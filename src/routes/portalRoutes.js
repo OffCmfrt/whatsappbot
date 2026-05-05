@@ -56,15 +56,15 @@ function isTicketInTimeRange(ticket, config) {
 async function getPortalTickets(portalId, portalType, portalConfig) {
     if (portalType === 'time_based') {
         const config = portalConfig ? JSON.parse(portalConfig) : {};
-        // OPTIMIZED: Limit to last 500 tickets to avoid loading entire table
+        // OPTIMIZED: Limit to last 200 tickets to avoid loading entire table
         const allTickets = await dbAdapter.query(
-            'SELECT * FROM support_tickets ORDER BY created_at DESC LIMIT 500'
+            'SELECT * FROM support_tickets ORDER BY created_at DESC LIMIT 200'
         );
         return allTickets.filter(t => isTicketInTimeRange(t, config));
     } else {
         // manual or auto
         return await dbAdapter.query(
-            'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC LIMIT 500',
+            'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC LIMIT 200',
             [portalId]
         );
     }
