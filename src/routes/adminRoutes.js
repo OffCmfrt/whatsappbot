@@ -14,7 +14,7 @@ const xlsx = require('xlsx');
 const multer = require('multer');
 const cloudinaryService = require('../services/cloudinaryService');
 const { toIST, formatDateForExport, fromISTtoUTC } = require('../utils/timezone');
-const { invalidateCache: clearAllCaches, getCacheStats } = require('../utils/cache');
+const { invalidateCache: clearAllCaches, getCacheStats, getCached, setCache } = require('../utils/cache');
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Advanced caching system imported from utils/cache
@@ -166,6 +166,15 @@ router.get('/customers', verifyToken, async (req, res) => {
         const { limit = 100, offset = 0, segment } = req.query;
         let formattedCustomers = [];
 
+        // Check cache first (only for unfiltered queries)
+        const cacheKey = `customers:${limit}:${offset}:${segment || 'all'}`;
+        if (!segment || segment === 'all') {
+            const cached = getCached(cacheKey);
+            if (cached) {
+                return res.json(cached);
+            }
+        }
+
         // Build segment filter condition
         let segmentCondition = '';
         let segmentParams = [];
@@ -204,23 +213,36 @@ router.get('/customers', verifyToken, async (req, res) => {
         const countRes = await dbAdapter.query(countSql, segmentParams);
         const total = countRes[0]?.total || 0;
 
+        // Optimized query using LEFT JOIN instead of correlated subquery
         const sql = `
             SELECT c.*, 
-                (SELECT COUNT(*) FROM messages m WHERE m.customer_phone = c.phone) as message_count
+                COALESCE(m.message_count, 0) as message_count
             FROM customers c
+            LEFT JOIN (
+                SELECT customer_phone, COUNT(*) as message_count 
+                FROM messages 
+                GROUP BY customer_phone
+            ) m ON c.phone = m.customer_phone
             ${segmentCondition}
             ORDER BY c.updated_at DESC
             LIMIT ? OFFSET ?
         `;
         formattedCustomers = await dbAdapter.query(sql, [...segmentParams, parseInt(limit), parseInt(offset)]);
 
-        res.json({
+        const response = {
             success: true,
             customers: formattedCustomers,
             total,
             page: Math.floor(offset / limit) + 1,
             limit: parseInt(limit)
-        });
+        };
+
+        // Cache the response (only for unfiltered queries)
+        if (!segment || segment === 'all') {
+            setCache(cacheKey, response, 'queries', 2 * 60 * 1000); // 2 minutes TTL
+        }
+
+        res.json(response);
     } catch (error) {
         console.error('Customers error:', error);
         res.status(500).json({ error: 'Failed to fetch customers' });
@@ -941,12 +963,19 @@ router.post('/sync/all', verifyToken, async (req, res) => {
 // Get customer segments
 router.get('/customers/segments', verifyToken, async (req, res) => {
     try {
-        // Fetch customers with their latest order date
+        // Check cache first
+        const cached = getCached('customer_segments');
+        if (cached) {
+            return res.json(cached);
+        }
+
+        // Optimized query using pre-calculated order_count column
         const sql = `
-            SELECT c.*, MAX(o.order_date) as last_order_at
+            SELECT c.phone, c.order_count, c.created_at, 
+                MAX(o.order_date) as last_order_at
             FROM customers c
             LEFT JOIN orders o ON c.phone = o.customer_phone
-            GROUP BY c.phone
+            GROUP BY c.phone, c.order_count, c.created_at
         `;
         const customers = await dbAdapter.query(sql);
         
@@ -972,7 +1001,12 @@ router.get('/customers/segments', verifyToken, async (req, res) => {
             }).length
         };
 
-        res.json({ success: true, segments });
+        const response = { success: true, segments };
+        
+        // Cache the response
+        setCache('customer_segments', response, 'stats', 5 * 60 * 1000); // 5 minutes TTL
+        
+        res.json(response);
     } catch (error) {
         console.error('Fetch segments error:', error);
         res.status(500).json({ error: 'Failed to fetch customer segments' });
@@ -1290,6 +1324,26 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
             params
         );
         
+        // If status changed, update the portal's assigned_count
+        if (status) {
+            const ticket = await dbAdapter.query(
+                'SELECT portal_id FROM support_tickets WHERE id = ?',
+                [id]
+            );
+            
+            if (ticket[0]?.portal_id) {
+                const countResult = await dbAdapter.query(
+                    'SELECT COUNT(*) as count FROM support_tickets WHERE portal_id = ? AND status = "open"',
+                    [ticket[0].portal_id]
+                );
+                const newCount = countResult[0]?.count || 0;
+                await dbAdapter.run(
+                    'UPDATE support_portals SET assigned_count = ? WHERE id = ?',
+                    [newCount, ticket[0].portal_id]
+                );
+            }
+        }
+        
         // Invalidate cache after ticket status change
         invalidateCache();
 
@@ -1367,10 +1421,29 @@ router.delete('/support-tickets/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
 
+        // Get ticket's portal_id before deletion
+        const ticket = await dbAdapter.query(
+            'SELECT portal_id FROM support_tickets WHERE id = ?',
+            [id]
+        );
+
         await dbAdapter.query(
             `DELETE FROM support_tickets WHERE id = ?`,
             [id]
         );
+        
+        // Update portal's assigned_count if ticket was assigned
+        if (ticket[0]?.portal_id) {
+            const countResult = await dbAdapter.query(
+                'SELECT COUNT(*) as count FROM support_tickets WHERE portal_id = ? AND status = "open"',
+                [ticket[0].portal_id]
+            );
+            const newCount = countResult[0]?.count || 0;
+            await dbAdapter.run(
+                'UPDATE support_portals SET assigned_count = ? WHERE id = ?',
+                [newCount, ticket[0].portal_id]
+            );
+        }
         
         // Invalidate cache after ticket deletion
         invalidateCache();
@@ -1486,16 +1559,16 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         const countRes = await dbAdapter.query(countSql, params);
         const total = countRes[0]?.total || 0;
 
-        // Use GROUP BY order_id to ensure no duplicates are returned
-        // GROUP BY automatically keeps the first row for each order_id
+        // Use LEFT JOIN instead of correlated subqueries for better performance
         const sql = `
             SELECT s.*, 
-                   (SELECT o.awb FROM orders o WHERE o.order_id = s.order_id LIMIT 1) as awb,
-                   (SELECT o.courier_name FROM orders o WHERE o.order_id = s.order_id LIMIT 1) as courier_name,
-                   (SELECT IFNULL(s.order_total, o.total) FROM orders o WHERE o.order_id = s.order_id LIMIT 1) as order_total,
-                   (SELECT o.status FROM orders o WHERE o.order_id = s.order_id LIMIT 1) as order_status,
-                   (SELECT o.tracking_url FROM orders o WHERE o.order_id = s.order_id LIMIT 1) as tracking_url
+                   o.awb,
+                   o.courier_name,
+                   IFNULL(s.order_total, o.total) as order_total,
+                   o.status as order_status,
+                   o.tracking_url
             FROM store_shoppers s
+            LEFT JOIN orders o ON o.order_id = s.order_id
             ${whereClause} 
             GROUP BY s.order_id
             ${orderByClause}
@@ -2997,7 +3070,9 @@ router.post('/support-portals', verifyToken, async (req, res) => {
 router.get('/support-portals', verifyToken, async (req, res) => {
     try {
         const portals = await dbAdapter.query(`
-            SELECT p.*, COUNT(t.id) as ticket_count
+            SELECT p.*, 
+                   COUNT(t.id) as ticket_count,
+                   SUM(CASE WHEN t.status = 'open' THEN 1 ELSE 0 END) as assigned_count
             FROM support_portals p
             LEFT JOIN support_tickets t ON t.portal_id = p.id
             GROUP BY p.id
@@ -3056,6 +3131,17 @@ router.post('/support-portals/:id/assign', verifyToken, async (req, res) => {
         await dbAdapter.run(
             `UPDATE support_tickets SET portal_id = ? WHERE id IN (${placeholders})`,
             [id, ...ticketIds]
+        );
+
+        // Update assigned_count for the portal
+        const countResult = await dbAdapter.query(
+            'SELECT COUNT(*) as count FROM support_tickets WHERE portal_id = ? AND status = "open"',
+            [id]
+        );
+        const newCount = countResult[0]?.count || 0;
+        await dbAdapter.run(
+            'UPDATE support_portals SET assigned_count = ? WHERE id = ?',
+            [newCount, id]
         );
 
         invalidateCache();

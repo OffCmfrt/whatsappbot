@@ -73,7 +73,21 @@ async function getPortalTickets(portalId, portalType, portalConfig) {
 // Helper to verify a phone belongs to the portal
 async function verifyPhoneInPortal(phone, portal) {
     const tickets = await getPortalTickets(portal.portalId, portal.type, portal.config);
-    return tickets.some(t => t.customer_phone === phone || t.customer_phone.replace(/\D/g, '') === phone.replace(/\D/g, ''));
+    
+    // Normalize the input phone number
+    const cleanPhone = phone.replace(/\D/g, '');
+    const possibleFormats = [
+        cleanPhone,
+        `+${cleanPhone}`,
+        `91${cleanPhone}`,
+        `+91${cleanPhone}`
+    ];
+    
+    // Check if any ticket's customer_phone matches any of the possible formats
+    return tickets.some(t => {
+        const ticketPhone = t.customer_phone.replace(/\D/g, '');
+        return possibleFormats.some(format => format.replace(/\D/g, '') === ticketPhone);
+    });
 }
 
 // Portal authentication
@@ -174,20 +188,22 @@ router.get('/:slug/chat/:phone', verifyPortalToken, async (req, res) => {
         const cleanPhone = phone.replace(/\D/g, '');
         const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
 
-        // Get customer info (optimized - use single formatted phone lookup)
+        // Get customer info - try multiple phone format variations
         const customerInfo = await dbAdapter.query(
-            'SELECT name, phone, email FROM customers WHERE phone = ?',
-            [formattedPhone]
+            `SELECT name, phone, email FROM customers 
+             WHERE phone = ? OR phone = ? OR phone = ? OR phone = ?
+             LIMIT 1`,
+            [formattedPhone, `+${cleanPhone}`, `91${cleanPhone}`, cleanPhone]
         );
 
-        // Get messages (optimized - use single formatted phone lookup)
+        // Get messages - try multiple phone format variations and get most recent 200
         const messages = await dbAdapter.query(
             `SELECT id, customer_phone, message_type, message_content, status, wa_message_id, created_at
              FROM messages
-             WHERE customer_phone = ?
+             WHERE customer_phone = ? OR customer_phone = ? OR customer_phone = ? OR customer_phone = ?
              ORDER BY created_at DESC
              LIMIT 200`,
-            [formattedPhone]
+            [formattedPhone, `+${cleanPhone}`, `91${cleanPhone}`, cleanPhone]
         );
 
         const formattedMessages = messages.reverse().map(msg => ({
@@ -253,13 +269,13 @@ router.post('/:slug/chat/send', verifyPortalToken, async (req, res) => {
             result = await whatsappService.sendMessage(formattedPhone, message, 'manual_reply');
         }
 
-        // Update shopper record if exists
+        // Update shopper record if exists - try multiple phone formats
         await dbAdapter.run(
             `UPDATE store_shoppers 
              SET last_response_at = ?,
                  response_count = COALESCE(response_count, 0) + 1
-             WHERE phone = ? OR phone = ?`,
-            [new Date().toISOString(), formattedPhone, cleanPhone]
+             WHERE phone = ? OR phone = ? OR phone = ? OR phone = ?`,
+            [new Date().toISOString(), formattedPhone, `+${cleanPhone}`, `91${cleanPhone}`, cleanPhone]
         );
 
         res.json({

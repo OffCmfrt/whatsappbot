@@ -310,7 +310,7 @@ class MessageHandler {
                     helpMessageText = LanguageService.translate('help', lang);
                 }
                 
-                await whatsappService.sendRichResponse(phone, { answer: helpMessageText }, senderName);
+                await this.sendRichResponse(phone, { answer: helpMessageText }, senderName);
                 break;
             }
 

@@ -163,6 +163,33 @@ function getCacheStats() {
   return stats;
 }
 
+// Helper function to get cached value
+function getCached(key) {
+  // Try to find the key in all caches
+  for (const [cacheName, cache] of Object.entries(caches)) {
+    const value = cache.get(key);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+// Helper function to set cached value
+function setCache(key, value, cacheName = 'stats', ttl = null) {
+  const cache = caches[cacheName];
+  if (!cache) {
+    console.warn(`⚠️ Cache "${cacheName}" not found, using default cache`);
+    cache = caches.stats;
+  }
+  
+  if (ttl) {
+    cache.set(key, value, ttl);
+  } else {
+    cache.set(key, value);
+  }
+}
+
 // Log cache stats periodically
 function startCacheStatsLogging(intervalMs = 5 * 60 * 1000) {
   setInterval(() => {
@@ -178,5 +205,7 @@ module.exports = {
   generateQueryKey,
   invalidateCache,
   getCacheStats,
+  getCached,
+  setCache,
   startCacheStatsLogging
 };
