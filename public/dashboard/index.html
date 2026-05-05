@@ -1,0 +1,1555 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OffComfrt Bot - Admin Dashboard</title>
+    <link rel="stylesheet" href="/dashboard/css/style.css?v=2">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <!-- Login Screen -->
+    <div id="loginScreen" class="login-container">
+        <div class="login-box">
+            <h1>OffComfrt Bot Admin</h1>
+            <p>WhatsApp Business Management</p>
+            <form id="loginForm">
+                <div class="form-group">
+                    <input type="text" id="username" placeholder="Username" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <input type="password" id="password" placeholder="Password" required
+                        autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn btn-primary">
+                    <span id="loginButtonText">Sign In</span>
+                    <span id="loginLoader" class="loading" style="display: none;"></span>
+                </button>
+                <div id="loginError" class="error-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Dashboard Screen -->
+    <div id="dashboardScreen" class="dashboard-container" style="display: none;">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>OffComfrt Bot</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-page="overview">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    Overview
+                </a>
+                <a href="#" class="nav-item" data-page="customers">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    Customers
+                </a>
+                <a href="#" class="nav-item" data-page="orders">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+                    Orders
+                </a>
+                <a href="#" class="nav-item" data-page="returns">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                    Returns & Exchanges
+                </a>
+                <a href="#" class="nav-item" data-page="messages">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    Messages
+                </a>
+                <a href="#" class="nav-item" data-page="support">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><circle cx="12" cy="10" r="3"/></svg>
+                    Support Tickets
+                </a>
+                <a href="#" class="nav-item" data-page="broadcast">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                    Broadcast
+                </a>
+                <a href="#" class="nav-item" data-page="templates">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    Templates
+                </a>
+                <a href="#" class="nav-item" data-page="analytics">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+                    Analytics
+                </a>
+                <a href="#" class="nav-item" data-page="automation">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M20 9h3"/><path d="M20 14h3"/><path d="M1 9h3"/><path d="M1 14h3"/></svg>
+                    Automation & FAQs
+                </a>
+                <a href="#" class="nav-item" data-page="settings">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    Settings
+                </a>
+
+            </nav>
+            <div class="sidebar-footer">
+                <button id="logoutBtn" class="btn btn-secondary" style="width: 100%;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    Logout
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="dashboard-header">
+                <div class="header-title">
+                    <h1 id="pageTitle">Overview</h1>
+                    <p id="pageSubtitle">WhatsApp Bot Performance Dashboard</p>
+                </div>
+                <div class="header-actions">
+                    <button id="refreshBtn" class="btn btn-secondary">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                        Refresh
+                    </button>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <div class="content-area">
+                <!-- Overview Page -->
+                <div id="overviewPage" class="page-section active">
+                    <!-- Statistics Cards -->
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <div>
+                                    <div class="stat-label">Total Customers</div>
+                                    <div class="stat-value" id="totalCustomers">-</div>
+                                    <div class="stat-change positive" id="customersChange">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> Loading...
+                                    </div>
+                                </div>
+                                <div class="stat-icon primary"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+                            </div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <div>
+                                    <div class="stat-label">Total Orders</div>
+                                    <div class="stat-value" id="totalOrders">-</div>
+                                    <div class="stat-change positive" id="ordersChange">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> Loading...
+                                    </div>
+                                </div>
+                                <div class="stat-icon success"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></div>
+                            </div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <div>
+                                    <div class="stat-label">Total Messages</div>
+                                    <div class="stat-value" id="totalMessages">-</div>
+                                    <div class="stat-change positive" id="messagesChange">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> Loading...
+                                    </div>
+                                </div>
+                                <div class="stat-icon info"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+                            </div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-header">
+                                <div>
+                                    <div class="stat-label">Active Today</div>
+                                    <div class="stat-value" id="activeToday">-</div>
+                                    <div class="stat-change" id="activeChange">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg> Loading...
+                                    </div>
+                                </div>
+                                <div class="stat-icon warning"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Charts Row -->
+                    <div
+                        style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 24px; margin-bottom: 24px;">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">Message Volume (7 Days)</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="chart-container">
+                                    <canvas id="messageChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">Order Status Distribution</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="chart-container">
+                                    <canvas id="orderStatusChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Recent Activity</h3>
+                        </div>
+                        <div class="card-body">
+                            <div id="recentActivity">
+                                <div class="loading"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Customers Page -->
+                <div id="customersPage" class="page-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Customer Management</h3>
+                            <button class="btn btn-primary" id="exportCustomersBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                Export CSV
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <!-- Search Bar -->
+                            <div class="search-bar">
+                                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                                <input type="text" id="customerSearch"
+                                    placeholder="Search customers by name or phone...">
+                            </div>
+
+                            <!-- Customers Table -->
+                            <div class="table-container">
+                                <table id="customersTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Phone</th>
+                                            <th>Orders</th>
+                                            <th>Messages</th>
+                                            <th>Joined</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="customersTableBody">
+                                        <tr>
+                                            <td colspan="6" class="text-center">
+                                                <div class="loading"></div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <!-- Pagination -->
+                            <div class="pagination-controls" style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
+                                <div id="customersPaginationInfo" class="text-muted text-small">
+                                    Showing 0-0 of 0 customers
+                                </div>
+                                <div class="btn-group" style="display: flex; gap: 8px;">
+                                    <button class="btn btn-secondary btn-sm" id="btnPrevCustomers" style="padding: 6px 12px; font-size: 13px;">Previous</button>
+                                    <button class="btn btn-secondary btn-sm" id="btnNextCustomers" style="padding: 6px 12px; font-size: 13px;">Next</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Orders Page -->
+                <div id="ordersPage" class="page-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Order Management</h3>
+                            <div class="filters">
+                                <select id="orderStatusFilter">
+                                    <option value="">All Statuses</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="confirmed">Confirmed</option>
+                                    <option value="shipped">Shipped</option>
+                                    <option value="delivered">Delivered</option>
+                                    <option value="cancelled">Cancelled</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <!-- Search Bar -->
+                            <div class="search-bar">
+                                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                                <input type="text" id="orderSearch" placeholder="Search by order ID or customer...">
+                            </div>
+
+                            <!-- Orders Table -->
+                            <div class="table-container">
+                                <table id="ordersTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Order ID</th>
+                                            <th>Customer</th>
+                                            <th>Status</th>
+                                            <th>AWB</th>
+                                            <th>Date</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="ordersTableBody">
+                                        <tr>
+                                            <td colspan="6" class="text-center">
+                                                <div class="loading"></div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Returns & Exchanges Page -->
+                <div id="returnsPage" class="page-section">
+                    <div class="page-header">
+                        <h2>Returns & Exchanges</h2>
+                        <button class="btn btn-primary" id="refreshReturnsBtn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                            Refresh
+                        </button>
+                    </div>
+
+                    <!-- Tabs -->
+                    <div class="tabs">
+                        <button class="tab-btn active" data-tab="returns-tab">Returns</button>
+                        <button class="tab-btn" data-tab="exchanges-tab">Exchanges</button>
+                    </div>
+
+                    <!-- Returns Tab -->
+                    <div id="returns-tab" class="tab-content active">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">Return Requests</h3>
+                                <button class="btn btn-primary" id="exportReturnsBtn">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                    Export
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <!-- Filters -->
+                                <div class="filters">
+                                    <select id="returnStatusFilter">
+                                        <option value="">All Status</option>
+                                        <option value="initiated">Initiated</option>
+                                        <option value="pickup_scheduled">Pickup Scheduled</option>
+                                        <option value="picked_up">Picked Up</option>
+                                        <option value="delivered_to_warehouse">At Warehouse</option>
+                                        <option value="qc_passed">QC Passed</option>
+                                        <option value="qc_failed">QC Failed</option>
+                                        <option value="refund_processed">Refund Processed</option>
+                                        <option value="completed">Completed</option>
+                                    </select>
+                                    <input type="text" id="returnSearch"
+                                        placeholder="Search by return ID or order ID...">
+                                </div>
+
+                                <!-- Returns Table -->
+                                <div class="table-container">
+                                    <table id="returnsTable">
+                                        <thead>
+                                            <tr>
+                                                <th>Return ID</th>
+                                                <th>Order ID</th>
+                                                <th>Customer</th>
+                                                <th>Reason</th>
+                                                <th>Status</th>
+                                                <th>Refund Amount</th>
+                                                <th>Refund Status</th>
+                                                <th>Date</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="returnsTableBody">
+                                            <tr>
+                                                <td colspan="9" class="text-center">
+                                                    <div class="loading"></div>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Exchanges Tab -->
+                    <div id="exchanges-tab" class="tab-content">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">Exchange Requests</h3>
+                                <button class="btn btn-primary" id="exportExchangesBtn">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                    Export
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <!-- Filters -->
+                                <div class="filters">
+                                    <select id="exchangeStatusFilter">
+                                        <option value="">All Status</option>
+                                        <option value="initiated">Initiated</option>
+                                        <option value="payment_pending">Payment Pending</option>
+                                        <option value="payment_completed">Payment Completed</option>
+                                        <option value="pickup_scheduled">Pickup Scheduled</option>
+                                        <option value="picked_up">Picked Up</option>
+                                        <option value="qc_passed">QC Passed</option>
+                                        <option value="qc_failed">QC Failed</option>
+                                        <option value="new_order_created">New Order Created</option>
+                                        <option value="completed">Completed</option>
+                                    </select>
+                                    <input type="text" id="exchangeSearch"
+                                        placeholder="Search by exchange ID or order ID...">
+                                </div>
+
+                                <!-- Exchanges Table -->
+                                <div class="table-container">
+                                    <table id="exchangesTable">
+                                        <thead>
+                                            <tr>
+                                                <th>Exchange ID</th>
+                                                <th>Order ID</th>
+                                                <th>Customer</th>
+                                                <th>Reason</th>
+                                                <th>Price Diff</th>
+                                                <th>Payment Status</th>
+                                                <th>Status</th>
+                                                <th>Date</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="exchangesTableBody">
+                                            <tr>
+                                                <td colspan="9" class="text-center">
+                                                    <div class="loading"></div>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Messages Page -->
+                <div id="messagesPage" class="page-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Message History</h3>
+                            <button class="btn btn-primary" id="exportMessagesBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                Export
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <!-- Filters -->
+                            <div class="filters">
+                                <select id="messageTypeFilter">
+                                    <option value="">All Messages</option>
+                                    <option value="incoming">Incoming</option>
+                                    <option value="outgoing">Outgoing</option>
+                                </select>
+                                <input type="date" id="messageDateFilter">
+                            </div>
+
+                            <!-- Messages Table -->
+                            <div class="table-container">
+                                <table id="messagesTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Customer</th>
+                                            <th>Type</th>
+                                            <th>Message</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="messagesTableBody">
+                                        <tr>
+                                            <td colspan="4" class="text-center">
+                                                <div class="loading"></div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Support Tickets Page -->
+                <div id="supportPage" class="page-section">
+                    <!-- Stats Bar -->
+                    <div class="ticket-stats-bar">
+                        <div class="ticket-stat">
+                            <span class="ticket-stat-value" id="totalTicketsCount">0</span>
+                            <span class="ticket-stat-label">Total Tickets</span>
+                        </div>
+                        <div class="ticket-stat unread">
+                            <span class="ticket-stat-value" id="unreadTicketsCount">0</span>
+                            <span class="ticket-stat-label">Unread</span>
+                        </div>
+                        <div class="ticket-stat urgent">
+                            <span class="ticket-stat-value" id="urgentTicketsCount">0</span>
+                            <span class="ticket-stat-label">Urgent</span>
+                        </div>
+                        <div class="ticket-stat open">
+                            <span class="ticket-stat-value" id="openTicketsCount">0</span>
+                            <span class="ticket-stat-label">Open</span>
+                        </div>
+                        <div class="ticket-stat resolved">
+                            <span class="ticket-stat-value" id="resolvedTicketsCount">0</span>
+                            <span class="ticket-stat-label">Resolved</span>
+                        </div>
+                    </div>
+
+                    <!-- Portals Section -->
+                    <div class="portals-section" id="portalsSection">
+                        <div class="portals-header">
+                            <h3 class="portals-title">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                                Support Portals
+                            </h3>
+                            <div class="portals-actions">
+                                <button class="btn btn-primary" id="openCreatePortalBtn">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                    Create Portal
+                                </button>
+                                <button class="btn btn-secondary" id="openAutoDistributeBtn">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                                    Auto Distribute
+                                </button>
+                            </div>
+                        </div>
+                        <div class="portals-list" id="portalsList">
+                            <div class="portals-empty">Loading portals...</div>
+                        </div>
+                    </div>
+
+                    <!-- Toolbar -->
+                    <div class="ticket-toolbar-pro">
+                        <!-- Row 1: Search Bar -->
+                        <div class="toolbar-search-row">
+                            <div class="search-container">
+                                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                                <input type="text" id="ticketSearchInput" placeholder="Search tickets, phone numbers, order IDs, or messages...">
+                                <button class="search-filter-toggle" id="searchFilterToggle" title="Advanced filters">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Row 2: Collapsible Filters Panel -->
+                        <div class="toolbar-filters-panel" id="filtersPanel">
+                            <div class="filters-grid">
+                                <!-- Quick Presets -->
+                                <div class="filter-group">
+                                    <label>Quick Filters</label>
+                                    <div class="quick-presets">
+                                        <button class="preset-btn" data-action="preset" data-preset="today">Today</button>
+                                        <button class="preset-btn" data-action="preset" data-preset="yesterday">Yesterday</button>
+                                        <button class="preset-btn" data-action="preset" data-preset="week">This Week</button>
+                                        <button class="preset-btn" data-action="preset" data-preset="month">This Month</button>
+                                    </div>
+                                </div>
+
+                                <!-- Date Range -->
+                                <div class="filter-group">
+                                    <label>Date Range</label>
+                                    <div class="date-range-inputs">
+                                        <input type="date" id="dateFromFilter" class="date-filter" title="From Date">
+                                        <span class="date-separator">to</span>
+                                        <input type="date" id="dateToFilter" class="date-filter" title="To Date">
+                                    </div>
+                                </div>
+
+                                <!-- Time Range (IST) -->
+                                <div class="filter-group">
+                                    <label>Time Range (IST)</label>
+                                    <div class="time-range-inputs">
+                                        <input type="time" id="timeFromFilter" class="time-filter" title="From Time">
+                                        <span class="time-separator">to</span>
+                                        <input type="time" id="timeToFilter" class="time-filter" title="To Time">
+                                    </div>
+                                </div>
+
+                                <!-- Status & Sort -->
+                                <div class="filter-group">
+                                    <label>Status & Sort</label>
+                                    <div class="status-sort-row">
+                                        <select id="ticketStatusFilter">
+                                            <option value="">All Statuses</option>
+                                            <option value="open">Open</option>
+                                            <option value="resolved">Resolved</option>
+                                        </select>
+                                        <select id="ticketSortBy">
+                                            <option value="newest">Newest First</option>
+                                            <option value="oldest">Oldest First</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <!-- Urgent Filter -->
+                                <div class="filter-group">
+                                    <label>Urgent Keywords</label>
+                                    <div class="urgent-filter-row">
+                                        <button class="btn-filter btn-urgent" id="urgentFilterBtn" title="Show urgent tickets">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                                            Urgent
+                                        </button>
+                                        <button class="btn-secondary btn-sm" id="configureUrgentBtn" title="Configure keywords">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                                            Configure
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Read Status -->
+                                <div class="filter-group">
+                                    <label>Read Status</label>
+                                    <button class="btn-filter" id="unreadFilterBtn" title="Show only unread tickets">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                                        Unread Only
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Filter Actions -->
+                            <div class="filters-actions">
+                                <button class="btn btn-secondary" id="resetFiltersBtn" title="Reset all filters">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                                    Reset All
+                                </button>
+                                <span class="active-filters-count" id="activeFiltersCount"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tickets List -->
+                    <div class="tickets-container">
+                        <!-- Bulk Action Bar -->
+                        <div class="bulk-action-bar" id="bulkActionBar" style="display: none;">
+                            <div class="bulk-action-info">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                                <span><strong id="selectedCount">0</strong> ticket(s) selected</span>
+                            </div>
+                            <div class="bulk-action-controls">
+                                <select id="assignPortalSelect" class="bulk-portal-select">
+                                    <option value="">Assign to Portal...</option>
+                                </select>
+                                <button class="btn btn-danger btn-sm" id="bulkDeleteBtn" style="display: none;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                    Delete Selected
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="tickets-list-header">
+                            <div class="ticket-col checkbox">
+                                <input type="checkbox" id="selectAllTickets">
+                            </div>
+                            <div class="ticket-col ticket-number">Ticket #</div>
+                            <div class="ticket-col customer">Customer</div>
+                            <div class="ticket-col message">Message</div>
+                            <div class="ticket-col meta">Details</div>
+                            <div class="ticket-col portal">Portal</div>
+                            <div class="ticket-col actions">Actions</div>
+                        </div>
+                        <div id="ticketsList" class="tickets-list">
+                            <div class="tickets-loading">
+                                <div class="spinner"></div>
+                                <span>Loading tickets...</span>
+                            </div>
+                        </div>
+                        <div class="tickets-pagination" id="ticketsPagination" style="display: none;">
+                            <div class="pagination-info">
+                                Showing <span id="showingStart">0</span>-<span id="showingEnd">0</span> of <span id="showingTotal">0</span> tickets
+                            </div>
+                            <button class="btn btn-primary btn-show-more" id="showMoreBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                                Show More
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Urgent Keywords Configuration Modal -->
+                <div id="urgentKeywordsModal" class="modal">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Configure Urgent Keywords</h3>
+                            <button class="modal-close" data-action="closeModal" data-modal="urgentKeywordsModal">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <p class="text-muted mb-3">Tickets containing these keywords will be marked as urgent and highlighted</p>
+                            
+                            <div class="keyword-input-group">
+                                <input type="text" id="newKeywordInput" placeholder="Add new keyword (e.g., 'refund', 'complaint')" />
+                                <button class="btn btn-primary" id="addKeywordBtn">Add</button>
+                            </div>
+                            
+                            <div class="keywords-list" id="keywordsList">
+                                <!-- Keywords will be rendered here -->
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" data-action="closeModal" data-modal="urgentKeywordsModal">Cancel</button>
+                            <button class="btn btn-primary" id="saveKeywordsBtn">Save Changes</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Broadcast Page -->
+                <div id="broadcastPage" class="page-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Broadcast Message</h3>
+                        </div>
+                        <div class="card-body">
+                            <form id="broadcastForm">
+                                <div class="form-group">
+                                    <label>Recipients</label>
+                                    <select id="broadcastRecipients">
+                                        <option value="all">All Customers</option>
+                                        <option value="active">Active (Last 7 Days)</option>
+                                        <option value="recent">Recent Buyers (Last 30 Days)</option>
+                                        <option value="first_time">1st-time Buyers</option>
+                                        <option value="second_time">2nd-time Buyers</option>
+                                        <option value="loyal">Loyal (3-4 Orders)</option>
+                                        <option value="vip">VIP (5+ Orders)</option>
+                                        <option value="inactive">Inactive (No Order 60+ Days)</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group mt-3">
+                                    <label>Campaign Type</label>
+                                    <div class="d-flex gap-2 mt-1">
+                                        <label style="flex:1; border:1px solid #ddd; padding:10px; cursor:pointer">
+                                            <input type="radio" name="broadcastType" value="text" checked data-action="toggleBroadcastType"> Custom Message
+                                        </label>
+                                        <label style="flex:1; border:1px solid #ddd; padding:10px; cursor:pointer">
+                                            <input type="radio" name="broadcastType" value="template" data-action="toggleBroadcastType"> Meta Template
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div id="customMessageArea" class="mt-3">
+                                    <div class="form-group">
+                                        <label>Message</label>
+                                        <textarea id="broadcastMessage" placeholder="Enter your broadcast message..."></textarea>
+                                        <p class="text-small text-muted mt-1">
+                                            Tip: Use {{name}} to personalize with customer names
+                                        </p>
+                                    </div>
+
+                                    <div class="form-group mt-3">
+                                        <label>Image URL (Optional)</label>
+                                        <input type="text" id="broadcastImageUrl" placeholder="https://example.com/image.jpg">
+                                    </div>
+                                </div>
+
+                                <div id="templateArea" class="mt-3" style="display:none">
+                                    <div class="form-group">
+                                        <label>Select Meta Template</label>
+                                        <select id="broadcastTemplate">
+                                            <option value="">-- Select Template --</option>
+                                        </select>
+                                    </div>
+                                    <div id="templatePreview" class="mt-2 text-small text-muted" style="background:#f9f9f9; padding:10px; border-left:3px solid #000; display:none">
+                                        <!-- Preview text -->
+                                    </div>
+                                </div>
+
+                                <div class="form-group mt-3">
+                                    <label>Delay (Seconds)</label>
+                                    <input type="number" id="broadcastDelay" value="5" min="2">
+                                </div>
+
+                                <!-- Recipient Selection Tabs -->
+                                <div class="broadcast-tabs mt-4">
+                                    <div class="tab-buttons">
+                                        <button type="button" class="tab-btn active" data-action="switchBroadcastTab" data-tab="segmentTab">Segment</button>
+                                        <button type="button" class="tab-btn" data-action="switchBroadcastTab" data-tab="fileTab">Import File</button>
+                                        <button type="button" class="tab-btn" data-action="switchBroadcastTab" data-tab="manualTab">Manual Entry</button>
+                                    </div>
+                                    
+                                    <div id="segmentTab" class="broadcast-tab-content active">
+                                        <button type="button" class="btn btn-outline mt-2" id="previewSegmentBtn">Preview Recipients</button>
+                                    </div>
+                                    
+                                    <div id="fileTab" class="broadcast-tab-content" style="display: none;">
+                                        <div class="file-upload-area mt-2">
+                                            <input type="file" id="broadcastFile" accept=".csv,.xlsx" style="display: none;">
+                                            <button type="button" class="btn btn-outline" id="chooseBroadcastFileBtn">Choose File</button>
+                                            <span id="fileNameDisplay" class="text-muted ml-2">No file selected</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div id="manualTab" class="broadcast-tab-content" style="display: none;">
+                                        <div class="form-group mt-2">
+                                            <textarea id="manualPhoneList" rows="4" placeholder="Enter phone numbers (one per line or comma-separated)"></textarea>
+                                            <button type="button" class="btn btn-outline mt-2" id="parseManualPhonesBtn">Parse Numbers</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="d-flex justify-between align-center mt-4">
+                                    <p class="text-muted">
+                                        <strong id="recipientCount">0</strong> customers will receive this message
+                                    </p>
+                                    <button type="submit" class="btn btn-primary">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                        </svg>
+                                        <span>Send Broadcast</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Broadcast History -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Broadcast History</h3>
+                        </div>
+                        <div class="card-body">
+                            <div id="broadcastHistory">
+                                <div class="loading"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Templates Page -->
+                <div id="templatesPage" class="page-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Meta API Templates</h3>
+                            <button class="btn btn-primary" id="loadTemplatesBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                                Refresh
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Template Name</th>
+                                            <th>Category</th>
+                                            <th>Language</th>
+                                            <th>Status</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="templatesTableBody">
+                                        <!-- Templates go here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Analytics Page -->
+                <div id="analyticsPage" class="page-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Detailed Analytics</h3>
+                            <button class="btn btn-primary" id="syncAllDataBtn">
+                                <svg id="syncIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                                <span id="syncBtnText">Sync All Data (Shopify+Shiprocket)</span>
+                                <span id="syncLoader" class="loading" style="display: none;"></span>
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <!-- FAQ Analytics -->
+                            <h4 class="mb-2">Top FAQ Queries</h4>
+                            <div class="chart-container">
+                                <canvas id="faqChart"></canvas>
+                            </div>
+
+                            <!-- Customer Growth -->
+                            <h4 class="mb-2 mt-3">Customer Growth Trend</h4>
+                            <div class="chart-container">
+                                <canvas id="growthChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Automation & FAQs Page -->
+                <div id="automationPage" class="page-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Automated Responses & FAQs</h3>
+                            <div class="d-flex gap-2">
+                                <button class="btn btn-secondary" id="syncAutomationDefaultsBtn">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                    Reset to Defaults
+                                </button>
+                                <button class="btn btn-primary" id="openAutomationModalBtn">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                    Add New
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Key/Trigger</th>
+                                            <th>Type</th>
+                                            <th>Description</th>
+                                            <th>Last Updated</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="automationTableBody">
+                                        <!-- Automation items go here -->
+                                        <tr><td colspan="5" class="text-center"><div class="loading"></div></td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Page -->
+                <div id="settingsPage" class="page-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Bot Configuration</h3>
+                        </div>
+                        <div class="card-body">
+                            <form id="settingsForm">
+                                <h4 class="mb-3">Abandoned Cart Reminders</h4>
+
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>First Reminder Delay (Hours)</label>
+                                        <input type="number" id="abandonedCartFirstDelay" min="0" step="1" required>
+                                        <p class="text-small text-muted mt-1">Set to 0 for instant testing.</p>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Second Reminder Delay (Hours)</label>
+                                        <input type="number" id="abandonedCartSecondDelay" min="0" step="1" required>
+                                        <p class="text-small text-muted mt-1">Hours after checkout to send the final
+                                            reminder.</p>
+                                    </div>
+                                </div>
+
+                                <div class="d-flex justify-end mt-4">
+                                    <button type="submit" class="btn btn-primary">
+                                        <span id="settingsSaveText">Save Settings</span>
+                                        <span id="settingsLoader" class="loading" style="display: none;"></span>
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Customer Detail Modal -->
+    <div id="customerModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Customer Details</h3>
+                <button class="modal-close" id="closeCustomerModalBtn">×</button>
+            </div>
+            <div class="modal-body" id="customerModalBody">
+                <div class="loading-state"><div class="spinner"></div><span>Loading...</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Broadcast Recipient Preview Modal -->
+    <div id="selectionPreview" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h3 class="modal-title">Select Recipients</h3>
+                <button class="modal-close" id="closeSelectionPreviewBtn">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="table-container" style="max-height: 400px; overflow-y: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 40px;"><input type="checkbox" id="selectAllRecipients"></th>
+                                <th>Name</th>
+                                <th>Phone</th>
+                            </tr>
+                        </thead>
+                        <tbody id="previewTableBody"></tbody>
+                    </table>
+                </div>
+                <p class="text-muted mt-2"><span id="selectedCount">0</span> selected</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Automation Editor Modal -->
+    <div id="automationModal" class="modal">
+        <div class="modal-content" style="max-width: 700px;">
+            <div class="modal-header">
+                <h3 class="modal-title" id="automationModalTitle">Edit Automation</h3>
+                <button class="modal-close" id="closeAutomationModalBtn">×</button>
+            </div>
+            <div class="modal-body">
+                <form id="automationForm">
+                    <input type="hidden" id="automationId">
+                    <div class="form-group">
+                        <label>Key / Keyword (e.g., return_policy, shipping_info)</label>
+                        <input type="text" id="automationKey" required placeholder="return_policy">
+                    </div>
+                    
+                    <div class="form-row mt-3">
+                        <div class="form-group">
+                            <label>Response Type</label>
+                            <select id="automationType" required>
+                                <option value="text">Plain Text</option>
+                                <option value="image">Image + Text</option>
+                                <option value="button">Interactive (Buttons)</option>
+                                <option value="cta">CTA URL (Link Button)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Trigger Description</label>
+                            <input type="text" id="automationDesc" placeholder="What sends this?">
+                        </div>
+                    </div>
+
+                    <div class="form-group mt-3">
+                        <label>Response Message Content</label>
+                        <textarea id="automationContent" rows="6" required placeholder="Enter the message..."></textarea>
+                        <p class="text-small text-muted mt-1">Supports WhatsApp formatting (*bold*, _italic_)</p>
+                    </div>
+
+                    <div id="automationImageArea" class="form-group mt-3" style="display:none">
+                        <label>Header Image URL</label>
+                        <input type="text" id="automationImageUrl" placeholder="https://example.com/header.jpg">
+                    </div>
+
+                    <div id="automationButtonArea" class="mt-3" style="display:none">
+                        <label>Buttons (Max 3)</label>
+                        <div id="buttonBuilder" class="mt-2">
+                            <!-- Buttons added here -->
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm mt-2" id="addButtonRowBtn">+ Add Button</button>
+                    </div>
+
+                    <div id="automationCtaArea" class="form-row mt-3" style="display:none">
+                        <div class="form-group">
+                            <label>CTA Button Text</label>
+                            <input type="text" id="automationCtaText" placeholder="Visit Website">
+                        </div>
+                        <div class="form-group">
+                            <label>CTA URL</label>
+                            <input type="text" id="automationCtaUrl" placeholder="https://offcomfrt.in">
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-end mt-4">
+                        <button type="submit" class="btn btn-primary">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                            Save Configuration
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Portal Modal -->
+    <div id="createPortalModal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>Create Support Portal</h3>
+                <button class="modal-close" id="closeCreatePortalBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="createPortalForm">
+                    <div class="form-group">
+                        <label>Portal Name</label>
+                        <input type="text" id="portalName" placeholder="e.g. Day Shift Portal" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Type</label>
+                        <select id="portalType" required>
+                            <option value="manual">Manual Assignment</option>
+                            <option value="time_based">Time-Based</option>
+                        </select>
+                    </div>
+                    <div id="timeBasedFields" style="display: none;">
+                        <div class="form-row">
+                            <div class="form-group" style="flex: 1;">
+                                <label>Start Time</label>
+                                <input type="time" id="portalTimeStart" value="06:00">
+                            </div>
+                            <div class="form-group" style="flex: 1;">
+                                <label>End Time</label>
+                                <input type="time" id="portalTimeEnd" value="18:00">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Timezone</label>
+                            <select id="portalTimezone">
+                                <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+                                <option value="UTC">UTC</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <div class="password-input-group">
+                            <input type="text" id="portalPassword" placeholder="Auto-generated if empty">
+                            <button type="button" class="btn btn-secondary" id="generatePortalPasswordBtn">Generate</button>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" id="cancelCreatePortalBtn">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create Portal</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto Distribute Modal - Professional Multi-Step Wizard -->
+    <div id="autoDistributeModal" class="modal">
+        <div class="modal-content wizard-modal">
+            <div class="modal-header">
+                <h3>Auto Distribute Tickets</h3>
+                <button class="modal-close" id="closeAutoDistributeBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <!-- Progress Steps -->
+                <div class="wizard-progress">
+                    <div class="wizard-step active" data-step="1">
+                        <div class="step-number">1</div>
+                        <div class="step-label">Mode</div>
+                    </div>
+                    <div class="wizard-step" data-step="2">
+                        <div class="step-number">2</div>
+                        <div class="step-label">Configure</div>
+                    </div>
+                    <div class="wizard-step" data-step="3">
+                        <div class="step-number">3</div>
+                        <div class="step-label">Settings</div>
+                    </div>
+                    <div class="wizard-step" data-step="4">
+                        <div class="step-number">4</div>
+                        <div class="step-label">Preview</div>
+                    </div>
+                </div>
+
+                <!-- Step 1: Distribution Mode Selection -->
+                <div class="wizard-panel" id="wizardStep1">
+                    <h4 class="wizard-panel-title">Select Distribution Mode</h4>
+                    <div class="mode-selection-grid">
+                        <div class="mode-card" data-mode="round_robin">
+                            <div class="mode-icon">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                            </div>
+                            <h5>Round Robin</h5>
+                            <p>Evenly distribute tickets across portals in sequential order</p>
+                        </div>
+                        <div class="mode-card" data-mode="filter_based">
+                            <div class="mode-icon">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                            </div>
+                            <h5>Filter Based</h5>
+                            <p>Distribute tickets based on custom date/time filters</p>
+                        </div>
+                        <div class="mode-card" data-mode="shift_based">
+                            <div class="mode-icon">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                            </div>
+                            <h5>Shift Based</h5>
+                            <p>Route tickets to portals based on time shifts (morning, evening, night)</p>
+                        </div>
+                        <div class="mode-card" data-mode="workload_balanced">
+                            <div class="mode-icon">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+                            </div>
+                            <h5>Workload Balanced</h5>
+                            <p>Distribute based on current portal capacity for balanced workload</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Configuration Panel (Dynamic) -->
+                <div class="wizard-panel" id="wizardStep2" style="display: none;">
+                    <h4 class="wizard-panel-title">Configure Distribution</h4>
+                    
+                    <!-- Round Robin / Workload Balanced Config -->
+                    <div id="simpleConfig" class="config-section" style="display: none;">
+                        <div class="form-group">
+                            <label>Number of Portals</label>
+                            <input type="number" id="distributeCount" min="2" max="20" value="2" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Name Prefix</label>
+                            <input type="text" id="distributeNamePrefix" placeholder="e.g. Agent" value="Agent">
+                        </div>
+                        <p class="text-small text-muted">Tickets will be distributed evenly across all created portals.</p>
+                    </div>
+
+                    <!-- Filter Based Config -->
+                    <div id="filterConfig" class="config-section" style="display: none;">
+                        <div class="filter-card">
+                            <h5>Date & Time Range Filter</h5>
+                            <div class="filter-row">
+                                <div class="form-group">
+                                    <label>Date From</label>
+                                    <input type="date" id="filterDateFrom">
+                                </div>
+                                <div class="form-group">
+                                    <label>Time From</label>
+                                    <input type="time" id="filterTimeFrom">
+                                </div>
+                            </div>
+                            <div class="filter-row">
+                                <div class="form-group">
+                                    <label>Date To</label>
+                                    <input type="date" id="filterDateTo">
+                                </div>
+                                <div class="form-group">
+                                    <label>Time To</label>
+                                    <input type="time" id="filterTimeTo">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Ticket Status</label>
+                                <div class="checkbox-group">
+                                    <label class="checkbox-label"><input type="checkbox" value="open" checked> Open</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="pending"> Pending</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="in-progress"> In Progress</label>
+                                </div>
+                            </div>
+                            <div class="filter-preview">
+                                <strong>Preview:</strong> <span id="filterTicketCount">Calculating...</span> tickets match filters
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Number of Portals</label>
+                            <input type="number" id="filterDistributeCount" min="2" max="20" value="2" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Name Prefix</label>
+                            <input type="text" id="filterNamePrefix" placeholder="e.g. Agent" value="Agent">
+                        </div>
+                    </div>
+
+                    <!-- Shift Based Config -->
+                    <div id="shiftConfig" class="config-section" style="display: none;">
+                        <div class="shift-header">
+                            <h5>Shift Configuration</h5>
+                            <button type="button" class="btn btn-sm btn-secondary" id="addShiftBtn">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                Add Shift
+                            </button>
+                        </div>
+                        <div id="shiftsContainer">
+                            <!-- Shifts will be dynamically added here -->
+                        </div>
+                        <div class="filter-preview">
+                            <strong>Total Tickets:</strong> <span id="shiftTicketCount">Calculating...</span> tickets will be distributed
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: Portal Settings -->
+                <div class="wizard-panel" id="wizardStep3" style="display: none;">
+                    <h4 class="wizard-panel-title">Portal Settings</h4>
+                    <div class="settings-card">
+                        <div class="form-group">
+                            <label>Max Tickets per Portal (optional)</label>
+                            <input type="number" id="maxTicketsPerPortal" min="1" placeholder="Leave empty for unlimited">
+                            <p class="text-small text-muted">Limit the number of tickets each portal can receive</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="autoGeneratePasswords" checked>
+                                Auto-generate secure passwords
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="enableWorkloadBalancing" checked>
+                                Enable workload balancing
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="autoRotate24h">
+                                Auto-rotate after 24 hours
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 4: Preview & Confirm -->
+                <div class="wizard-panel" id="wizardStep4" style="display: none;">
+                    <h4 class="wizard-panel-title">Preview Distribution</h4>
+                    <div class="preview-summary">
+                        <div class="summary-item">
+                            <span class="summary-label">Distribution Mode:</span>
+                            <span class="summary-value" id="previewMode">-</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">Total Tickets:</span>
+                            <span class="summary-value" id="previewTickets">-</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">Total Portals:</span>
+                            <span class="summary-value" id="previewPortals">-</span>
+                        </div>
+                    </div>
+                    <div class="preview-table-container">
+                        <table class="preview-table">
+                            <thead>
+                                <tr>
+                                    <th>Portal Name</th>
+                                    <th>Configuration</th>
+                                    <th>Est. Tickets</th>
+                                    <th>Capacity</th>
+                                </tr>
+                            </thead>
+                            <tbody id="previewTableBody">
+                                <!-- Preview rows will be inserted here -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="preview-warning" id="previewWarning" style="display: none;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        <span id="previewWarningText"></span>
+                    </div>
+                </div>
+
+                <div class="modal-footer wizard-footer">
+                    <button type="button" class="btn btn-secondary" id="wizardPrevBtn" style="display: none;">Previous</button>
+                    <button type="button" class="btn btn-secondary" id="cancelAutoDistributeBtn">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="wizardNextBtn">Next</button>
+                    <button type="button" class="btn btn-success" id="confirmDistributeBtn" style="display: none;">Distribute Tickets</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto Distribute Results Modal - Professional -->
+    <div id="distributeResultsModal" class="modal">
+        <div class="modal-content results-modal">
+            <div class="modal-header">
+                <div class="results-header">
+                    <div class="success-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    </div>
+                    <div>
+                        <h3>Distribution Complete</h3>
+                        <p class="text-muted" id="resultsSummary">Tickets have been successfully distributed</p>
+                    </div>
+                </div>
+                <button class="modal-close" id="closeDistributeResultsBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="results-stats">
+                    <div class="stat-card">
+                        <div class="stat-value" id="statTotalTickets">0</div>
+                        <div class="stat-label">Total Tickets</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="statTotalPortals">0</div>
+                        <div class="stat-label">Portals Created</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="statDistributionMode">-</div>
+                        <div class="stat-label">Distribution Mode</div>
+                    </div>
+                </div>
+                
+                <h4 class="results-section-title">Portal Details</h4>
+                <div id="distributeResultsList" class="results-portal-list">
+                    <!-- Portal cards will be inserted here -->
+                </div>
+                
+                <div class="modal-footer results-footer">
+                    <button type="button" class="btn btn-secondary" id="exportResultsBtn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Export Results
+                    </button>
+                    <button type="button" class="btn btn-primary" id="doneDistributeResultsBtn">Done</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Support Ticket Chat Modal -->
+    <div id="supportChatModal" class="modal chat-modal">
+        <div class="chat-modal-content">
+            <div class="chat-container">
+                <div class="chat-sidebar">
+                    <div class="chat-sidebar-header">
+                        <h3>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>
+                            Customer Info
+                        </h3>
+                        <button class="chat-sidebar-close" id="closeSupportChatMobile">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                    </div>
+                    <div class="chat-customer-info" id="chatCustomerInfo">
+                        <div class="info-row">
+                            <span class="info-label">Name</span>
+                            <span class="info-value" id="chatCustomerName">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Phone</span>
+                            <span class="info-value" id="chatCustomerPhone">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Ticket ID</span>
+                            <span class="info-value" id="chatTicketId">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Status</span>
+                            <span class="info-value" id="chatTicketStatus">-</span>
+                        </div>
+                    </div>
+                    <div class="chat-sidebar-actions">
+                        <button class="btn btn-outline" id="viewAllOrdersBtn">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
+                                <rect x="9" y="3" width="6" height="4" rx="1"/>
+                                <line x1="9" y1="12" x2="15" y2="12"/>
+                                <line x1="9" y1="16" x2="15" y2="16"/>
+                            </svg>
+                            View All Orders
+                        </button>
+                        <button class="btn btn-outline" id="viewTicketOrderBtn">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/></svg>
+                            View Order
+                        </button>
+                        <button class="btn btn-primary" id="markTicketResolvedBtn">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                            Mark Resolved
+                        </button>
+                    </div>
+                </div>
+                <div class="chat-main">
+                    <div class="chat-header">
+                        <div class="chat-header-info">
+                            <div class="chat-header-avatar">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                            </div>
+                            <div class="chat-header-details">
+                                <h4 id="chatHeaderTitle">Customer</h4>
+                                <span class="chat-header-status" id="chatHeaderStatus">Online</span>
+                            </div>
+                        </div>
+                        <div class="chat-header-actions">
+                            <button class="chat-header-btn" id="pinMessageBtn" title="Pin a message">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l-5.5 9h11z"/><circle cx="12" cy="19" r="3"/></svg>
+                            </button>
+                            <button class="chat-close" id="closeSupportChat">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="chat-pinned-message" id="pinnedMessageContainer" style="display: none;">
+                        <div class="pinned-label">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l-5.5 9h11z"/><circle cx="12" cy="19" r="3"/></svg>
+                            Pinned
+                        </div>
+                        <div class="pinned-content" id="pinnedMessageContent"></div>
+                        <button class="pinned-unpin" id="unpinMessageBtn" title="Unpin message">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                    </div>
+                    <div class="chat-messages" id="supportChatMessages">
+                        <div class="chat-loading">
+                            <div class="spinner"></div>
+                            <span>Loading conversation...</span>
+                        </div>
+                    </div>
+                    <div class="chat-input-area">
+                        <textarea id="supportChatInput" placeholder="Type a message..." rows="1"></textarea>
+                        <button class="btn btn-chat" id="sendSupportChatBtn">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- All Orders Modal -->
+    <div id="allOrdersModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h3>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
+                        <rect x="9" y="3" width="6" height="4" rx="1"/>
+                    </svg>
+                    All Orders - <span id="allOrdersCustomerPhone">-</span>
+                    <span id="allOrdersSource" class="text-small text-muted"></span>
+                </h3>
+                <button class="modal-close" id="closeAllOrdersModal">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="allOrdersLoading" class="loading">
+                    <div class="spinner"></div>
+                    <span>Loading orders from database...</span>
+                </div>
+                <div id="allOrdersContent" style="display: none;">
+                    <div id="allOrdersSummary" class="orders-summary"></div>
+                    <div id="allOrdersList" class="orders-list"></div>
+                </div>
+                <div id="allOrdersEmpty" class="empty-state" style="display: none;">
+                    <div class="empty-state-icon">📦</div>
+                    <div class="empty-state-title">No orders found</div>
+                    <div class="empty-state-text">This customer has no order history in our database.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/dashboard/js/chart.min.js" defer></script>
+    <script src="/dashboard/js/main.js?v=2" defer></script>
+</body>
+
+</html>

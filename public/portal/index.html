@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OffComfrt - Customer Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+
+    <header>
+        <div class="header-content">
+            <a href="#" class="logo">OffComfrt</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="auth-container">
+            <h1 class="auth-title">Track & Manage Orders</h1>
+            <p class="auth-subtitle">Enter your details to track shipments, request returns, or exchanges.</p>
+
+            <form id="loginForm">
+                <div class="form-group">
+                    <label class="form-label">Order ID</label>
+                    <input type="text" id="orderId" class="form-input" placeholder="e.g. ORD-2024-001" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Phone Number</label>
+                    <input type="tel" id="phone" class="form-input" placeholder="e.g. 9876543210" required>
+                </div>
+
+                <div id="errorMessage" style="color: red; margin-bottom: 15px; font-size: 14px; display: none;"></div>
+
+                <button type="submit" class="btn">View Order</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="js/main.js"></script>
+</body>
+
+</html>
