@@ -611,24 +611,37 @@ class WhatsAppService {
         }
     }
 
-    // Cleanup old messages to keep only last 200 per customer (auto-delete when limit reached)
+    // Cleanup old messages to keep only last 200 per customer (optimized)
     async _cleanupOldMessages(phone) {
         try {
             const cleanPhone = phone.replace(/\D/g, '');
+            
+            // OPTIMIZED: Only run cleanup if customer has more than 250 messages
+            const countResult = await dbAdapter.query(
+                'SELECT COUNT(*) as count FROM messages WHERE customer_phone = ?',
+                [cleanPhone]
+            );
+            const messageCount = countResult[0]?.count || 0;
+            
+            // Only cleanup if significantly over the 200 limit
+            if (messageCount <= 250) {
+                return; // Skip cleanup - still within acceptable range
+            }
+            
+            // Use a more efficient approach: delete messages older than the 200th most recent
             await dbAdapter.query(
                 `DELETE FROM messages 
                  WHERE customer_phone = ? 
-                 AND id NOT IN (
-                     SELECT id FROM messages 
+                 AND created_at < (
+                     SELECT created_at FROM messages 
                      WHERE customer_phone = ? 
                      ORDER BY created_at DESC 
-                     LIMIT 200
+                     LIMIT 1 OFFSET 200
                  )`,
                 [cleanPhone, cleanPhone]
             );
         } catch (error) {
             // Silent fail - cleanup is best effort
-            console.error('[WA] Error cleaning up old messages:', error.message);
         }
     }
 }
