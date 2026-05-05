@@ -52,18 +52,19 @@ function isTicketInTimeRange(ticket, config) {
     }
 }
 
-// Helper to get portal tickets
+// Helper to get portal tickets (optimized)
 async function getPortalTickets(portalId, portalType, portalConfig) {
     if (portalType === 'time_based') {
         const config = portalConfig ? JSON.parse(portalConfig) : {};
+        // OPTIMIZED: Limit to last 500 tickets to avoid loading entire table
         const allTickets = await dbAdapter.query(
-            'SELECT * FROM support_tickets ORDER BY created_at DESC'
+            'SELECT * FROM support_tickets ORDER BY created_at DESC LIMIT 500'
         );
         return allTickets.filter(t => isTicketInTimeRange(t, config));
     } else {
         // manual or auto
         return await dbAdapter.query(
-            'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC',
+            'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC LIMIT 500',
             [portalId]
         );
     }
@@ -179,14 +180,14 @@ router.get('/:slug/chat/:phone', verifyPortalToken, async (req, res) => {
             [cleanPhone, `+${cleanPhone}`, `91${cleanPhone}`, `+91${cleanPhone}`]
         );
 
-        // Get messages
+        // Get messages (optimized - normalize phone to single format)
         const messages = await dbAdapter.query(
             `SELECT id, customer_phone, message_type, message_content, status, wa_message_id, created_at
              FROM messages
-             WHERE customer_phone IN (?, ?, ?, ?)
+             WHERE customer_phone = ?
              ORDER BY created_at DESC
              LIMIT 200`,
-            [cleanPhone, `+${cleanPhone}`, `91${cleanPhone}`, `+91${cleanPhone}`]
+            [cleanPhone]
         );
 
         const formattedMessages = messages.reverse().map(msg => ({

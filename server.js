@@ -368,18 +368,16 @@ async function startServer() {
         console.log('📊 Initializing cache statistics logging...');
         startCacheStatsLogging(5 * 60 * 1000);
 
-        // Warm up cache with frequently accessed data
+        // Warm up cache with frequently accessed data (optimized - skip slow message count)
         console.log('🔥 Warming up cache...');
         try {
             const Customer = require('./src/models/Customer');
             const Order = require('./src/models/Order');
-            const Message = require('./src/models/Message');
             
-            // Pre-load counts
+            // Pre-load fast counts only (skip message count - too slow on large tables)
             await Promise.all([
                 Customer.getCount(),
-                Order.getCount(),
-                Message.getCount()
+                Order.getCount()
             ]);
             console.log('✅ Cache warmed up successfully');
         } catch (error) {
