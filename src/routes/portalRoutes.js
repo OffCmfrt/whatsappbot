@@ -174,20 +174,20 @@ router.get('/:slug/chat/:phone', verifyPortalToken, async (req, res) => {
         const cleanPhone = phone.replace(/\D/g, '');
         const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
 
-        // Get customer info
+        // Get customer info (optimized - use single formatted phone lookup)
         const customerInfo = await dbAdapter.query(
-            'SELECT name, phone, email FROM customers WHERE phone IN (?, ?, ?, ?)',
-            [cleanPhone, `+${cleanPhone}`, `91${cleanPhone}`, `+91${cleanPhone}`]
+            'SELECT name, phone, email FROM customers WHERE phone = ?',
+            [formattedPhone]
         );
 
-        // Get messages (optimized - normalize phone to single format)
+        // Get messages (optimized - use single formatted phone lookup)
         const messages = await dbAdapter.query(
             `SELECT id, customer_phone, message_type, message_content, status, wa_message_id, created_at
              FROM messages
              WHERE customer_phone = ?
              ORDER BY created_at DESC
              LIMIT 200`,
-            [cleanPhone]
+            [formattedPhone]
         );
 
         const formattedMessages = messages.reverse().map(msg => ({

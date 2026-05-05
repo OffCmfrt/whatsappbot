@@ -538,12 +538,14 @@ class BroadcastService {
     // Cleanup old messages to keep only last 200 per customer (optimized)
     async _cleanupOldMessages(phone) {
         try {
+            // Normalize phone to match DB storage format (with + prefix)
             const cleanPhone = phone.replace(/\D/g, '');
+            const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
             
             // OPTIMIZED: Only run cleanup if customer has more than 250 messages
             const countResult = await dbAdapter.query(
                 'SELECT COUNT(*) as count FROM messages WHERE customer_phone = ?',
-                [cleanPhone]
+                [formattedPhone]
             );
             const messageCount = countResult[0]?.count || 0;
             
@@ -562,7 +564,7 @@ class BroadcastService {
                      ORDER BY created_at DESC 
                      LIMIT 1 OFFSET 200
                  )`,
-                [cleanPhone, cleanPhone]
+                [formattedPhone, formattedPhone]
             );
         } catch (error) {
             // Silent fail - cleanup is best effort
