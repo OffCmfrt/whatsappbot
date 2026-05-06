@@ -874,7 +874,7 @@ async function ensureTemplatesTable() {
             }
         }
     }
-});
+}
 
 // Create new template and submit to Meta
 router.post('/templates/create', verifyToken, async (req, res) => {
