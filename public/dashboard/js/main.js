@@ -699,7 +699,8 @@ async function loadMessages() {
 function renderMessagesTable(messages) {
     const tbody = document.getElementById('messagesTableBody');
 
-    if (messages.length === 0) {
+    // Safety check for undefined or null
+    if (!messages || messages.length === 0) {
         tbody.innerHTML = `
             <tr>
                 <td colspan="4" class="text-center">
@@ -3529,14 +3530,15 @@ function filterMessages() {
     const typeFilter = document.getElementById('messageTypeFilter').value;
     const dateFilter = document.getElementById('messageDateFilter').value;
 
-    let filtered = window.messagesData;
+    // Safety check for undefined window.messagesData
+    let filtered = window.messagesData || [];
 
     if (typeFilter) {
         filtered = filtered.filter(m => m.message_type === typeFilter);
     }
 
     if (dateFilter) {
-        filtered = filtered.filter(m => m.created_at.startsWith(dateFilter));
+        filtered = filtered.filter(m => m.created_at && m.created_at.startsWith(dateFilter));
     }
 
     renderMessagesTable(filtered);
@@ -3640,6 +3642,12 @@ function formatTimeAgo(dateString) {
 
 function formatPhone(phone) {
     return phone.replace(/(\d{2})(\d{5})(\d{5})/, '+$1 $2-$3');
+}
+
+function truncate(str, maxLen) {
+    if (!str) return '';
+    if (str.length <= maxLen) return str;
+    return str.substring(0, maxLen) + '...';
 }
 
 function getStatusBadge(status) {
