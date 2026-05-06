@@ -481,20 +481,29 @@ class WhatsAppService {
         }
     }
 
-    // Get official message templates from Meta
+    // Get official message templates from Meta with pagination
     async getTemplates() {
         try {
-            const response = await axios.get(
-                `${this.wabaBaseURL}/message_templates`,
-                {
+            let allTemplates = [];
+            let nextUrl = `${this.wabaBaseURL}/message_templates?limit=100`;
+            
+            while (nextUrl) {
+                const response = await axios.get(nextUrl, {
                     headers: {
                         'Authorization': `Bearer ${this.accessToken}`
                     }
+                });
+                
+                if (response.data.data) {
+                    allTemplates = allTemplates.concat(response.data.data);
+                    console.log(`✅ Fetched ${response.data.data.length} templates (total: ${allTemplates.length})`);
                 }
-            );
-
-            console.log(`✅ Fetched ${response.data.data?.length || 0} templates from Meta`);
-            return response.data;
+                
+                nextUrl = response.data.paging?.next || null;
+            }
+            
+            console.log(`✅ Total templates fetched from Meta: ${allTemplates.length}`);
+            return { data: allTemplates };
         } catch (error) {
             console.error('❌ Error fetching templates from Meta:', error.response?.data || error.message);
             throw error;

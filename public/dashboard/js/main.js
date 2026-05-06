@@ -182,6 +182,15 @@ function setupEventListeners() {
     document.querySelectorAll('[data-action="switchBroadcastTab"]').forEach(btn => {
         btn.addEventListener('click', (e) => switchBroadcastTab(e, btn.dataset.tab));
     });
+    
+    // Template search
+    initTemplateSearch();
+    
+    // Load templates button
+    document.getElementById('loadTemplatesBtn')?.addEventListener('click', loadTemplates);
+    
+    // Sync templates button (if exists)
+    document.getElementById('syncTemplatesBtn')?.addEventListener('click', syncTemplates);
 
     // Customer & recipient modals
     document.getElementById('closeCustomerModalBtn')?.addEventListener('click', closeCustomerModal);
@@ -228,6 +237,35 @@ function setupEventListeners() {
                 break;
             case 'removeRow':
                 actionEl.closest('.d-flex')?.remove();
+                break;
+            // Template management actions
+            case 'closeTemplateModal':
+                closeTemplateModal();
+                break;
+            case 'createTemplate':
+                openTemplateModal();
+                break;
+            case 'submitTemplate':
+                submitTemplate(e);
+                break;
+            case 'addQuickReplyButton':
+                addButtonRow();
+                break;
+            case 'checkTemplateStatus':
+                checkTemplateStatus(actionEl.dataset.id);
+                break;
+            case 'deleteTemplate':
+                deleteTemplate(actionEl.dataset.id);
+                break;
+            case 'selectTemplate':
+                handleTemplateSelection(actionEl.dataset.template);
+                break;
+            case 'formatBold':
+            case 'formatItalic':
+            case 'formatStrikethrough':
+            case 'insertEmoji':
+            case 'insertVariable':
+                handleToolbarAction(action);
                 break;
         }
     });
@@ -3040,16 +3078,35 @@ async function handleBroadcast(e) {
                 imageUrl
             });
         } else {
-            const templateName = document.getElementById('broadcastTemplate').value;
+            // Template broadcast with variable support
+            const selectedCard = document.querySelector('.template-card.selected');
+            const templateName = selectedCard ? selectedCard.dataset.template : '';
+            
             if (!templateName) throw new Error('Please select a template');
 
             const template = window.metaTemplates?.find(t => t.name === templateName);
+            
+            // Collect variable values if template has variables
+            const varInputs = document.querySelectorAll('.template-var-input');
+            const components = [];
+            
+            if (varInputs.length > 0) {
+                const parameters = Array.from(varInputs).map(input => ({
+                    type: 'text',
+                    text: input.value || `[${input.dataset.var}]`
+                }));
+                
+                components.push({
+                    type: 'body',
+                    parameters
+                });
+            }
 
             response = await apiCall('/broadcast/template', 'POST', {
                 ...commonData,
                 templateName,
                 language: template?.language || 'en_US',
-                components: []
+                components
             });
         }
 
@@ -3058,6 +3115,8 @@ async function handleBroadcast(e) {
             document.getElementById('broadcastForm').reset();
             currentBroadcastRecipients = [];
             document.getElementById('selectionPreview').style.display = 'none';
+            document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
+            document.getElementById('templateVariablesArea').style.display = 'none';
             toggleBroadcastType();
             loadBroadcastHistory();
             updateRecipientCount();
@@ -3250,6 +3309,24 @@ function toggleBroadcastType() {
     }
 }
 
+// Template search functionality
+function initTemplateSearch() {
+    const searchInput = document.getElementById('templateSearch');
+    if (!searchInput) return;
+    
+    searchInput.addEventListener('input', (e) => {
+        const searchTerm = e.target.value.toLowerCase();
+        const filtered = window.metaTemplates?.filter(t => 
+            t.status === 'APPROVED' && (
+                t.name.toLowerCase().includes(searchTerm) ||
+                t.category.toLowerCase().includes(searchTerm)
+            )
+        ) || [];
+        
+        renderTemplateList(filtered);
+    });
+}
+
 async function loadTemplates() {
     try {
         const tbody = document.getElementById('templatesTableBody');
@@ -3260,6 +3337,9 @@ async function loadTemplates() {
             window.metaTemplates = response.templates || [];
             renderTemplatesTable(window.metaTemplates);
             updateTemplateDropdown(window.metaTemplates);
+            
+            // Also render template cards for broadcast if container exists
+            renderTemplateList(window.metaTemplates);
         }
     } catch (error) {
         console.error('Failed to load templates:', error);
@@ -4352,4 +4432,493 @@ function renderAllOrders(orders) {
             </div>
         </div>
     `).join('');
+}
+
+// ===================================
+// Template Editor & Management Functions
+// ===================================
+
+// Initialize template editor when modal opens
+function initTemplateEditor() {
+    // Toolbar actions
+    document.querySelectorAll('.toolbar-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const action = e.currentTarget.dataset.action;
+            handleToolbarAction(action);
+        });
+    });
+    
+    // Auto-detect variables
+    const bodyTextarea = document.getElementById('templateBody');
+    if (bodyTextarea) {
+        bodyTextarea.addEventListener('input', updateVariables);
+        bodyTextarea.addEventListener('input', updateTemplatePreview);
+    }
+    
+    // Header type change
+    const headerType = document.getElementById('headerType');
+    if (headerType) {
+        headerType.addEventListener('change', handleHeaderTypeChange);
+    }
+    
+    // Footer change
+    const footerInput = document.getElementById('templateFooter');
+    if (footerInput) {
+        footerInput.addEventListener('input', updateTemplatePreview);
+    }
+    
+    // Initialize emoji picker
+    initEmojiPicker();
+}
+
+function handleToolbarAction(action) {
+    const textarea = document.getElementById('templateBody');
+    if (!textarea) return;
+    
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selectedText = textarea.value.substring(start, end);
+    let replacement = '';
+    
+    switch(action) {
+        case 'formatBold':
+            replacement = `*${selectedText || 'bold text'}*`;
+            break;
+        case 'formatItalic':
+            replacement = `_${selectedText || 'italic text'}_`;
+            break;
+        case 'formatStrikethrough':
+            replacement = `~${selectedText || 'strikethrough'}~`;
+            break;
+        case 'insertEmoji':
+            toggleEmojiPicker();
+            return;
+        case 'insertVariable':
+            replacement = insertNextVariable();
+            break;
+    }
+    
+    textarea.value = textarea.value.substring(0, start) + replacement + textarea.value.substring(end);
+    textarea.focus();
+    textarea.selectionStart = textarea.selectionEnd = start + replacement.length;
+    updateVariables();
+    updateTemplatePreview();
+}
+
+function insertNextVariable() {
+    const body = document.getElementById('templateBody').value;
+    const existingVars = body.match(/\{\{(\d+)\}\}/g) || [];
+    const nextNum = existingVars.length + 1;
+    return `{{${nextNum}}}`;
+}
+
+function updateVariables() {
+    const body = document.getElementById('templateBody').value;
+    const variables = body.match(/\{\{(\d+)\}\}/g) || [];
+    const uniqueVars = [...new Set(variables)];
+    
+    const variablesList = document.getElementById('variablesList');
+    if (!variablesList) return;
+    
+    if (uniqueVars.length === 0) {
+        variablesList.innerHTML = '<p class="text-small text-muted">Variables will appear here as you type them in the body</p>';
+        return;
+    }
+    
+    variablesList.innerHTML = uniqueVars.map(v => `
+        <div class="variable-item">
+            <span>${v}</span>
+            <input type="text" class="wa-input variable-example" data-var="${v}" 
+                   placeholder="Example value for ${v}">
+        </div>
+    `).join('');
+}
+
+function updateTemplatePreview() {
+    const body = document.getElementById('templateBody').value;
+    const headerType = document.getElementById('headerType').value;
+    const headerText = document.getElementById('headerText').value;
+    const footer = document.getElementById('templateFooter').value;
+    
+    if (!body) {
+        document.getElementById('templateLivePreview').innerHTML = `
+            <div class="preview-body" style="color: #999;">
+                Start typing to see preview...
+            </div>
+        `;
+        return;
+    }
+    
+    // Convert WhatsApp markdown to HTML for preview
+    let htmlBody = escapeHtml(body)
+        .replace(/\*([^*]+)\*/g, '<strong>$1</strong>')
+        .replace(/_([^_]+)_/g, '<em>$1</em>')
+        .replace(/~([^~]+)~/g, '<s>$1</s>')
+        .replace(/```([^`]+)```/g, '<code>$1</code>')
+        .replace(/\n/g, '<br>');
+    
+    let previewHTML = '';
+    
+    if (headerType === 'TEXT' && headerText) {
+        previewHTML += `<div class="preview-header">${escapeHtml(headerText)}</div>`;
+    } else if (headerType === 'IMAGE') {
+        previewHTML += `<div class="preview-header">[Image Header]</div>`;
+    }
+    
+    previewHTML += `<div class="preview-body">${htmlBody}</div>`;
+    
+    if (footer) {
+        previewHTML += `<div class="preview-footer">${escapeHtml(footer)}</div>`;
+    }
+    
+    document.getElementById('templateLivePreview').innerHTML = previewHTML;
+}
+
+function handleHeaderTypeChange() {
+    const headerType = document.getElementById('headerType').value;
+    const headerContentArea = document.getElementById('headerContentArea');
+    const textHeaderArea = document.getElementById('textHeaderArea');
+    const imageHeaderArea = document.getElementById('imageHeaderArea');
+    
+    if (headerType === 'NONE') {
+        headerContentArea.style.display = 'none';
+    } else {
+        headerContentArea.style.display = 'block';
+        textHeaderArea.style.display = headerType === 'TEXT' ? 'block' : 'none';
+        imageHeaderArea.style.display = headerType === 'IMAGE' ? 'block' : 'none';
+    }
+}
+
+// Simple emoji picker
+function initEmojiPicker() {
+    const emojis = [
+        '😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊',
+        '😇', '🙂', '😉', '😌', '😍', '🥰', '😘', '😗',
+        '👍', '👎', '👏', '🙏', '💪', '❤️', '🔥', '⭐',
+        '✅', '❌', '⚡', '🎉', '🎊', '💯', '📦', '🛒',
+        '📞', '📧', '💬', '👋', '🤝', '🎁', '💰', '📱'
+    ];
+    
+    const picker = document.getElementById('emojiPicker');
+    if (!picker) return;
+    
+    picker.innerHTML = emojis.map(emoji => 
+        `<button type="button" class="emoji-btn" data-emoji="${emoji}">${emoji}</button>`
+    ).join('');
+    
+    picker.addEventListener('click', (e) => {
+        if (e.target.classList.contains('emoji-btn')) {
+            const emoji = e.target.dataset.emoji;
+            const textarea = document.getElementById('templateBody');
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            
+            textarea.value = textarea.value.substring(0, start) + emoji + textarea.value.substring(end);
+            textarea.focus();
+            toggleEmojiPicker();
+            updateTemplatePreview();
+        }
+    });
+}
+
+function toggleEmojiPicker() {
+    const picker = document.getElementById('emojiPicker');
+    if (picker) {
+        picker.style.display = picker.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+// Button management
+function addButtonRow(text = '') {
+    const builder = document.getElementById('quickReplyBuilder');
+    if (!builder) return;
+    
+    if (builder.children.length >= 3) {
+        alert('Maximum 3 buttons allowed');
+        return;
+    }
+    
+    const div = document.createElement('div');
+    div.className = 'd-flex gap-2 mb-2';
+    div.innerHTML = `
+        <input type="text" class="wa-input btn-text" style="flex:1" placeholder="Button text" maxlength="25" value="${text}">
+        <button type="button" class="btn btn-danger btn-sm btn-remove-row">×</button>
+    `;
+    builder.appendChild(div);
+    
+    // Add remove handler
+    div.querySelector('.btn-remove-row').addEventListener('click', () => {
+        div.remove();
+    });
+}
+
+// Submit template to Meta
+async function submitTemplate(e) {
+    e.preventDefault();
+    
+    const name = document.getElementById('templateNameInput').value.trim();
+    const category = document.getElementById('templateCategory').value;
+    const language = document.getElementById('templateLanguage').value;
+    const headerType = document.getElementById('headerType').value;
+    const headerText = document.getElementById('headerText').value;
+    const headerImageUrl = document.getElementById('headerImageUrl').value;
+    const body = document.getElementById('templateBody').value.trim();
+    const footer = document.getElementById('templateFooter').value.trim();
+    
+    if (!name || !body) {
+        alert('Template name and body content are required');
+        return;
+    }
+    
+    // Collect buttons
+    const buttons = Array.from(document.querySelectorAll('#quickReplyBuilder .d-flex')).map(row => {
+        const text = row.querySelector('.btn-text').value.trim();
+        return text ? { text } : null;
+    }).filter(b => b);
+    
+    // Collect example values
+    const exampleInputs = document.querySelectorAll('.variable-example');
+    const exampleValues = Array.from(exampleInputs).map(input => input.value || `Example ${input.dataset.var}`);
+    
+    const payload = {
+        name,
+        category,
+        language,
+        headerType,
+        headerText,
+        headerImageUrl,
+        body,
+        footer,
+        buttons,
+        exampleValues
+    };
+    
+    try {
+        const submitBtn = document.getElementById('submitTemplateBtn');
+        const originalHTML = submitBtn.innerHTML;
+        submitBtn.innerHTML = '<div class="wa-spinner" style="width:16px;height:16px;"></div> Submitting...';
+        submitBtn.disabled = true;
+        
+        const response = await apiCall('/templates/create', 'POST', payload);
+        
+        submitBtn.innerHTML = originalHTML;
+        submitBtn.disabled = false;
+        
+        if (response.success) {
+            alert('✅ ' + response.message);
+            closeTemplateModal();
+            loadTemplates(); // Refresh template list
+        } else {
+            alert('❌ ' + (response.error || 'Failed to create template'));
+        }
+    } catch (error) {
+        console.error('Template submission error:', error);
+        alert('Failed to submit template: ' + error.message);
+        document.getElementById('submitTemplateBtn').disabled = false;
+    }
+}
+
+function openTemplateModal() {
+    document.getElementById('createTemplateModal').style.display = 'block';
+    initTemplateEditor();
+    updateTemplatePreview();
+}
+
+function closeTemplateModal() {
+    document.getElementById('createTemplateModal').style.display = 'none';
+    document.getElementById('createTemplateForm').reset();
+    document.getElementById('quickReplyBuilder').innerHTML = '';
+    document.getElementById('variablesList').innerHTML = '<p class="text-small text-muted">Variables will appear here as you type them in the body</p>';
+    updateTemplatePreview();
+}
+
+// Enhanced template table rendering
+function renderTemplatesTable(templates) {
+    const tbody = document.getElementById('templatesTableBody');
+    if (!tbody) return;
+
+    if (!templates || templates.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center">No templates found. Click "Refresh" to sync from Meta or "Create New" to build a template.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = templates.map(t => {
+        const components = typeof t.components === 'string' ? JSON.parse(t.components) : t.components;
+        const bodyComp = components?.find(c => c.type === 'BODY');
+        const buttons = components?.find(c => c.type === 'BUTTONS')?.buttons || [];
+        
+        return `
+        <tr>
+            <td>
+                <strong>${t.name}</strong>
+                <div class="text-small text-muted">${bodyComp?.text?.substring(0, 50) || 'No body'}...</div>
+            </td>
+            <td><span class="badge badge-gray">${t.category}</span></td>
+            <td>${t.language || 'N/A'}</td>
+            <td>
+                <span class="badge ${
+                    t.status === 'APPROVED' ? 'badge-success' : 
+                    t.status === 'PENDING' ? 'badge-warning' : 
+                    t.status === 'REJECTED' ? 'badge-danger' : 'badge-gray'
+                }">${t.status || 'UNKNOWN'}</span>
+                ${t.status === 'REJECTED' && t.rejection_reason ? 
+                    `<div class="text-small text-danger" title="${escapeHtml(t.rejection_reason)}">⚠️ Rejected</div>` : ''}
+            </td>
+            <td>
+                <div class="d-flex gap-1">
+                    ${t.status === 'APPROVED' ? 
+                        `<button class="btn btn-sm btn-primary" data-action="initiateTemplateBroadcast" data-template="${t.name}">Use</button>` : ''}
+                    ${t.status === 'PENDING' ? 
+                        `<button class="btn btn-sm btn-secondary" data-action="checkTemplateStatus" data-id="${t.id}">Check Status</button>` : ''}
+                    ${t.status !== 'APPROVED' ? 
+                        `<button class="btn btn-sm btn-danger" data-action="deleteTemplate" data-id="${t.id}">Delete</button>` : ''}
+                </div>
+            </td>
+        </tr>
+        `;
+    }).join('');
+}
+
+// Enhanced template list for broadcast
+function renderTemplateList(templates) {
+    const container = document.getElementById('templateList');
+    if (!container) return;
+    
+    const approved = templates.filter(t => t.status === 'APPROVED');
+    
+    if (approved.length === 0) {
+        container.innerHTML = '<p class="text-center text-muted">No approved templates available</p>';
+        return;
+    }
+    
+    container.innerHTML = approved.map(t => {
+        const components = typeof t.components === 'string' ? JSON.parse(t.components) : t.components;
+        const bodyComp = components?.find(c => c.type === 'BODY');
+        const buttons = components?.find(c => c.type === 'BUTTONS')?.buttons || [];
+        
+        return `
+        <div class="template-card" data-template="${t.name}" data-action="selectTemplate">
+            <div class="template-card-header">
+                <strong>${t.name}</strong>
+                <span class="badge badge-success">${t.category}</span>
+            </div>
+            <div class="template-card-body">
+                ${bodyComp?.text?.substring(0, 100) || 'No preview'}...
+            </div>
+            ${buttons.length > 0 ? `
+                <div class="template-card-buttons">
+                    ${buttons.map(b => `<span class="badge badge-gray">${b.text}</span>`).join(' ')}
+                </div>
+            ` : ''}
+        </div>
+        `;
+    }).join('');
+}
+
+// Handle template selection in broadcast
+function handleTemplateSelection(templateName) {
+    const template = window.metaTemplates?.find(t => t.name === templateName);
+    if (!template) return;
+    
+    // Highlight selected template
+    document.querySelectorAll('.template-card').forEach(card => {
+        card.classList.toggle('selected', card.dataset.template === templateName);
+    });
+    
+    // Show variables area
+    const components = typeof template.components === 'string' ? JSON.parse(template.components) : template.components;
+    const bodyComp = components?.find(c => c.type === 'BODY');
+    const variables = bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || [];
+    const uniqueVars = [...new Set(variables)];
+    
+    const variablesArea = document.getElementById('templateVariablesArea');
+    const variablesInputs = document.getElementById('templateVariablesInputs');
+    
+    if (uniqueVars.length > 0 && variablesArea && variablesInputs) {
+        variablesArea.style.display = 'block';
+        variablesInputs.innerHTML = uniqueVars.map(v => `
+            <div class="form-group">
+                <label>Variable ${v}</label>
+                <input type="text" class="wa-input template-var-input" data-var="${v}" 
+                       placeholder="Enter value for ${v}">
+            </div>
+        `).join('');
+    } else if (variablesArea) {
+        variablesArea.style.display = 'none';
+    }
+    
+    // Update broadcast form
+    document.getElementById('broadcastTemplate').value = templateName;
+}
+
+// Check template status
+async function checkTemplateStatus(id) {
+    try {
+        const response = await apiCall(`/templates/${id}/status`);
+        if (response.success) {
+            alert(`Template status: ${response.status}${response.rejection_reason ? '\nReason: ' + response.rejection_reason : ''}`);
+            loadTemplates();
+        }
+    } catch (error) {
+        alert('Failed to check template status: ' + error.message);
+    }
+}
+
+// Delete template
+async function deleteTemplate(id) {
+    if (!confirm('Are you sure you want to delete this template? This action cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        const response = await apiCall(`/templates/${id}`, 'DELETE');
+        if (response.success) {
+            alert('Template deleted successfully');
+            loadTemplates();
+        }
+    } catch (error) {
+        alert('Failed to delete template: ' + error.message);
+    }
+}
+
+// Enhanced broadcast with template variables
+async function startTemplateBroadcast(phones) {
+    const templateName = document.getElementById('broadcastTemplate').value;
+    if (!templateName) {
+        alert('Please select a template');
+        return;
+    }
+    
+    // Collect variable values
+    const varInputs = document.querySelectorAll('.template-var-input');
+    const components = [];
+    
+    if (varInputs.length > 0) {
+        const parameters = Array.from(varInputs).map(input => ({
+            type: 'text',
+            text: input.value || `[${input.dataset.var}]`
+        }));
+        
+        components.push({
+            type: 'body',
+            parameters
+        });
+    }
+    
+    const payload = {
+        templateName,
+        language: 'en_US',
+        components,
+        delay_seconds: parseInt(document.getElementById('broadcastDelay').value) || 5,
+        phones
+    };
+    
+    const response = await apiCall('/broadcast/template', 'POST', payload);
+    if (response.success) {
+        showToast(`✅ Template broadcast queued for ${response.totalRecipients} recipients!`, 'success');
+        return true;
+    } else {
+        alert('❌ ' + (response.error || 'Failed to start broadcast'));
+        return false;
+    }
 }

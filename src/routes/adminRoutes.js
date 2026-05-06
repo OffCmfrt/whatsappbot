@@ -751,29 +751,81 @@ router.get('/templates/sync', verifyToken, async (req, res) => {
         const metaTemplates = metaResponse.data || [];
 
         await ensureTemplatesTable();
+        
+        let syncedCount = 0;
         for (const t of metaTemplates) {
-            // Upsert logic
+            // Extract components
+            const bodyComponent = t.components?.find(c => c.type === 'BODY');
+            const headerComponent = t.components?.find(c => c.type === 'HEADER');
+            const footerComponent = t.components?.find(c => c.type === 'FOOTER');
+            const buttonsComponent = t.components?.find(c => c.type === 'BUTTONS');
+            
+            // Count variables in body text
+            const bodyText = bodyComponent?.text || '';
+            const variablesCount = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
+            
+            // Get rejection reason if rejected
+            let rejectionReason = null;
+            if (t.status === 'REJECTED') {
+                rejectionReason = t.error_reason || 'Meta policy violation';
+            }
+            
+            // Upsert logic with enhanced component data
             const existing = await dbAdapter.query('SELECT id FROM templates WHERE name = ?', [t.name]);
             if (existing && existing.length > 0) {
                 await dbAdapter.query(
-                    `UPDATE templates SET category=?, status=?, language=?, body=?, components=?, updated_at=? WHERE name=?`,
-                    [t.category, t.status, t.language, '', JSON.stringify(t.components), new Date().toISOString(), t.name]
+                    `UPDATE templates SET 
+                        category=?, status=?, language=?, body=?, header=?, footer=?, 
+                        buttons=?, components=?, variables_count=?, rejection_reason=?, updated_at=? 
+                    WHERE name=?`,
+                    [
+                        t.category, 
+                        t.status, 
+                        t.language, 
+                        bodyText,
+                        headerComponent?.text || headerComponent?.format || '',
+                        footerComponent?.text || '',
+                        JSON.stringify(buttonsComponent?.buttons || []),
+                        JSON.stringify(t.components),
+                        variablesCount,
+                        rejectionReason,
+                        new Date().toISOString(), 
+                        t.name
+                    ]
                 );
             } else {
                 await dbAdapter.query(
-                    `INSERT INTO templates (id, name, category, status, language, body, components, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [t.id || `meta_${Date.now()}_${Math.random()}`, t.name, t.category, t.status, t.language, '', JSON.stringify(t.components), new Date().toISOString()]
+                    `INSERT INTO templates (
+                        id, name, category, status, language, body, header, footer, 
+                        buttons, components, variables_count, rejection_reason, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        t.id || `meta_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, 
+                        t.name, 
+                        t.category, 
+                        t.status, 
+                        t.language, 
+                        bodyText,
+                        headerComponent?.text || headerComponent?.format || '',
+                        footerComponent?.text || '',
+                        JSON.stringify(buttonsComponent?.buttons || []),
+                        JSON.stringify(t.components),
+                        variablesCount,
+                        rejectionReason,
+                        new Date().toISOString()
+                    ]
                 );
             }
+            syncedCount++;
         }
         
         // Invalidate cache after template changes
         invalidateCache();
 
-        res.json({ success: true, count: metaTemplates.length });
+        res.json({ success: true, count: syncedCount, message: `Successfully synced ${syncedCount} templates from Meta` });
     } catch (error) {
         console.error('Sync error:', error);
-        res.status(500).json({ error: 'Failed to sync templates from Meta' });
+        res.status(500).json({ error: 'Failed to sync templates from Meta', details: error.message });
     }
 });
 
@@ -784,7 +836,15 @@ async function ensureTemplatesTable() {
             id TEXT PRIMARY KEY,
             name TEXT,
             category TEXT,
+            status TEXT,
+            language TEXT,
             body TEXT,
+            header TEXT,
+            footer TEXT,
+            buttons TEXT,
+            components TEXT,
+            variables_count INTEGER DEFAULT 0,
+            rejection_reason TEXT,
             image_url TEXT,
             updated_at TEXT
         )
@@ -794,7 +854,12 @@ async function ensureTemplatesTable() {
     const columns = [
         { name: 'status', type: 'TEXT' },
         { name: 'language', type: 'TEXT' },
-        { name: 'components', type: 'TEXT' }
+        { name: 'components', type: 'TEXT' },
+        { name: 'header', type: 'TEXT' },
+        { name: 'footer', type: 'TEXT' },
+        { name: 'buttons', type: 'TEXT' },
+        { name: 'variables_count', type: 'INTEGER DEFAULT 0' },
+        { name: 'rejection_reason', type: 'TEXT' }
     ];
 
     for (const col of columns) {
@@ -803,12 +868,217 @@ async function ensureTemplatesTable() {
             console.log(`✅ Added column ${col.name} to templates table`);
         } catch (err) {
             // Ignore error if column already exists
-            if (!err.message.includes('duplicate column name')) {
-                console.log(`ℹ️ Column ${col.name} might already exist or handled by Turso`);
+            if (!err.message.includes('duplicate column name') && 
+                !err.message.includes('SQLITE_ERROR')) {
+                console.log(`ℹ️ Column ${col.name} might already exist: ${err.message}`);
             }
         }
     }
-}
+});
+
+// Create new template and submit to Meta
+router.post('/templates/create', verifyToken, async (req, res) => {
+    try {
+        const { 
+            name, category, language, headerType, headerText, headerImageUrl,
+            body, footer, buttons, exampleValues 
+        } = req.body;
+        
+        // Validate template name
+        if (!name || !/^[a-z0-9_]+$/.test(name)) {
+            return res.status(400).json({ 
+                error: 'Template name must contain only lowercase letters, numbers, and underscores' 
+            });
+        }
+        
+        if (name.length > 512) {
+            return res.status(400).json({ error: 'Template name must be 512 characters or less' });
+        }
+        
+        // Build template components
+        const components = [];
+        
+        // Add header if present
+        if (headerType !== 'NONE') {
+            if (headerType === 'TEXT') {
+                if (!headerText) {
+                    return res.status(400).json({ error: 'Header text is required for TEXT header type' });
+                }
+                components.push({
+                    type: 'HEADER',
+                    format: 'TEXT',
+                    text: headerText
+                });
+            } else if (headerType === 'IMAGE') {
+                if (!headerImageUrl) {
+                    return res.status(400).json({ error: 'Image URL is required for IMAGE header type' });
+                }
+                components.push({
+                    type: 'HEADER',
+                    format: 'IMAGE',
+                    example: {
+                        header_handle: [headerImageUrl]
+                    }
+                });
+            }
+        }
+        
+        // Validate body
+        if (!body) {
+            return res.status(400).json({ error: 'Body content is required' });
+        }
+        
+        // Add body with examples
+        const bodyComponent = {
+            type: 'BODY',
+            text: body
+        };
+        
+        if (exampleValues && Array.isArray(exampleValues)) {
+            bodyComponent.example = {
+                body_text: [exampleValues]
+            };
+        }
+        
+        components.push(bodyComponent);
+        
+        // Add footer if present
+        if (footer && footer.trim()) {
+            components.push({
+                type: 'FOOTER',
+                text: footer
+            });
+        }
+        
+        // Add buttons if present
+        if (buttons && buttons.length > 0) {
+            if (buttons.length > 3) {
+                return res.status(400).json({ error: 'Maximum 3 buttons allowed' });
+            }
+            
+            components.push({
+                type: 'BUTTONS',
+                buttons: buttons.map(btn => ({
+                    type: 'QUICK_REPLY',
+                    text: btn.text.substring(0, 25) // Meta limit is 25 chars
+                }))
+            });
+        }
+        
+        // Submit to Meta API
+        const whatsappService = require('../services/whatsappService');
+        const axios = require('axios');
+        const response = await axios.post(
+            `${whatsappService.wabaBaseURL}/message_templates`,
+            {
+                name,
+                language,
+                category,
+                components
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${whatsappService.accessToken}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+        
+        // Save to local DB with PENDING status
+        await dbAdapter.query(
+            `INSERT INTO templates (id, name, category, status, language, body, header, footer, buttons, components, variables_count, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                response.data.id || `tpl_${Date.now()}`,
+                name,
+                category,
+                'PENDING',
+                language,
+                body,
+                headerText || '',
+                footer || '',
+                JSON.stringify(buttons),
+                JSON.stringify(components),
+                (body.match(/\{\{\d+\}\}/g) || []).length,
+                new Date().toISOString()
+            ]
+        );
+        
+        res.json({ 
+            success: true, 
+            templateId: response.data.id,
+            message: 'Template submitted to Meta for approval. Approval usually takes 24-48 hours.' 
+        });
+        
+    } catch (error) {
+        console.error('Template creation error:', error.response?.data || error.message);
+        res.status(500).json({ 
+            error: 'Failed to create template',
+            details: error.response?.data?.error?.message || error.message
+        });
+    }
+});
+
+// Check template approval status
+router.get('/templates/:id/status', verifyToken, async (req, res) => {
+    try {
+        const whatsappService = require('../services/whatsappService');
+        const axios = require('axios');
+        const response = await axios.get(
+            `${whatsappService.wabaBaseURL}/message_templates/${req.params.id}`,
+            {
+                headers: { 'Authorization': `Bearer ${whatsappService.accessToken}` }
+            }
+        );
+        
+        // Update local DB
+        const template = response.data;
+        let rejectionReason = null;
+        if (template.status === 'REJECTED') {
+            rejectionReason = template.error_reason || 'Meta policy violation';
+        }
+        
+        await dbAdapter.query(
+            'UPDATE templates SET status = ?, rejection_reason = ?, updated_at = ? WHERE id = ?',
+            [template.status, rejectionReason, new Date().toISOString(), req.params.id]
+        );
+        
+        res.json({ success: true, status: template.status, rejection_reason: rejectionReason });
+    } catch (error) {
+        console.error('Status check error:', error);
+        res.status(500).json({ error: 'Failed to check template status' });
+    }
+});
+
+// Delete template
+router.delete('/templates/:id', verifyToken, async (req, res) => {
+    try {
+        const whatsappService = require('../services/whatsappService');
+        const axios = require('axios');
+        
+        // Try to delete from Meta first
+        try {
+            await axios.delete(
+                `${whatsappService.wabaBaseURL}/message_templates/${req.params.id}`,
+                {
+                    headers: { 'Authorization': `Bearer ${whatsappService.accessToken}` }
+                }
+            );
+        } catch (metaError) {
+            console.warn('Meta deletion failed, removing from local DB only:', metaError.message);
+        }
+        
+        // Delete from local DB
+        await dbAdapter.query('DELETE FROM templates WHERE id = ?', [req.params.id]);
+        
+        invalidateCache();
+        
+        res.json({ success: true, message: 'Template deleted successfully' });
+    } catch (error) {
+        console.error('Delete error:', error);
+        res.status(500).json({ error: 'Failed to delete template' });
+    }
+});
 
 async function ensureAutomationTable() {
     await dbAdapter.query(`
