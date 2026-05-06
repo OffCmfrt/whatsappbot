@@ -484,6 +484,9 @@ class WhatsAppService {
     // Get official message templates from Meta with pagination
     async getTemplates() {
         try {
+            console.log(`[TEMPLATES] Fetching from WABA ID: ${this.wabaId}`);
+            console.log(`[TEMPLATES] API Endpoint: ${this.wabaBaseURL}/message_templates`);
+            
             let allTemplates = [];
             let nextUrl = `${this.wabaBaseURL}/message_templates?limit=100`;
             
@@ -496,16 +499,16 @@ class WhatsAppService {
                 
                 if (response.data.data) {
                     allTemplates = allTemplates.concat(response.data.data);
-                    console.log(`✅ Fetched ${response.data.data.length} templates (total: ${allTemplates.length})`);
+                    console.log(`[TEMPLATES] Fetched ${response.data.data.length} templates (total: ${allTemplates.length})`);
                 }
                 
                 nextUrl = response.data.paging?.next || null;
             }
             
-            console.log(`✅ Total templates fetched from Meta: ${allTemplates.length}`);
+            console.log(`[TEMPLATES] Total templates fetched from Meta: ${allTemplates.length}`);
             return { data: allTemplates };
         } catch (error) {
-            console.error('❌ Error fetching templates from Meta:', error.response?.data || error.message);
+            console.error('[TEMPLATES] Error fetching templates from Meta:', error.response?.data || error.message);
             throw error;
         }
     }

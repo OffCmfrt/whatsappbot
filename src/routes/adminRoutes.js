@@ -750,10 +750,19 @@ router.get('/templates/sync', verifyToken, async (req, res) => {
         const metaResponse = await whatsappService.getTemplates();
         const metaTemplates = metaResponse.data || [];
 
+        console.log(`[TEMPLATES] Fetched ${metaTemplates.length} templates from Meta:`);
+        metaTemplates.forEach((t, idx) => {
+            console.log(`  ${idx + 1}. ${t.name} [${t.status}] [${t.language}] [${t.category}]`);
+        });
+
         await ensureTemplatesTable();
         
+        // Filter to only sync APPROVED templates (skip DRAFT, PENDING, REJECTED)
+        const approvedTemplates = metaTemplates.filter(t => t.status === 'APPROVED');
+        console.log(`[TEMPLATES] Filtering to APPROVED only: ${approvedTemplates.length} of ${metaTemplates.length}`);
+        
         let syncedCount = 0;
-        for (const t of metaTemplates) {
+        for (const t of approvedTemplates) {
             // Extract components
             const bodyComponent = t.components?.find(c => c.type === 'BODY');
             const headerComponent = t.components?.find(c => c.type === 'HEADER');
@@ -819,10 +828,27 @@ router.get('/templates/sync', verifyToken, async (req, res) => {
             syncedCount++;
         }
         
+        // Clear old templates that are no longer in Meta (sync cleanup)
+        const templateNames = approvedTemplates.map(t => t.name);
+        if (templateNames.length > 0) {
+            const placeholders = templateNames.map(() => '?').join(',');
+            await dbAdapter.query(
+                `DELETE FROM templates WHERE name NOT IN (${placeholders})`,
+                templateNames
+            );
+            console.log(`[TEMPLATES] Cleaned up old templates not in Meta account`);
+        }
+        
         // Invalidate cache after template changes
         invalidateCache();
 
-        res.json({ success: true, count: syncedCount, message: `Successfully synced ${syncedCount} templates from Meta` });
+        res.json({ 
+            success: true, 
+            count: syncedCount,
+            totalFetched: metaTemplates.length,
+            approvedOnly: approvedTemplates.length,
+            message: `Successfully synced ${syncedCount} APPROVED templates from Meta` 
+        });
     } catch (error) {
         console.error('Sync error:', error);
         res.status(500).json({ error: 'Failed to sync templates from Meta', details: error.message });
