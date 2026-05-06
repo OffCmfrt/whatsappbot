@@ -1127,53 +1127,7 @@ async function ensureAutomationTable() {
     }
 }
 
-// Get all automation configs
-router.get('/automation', verifyToken, async (req, res) => {
-    try {
-        await ensureAutomationTable();
-        const configs = await dbAdapter.select('automation_config', {}, { orderBy: 'type ASC' });
-        res.json({ success: true, configs });
-    } catch (error) {
-        console.error('Fetch automation error:', error);
-        res.status(500).json({ error: 'Failed to fetch automation configs' });
-    }
-});
 
-// Save/Update automation config
-router.post('/automation', verifyToken, async (req, res) => {
-    try {
-        const { key, type, content, description } = req.body;
-        await ensureAutomationTable();
-
-        const configData = {
-            key,
-            type,
-            content: typeof content === 'string' ? content : JSON.stringify(content),
-            description: description || '',
-            updated_at: new Date().toISOString()
-        };
-
-        console.log(`💾 Saving automation: ${key} (${type})`);
-        console.log(`📦 Payload:`, configData.content);
-
-        const existing = await dbAdapter.select('automation_config', { key });
-        if (existing && existing.length > 0) {
-            console.log(`🔄 Updating existing automation: ${key}`);
-            await dbAdapter.update('automation_config', configData, { key });
-        } else {
-            console.log(`🆕 Inserting new automation: ${key}`);
-            configData.id = req.body.id || `auto_${Date.now()}`;
-            await dbAdapter.insert('automation_config', configData);
-        }
-
-        // Invalidate cache after automation changes
-        invalidateCache();
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Save automation error:', error);
-        res.status(500).json({ error: 'Failed to save automation config' });
-    }
-});
 
 // Sync customers from Shiprocket
 router.post('/shiprocket/sync', verifyToken, async (req, res) => {
@@ -1309,75 +1263,7 @@ router.get('/customers/segments', verifyToken, async (req, res) => {
     }
 });
 
-// Sync default automation from hardcoded files
-router.post('/automation/sync', verifyToken, async (req, res) => {
-    try {
-        await ensureAutomationTable();
-        const faqHandler = require('../handlers/faqHandler');
-        const messageHandler = require('../handlers/messageHandler');
 
-        const defaults = [];
-
-        // Add FAQs (Simplified Active Style)
-        faqHandler.faqs.forEach(faq => {
-            let answer = faq.answer;
-
-            // Custom active return message provided by user
-            if (faq.keywords.includes('return')) {
-                answer = "To initiate a *Return*, please visit our website.\n\nOur team reviews all return requests within 24–48 hours. 🙏";
-            }
-
-            defaults.push({
-                id: `auto_faq_${faq.keywords[0]}`,
-                key: faq.keywords[0],
-                type: 'faq',
-                content: JSON.stringify({
-                    answer: answer,
-                    keywords: faq.keywords
-                })
-            });
-        });
-
-        // Add Welcome/Help (Simplified Active Style)
-        defaults.push({
-            id: 'auto_welcome',
-            key: 'welcome_message',
-            type: 'welcome',
-            content: JSON.stringify({ 
-                answer: "👋 Hi {{name}}! Welcome to OFFCOMFRT.\n\nI'm your personal shopping assistant. I can help you with orders, returns, exchanges and more!\n\nJust send me your *Order ID* to track it instantly! ✨" 
-            })
-        });
-
-        let syncCount = 0;
-        for (const config of defaults) {
-            config.updated_at = new Date().toISOString();
-            
-            // Overwrite existing keys to ensure "active" versions are loaded
-            const existing = await dbAdapter.select('automation_config', { key: config.key });
-            if (existing && existing.length > 0) {
-                await dbAdapter.update('automation_config', config, { key: config.key });
-            } else {
-                await dbAdapter.insert('automation_config', config);
-            }
-            syncCount++;
-        }
-        
-        // Invalidate cache after bulk sync
-        invalidateCache();
-
-        res.json({ success: true, count: syncCount });
-    } catch (error) {
-        console.error('❌ Automation sync error details:', {
-            message: error.message,
-            stack: error.stack,
-            code: error.code
-        });
-        res.status(500).json({ 
-            error: 'Failed to sync automation defaults', 
-            details: error.message 
-        });
-    }
-});
 
 router.post('/templates', verifyToken, async (req, res) => {
     try {
@@ -1436,46 +1322,7 @@ router.delete('/templates/:id', verifyToken, async (req, res) => {
     }
 });
 
-// ===================================
-// Returns & Exchanges Endpoints
-// ===================================
 
-router.get('/returns', verifyToken, async (req, res) => {
-    try {
-        const exchanges = await dbAdapter.query('SELECT * FROM exchanges ORDER BY created_at DESC');
-        res.json({ success: true, exchanges });
-    } catch (error) {
-        console.error('Error fetching exchanges:', error);
-        res.status(500).json({ error: 'Failed to fetch exchanges' });
-    }
-});
-
-// Status update endpoints
-['returns', 'exchanges'].forEach(type => {
-    router.post(`/${type}/:id/approve`, verifyToken, async (req, res) => {
-        try {
-            const result = type === 'returns'
-                ? await require('../services/returnService').approveReturn(req.params.id)
-                : await require('../services/returnService').approveExchange(req.params.id);
-            if (result.success) res.json(result);
-            else res.status(400).json({ error: result.error || result.message });
-        } catch (error) {
-            res.status(500).json({ error: `Failed to approve ${type.slice(0, -1)}` });
-        }
-    });
-
-    router.post(`/${type}/:id/reject`, verifyToken, async (req, res) => {
-        try {
-            const result = type === 'returns'
-                ? await require('../services/returnService').rejectReturn(req.params.id, req.body.reason)
-                : await require('../services/returnService').rejectExchange(req.params.id, req.body.reason);
-            if (result.success) res.json(result);
-            else res.status(400).json({ error: result.error });
-        } catch (error) {
-            res.status(500).json({ error: `Failed to reject ${type.slice(0, -1)}` });
-        }
-    });
-});
 
 // ===================================
 // Settings Routes
