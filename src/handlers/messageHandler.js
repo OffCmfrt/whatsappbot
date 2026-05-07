@@ -225,6 +225,10 @@ class MessageHandler {
 
 
 
+            // Check for request ID (REQ-XXXX to REQ-XXXXXX)
+            const requestIdHandled = await this.handleRequestId(phone, cleanMessage, lang);
+            if (requestIdHandled) return;
+
             // Check for return/exchange requests
             const returnExchangeHandled = await returnExchangeHandler.handle(phone, cleanMessage, lang);
             if (returnExchangeHandled) return;
@@ -505,6 +509,50 @@ class MessageHandler {
             : `📏 *Size Help*\n\n▫️ For sizing and measurement questions, please contact our support team.\n\n▫️ Type "support" to reach out.\n▫️ Our team will respond within *24 hours*.`;
 
         await whatsappService.sendMessage(phone, sizeRedirectMsg);
+        return true;
+    }
+
+    // Handle request ID tracking (REQ-XXXX to REQ-XXXXXX)
+    async handleRequestId(phone, message, lang = 'en') {
+        // Match REQ- followed by 4-6 digits
+        const requestIdPattern = /REQ-(\d{4,6})/i;
+        const match = message.match(requestIdPattern);
+        
+        if (!match) return false;
+
+        const requestId = match[0]; // Full match: REQ-XXXX
+        
+        const trackingMsg = [
+            `📦 *OFFCOMFRT — TRACK YOUR REQUEST*`,
+            ``,
+            ``,
+            `▫️ *Request ID:* ${requestId}`,
+            ``,
+            `▫️ Track the status of your return/exchange request using the button below.`,
+            ``,
+            `▫️ Our team processes all requests within *24-48 hours*.`,
+            ``,
+            ``
+        ].join('\n');
+
+        try {
+            await whatsappService.sendCtaUrlMessage(
+                phone,
+                trackingMsg,
+                'Track Request',
+                'https://offcomfrt.in/pages/track-request',
+                null,
+                null
+            );
+            console.log(`[REQ TRACK] Sent tracking message for ${requestId} to ${phone}`);
+        } catch (err) {
+            console.error(`[REQ TRACK] Failed to send tracking message:`, err.message);
+            await whatsappService.sendMessage(
+                phone,
+                `📦 *Request Tracking*\n\n▫️ *Request ID:* ${requestId}\n\n▫️ Track your request at:\nhttps://offcomfrt.in/pages/track-request`
+            );
+        }
+
         return true;
     }
 
