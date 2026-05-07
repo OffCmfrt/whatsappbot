@@ -26,7 +26,7 @@ class FAQHandler {
 ▫️ Original packaging is required
 ▫️ Request must be within 2 days of delivery
 
-▫️ For questions, write to *support@offcomfrt.in*.`
+▫️ Type "return" to start a return request.`
             },
             {
                 keywords: ['exchange', 'size change', 'wrong size', 'different size'],
@@ -148,7 +148,7 @@ class FAQHandler {
 ▫️ 2. Type "cancel"
 ▫️ 3. Store credit will be issued within 3 to 5 business days
 
-▫️ Need help? Write to *support@offcomfrt.in*.`
+▫️ Need help? Type "support" to contact our team.`
             },
             {
                 keywords: ['discount', 'offer', 'coupon', 'promo code', 'sale'],
@@ -172,8 +172,6 @@ class FAQHandler {
                 keywords: ['contact', 'support', 'help', 'customer care', 'phone number', 'email'],
                 question: 'How can I contact support?',
                 answer: `🎧 *Contact Support*
-
-▫️ *Email:* support@offcomfrt.in
 
 ▫️ *WhatsApp:* You are already here — available 24/7
 

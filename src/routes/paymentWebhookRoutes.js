@@ -162,7 +162,7 @@ async function handlePaymentFailure(payment) {
                 `▫️ *Reason:* ${reason}`,
                 ``,
                 `▫️ Please try again using the button below.`,
-                `▫️ If you need assistance, reply or write to *support@offcomfrt.in*.`,
+                `▫️ If you need assistance, reply to this message.`,
                 ``,
                 ``,
                 ''
@@ -203,7 +203,7 @@ async function notifyCustomerReturnStatus(returnRecord, status) {
                 detail: `Your return has been approved. Store credit will be issued within 3 to 5 business days.`
             },
             'qc_failed': {
-                detail: `Your return could not be approved. Items will be sent back to you. Please reply to this message or write to *support@offcomfrt.in* for assistance.`
+                detail: `Your return could not be approved. Items will be sent back to you. Please reply to this message for assistance.`
             },
             'refund_processed': {
                 detail: `Your store credit of *Rs.${returnRecord.refund_amount}* has been issued and is now available in your account.`
@@ -259,7 +259,7 @@ async function notifyCustomerExchangeStatus(exchangeRecord, status) {
                 detail: `Quality check passed. Your new items will be shipped shortly.`
             },
             'qc_failed': {
-                detail: `Your exchange could not be approved. Please reply to this message or write to *support@offcomfrt.in* for assistance.`
+                detail: `Your exchange could not be approved. Please reply to this message for assistance.`
             },
             'new_order_created': {
                 detail: `Your new items have been dispatched. Tracking details will be shared once available.`

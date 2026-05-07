@@ -65,8 +65,7 @@ class ReengagementService {
 ▫️ We apologize for the delay.
 ▫️ Our support team will contact you soon.
 
-▫️ Reply to this message to keep this conversation active.
-▫️ If urgent, write to *support@offcomfrt.in*.`;
+▫️ Reply to this message to keep this conversation active.`;
 
         // Send WhatsApp message
         await whatsappService.sendMessage(phone, message);

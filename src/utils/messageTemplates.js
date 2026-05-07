@@ -114,7 +114,7 @@ const errorMessages = {
 ▫️ The order ID is correct
 ▫️ You are messaging from the registered number
 
-✉️ If you used a different number, please message from that number or write to *support@offcomfrt.in*.`.trim();
+✉️ If you used a different number, please message from that number.`.trim();
         }
         return `❌ ${translate('orderNotFound', lang)}\nID: ${orderId}`;
     },
@@ -134,7 +134,7 @@ const errorMessages = {
         if (lang === 'en') return `⚠️ *We encountered an issue on our end.*
 
 ▫️ Please try again in a moment.
-▫️ If the problem persists, reach out to *support@offcomfrt.in*.`.trim();
+▫️ If the problem persists, type "support" to contact our team.`.trim();
         return `⚠️ ${translate('error', lang)}`;
     },
 
@@ -166,7 +166,7 @@ const helpMessage = () => `🎧 *OFFCOMFRT SUPPORT*
 ▫️ "help" — Show this message
 
 📞 *Need Assistance?*
-▫️ Email: support@offcomfrt.in
+▫️ Type "support" to contact our team
 ▫️ Website: offcomfrt.in
 
 We are available around the clock to help.`.trim();

@@ -145,7 +145,7 @@ class MessageHandler {
                     );
                     await whatsappService.sendMessage(
                         phone,
-                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your message has been added to your existing ticket.\n\n▫️ Our team will review it and respond within *24 hours*.\n▫️ If urgent, write to *support@offcomfrt.in*.`
+                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your message has been added to your existing ticket.\n\n▫️ Our team will review it and respond within *24 hours*.`
                     );
                 } else {
                     // Create new support ticket
@@ -156,7 +156,7 @@ class MessageHandler {
                     );
                     await whatsappService.sendMessage(
                         phone,
-                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will review it and respond within *24 hours*.\n▫️ If urgent, write to *support@offcomfrt.in*.`
+                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will review it and respond within *24 hours*.`
                     );
                 }
 
@@ -270,7 +270,7 @@ class MessageHandler {
             try {
                 await whatsappService.sendMessage(
                     phone,
-                    '📱 *OffComfrt*\n\n▫️ We encountered an issue processing your request.\n▫️ Please try again or write to *support@offcomfrt.in*.'
+                    '📱 *OffComfrt*\n\n▫️ We encountered an issue processing your request.\n▫️ Please try again or type "support" to contact our team.'
                 );
             } catch (sentErr) {
                 console.error(`❌ [${phone}] Even fallback message failed:`, sentErr.message);
@@ -359,7 +359,7 @@ class MessageHandler {
                 }
                 const supportMsg = lang !== 'en'
                     ? `📱 *OffComfrt*\n\n${LanguageService.translate('help', lang).split('\n')[0]}\n\n▫️ Please type your question below.\n▫️ Our team will respond within *24 hours*.`
-                    : `🎧 *Contact Support*\n\n▫️ Please type your question or concern below and send it.\n\n▫️ Our team will review and respond within *24 hours*.\n▫️ Alternatively, write to *support@offcomfrt.in*.`;
+                    : `🎧 *Contact Support*\n\n▫️ Please type your question or concern below and send it.\n\n▫️ Our team will review and respond within *24 hours*.`;
                 await whatsappService.sendMessage(phone, supportMsg);
                 break;
             }
@@ -501,8 +501,8 @@ class MessageHandler {
         if (!isSizeQuery) return false;
 
         const sizeRedirectMsg = lang !== 'en'
-            ? `📱 *OffComfrt*\n\n▫️ For sizing questions, please contact our support team.\n\n▫️ 📧 *support@offcomfrt.in*\n▫️ Our team will respond within *24 hours*.`
-            : `📏 *Size Help*\n\n▫️ For sizing and measurement questions, please contact our support team.\n\n▫️ 📧 *support@offcomfrt.in*\n▫️ Our team will respond within *24 hours*.`;
+            ? `📱 *OffComfrt*\n\n▫️ For sizing questions, please contact our support team.\n\n▫️ Type "support" to reach out.\n▫️ Our team will respond within *24 hours*.`
+            : `📏 *Size Help*\n\n▫️ For sizing and measurement questions, please contact our support team.\n\n▫️ Type "support" to reach out.\n▫️ Our team will respond within *24 hours*.`;
 
         await whatsappService.sendMessage(phone, sizeRedirectMsg);
         return true;

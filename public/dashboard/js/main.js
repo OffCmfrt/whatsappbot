@@ -775,7 +775,7 @@ const quickReplyTemplates = [
     { label: 'Shipping', text: 'Your order has been shipped and is on its way! You can track it using the tracking number sent to your WhatsApp.' },
     { label: 'Return Policy', text: 'We accept returns within 7 days of delivery. The item must be unworn with original tags. Would you like to initiate a return?' },
     { label: 'Exchange', text: 'For exchanges, we can arrange a pickup of your current item and deliver the new size/color. There may be a price difference to pay.' },
-    { label: 'Size Help', text: 'For sizing guidance and detailed measurements, please contact our support team at support@offcomfrt.in or type your question here and we will respond within 24 hours.' },
+    { label: 'Size Help', text: 'For sizing guidance and detailed measurements, please type your question here and our support team will respond within 24 hours.' },
     { label: 'Payment Issue', text: 'I understand you\'re facing a payment issue. Please try using a different payment method or contact your bank if the issue persists.' },
     { label: 'Refund', text: 'Your store credit has been issued and is now available in your account. You can use it for your next purchase.' },
     { label: 'Thanks', text: 'Thank you for choosing OffComfrt! Is there anything else I can help you with today?' },

@@ -66,7 +66,7 @@ class OrderHistoryHandler {
             orders = await shiprocketService.getOrdersByPhone(phoneToSearch);
 
             if (!orders || orders.length === 0) {
-                await whatsappService.sendMessage(phone, `📱 *OffComfrt*\n\n▫️ No orders found for *${phoneToSearch}*.\n\n▫️ Please verify:\n▫️ The phone number is correct\n▫️ Orders exist under this number\n\n▫️ For assistance, write to *support@offcomfrt.in*.\n`);
+                await whatsappService.sendMessage(phone, `📱 *OffComfrt*\n\n▫️ No orders found for *${phoneToSearch}*.\n\n▫️ Please verify:\n▫️ The phone number is correct\n▫️ Orders exist under this number\n`);
                 return;
             }
 
