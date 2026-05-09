@@ -169,15 +169,14 @@ class FAQHandler {
 `
             },
             {
-                keywords: ['contact', 'support', 'help', 'customer care', 'phone number', 'email'],
+                keywords: ['contact', 'customer care', 'phone number'],
                 question: 'How can I contact support?',
                 answer: `🎧 *Contact Support*
 
 ▫️ *WhatsApp:* You are already here — available 24/7
 
 ▫️ *Response Time:*
-▫️ WhatsApp: Immediate
-▫️ Email: Within 24 hours
+▫️ WhatsApp: Within 24 hours
 
 ▫️ *Business Hours:*
 ▫️ Monday to Saturday: 10 AM to 7 PM IST

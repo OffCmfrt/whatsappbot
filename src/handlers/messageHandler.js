@@ -318,6 +318,24 @@ class MessageHandler {
                 break;
             }
 
+            case 'support': {
+                // Trigger support ticket flow
+                try {
+                    await dbAdapter.query(
+                        'INSERT OR REPLACE INTO conversations (customer_phone, state, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+                        [phone, 'awaiting_support_query']
+                    );
+                    console.log(`[SUPPORT] State set for ${phone}: awaiting_support_query`);
+                } catch (dbErr) {
+                    console.error('[SUPPORT] Failed to set conversation state:', dbErr.message);
+                }
+                const supportMsg = lang !== 'en'
+                    ? `📱 *OffComfrt*\n\n${LanguageService.translate('help', lang).split('\n')[0]}\n\n▫️ Please type your question below.\n▫️ Our team will respond within *24 hours*.`
+                    : `🎧 *Contact Support*\n\n▫️ Please type your question or concern below and send it.\n\n▫️ Our team will review and respond within *24 hours*.`;
+                await whatsappService.sendMessage(phone, supportMsg);
+                break;
+            }
+
             case 'history':
                 await orderHistoryHandler.handle(phone, null, lang);
                 break;
