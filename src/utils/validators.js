@@ -72,10 +72,10 @@ function sanitizeInput(input) {
 // Check if message is a command
 function isCommand(message) {
     const commands = [
-        'help', 'orders', 'history', 'status', 'start', 'stop', 'welcome', 'hi', 'hello', 'hey', 
-        'track_order', 'order_history', 'menu_contact_support', 'menu_return', 'menu_exchange', 
+        'help', 'orders', 'history', 'status', 'start', 'stop', 'welcome', 'hi', 'hello', 'hey',
+        'track_order', 'order_history', 'menu_contact_support', 'menu_return', 'menu_exchange',
         'menu_size', 'menu_language', 'shop_confirm', 'shop_cancel', 'shop_edit',
-        'confirm order', 'cancel order', 'edit details'
+        'confirm order', 'cancel order', 'edit details', 'support'
     ];
     const cleaned = message.toLowerCase().trim();
 
@@ -134,7 +134,8 @@ function parseCommand(message) {
         'shop_edit': 'shop_edit',
         'confirm order': 'shop_confirm',
         'cancel order': 'shop_cancel',
-        'edit details': 'shop_edit'
+        'edit details': 'shop_edit',
+        'support': 'support'
     };
 
     return commandMap[cleaned] || null;
