@@ -1,23 +1,9 @@
 const whatsappService = require('../services/whatsappService');
-const orderStatusHandler = require('./orderStatusHandler');
-const orderHistoryHandler = require('./orderHistoryHandler');
-const faqHandler = require('./faqHandler');
 const followUpService = require('../services/followUpService');
-
-const returnExchangeHandler = require('./returnExchangeHandler');
 const LanguageService = require('../services/languageService');
 const Customer = require('../models/Customer');
 const { dbAdapter } = require('../database/db');
-const {
-    welcomeMessage,
-    helpMessage
-} = require('../utils/messageTemplates');
-const {
-    sanitizeInput,
-    isCommand,
-    parseCommand,
-    extractOrderId
-} = require('../utils/validators');
+const { sanitizeInput } = require('../utils/validators');
 
 // Generate unique ticket number
 function generateTicketNumber() {
@@ -28,6 +14,9 @@ function generateTicketNumber() {
 
 class MessageHandler {
     // Main message processing entry point
+    // Behavior: every inbound text creates (or appends to) a support ticket.
+    // Exceptions: order-template button clicks (shop_confirm/cancel/edit) keep
+    // their original automation, and the 48h conversation lock is still honored.
     async processMessage(phone, message, senderName = null) {
         try {
             // Sanitize input
@@ -42,6 +31,18 @@ class MessageHandler {
             console.log(`📥 [${phone}] ${senderName || 'User'}: "${cleanMessage}"`);
             await this.logMessage(phone, cleanMessage, 'incoming');
 
+            // Identify shopper template-button clicks (these keep their existing flow)
+            const buttonCommandMap = {
+                'shop_confirm': 'shop_confirm',
+                'confirm order': 'shop_confirm',
+                'shop_cancel': 'shop_cancel',
+                'cancel order': 'shop_cancel',
+                'shop_edit': 'shop_edit',
+                'edit details': 'shop_edit',
+                'edit details(size, add.)': 'shop_edit'
+            };
+            const buttonCommand = buttonCommandMap[cleanMessage.toLowerCase()] || null;
+
             // Check if customer has an active conversation lock (48-hour quiet period)
             // This prevents bot automation after order confirmation template is sent
             const activeLock = await dbAdapter.query(
@@ -50,130 +51,25 @@ class MessageHandler {
             );
 
             if (activeLock && activeLock.length > 0) {
-                // Customer is in quiet period - only process template button clicks
-                const isButtonCommand = ['shop_confirm', 'shop_cancel', 'shop_edit', 'confirm order', 'cancel order', 'edit details', 'edit details(size, add.)'].includes(cleanMessage.toLowerCase());
-                
-                if (!isButtonCommand) {
+                if (!buttonCommand) {
                     console.log(`[QUIET PERIOD] Blocking automated response for ${phone} (locked until ${activeLock[0].conversation_lock_until})`);
-                    // Don't send any automated response - just log the message (already logged above)
                     return;
                 }
-                
-                // If it IS a button command, allow it through
                 console.log(`[QUIET PERIOD] Allowing button click: ${cleanMessage} for ${phone}`);
             }
 
-            // Only prompt language for truly brand-new users
-            const needsLanguage = customer.isNew;
-            const isShopperAction = ['shop_confirm', 'shop_cancel', 'shop_edit', 'confirm order', 'cancel order', 'edit details'].includes(cleanMessage.toLowerCase());
-
-            if (needsLanguage && !LanguageService.isLanguageCommand(cleanMessage) && !cleanMessage.startsWith('lang_') && !isShopperAction) {
-                console.log(`New user ${phone}, prompting language selection.`);
-                await this.handleLanguageSelection(phone, null, null);
-                return;
-            }
-
-            // Get customer's language preference (now we know it's set or we just prompted)
-            const lang = customer.preferred_language || 'en';
-
-            // Check for explicit language setting from list menu (e.g. lang_1 = English)
-            if (cleanMessage.startsWith('lang_')) {
-                const selectedLangCode = LanguageService.parseLanguageSelection(cleanMessage.split('_')[1]);
-                if (selectedLangCode) {
-                    await this.handleLanguageSelection(phone, selectedLangCode, lang);
-                } else {
-                    await this.handleLanguageSelection(phone, cleanMessage.split('_')[1], lang);
-                }
-                // Immediately show welcome menu after picking language
-                const newLang = await LanguageService.getCustomerLanguage(phone);
-                await this.handleCommand(phone, 'welcome', senderName, newLang);
-                return;
-            }
-
-            // Check for language change request (e.g. typing "language")
-            if (LanguageService.isLanguageCommand(cleanMessage)) {
-                await this.handleLanguageSelection(phone, cleanMessage, lang);
-                return;
-            }
-
-            // Check if it's a command
-            if (isCommand(cleanMessage)) {
-                const command = parseCommand(cleanMessage);
-                await this.handleCommand(phone, command, senderName, lang);
-                return;
-            }
-
-            // Get conversation state
+            // Get conversation state — still needed so the edit-details capture
+            // (set by the shop_edit case) can collect the customer's free-text edit.
             const convRows = await dbAdapter.query(
                 'SELECT state FROM conversations WHERE customer_phone = ? ORDER BY updated_at DESC LIMIT 1',
                 [phone]
             );
             const convState = convRows?.[0]?.state || null;
 
-            // Check if message is an order ID FIRST (even if in support mode)
-            // This handles the case where user asks for status, then sends order ID
-            const orderId = extractOrderId(cleanMessage);
-            if (orderId && convState === 'awaiting_support_query') {
-                // User sent an order ID while in support mode - process as status request
-                // Clear the support state first
-                await dbAdapter.query(
-                    'UPDATE conversations SET state = NULL WHERE customer_phone = ?',
-                    [phone]
-                );
-                // Process as order status
-                await orderStatusHandler.handle(phone, cleanMessage, lang);
-                return;
-            }
-
-            if (convState === 'awaiting_support_query') {
-                // Check for existing open ticket from same customer
-                const name = customer.name || 'Customer';
-                const existingTicket = await dbAdapter.query(
-                    'SELECT id FROM support_tickets WHERE customer_phone = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
-                    [phone, 'open']
-                );
-
-                if (existingTicket && existingTicket.length > 0) {
-                    // Append message to existing ticket instead of creating duplicate
-                    const ticketId = existingTicket[0].id;
-                    await dbAdapter.query(
-                        `UPDATE support_tickets
-                         SET message = message || '\n\n---\n' || ?,
-                             updated_at = CURRENT_TIMESTAMP
-                         WHERE id = ?`,
-                        [cleanMessage, ticketId]
-                    );
-                    await whatsappService.sendMessage(
-                        phone,
-                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your message has been added to your existing ticket.\n\n▫️ Our team will review it and respond within *24 hours*.`
-                    );
-                } else {
-                    // Create new support ticket
-                    const ticketNumber = generateTicketNumber();
-                    await dbAdapter.query(
-                        'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, 0)',
-                        [ticketNumber, phone, name, cleanMessage]
-                    );
-                    await whatsappService.sendMessage(
-                        phone,
-                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will review it and respond within *24 hours*.`
-                    );
-                }
-
-                // Clear conversation state - no menu pushed after support ticket
-                await dbAdapter.query(
-                    'UPDATE conversations SET state = NULL WHERE customer_phone = ?',
-                    [phone]
-                );
-                return;
-            }
-
-            // Check if user is awaiting edit details state
-            if (convState === 'awaiting_edit_details') {
-                // Save the edit request message to store_shoppers
+            // Capture edit-details follow-up text after the customer pressed Edit Details
+            if (convState === 'awaiting_edit_details' && !buttonCommand) {
                 const now = new Date().toISOString();
                 try {
-                    // Get the order_id from conversation context
                     const convContextRows = await dbAdapter.query(
                         'SELECT context FROM conversations WHERE customer_phone = ? ORDER BY updated_at DESC LIMIT 1',
                         [phone]
@@ -183,20 +79,17 @@ class MessageHandler {
                         const context = JSON.parse(convContextRows?.[0]?.context || '{}');
                         targetOrderId = context.order_id;
                     } catch (e) {}
-                    
-                    // Get current response count for the specific order
+
                     const shopperRows = await dbAdapter.query(
                         'SELECT response_count, customer_message FROM store_shoppers WHERE phone = ? AND order_id = ?',
                         [phone, targetOrderId]
                     );
                     const currentCount = shopperRows?.[0]?.response_count || 0;
                     const existingMessage = shopperRows?.[0]?.customer_message || '';
-                    
-                    // Append new message to existing
-                    const updatedMessage = existingMessage 
-                        ? `${existingMessage}\n---\n${cleanMessage}` 
+                    const updatedMessage = existingMessage
+                        ? `${existingMessage}\n---\n${cleanMessage}`
                         : cleanMessage;
-                    
+
                     await dbAdapter.query(
                         `UPDATE store_shoppers 
                          SET customer_message = ?, 
@@ -209,13 +102,12 @@ class MessageHandler {
                 } catch (dbErr) {
                     console.error('[EDIT] Failed to save edit request:', dbErr.message);
                 }
-                
-                // Clear conversation state
+
                 await dbAdapter.query(
                     'UPDATE conversations SET state = NULL WHERE customer_phone = ?',
                     [phone]
                 );
-                
+
                 await whatsappService.sendMessage(
                     phone,
                     `📝 *Edit Request Received*\n\n▫️ *Thank you!*\n▫️ Your request has been saved:\n"${cleanMessage.substring(0, 100)}${cleanMessage.length > 100 ? '...' : ''}"\n\n▫️ Our team will review and update your order.`
@@ -223,48 +115,47 @@ class MessageHandler {
                 return;
             }
 
-
-
-            // Check for request ID (REQ-XXXX to REQ-XXXXXX)
-            const requestIdHandled = await this.handleRequestId(phone, cleanMessage, lang);
-            if (requestIdHandled) return;
-
-            // Check for return/exchange requests
-            const returnExchangeHandled = await returnExchangeHandler.handle(phone, cleanMessage, lang);
-            if (returnExchangeHandled) return;
-
-            // Check for size chart / measurement queries — redirect to support
-            const sizeQueryHandled = await this.handleSizeQuery(phone, cleanMessage, lang);
-            if (sizeQueryHandled) return;
-
-            // Check for FAQ queries
-            const faqHandled = await faqHandler.handle(phone, cleanMessage, lang);
-            if (faqHandled) return;
-
-            // Check if message is JUST a phone number (show order history)
-            const { extractPhoneNumber } = require('../utils/validators');
-            const phoneOnly = extractPhoneNumber(cleanMessage);
-
-            // If message is PURELY a 10-digit number, treat it as a phone number for order history
-            const isPurePhoneNumber = /^\d{10}$/.test(cleanMessage.trim());
-
-            if (isPurePhoneNumber && phoneOnly) {
-                console.log(`Phone-only message detected: ${phoneOnly}`);
-                await orderHistoryHandler.handle(phone, phoneOnly, lang);
+            // Route the three shopper button clicks to their existing handlers
+            if (buttonCommand) {
+                const lang = customer.preferred_language || 'en';
+                await this.handleCommand(phone, buttonCommand, senderName, lang);
                 return;
             }
 
-            // Check if message contains an order ID (orderId already extracted earlier)
-            if (orderId) {
-                await orderStatusHandler.handle(phone, cleanMessage, lang);
-                return;
-            }
+            // Default path: every other inbound message becomes a support ticket
+            const name = customer.name || senderName || 'Customer';
 
-            // Default: send a simple prompt instead of full menu
-            await whatsappService.sendMessage(
-                phone,
-                `📱 *OffComfrt*\n\n▫️ How can we help you today?\n▫️ Type *help* or *menu* to see available options.`,
+            const existingTicket = await dbAdapter.query(
+                'SELECT id, ticket_number FROM support_tickets WHERE customer_phone = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
+                [phone, 'open']
             );
+
+            if (existingTicket && existingTicket.length > 0) {
+                const ticketId = existingTicket[0].id;
+                const existingNumber = existingTicket[0].ticket_number;
+                await dbAdapter.query(
+                    `UPDATE support_tickets
+                     SET message = message || '\n\n---\n' || ?,
+                         is_read = 0,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?`,
+                    [cleanMessage, ticketId]
+                );
+                await whatsappService.sendMessage(
+                    phone,
+                    `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your message has been added to ticket *${existingNumber}*.\n▫️ Our team will respond within *24 hours*.\n▫️ If urgent, write to *support@offcomfrt.in*.`
+                );
+            } else {
+                const ticketNumber = generateTicketNumber();
+                await dbAdapter.query(
+                    'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, 0)',
+                    [ticketNumber, phone, name, cleanMessage]
+                );
+                await whatsappService.sendMessage(
+                    phone,
+                    `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will respond within *24 hours*.\n▫️ If urgent, write to *support@offcomfrt.in*.`
+                );
+            }
 
         } catch (error) {
             console.error(`❌ [${phone}] Error processing message:`, error.message);
@@ -274,7 +165,7 @@ class MessageHandler {
             try {
                 await whatsappService.sendMessage(
                     phone,
-                    '📱 *OffComfrt*\n\n▫️ We encountered an issue processing your request.\n▫️ Please try again or type "support" to contact our team.'
+                    '📱 *OffComfrt*\n\n▫️ We encountered an issue processing your request.\n▫️ Please try again or write to *support@offcomfrt.in*.'
                 );
             } catch (sentErr) {
                 console.error(`❌ [${phone}] Even fallback message failed:`, sentErr.message);
