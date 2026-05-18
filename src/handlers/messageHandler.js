@@ -250,15 +250,46 @@ class MessageHandler {
                     );
                 }
             } else {
-                const ticketNumber = generateTicketNumber();
-                await dbAdapter.query(
-                    'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, 0)',
-                    [ticketNumber, phone, name, cleanMessage]
+                // Check if this is the customer's first message (awaiting their question)
+                const convStateRows = await dbAdapter.query(
+                    'SELECT state FROM conversations WHERE customer_phone = ? ORDER BY updated_at DESC LIMIT 1',
+                    [phone]
                 );
-                await whatsappService.sendMessage(
-                    phone,
-                    `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will respond within *24 hours*.`
-                );
+                
+                const currentState = convStateRows && convStateRows.length > 0 ? convStateRows[0].state : null;
+                
+                if (currentState === 'awaiting_customer_question') {
+                    // Customer has sent their question - create ticket now
+                    const ticketNumber = generateTicketNumber();
+                    await dbAdapter.query(
+                        'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, 0)',
+                        [ticketNumber, phone, name, cleanMessage]
+                    );
+                    await whatsappService.sendMessage(
+                        phone,
+                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will respond within *24 hours*.`
+                    );
+                    console.log(`[TICKET] Created new ticket ${ticketNumber} for ${phone}`);
+                    
+                    // Clear the conversation state
+                    await dbAdapter.query(
+                        'UPDATE conversations SET state = NULL WHERE customer_phone = ?',
+                        [phone]
+                    );
+                } else {
+                    // First message from customer - ask them to describe their issue
+                    await whatsappService.sendMessage(
+                        phone,
+                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Hello, ${name}.*\n▫️ Please describe your question or issue in detail.\n▫️ Our team will assist you shortly.`
+                    );
+                    
+                    // Set conversation state to await customer's question
+                    await dbAdapter.query(
+                        'INSERT OR REPLACE INTO conversations (customer_phone, state, context, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                        [phone, 'awaiting_customer_question', JSON.stringify({})]
+                    );
+                    console.log(`[SUPPORT] Asking ${phone} to describe their issue`);
+                }
             }
 
         } catch (error) {
