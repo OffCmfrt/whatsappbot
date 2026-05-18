@@ -39,7 +39,9 @@ class MessageHandler {
                 'cancel order': 'shop_cancel',
                 'shop_edit': 'shop_edit',
                 'edit details': 'shop_edit',
-                'edit details(size, add.)': 'shop_edit'
+                'edit details(size, add.)': 'shop_edit',
+                'append_to_ticket': 'append_to_ticket',
+                'create_new_ticket': 'create_new_ticket'
             };
             const buttonCommand = buttonCommandMap[cleanMessage.toLowerCase()] || null;
 
@@ -115,6 +117,67 @@ class MessageHandler {
                 return;
             }
 
+            // Handle ticket choice button clicks (append_to_ticket or create_new_ticket)
+            if (buttonCommand === 'append_to_ticket' || buttonCommand === 'create_new_ticket') {
+                const convContextRows = await dbAdapter.query(
+                    'SELECT context FROM conversations WHERE customer_phone = ? ORDER BY updated_at DESC LIMIT 1',
+                    [phone]
+                );
+                
+                let ticketContext = {};
+                try {
+                    ticketContext = JSON.parse(convContextRows?.[0]?.context || '{}');
+                } catch (e) {}
+
+                const name = customer.name || senderName || 'Customer';
+
+                if (buttonCommand === 'append_to_ticket') {
+                    // Append message to existing ticket
+                    const ticketId = ticketContext.existingTicketId;
+                    const existingNumber = ticketContext.existingTicketNumber;
+                    const message = ticketContext.cleanMessage;
+
+                    if (ticketId && message) {
+                        await dbAdapter.query(
+                            `UPDATE support_tickets
+                             SET message = message || '\n\n---\n' || ?,
+                                 is_read = 0,
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE id = ?`,
+                            [message, ticketId]
+                        );
+                        await whatsappService.sendMessage(
+                            phone,
+                            `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your message has been added to ticket *${existingNumber}*.\n▫️ Our team will respond within *24 hours*.`
+                        );
+                        console.log(`[TICKET] Appended message to existing ticket ${existingNumber} for ${phone}`);
+                    }
+                } else if (buttonCommand === 'create_new_ticket') {
+                    // Create a new ticket
+                    const message = ticketContext.cleanMessage;
+                    const ticketNumber = generateTicketNumber();
+
+                    if (message) {
+                        await dbAdapter.query(
+                            'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, 0)',
+                            [ticketNumber, phone, name, message]
+                        );
+                        await whatsappService.sendMessage(
+                            phone,
+                            `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will respond within *24 hours*.`
+                        );
+                        console.log(`[TICKET] Created new ticket ${ticketNumber} for ${phone}`);
+                    }
+                }
+
+                // Clear the conversation state
+                await dbAdapter.query(
+                    'UPDATE conversations SET state = NULL WHERE customer_phone = ?',
+                    [phone]
+                );
+                return;
+            }
+
             // Route the three shopper button clicks to their existing handlers
             if (buttonCommand) {
                 const lang = customer.preferred_language || 'en';
@@ -133,18 +196,59 @@ class MessageHandler {
             if (existingTicket && existingTicket.length > 0) {
                 const ticketId = existingTicket[0].id;
                 const existingNumber = existingTicket[0].ticket_number;
-                await dbAdapter.query(
-                    `UPDATE support_tickets
-                     SET message = message || '\n\n---\n' || ?,
-                         is_read = 0,
-                         updated_at = CURRENT_TIMESTAMP
-                     WHERE id = ?`,
-                    [cleanMessage, ticketId]
+                
+                // Check ticket age to determine flow
+                const ticketAgeRows = await dbAdapter.query(
+                    'SELECT created_at FROM support_tickets WHERE id = ?',
+                    [ticketId]
                 );
-                await whatsappService.sendMessage(
-                    phone,
-                    `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your message has been added to ticket *${existingNumber}*.\n▫️ Our team will respond within *24 hours*.\n▫️ If urgent, write to *support@offcomfrt.in*.`
-                );
+                
+                let shouldOfferChoice = false;
+                if (ticketAgeRows && ticketAgeRows.length > 0) {
+                    const ticketCreatedAt = new Date(ticketAgeRows[0].created_at);
+                    const now = new Date();
+                    const hoursDiff = (now - ticketCreatedAt) / (1000 * 60 * 60);
+                    shouldOfferChoice = hoursDiff >= 48;
+                }
+                
+                if (shouldOfferChoice) {
+                    // Ticket is older than 48 hours - offer choice
+                    await whatsappService.sendButtonMessage(
+                        phone,
+                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ You have an existing open ticket: *${existingNumber}* (created ${Math.floor((new Date() - new Date(ticketAgeRows[0].created_at)) / (1000 * 60 * 60))} hours ago).\n▫️ How would you like to proceed?`,
+                        [
+                            { id: 'append_to_ticket', title: 'Keep Existing Ticket' },
+                            { id: 'create_new_ticket', title: 'Create New Ticket' }
+                        ],
+                        null,
+                        null
+                    );
+                    
+                    // Store the current message in conversation state for later use
+                    try {
+                        await dbAdapter.query(
+                            'INSERT OR REPLACE INTO conversations (customer_phone, state, context, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                            [phone, 'awaiting_ticket_choice', JSON.stringify({ cleanMessage, existingTicketId: ticketId, existingTicketNumber: existingNumber })]
+                        );
+                        console.log(`[TICKET CHOICE] State set for ${phone}: awaiting_ticket_choice`);
+                    } catch (dbErr) {
+                        console.error('[TICKET CHOICE] Failed to set conversation state:', dbErr.message);
+                    }
+                } else {
+                    // Ticket is less than 48 hours old - auto-append
+                    await dbAdapter.query(
+                        `UPDATE support_tickets
+                         SET message = message || '\n\n---\n' || ?,
+                             is_read = 0,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ?`,
+                        [cleanMessage, ticketId]
+                    );
+                    await whatsappService.sendMessage(
+                        phone,
+                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your message has been added to ticket *${existingNumber}*.\n▫️ Our team will respond within *24 hours*.`
+                    );
+                }
             } else {
                 const ticketNumber = generateTicketNumber();
                 await dbAdapter.query(
@@ -153,7 +257,7 @@ class MessageHandler {
                 );
                 await whatsappService.sendMessage(
                     phone,
-                    `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will respond within *24 hours*.\n▫️ If urgent, write to *support@offcomfrt.in*.`
+                    `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will respond within *24 hours*.`
                 );
             }
 
@@ -165,7 +269,7 @@ class MessageHandler {
             try {
                 await whatsappService.sendMessage(
                     phone,
-                    '📱 *OffComfrt*\n\n▫️ We encountered an issue processing your request.\n▫️ Please try again or write to *support@offcomfrt.in*.'
+                    '📱 *OffComfrt*\n\n▫️ We encountered an issue processing your request.\n▫️ Please try again or contact our support team.'
                 );
             } catch (sentErr) {
                 console.error(`❌ [${phone}] Even fallback message failed:`, sentErr.message);
