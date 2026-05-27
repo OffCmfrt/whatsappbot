@@ -1804,21 +1804,45 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         const total = countRes[0]?.total || 0;
 
         // Use LEFT JOIN instead of correlated subqueries for better performance
-        const sql = `
-            SELECT s.*, 
-                   o.awb,
-                   o.courier_name,
-                   IFNULL(s.order_total, o.total) as order_total,
-                   o.status as order_status,
-                   o.tracking_url
-            FROM store_shoppers s
-            LEFT JOIN orders o ON o.order_id = s.order_id
-            ${whereClause} 
-            GROUP BY s.order_id
-            ${orderByClause}
-            LIMIT ? OFFSET ?
-        `;
-        const shoppers = await dbAdapter.query(sql, [...params, parseInt(limit), parseInt(offset)]);
+        let sql;
+        let queryParams;
+        
+        if (noLimit && noLimit === 'true') {
+            // NO LIMIT for analytics/full data export
+            sql = `
+                SELECT s.*, 
+                       o.awb,
+                       o.courier_name,
+                       IFNULL(s.order_total, o.total) as order_total,
+                       o.status as order_status,
+                       o.tracking_url
+                FROM store_shoppers s
+                LEFT JOIN orders o ON o.order_id = s.order_id
+                ${whereClause} 
+                GROUP BY s.order_id
+                ${orderByClause}
+            `;
+            queryParams = [...params];
+        } else {
+            // Apply LIMIT for regular queries
+            sql = `
+                SELECT s.*, 
+                       o.awb,
+                       o.courier_name,
+                       IFNULL(s.order_total, o.total) as order_total,
+                       o.status as order_status,
+                       o.tracking_url
+                FROM store_shoppers s
+                LEFT JOIN orders o ON o.order_id = s.order_id
+                ${whereClause} 
+                GROUP BY s.order_id
+                ${orderByClause}
+                LIMIT ? OFFSET ?
+            `;
+            queryParams = [...params, parseInt(limit), parseInt(offset)];
+        }
+        
+        const shoppers = await dbAdapter.query(sql, queryParams);
 
         // Note: Deduplication removed after cleanup script ran on 2026-04-29
         // If duplicates reappear, re-enable the deduplication logic below
