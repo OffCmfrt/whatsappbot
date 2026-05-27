@@ -1479,6 +1479,9 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
         );
         
         // Enrich tickets with portal information
+        console.log(`\n🎫 Enriching ${tickets.length} tickets with portal info...`);
+        console.log(`🔍 Found ${timeBasedPortals.length} time-based portals`);
+        
         const enrichedTickets = tickets.map(ticket => {
             // If ticket has explicit portal_id, it's from manual/auto assignment
             if (ticket.portal_id) {
@@ -1490,7 +1493,9 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
                 try {
                     const config = typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config;
                     if (config.time_start && config.time_end) {
-                        if (isTicketInTimeRangeForAdmin(ticket, config)) {
+                        const matches = isTicketInTimeRangeForAdmin(ticket, config);
+                        if (matches) {
+                            console.log(`✅ Ticket ${ticket.id} matched to portal "${portal.name}"`);
                             return {
                                 ...ticket,
                                 portal_id: portal.id,
@@ -1499,12 +1504,15 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
                         }
                     }
                 } catch (e) {
-                    // Skip invalid config
+                    console.error(` Error checking portal ${portal.name}:`, e);
                 }
             }
             
+            console.log(`⚠️ Ticket ${ticket.id} did not match any portal`);
             return ticket;
         });
+        
+        console.log(`✅ Enriched ${enrichedTickets.filter(t => t.portal_name).length} tickets with portal names\n`);
         
         res.json({ success: true, tickets: enrichedTickets });
     } catch (error) {
