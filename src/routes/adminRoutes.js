@@ -1387,6 +1387,47 @@ router.post('/settings', verifyToken, async (req, res) => {
 // ===================================
 // Support Tickets Endpoints
 // ===================================
+// Helper to check if a ticket's created time falls within portal time range (for admin)
+function isTicketInTimeRangeForAdmin(ticket, config) {
+    if (!config || !config.time_start || !config.time_end) return true;
+
+    const createdAt = new Date(ticket.created_at);
+    const timezone = config.timezone || 'Asia/Kolkata';
+
+    // Convert to target timezone
+    const options = { timeZone: timezone, hour12: false, hour: '2-digit', minute: '2-digit' };
+    const timeStr = new Intl.DateTimeFormat('en-US', options).format(createdAt);
+    const [hour, minute] = timeStr.split(':').map(Number);
+    const ticketMinutes = hour * 60 + minute;
+
+    const [startHour, startMin] = config.time_start.split(':').map(Number);
+    const [endHour, endMin] = config.time_end.split(':').map(Number);
+    const startMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
+
+    let inRange;
+    if (startMinutes <= endMinutes) {
+        // Normal range (e.g., 06:00 to 18:00)
+        inRange = ticketMinutes >= startMinutes && ticketMinutes < endMinutes;
+    } else {
+        // Overnight range (e.g., 18:00 to 06:00)
+        inRange = ticketMinutes >= startMinutes || ticketMinutes < endMinutes;
+    }
+    
+    // Debug first 3 tickets only
+    if (global._debugTicketCount === undefined) global._debugTicketCount = 0;
+    if (global._debugTicketCount < 3) {
+        console.log(`   🎫 Ticket ${ticket.id} (${ticket.created_at}):`);
+        console.log(`      UTC: ${createdAt.toISOString()}`);
+        console.log(`      ${timezone}: ${timeStr} (${ticketMinutes} minutes)`);
+        console.log(`      Range: ${config.time_start}-${config.time_end} (${startMinutes}-${endMinutes} minutes)`);
+        console.log(`      Match: ${inRange}`);
+        global._debugTicketCount++;
+    }
+    
+    return inRange;
+}
+
 router.get('/support-tickets', verifyToken, async (req, res) => {
     try {
         const { status, is_read, date_from, date_to, time_from, time_to } = req.query;
@@ -1431,7 +1472,41 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
         query += ' ORDER BY created_at DESC';
 
         const tickets = await dbAdapter.query(query, params);
-        res.json({ success: true, tickets });
+        
+        // Get all time-based portals to determine which portal each ticket belongs to
+        const timeBasedPortals = await dbAdapter.query(
+            "SELECT id, name, config FROM support_portals WHERE type = 'time_based'"
+        );
+        
+        // Enrich tickets with portal information
+        const enrichedTickets = tickets.map(ticket => {
+            // If ticket has explicit portal_id, it's from manual/auto assignment
+            if (ticket.portal_id) {
+                return ticket;
+            }
+            
+            // For time-based tickets, find matching portal
+            for (const portal of timeBasedPortals) {
+                try {
+                    const config = typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config;
+                    if (config.time_start && config.time_end) {
+                        if (isTicketInTimeRangeForAdmin(ticket, config)) {
+                            return {
+                                ...ticket,
+                                portal_id: portal.id,
+                                portal_name: portal.name
+                            };
+                        }
+                    }
+                } catch (e) {
+                    // Skip invalid config
+                }
+            }
+            
+            return ticket;
+        });
+        
+        res.json({ success: true, tickets: enrichedTickets });
     } catch (error) {
         console.error('Error fetching support tickets:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch support tickets' });
@@ -3222,13 +3297,58 @@ router.get('/support-portals', verifyToken, async (req, res) => {
             ORDER BY p.created_at DESC
         `);
 
+        // For time-based portals, calculate dynamic ticket count
+        const enrichedPortals = await Promise.all(portals.map(async (portal) => {
+            if (portal.type === 'time_based' && portal.config) {
+                try {
+                    const config = typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config;
+                    if (config.time_start && config.time_end) {
+                        // Count tickets that fall within the time range
+                        const allTickets = await dbAdapter.query(
+                            'SELECT id, created_at, status FROM support_tickets ORDER BY created_at DESC LIMIT 500'
+                        );
+                        
+                        let matchingCount = 0;
+                        let openCount = 0;
+                        
+                        // Debug logging
+                        console.log(`\n🔍 Portal "${portal.name}" checking ${allTickets.length} tickets...`);
+                        console.log(`   Time range: ${config.time_start} - ${config.time_end} (${config.timezone || 'Asia/Kolkata'})`);
+                        
+                        for (const ticket of allTickets) {
+                            if (isTicketInTimeRangeForAdmin(ticket, config)) {
+                                matchingCount++;
+                                if (ticket.status === 'open') {
+                                    openCount++;
+                                }
+                            }
+                        }
+                        
+                        console.log(`   ✅ Matched ${matchingCount} tickets (${openCount} open)`);
+                        
+                        return {
+                            ...portal,
+                            ticket_count: matchingCount,
+                            assigned_count: openCount,
+                            config: typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config,
+                            url: `${req.protocol}://${req.get('host')}/portal/support/?slug=${portal.slug}`
+                        };
+                    }
+                } catch (e) {
+                    console.error('Error calculating time-based portal count:', e);
+                }
+            }
+            
+            return {
+                ...portal,
+                config: typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config,
+                url: `${req.protocol}://${req.get('host')}/portal/support/?slug=${portal.slug}`
+            };
+        }));
+
         res.json({
             success: true,
-            portals: portals.map(p => ({
-                ...p,
-                config: p.config ? JSON.parse(p.config) : null,
-                url: `${req.protocol}://${req.get('host')}/portal/support/?slug=${p.slug}`
-            }))
+            portals: enrichedPortals
         });
     } catch (error) {
         console.error('List support portals error:', error);

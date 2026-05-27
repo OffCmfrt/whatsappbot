@@ -996,10 +996,16 @@ function renderTicketItem(t) {
     const date = formatTicketDate(t.created_at);
     
     // Get portal badge
+    let portalBadge = '<span class="no-portal-badge">No Portal</span>';
+    
+    // Check if ticket has portal_id from manual/auto assignment
     const assignedPortal = allPortals.find(p => p.id == t.portal_id);
-    const portalBadge = assignedPortal 
-        ? `<span class="portal-badge portal-badge-${assignedPortal.type}">${escapeHtml(assignedPortal.name)}</span>`
-        : '<span class="no-portal-badge">No Portal</span>';
+    if (assignedPortal) {
+        portalBadge = `<span class="portal-badge portal-badge-${assignedPortal.type}">${escapeHtml(assignedPortal.name)}</span>`;
+    } else if (t.portal_name) {
+        // Time-based portal assignment (backend enriched the ticket)
+        portalBadge = `<span class="portal-badge portal-badge-time_based">${escapeHtml(t.portal_name)}</span>`;
+    }
     
     return `
     <div class="ticket-item ${isResolved ? 'ticket-item-resolved' : ''} ${isUnread ? 'ticket-item-unread' : ''} ${isUrgent ? 'ticket-item-urgent' : ''}" 
