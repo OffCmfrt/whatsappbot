@@ -2833,6 +2833,20 @@ router.get('/analytics/orders', verifyToken, async (req, res) => {
 // Get chat analytics (response rates, etc.)
 router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
     try {
+        const { startDate, endDate } = req.query;
+        
+        // Build date filter - support custom date range or default to 30 days
+        let dateFilter = "WHERE created_at >= datetime('now', '-30 days')";
+        const dateParams = [];
+        
+        if (startDate && endDate) {
+            // Convert IST dates from frontend to UTC for database query
+            const utcStartDate = fromISTtoUTC(startDate + ' 00:00:00') || (startDate + ' 00:00:00');
+            const utcEndDate = fromISTtoUTC(endDate + ' 23:59:59') || (endDate + ' 23:59:59');
+            dateFilter = "WHERE created_at >= ? AND created_at <= ?";
+            dateParams.push(utcStartDate, utcEndDate);
+        }
+        
         // Get overall stats
         const stats = await dbAdapter.query(`
             SELECT 
@@ -2844,20 +2858,20 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
                 SUM(CASE WHEN customer_message IS NOT NULL THEN 1 ELSE 0 END) as responded_count,
                 AVG(CASE WHEN response_count > 0 THEN response_count END) as avg_response_count
             FROM store_shoppers
-            WHERE created_at >= datetime('now', '-30 days')
-        `);
+            ${dateFilter}
+        `, dateParams);
         
-        // Get daily response stats for the last 7 days
+        // Get daily response stats - use same date filter
         const dailyStats = await dbAdapter.query(`
             SELECT 
                 DATE(created_at) as date,
                 COUNT(*) as total,
                 SUM(CASE WHEN status != 'pending' THEN 1 ELSE 0 END) as responded
             FROM store_shoppers
-            WHERE created_at >= datetime('now', '-7 days')
+            ${dateFilter}
             GROUP BY DATE(created_at)
             ORDER BY date DESC
-        `);
+        `, dateParams);
         
         res.json({
             success: true,
