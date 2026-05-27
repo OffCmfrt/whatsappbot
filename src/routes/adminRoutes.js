@@ -2802,10 +2802,20 @@ router.get('/shoppers/recent-confirmed', verifyToken, async (req, res) => {
 // Get comprehensive analytics data for Shoppers Hub (Orders-based)
 router.get('/analytics/orders', verifyToken, async (req, res) => {
     try {
-        const { startDate, endDate } = req.query;
+        const { startDate, endDate, noLimit } = req.query;
         
         if (!startDate || !endDate) {
             return res.status(400).json({ error: 'Start date and end date are required' });
+        }
+        
+        // Convert IST dates from frontend to UTC for database query
+        const utcStartDate = fromISTtoUTC(startDate + ' 00:00:00') || (startDate + ' 00:00:00');
+        const utcEndDate = fromISTtoUTC(endDate + ' 23:59:59') || (endDate + ' 23:59:59');
+        
+        // Build query - NO LIMIT for analytics to get all historical data
+        let limitClause = '';
+        if (!noLimit || noLimit !== 'true') {
+            limitClause = 'LIMIT 500'; // Default limit for regular queries
         }
         
         // Fetch all orders in the date range
@@ -2817,7 +2827,11 @@ router.get('/analytics/orders', verifyToken, async (req, res) => {
             LEFT JOIN customers c ON o.customer_phone = c.phone
             WHERE o.created_at >= ? AND o.created_at <= ?
             ORDER BY o.created_at DESC
-        `, [startDate + 'T00:00:00Z', endDate + 'T23:59:59Z']);
+            ${limitClause}
+        `, [utcStartDate, utcEndDate]);
+        
+        // Invalidate cache to ensure fresh analytics data
+        invalidateCache();
         
         res.json({
             success: true,
