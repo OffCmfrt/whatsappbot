@@ -90,22 +90,22 @@ class LRUCache {
 // Create specialized caches for different use cases
 const caches = {
   // Customer lookups by phone (high frequency, small data)
-  customers: new LRUCache(500, 10 * 60 * 1000), // 500 items, 10 min TTL
+  customers: new LRUCache(300, 10 * 60 * 1000), // Reduced from 500 to 300, 10 min TTL
   
   // Order lookups (medium frequency)
-  orders: new LRUCache(300, 5 * 60 * 1000), // 300 items, 5 min TTL
+  orders: new LRUCache(200, 5 * 60 * 1000), // Reduced from 300 to 200, 5 min TTL
   
   // Stats and analytics (low frequency, expensive queries)
-  stats: new LRUCache(50, 3 * 60 * 1000), // 50 items, 3 min TTL
+  stats: new LRUCache(30, 3 * 60 * 1000), // Reduced from 50 to 30, 3 min TTL
   
   // Settings (very low frequency, should persist long)
-  settings: new LRUCache(20, 30 * 60 * 1000), // 20 items, 30 min TTL
+  settings: new LRUCache(15, 30 * 60 * 1000), // Reduced from 20 to 15, 30 min TTL
   
   // Query results (generic cache for arbitrary queries)
-  queries: new LRUCache(200, 5 * 60 * 1000), // 200 items, 5 min TTL
+  queries: new LRUCache(100, 5 * 60 * 1000), // Reduced from 200 to 100, 5 min TTL
   
   // Shopper data
-  shoppers: new LRUCache(300, 2 * 60 * 1000), // 300 items, 2 min TTL
+  shoppers: new LRUCache(150, 2 * 60 * 1000), // Reduced from 300 to 150, 2 min TTL
 };
 
 // Cache key generator for queries

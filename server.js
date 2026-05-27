@@ -22,6 +22,26 @@ app.use(helmet());
 // Apply compression middleware for response payload compression
 app.use(compression());
 
+// Monitor response sizes and log warnings for large responses
+app.use((req, res, next) => {
+    const originalJson = res.json.bind(res);
+    res.json = (data) => {
+        const responseSize = JSON.stringify(data).length;
+        const sizeKB = Math.round(responseSize / 1024);
+        
+        if (sizeKB > 500) {
+            console.warn(`⚠️ LARGE RESPONSE: ${req.method} ${req.path} - ${sizeKB}KB (${responseSize} bytes)`);
+        }
+        
+        if (sizeKB > 1000) {
+            console.error(`🚨 VERY LARGE RESPONSE: ${req.method} ${req.path} - ${sizeKB}KB - Consider pagination!`);
+        }
+        
+        return originalJson(data);
+    };
+    next();
+});
+
 
 // Apply generic rate limiter to all requests (adjust as needed)
 const PORT = process.env.PORT || 3000;
@@ -388,7 +408,15 @@ async function startServer() {
         abandonedCartCron.init();
         reengagementCron.init();
 
-        // NEW: Memory monitoring - log every 5 minutes
+        // NEW: Periodic task queue cleanup - clear if queue is stuck
+        setInterval(() => {
+            if (taskQueue.length > 100) {
+                console.warn(`[QUEUE] Task queue has ${taskQueue.length} items, clearing to prevent memory buildup`);
+                taskQueue.length = 0;
+            }
+        }, 10 * 60 * 1000); // Every 10 minutes
+
+        // NEW: Memory monitoring - log every 2 minutes (more frequent)
         setInterval(() => {
             const used = process.memoryUsage();
             const memoryMB = Math.round(used.rss / 1024 / 1024);
@@ -397,24 +425,51 @@ async function startServer() {
             
             console.log(`[MEMORY] Usage: ${memoryMB}MB / ${limitMB}MB (${usagePercent}%)`);
             
+            if (usagePercent > 50) {
+                console.warn(`⚠️ WARNING: Memory usage at ${usagePercent}%! Triggering cache cleanup...`);
+                // Clear all caches to free memory
+                const { invalidateCache } = require('./src/utils/cache');
+                invalidateCache();
+                
+                // Clear Settings cache
+                const Settings = require('./src/models/Settings');
+                Settings._cache.clear();
+                
+                // Force garbage collection hint
+                if (global.gc) {
+                    global.gc();
+                }
+            }
+            
             if (usagePercent > 70) {
-                console.warn(`⚠️ WARNING: Memory usage at ${usagePercent}%!`);
+                console.error('🚨 CRITICAL: Memory usage too high! Aggressive cleanup...');
+                // Clear ALL caches
+                const { caches } = require('./src/utils/cache');
+                Object.values(caches).forEach(cache => {
+                    cache.clear();
+                    cache.stats = { hits: 0, misses: 0, evictions: 0 }; // Reset stats too
+                });
+                
+                const Settings = require('./src/models/Settings');
+                Settings._cache.clear();
+                
+                console.log('[MEMORY] Aggressive cache cleanup completed');
             }
             
             if (usagePercent > 85) {
-                console.error('🚨 CRITICAL: Memory usage too high! Triggering cleanup...');
-                // Clear caches
-                const Settings = require('./src/models/Settings');
-                Settings._cache.clear();
-                console.log('[MEMORY] Emergency cache cleanup triggered');
+                console.error('🔥 EMERGENCY: Memory at 85%! Clearing task queue...');
+                // Clear task queue to prevent memory buildup
+                taskQueue.length = 0;
+                console.log('[MEMORY] Task queue cleared');
             }
-        }, 5 * 60 * 1000); // Every 5 minutes
+        }, 2 * 60 * 1000); // Every 2 minutes (more frequent)
 
-        // NEW: Clear Settings cache every hour to prevent memory buildup
+        // NEW: Clear ALL caches every 30 minutes to prevent memory buildup
         setInterval(() => {
-            const Settings = require('./src/models/Settings');
-            Settings.clearOldCache();
-        }, 60 * 60 * 1000); // Every hour
+            const { invalidateCache } = require('./src/utils/cache');
+            invalidateCache();
+            console.log('[MEMORY] Scheduled cache cleanup (30 min interval)');
+        }, 30 * 60 * 1000); // Every 30 minutes
 
         // Start Express server
         app.listen(PORT, () => {

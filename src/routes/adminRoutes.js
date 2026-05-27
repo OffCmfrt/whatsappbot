@@ -58,7 +58,8 @@ router.post('/login', async (req, res) => {
 router.get('/stats', verifyToken, async (req, res) => {
     try {
         // Check cache first
-        const cached = getCached('stats');
+        const cacheKey = 'dashboard_stats';
+        const cached = getCached(cacheKey);
         if (cached) {
             return res.json(cached);
         }
@@ -88,8 +89,8 @@ router.get('/stats', verifyToken, async (req, res) => {
             }
         };
 
-        // Cache the response
-        setCache('stats', response);
+        // Cache the response for 3 minutes
+        setCache(cacheKey, response, 'stats', 3 * 60 * 1000);
         res.json(response);
     } catch (error) {
         console.error('Stats error:', error);
@@ -1714,7 +1715,20 @@ router.delete('/support-tickets/bulk/delete', verifyToken, async (req, res) => {
 // Get all shoppers with filtering and segmentation (Enhanced with Order details)
 router.get('/shoppers', verifyToken, async (req, res) => {
     try {
-        const { limit = 100, offset = 0, status, search, startDate, endDate, orderIdFrom, orderIdTo, paymentMethod, deliveryType, sortBy } = req.query;
+        let { limit = 100, offset = 0, status, search, startDate, endDate, orderIdFrom, orderIdTo, paymentMethod, deliveryType, sortBy } = req.query;
+        
+        // ENFORCE LIMITS to prevent memory overload
+        limit = Math.min(parseInt(limit), 500); // Max 500 records per request
+        offset = Math.max(0, parseInt(offset));
+        
+        // CACHE for list queries without search
+        const cacheKey = `shoppers_list:${limit}:${offset}:${status || 'all'}:${search || 'none'}:${startDate || 'none'}:${endDate || 'none'}`;
+        if (!search) { // Only cache if no search term (search results are unique)
+            const cached = getCached(cacheKey);
+            if (cached) {
+                return res.json(cached);
+            }
+        }
         
         let whereClause = 'WHERE 1=1';
         const params = [];
@@ -1805,12 +1819,19 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         // Note: Deduplication removed after cleanup script ran on 2026-04-29
         // If duplicates reappear, re-enable the deduplication logic below
 
-        res.json({
+        const response = {
             success: true,
             shoppers,
             total,
             page: Math.floor(offset / limit) + 1
-        });
+        };
+        
+        res.json(response);
+        
+        // Cache the response (only if no search)
+        if (!search) {
+            setCache(cacheKey, response, 'shoppers', 2 * 60 * 1000); // 2 minutes TTL
+        }
     } catch (error) {
         console.error('Shoppers fetch error:', error);
         res.status(500).json({ error: 'Failed to fetch shoppers' });
