@@ -2847,10 +2847,10 @@ router.get('/analytics/orders', verifyToken, async (req, res) => {
 // Get chat analytics (response rates, etc.)
 router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
     try {
-        const { startDate, endDate } = req.query;
+        const { startDate, endDate, noLimit } = req.query;
         
-        // Build date filter - support custom date range or default to 30 days
-        let dateFilter = "WHERE created_at >= datetime('now', '-30 days')";
+        // Build date filter - support custom date range or noLimit for all data
+        let dateFilter = "";
         const dateParams = [];
         
         if (startDate && endDate) {
@@ -2859,7 +2859,11 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
             const utcEndDate = fromISTtoUTC(endDate + ' 23:59:59') || (endDate + ' 23:59:59');
             dateFilter = "WHERE created_at >= ? AND created_at <= ?";
             dateParams.push(utcStartDate, utcEndDate);
+        } else if (!noLimit || noLimit !== 'true') {
+            // Default: last 30 days if no date range and noLimit not set
+            dateFilter = "WHERE created_at >= datetime('now', '-30 days')";
         }
+        // If noLimit=true and no dates, dateFilter stays empty (ALL historical data)
         
         // Get overall stats
         const stats = await dbAdapter.query(`

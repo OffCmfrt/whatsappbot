@@ -612,7 +612,20 @@ async function fetchShoppersData() {
 
 async function fetchAnalytics() {
     try {
-        const data = await apiCall('/chat/analytics/overview');
+        // Get current date filters from the UI
+        const startDate = document.getElementById('startDate')?.value || '';
+        const endDate = document.getElementById('endDate')?.value || '';
+        
+        // Build query params - use date range if available, otherwise use noLimit to get all data
+        let endpoint = '/chat/analytics/overview';
+        if (startDate && endDate) {
+            endpoint += `?startDate=${startDate}&endDate=${endDate}`;
+        } else {
+            // No date filter - get ALL historical data
+            endpoint += '?noLimit=true';
+        }
+        
+        const data = await apiCall(endpoint);
         if (data && data.success) {
             analyticsData = data;
             updateAnalyticsDisplay(data.overview);
