@@ -531,6 +531,11 @@ async function loadMoreShoppers() {
         sortBy: currentSortBy
     });
     
+    // Add noLimit parameter when no date filters are applied
+    if (!startDate && !endDate && !search && currentStatus === 'all') {
+        queryParams.append('noLimit', 'true');
+    }
+    
     try {
         const data = await apiCall(`/shoppers?${queryParams.toString()}`);
         if (data && data.success) {
@@ -590,6 +595,11 @@ async function fetchShoppersData() {
         deliveryType: currentDeliveryType,
         sortBy: currentSortBy
     });
+
+    // Add noLimit parameter when no date filters are applied
+    if (!startDate && !endDate && !search && currentStatus === 'all') {
+        queryParams.append('noLimit', 'true');
+    }
 
     try {
         const data = await apiCall(`/shoppers?${queryParams.toString()}`);

@@ -1715,10 +1715,14 @@ router.delete('/support-tickets/bulk/delete', verifyToken, async (req, res) => {
 // Get all shoppers with filtering and segmentation (Enhanced with Order details)
 router.get('/shoppers', verifyToken, async (req, res) => {
     try {
-        let { limit = 100, offset = 0, status, search, startDate, endDate, orderIdFrom, orderIdTo, paymentMethod, deliveryType, sortBy } = req.query;
+        let { limit = 100, offset = 0, status, search, startDate, endDate, orderIdFrom, orderIdTo, paymentMethod, deliveryType, sortBy, noLimit } = req.query;
         
-        // ENFORCE LIMITS to prevent memory overload
-        limit = Math.min(parseInt(limit), 500); // Max 500 records per request
+        // ENFORCE LIMITS to prevent memory overload (unless noLimit=true)
+        if (!noLimit || noLimit !== 'true') {
+            limit = Math.min(parseInt(limit), 500); // Max 500 records per request
+        } else {
+            limit = parseInt(limit) || 1000; // Allow larger fetch for noLimit
+        }
         offset = Math.max(0, parseInt(offset));
         
         // CACHE for list queries without search
