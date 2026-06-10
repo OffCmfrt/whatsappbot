@@ -2929,7 +2929,7 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
         // Get daily stats with per-status breakdown (IST timezone)
         const dailyStats = await dbAdapter.query(`
             SELECT 
-                DATE(created_at AT TIME ZONE 'Asia/Kolkata') as date,
+                TO_CHAR(DATE(created_at AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') as date,
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed,
                 SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,

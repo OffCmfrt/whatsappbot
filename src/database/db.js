@@ -176,6 +176,12 @@ async function initializeDatabase() {
     // Initialize Support Portals Table
     await initializeSupportPortalsTable();
     
+    // Initialize Abandoned Carts Table
+    await initializeAbandonedCartsTable();
+    
+    // Initialize Performance Indexes
+    await initializePerformanceIndexes();
+    
     console.log('ℹ️ Supabase database initialized');
     return true;
   } catch (error) {
@@ -412,6 +418,67 @@ async function initializeSupportPortalsTable() {
     console.log('✅ Support portals table initialized');
   } catch (error) {
     console.error('❌ Failed to initialize support portals table:', error.message);
+  }
+}
+
+async function initializeAbandonedCartsTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS abandoned_carts (
+        id SERIAL PRIMARY KEY,
+        checkout_id TEXT UNIQUE NOT NULL,
+        customer_phone VARCHAR(20) NOT NULL,
+        customer_name VARCHAR(255),
+        customer_email VARCHAR(255),
+        cart_items TEXT NOT NULL,
+        total_amount DECIMAL(10,2),
+        currency VARCHAR(10) DEFAULT 'INR',
+        cart_url TEXT NOT NULL,
+        status VARCHAR(50) DEFAULT 'pending',
+        first_reminder_sent_at TIMESTAMP,
+        second_reminder_sent_at TIMESTAMP,
+        recovered_at TIMESTAMP,
+        expired_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create indexes for abandoned_carts
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_abandoned_carts_status ON abandoned_carts(status)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_abandoned_carts_customer_phone ON abandoned_carts(customer_phone)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_abandoned_carts_customer_email ON abandoned_carts(customer_email)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_abandoned_carts_created_at ON abandoned_carts(created_at)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_abandoned_carts_status_created ON abandoned_carts(status, created_at)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_abandoned_carts_checkout_id ON abandoned_carts(checkout_id)');
+
+    console.log('✅ Abandoned carts table initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize abandoned carts table:', error.message);
+  }
+}
+
+async function initializePerformanceIndexes() {
+  try {
+    // Indexes for messages table (chat/unread queries)
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_messages_type_created ON messages(message_type, created_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_messages_phone_type ON messages(customer_phone, message_type)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at DESC)');
+    
+    // Composite index for store_shoppers (recent-confirmed and shoppers list queries)
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_status_updated ON store_shoppers(status, updated_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_order_updated ON store_shoppers(order_id, updated_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_created_at ON store_shoppers(created_at DESC)');
+    
+    // Index for orders table (JOIN operations)
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id)');
+    
+    // Index for message_reads (EXISTS subquery in unread queries)
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_message_reads_message_id ON message_reads(message_id)');
+    
+    console.log('✅ Performance indexes initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize performance indexes:', error.message);
   }
 }
 
