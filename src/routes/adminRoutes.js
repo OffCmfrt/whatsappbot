@@ -1818,9 +1818,13 @@ router.get('/shoppers', verifyToken, async (req, res) => {
                    o.status as order_status,
                    o.tracking_url
             FROM store_shoppers s
+            INNER JOIN (
+                SELECT order_id, MAX(updated_at) as max_updated
+                FROM store_shoppers
+                GROUP BY order_id
+            ) latest_s ON s.order_id = latest_s.order_id AND s.updated_at = latest_s.max_updated
             LEFT JOIN orders o ON o.order_id = s.order_id
             ${whereClause} 
-            GROUP BY s.order_id
             ${orderByClause}
             LIMIT ? OFFSET ?
         `;
@@ -2178,10 +2182,14 @@ router.get('/shoppers/export', verifyToken, async (req, res) => {
                    s.delivery_type, COALESCE(s.order_total, o.total) as order_total,
                    o.awb, o.courier_name
             FROM store_shoppers s
+            INNER JOIN (
+                SELECT order_id, MAX(updated_at) as max_updated
+                FROM store_shoppers
+                GROUP BY order_id
+            ) latest_s ON s.order_id = latest_s.order_id AND s.updated_at = latest_s.max_updated
             LEFT JOIN orders o ON s.order_id = o.order_id
             ${whereClause} 
-            GROUP BY s.order_id
-            ORDER BY MIN(s.created_at) DESC
+            ORDER BY s.created_at DESC
         `;
         const shoppers = await dbAdapter.query(sql, params);
 
@@ -2361,10 +2369,14 @@ router.get('/inbox/export', verifyToken, async (req, res) => {
                    COALESCE(s.order_total, o.total) as order_total,
                    o.awb, o.courier_name
             FROM store_shoppers s
+            INNER JOIN (
+                SELECT order_id, MAX(updated_at) as max_updated
+                FROM store_shoppers
+                GROUP BY order_id
+            ) latest_s ON s.order_id = latest_s.order_id AND s.updated_at = latest_s.max_updated
             LEFT JOIN orders o ON s.order_id = o.order_id
             ${whereClause}
-            GROUP BY s.order_id
-            ORDER BY MAX(s.updated_at) DESC
+            ORDER BY s.updated_at DESC
         `;
         const shoppers = await dbAdapter.query(sql, params);
 
@@ -2477,17 +2489,17 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
                    MAX(m.created_at) as last_message_at,
                    COUNT(*) as unread_count,
                    MAX(m.message_content) as latest_message,
-                   c.name as name,
-                   ls.id as shopper_id,
-                   ls.order_id,
-                   ls.status,
-                   ls.order_total,
-                   ls.delivery_type,
-                   ls.payment_method,
-                   ls.confirmed_by,
-                   ls.created_at,
-                   ls.updated_at,
-                   ls.last_response_at
+                   MAX(c.name) as name,
+                   MAX(ls.id) as shopper_id,
+                   MAX(ls.order_id) as order_id,
+                   MAX(ls.status) as status,
+                   MAX(ls.order_total) as order_total,
+                   MAX(ls.delivery_type) as delivery_type,
+                   MAX(ls.payment_method) as payment_method,
+                   MAX(ls.confirmed_by) as confirmed_by,
+                   MAX(ls.created_at) as created_at,
+                   MAX(ls.updated_at) as updated_at,
+                   MAX(ls.last_response_at) as last_response_at
             FROM messages m
             LEFT JOIN (
                 SELECT s1.id, s1.phone, s1.order_id, s1.status, s1.order_total,
@@ -2507,7 +2519,7 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
               ${searchClause}
               ${actionClause}
             GROUP BY m.customer_phone
-            ORDER BY MAX(m.created_at) DESC
+            ORDER BY last_message_at DESC
             LIMIT ? OFFSET ?
         `;
         const shoppers = await dbAdapter.query(unreadSql, [...dateParams, parseInt(limit), parseInt(offset)]);
@@ -2764,11 +2776,16 @@ router.get('/shoppers/recent-confirmed', verifyToken, async (req, res) => {
                    o.awb, o.courier_name, o.status as order_status, o.tracking_url,
                    COALESCE(s.order_total, o.total) as order_total
             FROM store_shoppers s
+            INNER JOIN (
+                SELECT order_id, MAX(updated_at) as max_updated
+                FROM store_shoppers
+                WHERE status = 'confirmed'
+                GROUP BY order_id
+            ) latest ON s.order_id = latest.order_id AND s.updated_at = latest.max_updated
             LEFT JOIN orders o ON s.order_id = o.order_id
             WHERE s.status = 'confirmed'
               ${dateClause}
-            GROUP BY s.order_id
-            ORDER BY MAX(s.updated_at) DESC
+            ORDER BY s.updated_at DESC
             LIMIT ? OFFSET ?
         `;
         const shoppers = await dbAdapter.query(confirmedSql, [...dateParams, parseInt(limit), parseInt(offset)]);
@@ -2912,7 +2929,7 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
         // Get daily stats with per-status breakdown (IST timezone)
         const dailyStats = await dbAdapter.query(`
             SELECT 
-                date(created_at, '+5 hours', '+30 minutes') as date,
+                DATE(created_at AT TIME ZONE 'Asia/Kolkata') as date,
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed,
                 SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
@@ -2921,7 +2938,7 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
                 SUM(CASE WHEN status != 'pending' THEN 1 ELSE 0 END) as responded
             FROM store_shoppers
             ${dateFilter}
-            GROUP BY date(created_at, '+5 hours', '+30 minutes')
+            GROUP BY DATE(created_at AT TIME ZONE 'Asia/Kolkata')
             ORDER BY date DESC
         `, dateParams);
         
