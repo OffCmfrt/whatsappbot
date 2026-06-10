@@ -165,10 +165,6 @@ class MessageHandler {
                              WHERE id = ?`,
                             [message, ticketId]
                         );
-                        await whatsappService.sendMessage(
-                            phone,
-                            `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your message has been added to ticket *${existingNumber}*.\n▫️ Our team will respond within *24 hours*.`
-                        );
                         console.log(`[TICKET] Appended message to existing ticket ${existingNumber} for ${phone}`);
                     }
                 } else if (buttonCommand === 'create_new_ticket') {
@@ -242,7 +238,7 @@ class MessageHandler {
                         null,
                         null
                     );
-                    
+
                     // Store the current message in conversation state for later use
                     try {
                         await dbAdapter.query(
@@ -254,7 +250,7 @@ class MessageHandler {
                         console.error('[TICKET CHOICE] Failed to set conversation state:', dbErr.message);
                     }
                 } else {
-                    // Ticket is less than 48 hours old - auto-append
+                    // Ticket is less than 48 hours old - auto-append (no confirmation, already sent on ticket creation)
                     await dbAdapter.query(
                         `UPDATE support_tickets
                          SET message = message || '\n\n---\n' || ?,
@@ -262,10 +258,6 @@ class MessageHandler {
                              updated_at = CURRENT_TIMESTAMP
                          WHERE id = ?`,
                         [cleanMessage, ticketId]
-                    );
-                    await whatsappService.sendMessage(
-                        phone,
-                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your message has been added to ticket *${existingNumber}*.\n▫️ Our team will respond within *24 hours*.`
                     );
                 }
             } else {
