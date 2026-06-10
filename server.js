@@ -23,20 +23,28 @@ app.use(helmet());
 app.use(compression());
 
 // Monitor response sizes and log warnings for large responses
+// Hard limit: block responses over 5MB to prevent memory exhaustion
+const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5MB
 app.use((req, res, next) => {
     const originalJson = res.json.bind(res);
     res.json = (data) => {
-        const responseSize = JSON.stringify(data).length;
+        const serialized = JSON.stringify(data);
+        const responseSize = serialized.length;
         const sizeKB = Math.round(responseSize / 1024);
         
         if (sizeKB > 500) {
             console.warn(`⚠️ LARGE RESPONSE: ${req.method} ${req.path} - ${sizeKB}KB (${responseSize} bytes)`);
         }
         
-        if (sizeKB > 1000) {
-            console.error(`🚨 VERY LARGE RESPONSE: ${req.method} ${req.path} - ${sizeKB}KB - Consider pagination!`);
+        if (responseSize > MAX_RESPONSE_SIZE) {
+            console.error(`🚨 BLOCKED RESPONSE: ${req.method} ${req.path} - ${sizeKB}KB exceeds 5MB limit`);
+            return res.status(413).json({
+                error: 'Response too large. Please use pagination or filters to reduce data size.'
+            });
         }
         
+        // Set Content-Length for accurate response tracking
+        res.setHeader('Content-Length', Buffer.byteLength(serialized));
         return originalJson(data);
     };
     next();

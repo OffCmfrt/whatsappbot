@@ -1874,7 +1874,7 @@ async function selectAllMatching() {
     const formattedEndDate = endDate ? `${endDate}T23:59:59` : '';
     
     const queryParams = new URLSearchParams({
-        limit: 10000, // Get all matching records
+        noLimit: 'true', // Get all matching records
         offset: 0,
         status: currentStatus,
         search,
@@ -2712,7 +2712,7 @@ async function fetchDetailedAnalytics() {
         analyticsTableDaysToShow = 7;
         
         // Fetch shoppers data for the date range
-        const url = `${API_BASE}/shoppers?limit=10000&start_date=${startDate}&end_date=${endDate}`;
+        const url = `${API_BASE}/shoppers?noLimit=true&start_date=${startDate}&end_date=${endDate}`;
         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${authToken}` } });
         const data = await res.json();
         

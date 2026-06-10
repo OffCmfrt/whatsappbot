@@ -1717,11 +1717,12 @@ router.get('/shoppers', verifyToken, async (req, res) => {
     try {
         let { limit = 100, offset = 0, status, search, startDate, endDate, orderIdFrom, orderIdTo, paymentMethod, deliveryType, sortBy, noLimit } = req.query;
         
-        // ENFORCE LIMITS to prevent memory overload (unless noLimit=true)
-        if (!noLimit || noLimit !== 'true') {
-            limit = Math.min(parseInt(limit), 500); // Max 500 records per request
+        // ENFORCE LIMITS to prevent memory overload
+        // noLimit is capped at 2000 to prevent huge responses (21MB+)
+        if (noLimit && noLimit === 'true') {
+            limit = 2000; // Hard cap for noLimit mode
         } else {
-            limit = parseInt(limit) || 1000; // Allow larger fetch for noLimit
+            limit = Math.min(parseInt(limit), 500); // Max 500 records per request
         }
         offset = Math.max(0, parseInt(offset));
         
@@ -1804,43 +1805,25 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         const total = countRes[0]?.total || 0;
 
         // Use LEFT JOIN instead of correlated subqueries for better performance
-        let sql;
-        let queryParams;
-        
-        if (noLimit && noLimit === 'true') {
-            // NO LIMIT for analytics/full data export
-            sql = `
-                SELECT s.*, 
-                       o.awb,
-                       o.courier_name,
-                       IFNULL(s.order_total, o.total) as order_total,
-                       o.status as order_status,
-                       o.tracking_url
-                FROM store_shoppers s
-                LEFT JOIN orders o ON o.order_id = s.order_id
-                ${whereClause} 
-                GROUP BY s.order_id
-                ${orderByClause}
-            `;
-            queryParams = [...params];
-        } else {
-            // Apply LIMIT for regular queries
-            sql = `
-                SELECT s.*, 
-                       o.awb,
-                       o.courier_name,
-                       IFNULL(s.order_total, o.total) as order_total,
-                       o.status as order_status,
-                       o.tracking_url
-                FROM store_shoppers s
-                LEFT JOIN orders o ON o.order_id = s.order_id
-                ${whereClause} 
-                GROUP BY s.order_id
-                ${orderByClause}
-                LIMIT ? OFFSET ?
-            `;
-            queryParams = [...params, parseInt(limit), parseInt(offset)];
-        }
+        // Always apply LIMIT to prevent unbounded queries (max 2000)
+        const sql = `
+            SELECT s.id, s.phone, s.name, s.email, s.order_id, s.address, s.city, s.province, s.zip,
+                   s.payment_method, s.order_total, s.delivery_type, s.source, s.status,
+                   s.customer_message, s.last_response_at, s.created_at, s.updated_at,
+                   s.confirmed_by,
+                   o.awb,
+                   o.courier_name,
+                   IFNULL(s.order_total, o.total) as order_total,
+                   o.status as order_status,
+                   o.tracking_url
+            FROM store_shoppers s
+            LEFT JOIN orders o ON o.order_id = s.order_id
+            ${whereClause} 
+            GROUP BY s.order_id
+            ${orderByClause}
+            LIMIT ? OFFSET ?
+        `;
+        const queryParams = [...params, parseInt(limit), parseInt(offset)];
         
         const shoppers = await dbAdapter.query(sql, queryParams);
 
@@ -2487,26 +2470,36 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
             dateParams.push(actionType);
         }
 
-        // Find phones with unread incoming messages (optimized with subqueries)
-        // Group by phone to get the latest unread message per customer
+        // Find phones with unread incoming messages (optimized with JOINs instead of correlated subqueries)
         const unreadSql = `
             SELECT m.customer_phone as phone,
                    MAX(m.created_at) as last_message_at,
                    COUNT(*) as unread_count,
                    MAX(m.message_content) as latest_message,
-                   (SELECT c.name FROM customers c WHERE c.phone = m.customer_phone LIMIT 1) as name,
-                   (SELECT s.id FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as shopper_id,
-                   (SELECT s.order_id FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as order_id,
-                   (SELECT s.status FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as status,
-                   (SELECT s.order_total FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as order_total,
-                   (SELECT s.delivery_type FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as delivery_type,
-                   (SELECT s.payment_method FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as payment_method,
-                   (SELECT s.items_json FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as items_json,
-                   (SELECT s.confirmed_by FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as confirmed_by,
-                   (SELECT s.created_at FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as created_at,
-                   (SELECT s.updated_at FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as updated_at,
-                   (SELECT s.last_response_at FROM store_shoppers s WHERE s.phone = m.customer_phone ORDER BY s.created_at DESC LIMIT 1) as last_response_at
+                   c.name as name,
+                   ls.id as shopper_id,
+                   ls.order_id,
+                   ls.status,
+                   ls.order_total,
+                   ls.delivery_type,
+                   ls.payment_method,
+                   ls.confirmed_by,
+                   ls.created_at,
+                   ls.updated_at,
+                   ls.last_response_at
             FROM messages m
+            LEFT JOIN (
+                SELECT s1.id, s1.phone, s1.order_id, s1.status, s1.order_total,
+                       s1.delivery_type, s1.payment_method, s1.confirmed_by,
+                       s1.created_at, s1.updated_at, s1.last_response_at
+                FROM store_shoppers s1
+                INNER JOIN (
+                    SELECT phone, MAX(created_at) as max_created
+                    FROM store_shoppers
+                    GROUP BY phone
+                ) s2 ON s1.phone = s2.phone AND s1.created_at = s2.max_created
+            ) ls ON ls.phone = m.customer_phone
+            LEFT JOIN customers c ON c.phone = m.customer_phone
             WHERE m.message_type = 'incoming'
               AND NOT EXISTS (SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id)
               ${dateClause}
@@ -2877,6 +2870,13 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
     try {
         const { startDate, endDate, noLimit } = req.query;
         
+        // Check cache first (3 min TTL for analytics)
+        const analyticsCacheKey = `analytics_overview:${startDate || 'all'}:${endDate || 'all'}:${noLimit || 'false'}`;
+        const cached = getCached(analyticsCacheKey);
+        if (cached) {
+            return res.json(cached);
+        }
+        
         // Build date filter - support custom date range or noLimit for all data
         let dateFilter = "";
         const dateParams = [];
@@ -2919,11 +2919,16 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
             ORDER BY date DESC
         `, dateParams);
         
-        res.json({
+        const response = {
             success: true,
             overview: stats[0] || {},
             daily: dailyStats
-        });
+        };
+        
+        // Cache for 3 minutes
+        setCache(analyticsCacheKey, response, 'stats', 3 * 60 * 1000);
+        
+        res.json(response);
     } catch (error) {
         console.error('Chat analytics error:', error);
         res.status(500).json({ error: 'Failed to fetch analytics' });

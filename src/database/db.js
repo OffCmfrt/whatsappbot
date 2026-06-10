@@ -189,6 +189,9 @@ async function initializeDatabase() {
   // Initialize Support Portals Table
   await initializeSupportPortalsTable();
   
+  // Apply performance indexes for slow queries identified in production logs
+  await applyPerformanceIndexes();
+  
   console.log('ℹ️ Turso database initialized');
   return true;
 }
@@ -514,6 +517,35 @@ async function initializeSupportPortalsTable() {
   } catch (error) {
     console.error('❌ Failed to initialize support portals table:', error.message);
   }
+}
+
+// Apply performance indexes for slow queries identified in production logs (June 2026)
+async function applyPerformanceIndexes() {
+  const indexes = [
+    // store_shoppers: status filter in analytics and list queries
+    'CREATE INDEX IF NOT EXISTS idx_store_shoppers_status ON store_shoppers(status)',
+    // store_shoppers: date range filters (created_at)
+    'CREATE INDEX IF NOT EXISTS idx_store_shoppers_created_at ON store_shoppers(created_at DESC)',
+    // store_shoppers: sort by updated_at in recent-confirmed
+    'CREATE INDEX IF NOT EXISTS idx_store_shoppers_updated_at ON store_shoppers(updated_at DESC)',
+    // store_shoppers: composite for analytics overview (status filter + date range)
+    'CREATE INDEX IF NOT EXISTS idx_store_shoppers_status_created ON store_shoppers(status, created_at)',
+    // messages: composite for unread inbox query (message_type + customer_phone + created_at)
+    'CREATE INDEX IF NOT EXISTS idx_messages_type_phone_created ON messages(message_type, customer_phone, created_at DESC)',
+    // messages: composite for message_reads NOT EXISTS check
+    'CREATE INDEX IF NOT EXISTS idx_messages_type_id ON messages(message_type, id)',
+  ];
+
+  for (const sql of indexes) {
+    try {
+      await tursoClient.execute(sql);
+    } catch (e) {
+      if (!e.message.includes('already exists')) {
+        console.error(`Index error: ${e.message}`);
+      }
+    }
+  }
+  console.log('✅ Performance indexes applied');
 }
 
 module.exports = {
