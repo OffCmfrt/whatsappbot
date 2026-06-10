@@ -1718,10 +1718,8 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         let { limit = 100, offset = 0, status, search, startDate, endDate, orderIdFrom, orderIdTo, paymentMethod, deliveryType, sortBy, noLimit } = req.query;
         
         // ENFORCE LIMITS to prevent memory overload
-        // noLimit=true raises the ceiling to 2000 but respects explicit limit if provided
+        // noLimit=true raises ceiling to 2000 for export use cases (single-day downloads)
         if (noLimit && noLimit === 'true') {
-            // If caller specified an explicit limit, honor it (for paginated requests with noLimit flag)
-            // Otherwise default to 2000 max for noLimit mode
             const requestedLimit = parseInt(req.query.limit);
             limit = (requestedLimit && requestedLimit > 0 && requestedLimit <= 2000) ? requestedLimit : 2000;
         } else {
@@ -1813,7 +1811,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
             SELECT s.id, s.phone, s.name, s.email, s.order_id, s.address, s.city, s.province, s.zip,
                    s.payment_method, s.order_total, s.delivery_type, s.source, s.status,
                    s.customer_message, s.last_response_at, s.created_at, s.updated_at,
-                   s.confirmed_by,
+                   s.confirmed_by, s.items_json,
                    o.awb,
                    o.courier_name,
                    IFNULL(s.order_total, o.total) as order_total,
@@ -2896,9 +2894,10 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
         }
         // If noLimit=true and no dates, dateFilter stays empty (ALL historical data)
         
-        // Get overall stats
+        // Get overall stats - lightweight aggregation
         const stats = await dbAdapter.query(`
             SELECT 
+                COUNT(*) as total_orders,
                 COUNT(DISTINCT phone) as total_shoppers,
                 SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed_count,
                 SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
@@ -2910,15 +2909,19 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
             ${dateFilter}
         `, dateParams);
         
-        // Get daily response stats - use same date filter
+        // Get daily stats with per-status breakdown (IST timezone)
         const dailyStats = await dbAdapter.query(`
             SELECT 
-                DATE(created_at) as date,
+                date(created_at, '+5 hours', '+30 minutes') as date,
                 COUNT(*) as total,
+                SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
+                SUM(CASE WHEN status = 'edit_details' THEN 1 ELSE 0 END) as edit_details,
                 SUM(CASE WHEN status != 'pending' THEN 1 ELSE 0 END) as responded
             FROM store_shoppers
             ${dateFilter}
-            GROUP BY DATE(created_at)
+            GROUP BY date(created_at, '+5 hours', '+30 minutes')
             ORDER BY date DESC
         `, dateParams);
         

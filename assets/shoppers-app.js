@@ -2709,17 +2709,17 @@ async function fetchDetailedAnalytics() {
         // Reset days to show counter when date filter changes
         analyticsTableDaysToShow = 7;
         
-        // Fetch shoppers data for the date range
-        const url = `${API_BASE}/shoppers?noLimit=true&start_date=${startDate}&end_date=${endDate}`;
+        // Use lightweight aggregated endpoint - no raw shopper records loaded into memory
+        const url = `${API_BASE}/chat/analytics/overview?startDate=${startDate}&endDate=${endDate}`;
         const res = await fetch(url, { headers: { 'Authorization': `Bearer ${authToken}` } });
         const data = await res.json();
         
-        if (!data.shoppers) {
+        if (!data.success) {
             throw new Error('No data available');
         }
         
-        // Process data for analytics
-        currentAnalyticsData = processAnalyticsData(data.shoppers, startDate, endDate);
+        // Build analytics from server-side aggregated data
+        currentAnalyticsData = processAnalyticsData(data, startDate, endDate);
         
         // Render all components
         renderAnalyticsDashboard();
@@ -2730,23 +2730,25 @@ async function fetchDetailedAnalytics() {
     }
 }
 
-function processAnalyticsData(shoppers, startDate, endDate) {
+function processAnalyticsData(data, startDate, endDate) {
+    const overview = data.overview || {};
+    const dailyRaw = data.daily || [];
+    
+    // Build stats from server-side aggregated counts
     const stats = {
-        total: shoppers.length,
-        confirmed: 0,
-        pending: 0,
-        cancelled: 0,
-        edit_details: 0,
-        daily: {},
-        byDate: {},
-        allShoppers: shoppers // Store all shoppers for daily export
+        total: overview.total_orders || 0,
+        confirmed: overview.confirmed_count || 0,
+        pending: overview.pending_count || 0,
+        cancelled: overview.cancelled_count || 0,
+        edit_details: overview.edit_requests_count || 0,
+        daily: {}
     };
     
-    // Initialize daily breakdown
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // Initialize all dates in the range (fill gaps with zeros)
+    const start = new Date(startDate + 'T00:00:00');
+    const end = new Date(endDate + 'T00:00:00');
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const dateKey = formatDateForInput(d);
+        const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         stats.daily[dateKey] = {
             date: dateKey,
             total: 0,
@@ -2754,48 +2756,29 @@ function processAnalyticsData(shoppers, startDate, endDate) {
             pending: 0,
             cancelled: 0,
             edit_details: 0,
-            responded: 0,
-            shoppers: [] // Store shoppers for this day
+            responded: 0
         };
     }
     
-    // Process each shopper
-    shoppers.forEach(s => {
-        const status = s.status || 'pending';
-        if (stats.hasOwnProperty(status)) {
-            stats[status]++;
-        }
-        
-        // Daily breakdown - convert UTC to IST date
-        let dateKey;
-        if (s.created_at) {
-            // Parse the UTC date and convert to IST date
-            const utcDate = new Date(s.created_at);
-            const istOffsetMs = 5.5 * 60 * 60 * 1000;
-            const istDate = new Date(utcDate.getTime() + istOffsetMs);
-            // Format as YYYY-MM-DD in IST
-            dateKey = `${istDate.getUTCFullYear()}-${String(istDate.getUTCMonth() + 1).padStart(2, '0')}-${String(istDate.getUTCDate()).padStart(2, '0')}`;
-        } else {
-            dateKey = formatDateForInput(new Date());
-        }
-        
-        if (stats.daily[dateKey]) {
-            stats.daily[dateKey].total++;
-            if (stats.daily[dateKey].hasOwnProperty(status)) {
-                stats.daily[dateKey][status]++;
-            }
-            if (status !== 'pending') {
-                stats.daily[dateKey].responded++;
-            }
-            // Store shopper data for export
-            stats.daily[dateKey].shoppers.push(s);
+    // Merge server-side daily aggregated data (already in IST from backend)
+    dailyRaw.forEach(day => {
+        if (stats.daily[day.date]) {
+            stats.daily[day.date] = {
+                date: day.date,
+                total: day.total || 0,
+                confirmed: day.confirmed || 0,
+                pending: day.pending || 0,
+                cancelled: day.cancelled || 0,
+                edit_details: day.edit_details || 0,
+                responded: day.responded || 0
+            };
         }
     });
     
-    // Convert daily to array and sort
+    // Convert daily to array and sort by date
     stats.dailyArray = Object.values(stats.daily).sort((a, b) => a.date.localeCompare(b.date));
     
-    // Calculate percentages
+    // Calculate percentages from aggregated totals
     stats.percentages = {
         confirmed: stats.total > 0 ? Math.round((stats.confirmed / stats.total) * 100) : 0,
         pending: stats.total > 0 ? Math.round((stats.pending / stats.total) * 100) : 0,
@@ -3060,54 +3043,42 @@ function showMoreAnalyticsDays() {
     renderAnalyticsTable();
 }
 
-function downloadDayReport(date, statusFilter) {
+async function downloadDayReport(date, statusFilter) {
     if (!currentAnalyticsData) return;
     
-    // Find the day's data
+    // Find the day's aggregated data
     const dayData = currentAnalyticsData.dailyArray.find(d => d.date === date);
-    if (!dayData) {
+    if (!dayData || dayData.total === 0) {
         alert('No data found for this date');
         return;
     }
     
-    // Filter shoppers by status if specified
-    let shoppersToExport = dayData.shoppers || [];
-    if (statusFilter) {
-        shoppersToExport = shoppersToExport.filter(s => (s.status || 'pending') === statusFilter);
-    }
-    
-    // Check if there are shoppers to export
-    if (shoppersToExport.length === 0) {
-        const label = statusFilter ? statusFilter.replace('_', ' ') : 'orders';
-        alert(`No ${label} found for this date`);
-        return;
-    }
-    
-    // Build report title and filename based on filter
-    const dateLabel = formatISTDateLabel(date, 'full');
-    const statusLabel = statusFilter 
-        ? statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1).replace('_', ' ') 
-        : 'Orders';
-    let csv = `${statusLabel} Report - ${dateLabel}\n`;
-    csv += `Total Orders: ${dayData.total} | Confirmed: ${dayData.confirmed} | Pending: ${dayData.pending} | Cancelled: ${dayData.cancelled} | Edits: ${dayData.edit_details}\n\n`;
-    
-    // CSV Headers
-    csv += 'Order ID,Customer Name,Phone,Email,Status,Total Amount,Delivery Type,Address,Products,Customer Message,Created At\n';
-    
-    // Add each shopper as a row
-    shoppersToExport.forEach(s => {
-        // Parse items for product list
-        let items = [];
-        try { items = JSON.parse(s.items_json || '[]'); } catch(e) {}
-        const productsList = items.map(item => {
-            let size = item.size || item.variant_size || item.product_size || '';
-            if (!size && item.variant_title) {
-                const sizeMatch = item.variant_title.match(/Size:\s*(\w+)/i) || item.variant_title.match(/\b(S|M|L|XL|XXS|XS|XXL|XXXL|Free Size|One Size)\b/i);
-                if (sizeMatch) size = sizeMatch[1].toUpperCase();
-            }
-            const sizeDisplay = size ? ` (Size: ${size})` : '';
-            return `${item.title || item.name}${sizeDisplay} x${item.quantity || 1}`;
-        }).join('; ');
+    // Fetch shoppers for this specific day on-demand (filtered by date + status)
+    try {
+        let url = `${API_BASE}/shoppers?noLimit=true&startDate=${date}&endDate=${date}`;
+        if (statusFilter) {
+            url += `&status=${statusFilter}`;
+        }
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${authToken}` } });
+        const data = await res.json();
+        
+        const shoppersToExport = data.shoppers || [];
+        if (shoppersToExport.length === 0) {
+            const label = statusFilter ? statusFilter.replace('_', ' ') : 'orders';
+            alert(`No ${label} found for this date`);
+            return;
+        }
+        
+        // Build report
+        const dateLabel = formatISTDateLabel(date, 'full');
+        const statusLabel = statusFilter 
+            ? statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1).replace('_', ' ') 
+            : 'Orders';
+        let csv = `${statusLabel} Report - ${dateLabel}\n`;
+        csv += `Total Orders: ${dayData.total} | Confirmed: ${dayData.confirmed} | Pending: ${dayData.pending} | Cancelled: ${dayData.cancelled} | Edits: ${dayData.edit_details}\n\n`;
+        
+        // CSV Headers
+        csv += 'Order ID,Customer Name,Phone,Email,Status,Total Amount,Delivery Type,Address,Products,Customer Message,Created At\n';
         
         // Escape fields that might contain commas
         const escapeCsv = (field) => {
@@ -3119,20 +3090,38 @@ function downloadDayReport(date, statusFilter) {
             return str;
         };
         
-        csv += `${escapeCsv(s.order_id)},${escapeCsv(s.name)},${escapeCsv(s.phone)},${escapeCsv(s.email)},${escapeCsv(s.status || 'pending')},${escapeCsv(s.total)},${escapeCsv(s.delivery_type || 'Standard')},${escapeCsv(s.address)},${escapeCsv(productsList)},${escapeCsv(s.customer_message || '')},${escapeCsv(formatDate(s.created_at))}\n`;
-    });
-    
-    // Download file
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    const filenamePrefix = statusFilter ? `${statusFilter}_orders` : 'daily_orders';
-    link.setAttribute('download', `${filenamePrefix}_${date}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+        // Add each shopper as a row
+        shoppersToExport.forEach(s => {
+            let items = [];
+            try { items = JSON.parse(s.items_json || '[]'); } catch(e) {}
+            const productsList = items.map(item => {
+                let size = item.size || item.variant_size || item.product_size || '';
+                if (!size && item.variant_title) {
+                    const sizeMatch = item.variant_title.match(/Size:\s*(\w+)/i) || item.variant_title.match(/\b(S|M|L|XL|XXS|XS|XXL|XXXL|Free Size|One Size)\b/i);
+                    if (sizeMatch) size = sizeMatch[1].toUpperCase();
+                }
+                const sizeDisplay = size ? ` (Size: ${size})` : '';
+                return `${item.title || item.name}${sizeDisplay} x${item.quantity || 1}`;
+            }).join('; ');
+            
+            csv += `${escapeCsv(s.order_id)},${escapeCsv(s.name)},${escapeCsv(s.phone)},${escapeCsv(s.email)},${escapeCsv(s.status || 'pending')},${escapeCsv(s.order_total)},${escapeCsv(s.delivery_type || 'Standard')},${escapeCsv(s.address)},${escapeCsv(productsList)},${escapeCsv(s.customer_message || '')},${escapeCsv(formatDate(s.created_at))}\n`;
+        });
+        
+        // Download file
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const blobUrl = URL.createObjectURL(blob);
+        link.setAttribute('href', blobUrl);
+        const filenamePrefix = statusFilter ? `${statusFilter}_orders` : 'daily_orders';
+        link.setAttribute('download', `${filenamePrefix}_${date}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    } catch (error) {
+        console.error('Failed to download day report:', error);
+        alert('Failed to download report. Please try again.');
+    }
 }
 
 function exportAnalyticsToExcel() {
