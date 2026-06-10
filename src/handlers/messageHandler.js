@@ -5,11 +5,30 @@ const Customer = require('../models/Customer');
 const { dbAdapter } = require('../database/db');
 const { sanitizeInput } = require('../utils/validators');
 
-// Generate unique ticket number
+// Generate a candidate ticket number: TKT-YYMMDD-XXXX (9000 per day instead of per year)
 function generateTicketNumber() {
-    const year = new Date().getFullYear();
+    const now = new Date();
+    const yy = String(now.getFullYear()).slice(-2);
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
     const random = Math.floor(Math.random() * 9000 + 1000); // 4-digit random number
-    return `TKT-${year}-${random}`;
+    return `TKT-${yy}${mm}${dd}-${random}`;
+}
+
+// Generate a ticket number guaranteed not to collide with existing ones (up to 5 retries)
+async function generateUniqueTicketNumber() {
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = generateTicketNumber();
+        const existing = await dbAdapter.query(
+            'SELECT id FROM support_tickets WHERE ticket_number = ? LIMIT 1',
+            [candidate]
+        );
+        if (!existing || existing.length === 0) return candidate;
+        console.warn(`[TICKET] Collision on ${candidate}, retrying (${attempt + 1}/5)...`);
+    }
+    // Fallback: append epoch ms to guarantee uniqueness
+    const fallback = `TKT-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
+    return fallback;
 }
 
 class MessageHandler {
@@ -155,7 +174,7 @@ class MessageHandler {
                 } else if (buttonCommand === 'create_new_ticket') {
                     // Create a new ticket
                     const message = ticketContext.cleanMessage;
-                    const ticketNumber = generateTicketNumber();
+                    const ticketNumber = await generateUniqueTicketNumber();
 
                     if (message) {
                         await dbAdapter.query(
@@ -260,7 +279,7 @@ class MessageHandler {
                 
                 if (currentState === 'awaiting_customer_question') {
                     // Customer has sent their question - create ticket now
-                    const ticketNumber = generateTicketNumber();
+                    const ticketNumber = await generateUniqueTicketNumber();
                     await dbAdapter.query(
                         'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, 0)',
                         [ticketNumber, phone, name, cleanMessage]
