@@ -531,10 +531,8 @@ async function loadMoreShoppers() {
         sortBy: currentSortBy
     });
     
-    // Add noLimit parameter when no date filters are applied
-    if (!startDate && !endDate && !search && currentStatus === 'all') {
-        queryParams.append('noLimit', 'true');
-    }
+    // Note: Do NOT add noLimit=true for load-more requests
+    // Pagination must always use explicit limit for proper chunked loading
     
     try {
         const data = await apiCall(`/shoppers?${queryParams.toString()}`);

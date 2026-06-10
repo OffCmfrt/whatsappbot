@@ -1718,9 +1718,12 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         let { limit = 100, offset = 0, status, search, startDate, endDate, orderIdFrom, orderIdTo, paymentMethod, deliveryType, sortBy, noLimit } = req.query;
         
         // ENFORCE LIMITS to prevent memory overload
-        // noLimit is capped at 2000 to prevent huge responses (21MB+)
+        // noLimit=true raises the ceiling to 2000 but respects explicit limit if provided
         if (noLimit && noLimit === 'true') {
-            limit = 2000; // Hard cap for noLimit mode
+            // If caller specified an explicit limit, honor it (for paginated requests with noLimit flag)
+            // Otherwise default to 2000 max for noLimit mode
+            const requestedLimit = parseInt(req.query.limit);
+            limit = (requestedLimit && requestedLimit > 0 && requestedLimit <= 2000) ? requestedLimit : 2000;
         } else {
             limit = Math.min(parseInt(limit), 500); // Max 500 records per request
         }
