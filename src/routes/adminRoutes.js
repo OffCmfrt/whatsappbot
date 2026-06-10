@@ -1959,13 +1959,13 @@ router.get('/shoppers/multi-orders', verifyToken, async (req, res) => {
             joinParams.push(utcEndDate, utcEndDate);
         }
 
-        // Find phones with 2+ orders where at least one pair is within 24 hours (1 day in julianday)
+        // Find phones with 2+ orders where at least one pair is within 24 hours (86400 seconds)
         const multiOrderPhonesSql = `
             SELECT DISTINCT s1.phone
             FROM store_shoppers s1
             JOIN store_shoppers s2 ON s1.phone = s2.phone
                 AND s1.id != s2.id
-                AND ABS(julianday(s1.created_at) - julianday(s2.created_at)) <= 1
+                AND ABS(EXTRACT(EPOCH FROM (s1.created_at - s2.created_at))) <= 86400
                 ${dateJoinClause}
         `;
         const phoneRows = await dbAdapter.query(multiOrderPhonesSql, joinParams);
@@ -2927,9 +2927,10 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
         `, dateParams);
         
         // Get daily stats with per-status breakdown (IST timezone)
+        // created_at is TIMESTAMP (no tz) storing UTC — convert UTC→IST correctly
         const dailyStats = await dbAdapter.query(`
             SELECT 
-                TO_CHAR(DATE(created_at AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') as date,
+                TO_CHAR(DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') as date,
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed,
                 SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
@@ -2938,7 +2939,7 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
                 SUM(CASE WHEN status != 'pending' THEN 1 ELSE 0 END) as responded
             FROM store_shoppers
             ${dateFilter}
-            GROUP BY DATE(created_at AT TIME ZONE 'Asia/Kolkata')
+            GROUP BY DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
             ORDER BY date DESC
         `, dateParams);
         
