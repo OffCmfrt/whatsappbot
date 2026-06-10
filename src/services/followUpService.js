@@ -705,7 +705,7 @@ class FollowUpService {
                     SUM(total_recipients) as recipients,
                     SUM(responded_count) as responses
                 FROM follow_up_campaigns
-                WHERE created_at >= datetime('now', '-30 days')
+                WHERE created_at >= NOW() - INTERVAL '30 days'
                 GROUP BY DATE(created_at)
                 ORDER BY date DESC
             `);

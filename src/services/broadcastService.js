@@ -279,22 +279,24 @@ class BroadcastService {
     async ensureQueueSchema() {
         await dbAdapter.query(`
             CREATE TABLE IF NOT EXISTS broadcast_queue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phone TEXT NOT NULL,
+                id SERIAL PRIMARY KEY,
+                phone VARCHAR(20) NOT NULL,
                 message TEXT,
                 image_url TEXT,
                 delay_seconds INTEGER DEFAULT 3,
                 broadcast_id INTEGER,
                 attempts INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'pending',
+                status VARCHAR(50) DEFAULT 'pending',
                 template_data TEXT
             )
         `);
 
-        // Check for missing columns (migration)
+        // Check for missing columns (migration) using information_schema
         try {
-            const tableInfo = await dbAdapter.query("PRAGMA table_info(broadcast_queue)");
-            const columns = tableInfo.map(c => c.name);
+            const tableInfo = await dbAdapter.query(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'broadcast_queue'"
+            );
+            const columns = tableInfo.map(c => c.column_name);
             
             if (!columns.includes('image_url')) {
                 await dbAdapter.query("ALTER TABLE broadcast_queue ADD COLUMN image_url TEXT");

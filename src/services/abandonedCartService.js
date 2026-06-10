@@ -278,7 +278,7 @@ class AbandonedCartService {
                     // During this period, only button clicks will be processed, no automated responses
                     try {
                         await dbAdapter.query(
-                            'UPDATE store_shoppers SET conversation_lock_until = datetime(\'now\', \'+48 hours\') WHERE phone = ? AND order_id = ?',
+                            'UPDATE store_shoppers SET conversation_lock_until = NOW() + INTERVAL \'48 hours\' WHERE phone = ? AND order_id = ?',
                             [phone, orderId]
                         );
                         console.log(`[LOCK] 48-hour conversation lock set for ${phone} / ${orderId}`);

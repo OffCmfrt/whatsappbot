@@ -67,7 +67,7 @@ class MessageHandler {
             // Check if customer has an active conversation lock (48-hour quiet period)
             // This prevents bot automation after order confirmation template is sent
             const activeLock = await dbAdapter.query(
-                'SELECT id, order_id, conversation_lock_until FROM store_shoppers WHERE phone = ? AND conversation_lock_until > datetime(\'now\') ORDER BY created_at DESC LIMIT 1',
+                'SELECT id, order_id, conversation_lock_until FROM store_shoppers WHERE phone = ? AND conversation_lock_until > NOW() ORDER BY created_at DESC LIMIT 1',
                 [phone]
             );
 
@@ -242,7 +242,7 @@ class MessageHandler {
                     // Store the current message in conversation state for later use
                     try {
                         await dbAdapter.query(
-                            'INSERT OR REPLACE INTO conversations (customer_phone, state, context, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                            'INSERT INTO conversations (customer_phone, state, context, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(customer_phone) DO UPDATE SET state = EXCLUDED.state, context = EXCLUDED.context, updated_at = CURRENT_TIMESTAMP',
                             [phone, 'awaiting_ticket_choice', JSON.stringify({ cleanMessage, existingTicketId: ticketId, existingTicketNumber: existingNumber })]
                         );
                         console.log(`[TICKET CHOICE] State set for ${phone}: awaiting_ticket_choice`);
@@ -296,7 +296,7 @@ class MessageHandler {
                     
                     // Set conversation state to await customer's question
                     await dbAdapter.query(
-                        'INSERT OR REPLACE INTO conversations (customer_phone, state, context, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                        'INSERT INTO conversations (customer_phone, state, context, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(customer_phone) DO UPDATE SET state = EXCLUDED.state, context = EXCLUDED.context, updated_at = CURRENT_TIMESTAMP',
                         [phone, 'awaiting_customer_question', JSON.stringify({})]
                     );
                     console.log(`[SUPPORT] Asking ${phone} to describe their issue`);
@@ -359,7 +359,7 @@ class MessageHandler {
                 // Trigger support ticket flow
                 try {
                     await dbAdapter.query(
-                        'INSERT OR REPLACE INTO conversations (customer_phone, state, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+                        'INSERT INTO conversations (customer_phone, state, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(customer_phone) DO UPDATE SET state = EXCLUDED.state, updated_at = CURRENT_TIMESTAMP',
                         [phone, 'awaiting_support_query']
                     );
                     console.log(`[SUPPORT] State set for ${phone}: awaiting_support_query`);
@@ -409,7 +409,7 @@ class MessageHandler {
             case 'menu_contact_support': {
                 try {
                     await dbAdapter.query(
-                        'INSERT OR REPLACE INTO conversations (customer_phone, state, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+                        'INSERT INTO conversations (customer_phone, state, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(customer_phone) DO UPDATE SET state = EXCLUDED.state, updated_at = CURRENT_TIMESTAMP',
                         [phone, 'awaiting_support_query']
                     );
                     console.log(`[SUPPORT] State set for ${phone}: awaiting_support_query`);
@@ -520,7 +520,7 @@ class MessageHandler {
                 // Set conversation state to capture the edit request message
                 try {
                     await dbAdapter.query(
-                        'INSERT OR REPLACE INTO conversations (customer_phone, state, context, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                        'INSERT INTO conversations (customer_phone, state, context, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(customer_phone) DO UPDATE SET state = EXCLUDED.state, context = EXCLUDED.context, updated_at = CURRENT_TIMESTAMP',
                         [phone, 'awaiting_edit_details', JSON.stringify({ order_id: targetOrderId })]
                     );
                     console.log(`[EDIT] State set for ${phone}: awaiting_edit_details (order: ${targetOrderId})`);

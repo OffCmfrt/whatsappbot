@@ -14,10 +14,10 @@ class ReengagementService {
             const tickets = await dbAdapter.query(
                 `SELECT id, customer_phone, customer_name, ticket_number
                  FROM support_tickets
-                 WHERE reengagement_sent = 0
+                 WHERE reengagement_sent = false
                    AND status = 'open'
-                   AND created_at <= datetime('now', '-20 hours')
-                   AND created_at > datetime('now', '-21 hours')`,
+                   AND created_at <= NOW() - INTERVAL '20 hours'
+                   AND created_at > NOW() - INTERVAL '21 hours'`,
                 []
             );
 

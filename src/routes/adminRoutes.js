@@ -1814,7 +1814,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
                    s.confirmed_by, s.items_json,
                    o.awb,
                    o.courier_name,
-                   IFNULL(s.order_total, o.total) as order_total,
+                   COALESCE(s.order_total, o.total) as order_total,
                    o.status as order_status,
                    o.tracking_url
             FROM store_shoppers s
@@ -2175,7 +2175,7 @@ router.get('/shoppers/export', verifyToken, async (req, res) => {
         const sql = `
             SELECT s.name, s.phone, s.email, s.order_id, s.address, s.city, s.province, s.zip, s.country, 
                    s.payment_method, s.items_json, s.status, s.created_at, s.customer_message,
-                   s.delivery_type, IFNULL(s.order_total, o.total) as order_total,
+                   s.delivery_type, COALESCE(s.order_total, o.total) as order_total,
                    o.awb, o.courier_name
             FROM store_shoppers s
             LEFT JOIN orders o ON s.order_id = o.order_id
@@ -2358,7 +2358,7 @@ router.get('/inbox/export', verifyToken, async (req, res) => {
             SELECT s.name, s.phone, s.email, s.order_id, s.address, s.city, s.province, s.zip,
                    s.payment_method, s.items_json, s.status, s.created_at, s.customer_message,
                    s.delivery_type, s.confirmed_by, s.updated_at,
-                   IFNULL(s.order_total, o.total) as order_total,
+                   COALESCE(s.order_total, o.total) as order_total,
                    o.awb, o.courier_name
             FROM store_shoppers s
             LEFT JOIN orders o ON s.order_id = o.order_id
@@ -2690,7 +2690,7 @@ router.post('/chat/mark-read/:phone', verifyToken, async (req, res) => {
             
             try {
                 await dbAdapter.query(
-                    `INSERT OR IGNORE INTO message_reads (message_id, read_at, read_by) VALUES ${placeholders}`,
+                    `INSERT INTO message_reads (message_id, read_at, read_by) VALUES ${placeholders} ON CONFLICT (message_id) DO NOTHING`,
                     params
                 );
                 markedCount += batch.length;
@@ -2762,7 +2762,7 @@ router.get('/shoppers/recent-confirmed', verifyToken, async (req, res) => {
                    s.payment_method, s.items_json, s.email, s.address, s.city, s.province, s.zip,
                    s.confirmed_by,
                    o.awb, o.courier_name, o.status as order_status, o.tracking_url,
-                   IFNULL(s.order_total, o.total) as order_total
+                   COALESCE(s.order_total, o.total) as order_total
             FROM store_shoppers s
             LEFT JOIN orders o ON s.order_id = o.order_id
             WHERE s.status = 'confirmed'
@@ -2890,7 +2890,7 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
             dateParams.push(utcStartDate, utcEndDate);
         } else if (!noLimit || noLimit !== 'true') {
             // Default: last 30 days if no date range and noLimit not set
-            dateFilter = "WHERE created_at >= datetime('now', '-30 days')";
+            dateFilter = "WHERE created_at >= NOW() - INTERVAL '30 days'";
         }
         // If noLimit=true and no dates, dateFilter stays empty (ALL historical data)
         

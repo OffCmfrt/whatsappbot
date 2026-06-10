@@ -499,8 +499,8 @@ async function startServer() {
         if (error.message.includes('WHATSAPP_')) {
             console.error('ℹ️ Hint: Check your WhatsApp Meta API environment variables.');
         }
-        if (error.message.includes('TURSO_')) {
-            console.error('ℹ️ Hint: Check your Turso/libSQL database credentials.');
+        if (error.message.includes('TURSO_') || error.message.includes('SUPABASE_')) {
+            console.error('ℹ️ Hint: Check your Supabase PostgreSQL database credentials (SUPABASE_DB_URL).');
         }
         
         process.exit(1);
