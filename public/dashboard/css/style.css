@@ -3068,7 +3068,7 @@ textarea {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--border-radius-lg);
-    overflow: hidden;
+    overflow: visible;
 }
 
 .toolbar-search-row {
@@ -3144,6 +3144,7 @@ textarea {
 
 .toolbar-filters-panel.open {
     max-height: 800px;
+    overflow: visible;
     border-top: 1px solid var(--border);
 }
 
