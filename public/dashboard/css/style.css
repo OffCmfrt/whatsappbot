@@ -2027,7 +2027,7 @@ textarea {
 
 .custom-dropdown {
     position: relative;
-    min-width: 140px;
+    min-width: 0;
     z-index: 100;
 }
 
@@ -2044,6 +2044,15 @@ textarea {
     cursor: pointer;
     transition: var(--transition);
     user-select: none;
+    overflow: hidden;
+}
+
+.custom-dropdown-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
 }
 
 .custom-dropdown-selected:hover {
@@ -2071,8 +2080,8 @@ textarea {
     position: absolute;
     top: calc(100% + 4px);
     left: 0;
-    right: 0;
-    min-width: 100%;
+    width: 100%;
+    min-width: 120px;
     background: #1a1a1a;
     border: 1px solid rgba(255,255,255,0.12);
     border-radius: var(--border-radius);
@@ -2093,6 +2102,8 @@ textarea {
     color: #e5e5e5;
     cursor: pointer;
     transition: background 0.15s ease;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
@@ -3222,7 +3233,8 @@ textarea {
 /* Status & Sort Row */
 .status-sort-row {
     display: flex;
-    gap: 8px;
+    gap: 12px;
+    overflow: visible;
 }
 
 .status-sort-row select {
@@ -3238,6 +3250,7 @@ textarea {
 .status-sort-row .custom-dropdown {
     flex: 1;
     min-width: 0;
+    overflow: visible;
 }
 
 /* Urgent Filter */
