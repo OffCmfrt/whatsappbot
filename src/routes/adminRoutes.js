@@ -1454,7 +1454,7 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
 
         if (is_read !== undefined) {
             conditions.push('is_read = ?');
-            params.push(is_read === 'true' ? 1 : 0);
+            params.push(is_read === 'true');
         }
 
         if (date_from) {
@@ -1552,7 +1552,7 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
 
         if (is_read !== undefined) {
             updates.push('is_read = ?');
-            params.push(is_read ? 1 : 0);
+            params.push(!!is_read);
         }
 
         params.push(id);

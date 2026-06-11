@@ -174,7 +174,7 @@ class MessageHandler {
 
                     if (message) {
                         await dbAdapter.query(
-                            'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, 0)',
+                            'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, false)',
                             [ticketNumber, phone, name, message]
                         );
                         await whatsappService.sendMessage(
@@ -273,7 +273,7 @@ class MessageHandler {
                     // Customer has sent their question - create ticket now
                     const ticketNumber = await generateUniqueTicketNumber();
                     await dbAdapter.query(
-                        'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, 0)',
+                        'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, is_read) VALUES (?, ?, ?, ?, false)',
                         [ticketNumber, phone, name, cleanMessage]
                     );
                     await whatsappService.sendMessage(
