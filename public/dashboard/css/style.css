@@ -1998,12 +1998,19 @@ textarea {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 10px center;
+    position: relative;
+    z-index: 1;
 }
 
 .ticket-filters select option {
-    background: #1a1a1a;
-    color: #e5e5e5;
-    padding: 8px;
+    background: #1e1e1e !important;
+    color: #e5e5e5 !important;
+    padding: 10px 8px !important;
+    border: none !important;
+}
+
+.ticket-filters select option:hover {
+    background: #2a2a2a !important;
 }
 
 .ticket-filters select:focus {
@@ -3054,6 +3061,8 @@ textarea {
     display: flex;
     flex-direction: column;
     gap: 10px;
+    position: relative;
+    z-index: 10;
 }
 
 .filter-group label {
@@ -3063,6 +3072,7 @@ textarea {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin: 0;
+    pointer-events: none;
 }
 
 /* Quick Presets */
