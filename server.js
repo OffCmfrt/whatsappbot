@@ -3,7 +3,6 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const compression = require('compression');
 const helmet = require('helmet');
-const bodyParser = require('body-parser');
 const cors = require('cors');
 const path = require('path');
 const messageHandler = require('./src/handlers/messageHandler');

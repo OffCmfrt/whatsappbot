@@ -5,7 +5,7 @@ require('dotenv').config();
 const pool = new Pool({
   connectionString: process.env.SUPABASE_DB_URL,
   ssl: { rejectUnauthorized: false },
-  max: 5, // Reduced from default 10 to save ~5-10MB memory
+  max: 5, // Reduced from default 10 to save memory
   idleTimeoutMillis: 30000, // Close idle connections after 30s
   connectionTimeoutMillis: 5000 // Fail fast if no connection available
 });

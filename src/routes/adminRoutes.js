@@ -10,11 +10,19 @@ const broadcastService = require('../services/broadcastService');
 const followUpService = require('../services/followUpService');
 const whatsappService = require('../services/whatsappService');
 const { dbAdapter } = require('../database/db');
-const multer = require('multer');
 const cloudinaryService = require('../services/cloudinaryService');
 const { toIST, formatDateForExport, fromISTtoUTC } = require('../utils/timezone');
 const { invalidateCache: clearAllCaches, caches, getCacheStats, getCached, setCache } = require('../utils/cache');
-const upload = multer({ storage: multer.memoryStorage() });
+
+// Lazy-load multer to save ~3-5MB at startup — only needed for file upload endpoints
+let _upload = null;
+function getUpload() {
+  if (!_upload) {
+    const multer = require('multer');
+    _upload = multer({ storage: multer.memoryStorage() });
+  }
+  return _upload;
+}
 
 // Lazy-load xlsx (saves ~30-50MB at startup) — only loaded when export/import is triggered
 let _xlsx = null;
@@ -482,7 +490,7 @@ router.post('/broadcast/import', verifyToken, async (req, res) => {
 });
 
 // Upload image to Cloudinary
-router.post('/upload', verifyToken, upload.single('image'), async (req, res) => {
+router.post('/upload', verifyToken, (req, res, next) => getUpload().single('image')(req, res, next), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });

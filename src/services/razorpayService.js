@@ -1,9 +1,9 @@
-const Razorpay = require('razorpay');
-
 class RazorpayService {
     constructor() {
         // Only initialize Razorpay if keys are provided
         if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+            // Lazy-load Razorpay SDK to save ~5-10MB at startup
+            const Razorpay = require('razorpay');
             this.razorpay = new Razorpay({
                 key_id: process.env.RAZORPAY_KEY_ID,
                 key_secret: process.env.RAZORPAY_KEY_SECRET
