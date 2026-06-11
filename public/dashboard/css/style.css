@@ -2000,6 +2000,12 @@ textarea {
     background-position: right 10px center;
 }
 
+.ticket-filters select option {
+    background: #1a1a1a;
+    color: #e5e5e5;
+    padding: 8px;
+}
+
 .ticket-filters select:focus {
     outline: none;
     border-color: var(--primary);
