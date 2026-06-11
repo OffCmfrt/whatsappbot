@@ -1,17 +1,23 @@
-const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
 
-console.log('Cloudinary Config:', {
-  cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-  apiKey: process.env.CLOUDINARY_API_KEY,
-  apiSecretPresent: !!process.env.CLOUDINARY_API_SECRET
-});
-
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
+// Lazy-load cloudinary to save ~5-10MB at startup
+let _cloudinary = null;
+function getCloudinary() {
+  if (!_cloudinary) {
+    _cloudinary = require('cloudinary').v2;
+    _cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET
+    });
+    console.log('Cloudinary Config:', {
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+      apiKey: process.env.CLOUDINARY_API_KEY,
+      apiSecretPresent: !!process.env.CLOUDINARY_API_SECRET
+    });
+  }
+  return _cloudinary;
+}
 
 class CloudinaryService {
   /**
@@ -22,7 +28,7 @@ class CloudinaryService {
    */
   async uploadImage(filePath, folder = 'whatsapp_bot') {
     try {
-      const result = await cloudinary.uploader.upload(filePath, {
+      const result = await getCloudinary().uploader.upload(filePath, {
         folder: folder,
         resource_type: 'auto'
       });
@@ -47,7 +53,7 @@ class CloudinaryService {
    */
   async uploadBuffer(buffer, folder = 'whatsapp_bot') {
     return new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
+      const uploadStream = getCloudinary().uploader.upload_stream(
         { folder: folder },
         (error, result) => {
           if (error) return reject(error);

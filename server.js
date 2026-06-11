@@ -433,7 +433,7 @@ async function startServer() {
             
             console.log(`[MEMORY] Usage: ${memoryMB}MB / ${limitMB}MB (${usagePercent}%)`);
             
-            if (usagePercent > 50) {
+            if (usagePercent > 80) {
                 console.warn(`⚠️ WARNING: Memory usage at ${usagePercent}%! Triggering cache cleanup...`);
                 // Clear all caches to free memory
                 const { invalidateCache } = require('./src/utils/cache');
@@ -449,7 +449,7 @@ async function startServer() {
                 }
             }
             
-            if (usagePercent > 70) {
+            if (usagePercent > 90) {
                 console.error('🚨 CRITICAL: Memory usage too high! Aggressive cleanup...');
                 // Clear ALL caches
                 const { caches } = require('./src/utils/cache');
@@ -464,8 +464,8 @@ async function startServer() {
                 console.log('[MEMORY] Aggressive cache cleanup completed');
             }
             
-            if (usagePercent > 85) {
-                console.error('🔥 EMERGENCY: Memory at 85%! Clearing task queue...');
+            if (usagePercent > 95) {
+                console.error('🔥 EMERGENCY: Memory at 95%! Clearing task queue...');
                 // Clear task queue to prevent memory buildup
                 taskQueue.length = 0;
                 console.log('[MEMORY] Task queue cleared');

@@ -218,7 +218,7 @@ router.get('/:slug/chat/:phone', verifyPortalToken, async (req, res) => {
 
         // Mark ticket as read when chat is opened
         await dbAdapter.query(
-            `UPDATE support_tickets SET is_read = 1 WHERE customer_phone IN (?, ?, ?, ?) AND is_read = 0`,
+            `UPDATE support_tickets SET is_read = true WHERE customer_phone IN (?, ?, ?, ?) AND is_read = false`,
             [cleanPhone, `+${cleanPhone}`, `91${cleanPhone}`, `+91${cleanPhone}`]
         );
 
@@ -383,7 +383,7 @@ router.patch('/:slug/tickets/:id/mark-read', verifyPortalToken, async (req, res)
         }
 
         await dbAdapter.query(
-            `UPDATE support_tickets SET is_read = 1 WHERE id = ?`,
+            `UPDATE support_tickets SET is_read = true WHERE id = ?`,
             [id]
         );
 

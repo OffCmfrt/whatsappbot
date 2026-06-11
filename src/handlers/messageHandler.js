@@ -160,7 +160,7 @@ class MessageHandler {
                         await dbAdapter.query(
                             `UPDATE support_tickets
                              SET message = message || '\n\n---\n' || ?,
-                                 is_read = 0,
+                                 is_read = false,
                                  updated_at = CURRENT_TIMESTAMP
                              WHERE id = ?`,
                             [message, ticketId]
@@ -254,7 +254,7 @@ class MessageHandler {
                     await dbAdapter.query(
                         `UPDATE support_tickets
                          SET message = message || '\n\n---\n' || ?,
-                             is_read = 0,
+                             is_read = false,
                              updated_at = CURRENT_TIMESTAMP
                          WHERE id = ?`,
                         [cleanMessage, ticketId]

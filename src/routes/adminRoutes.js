@@ -10,20 +10,31 @@ const broadcastService = require('../services/broadcastService');
 const followUpService = require('../services/followUpService');
 const whatsappService = require('../services/whatsappService');
 const { dbAdapter } = require('../database/db');
-const xlsx = require('xlsx');
 const multer = require('multer');
 const cloudinaryService = require('../services/cloudinaryService');
 const { toIST, formatDateForExport, fromISTtoUTC } = require('../utils/timezone');
-const { invalidateCache: clearAllCaches, getCacheStats, getCached, setCache } = require('../utils/cache');
+const { invalidateCache: clearAllCaches, caches, getCacheStats, getCached, setCache } = require('../utils/cache');
 const upload = multer({ storage: multer.memoryStorage() });
+
+// Lazy-load xlsx (saves ~30-50MB at startup) — only loaded when export/import is triggered
+let _xlsx = null;
+function getXlsx() {
+  if (!_xlsx) _xlsx = require('xlsx');
+  return _xlsx;
+}
 
 // Advanced caching system imported from utils/cache
 // Using LRU cache with TTL for better performance
 
-// Invalidate all caches (call after data mutations)
-function invalidateCache() {
-  clearAllCaches(); // From utils/cache
-  console.log('🗑️ All caches invalidated');
+// Targeted cache invalidation — only clear what's actually affected
+function invalidateCache(target = null) {
+  if (target && caches[target]) {
+    caches[target].clear();
+    console.log(`🗑️ Cache invalidated: ${target}`);
+  } else {
+    clearAllCaches(); // Fallback: clear all
+    console.log('🗑️ All caches invalidated');
+  }
 }
 
 // Admin login
@@ -434,10 +445,10 @@ router.post('/broadcast/import', verifyToken, async (req, res) => {
         if (!fileBase64) return res.status(400).json({ error: 'File data is required' });
 
         const buffer = Buffer.from(fileBase64, 'base64');
-        const workbook = xlsx.read(buffer, { type: 'buffer' });
+        const workbook = getXlsx().read(buffer, { type: 'buffer' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        const data = xlsx.utils.sheet_to_json(worksheet);
+        const data = getXlsx().utils.sheet_to_json(worksheet);
 
         // Extract phone numbers (smart search for phone columns)
         const phones = [];
@@ -841,7 +852,7 @@ router.get('/templates/sync', verifyToken, async (req, res) => {
         }
         
         // Invalidate cache after template changes
-        invalidateCache();
+        invalidateCache('stats');
 
         res.json({ 
             success: true, 
@@ -1098,7 +1109,7 @@ router.delete('/templates/:id', verifyToken, async (req, res) => {
         // Delete from local DB
         await dbAdapter.query('DELETE FROM templates WHERE id = ?', [req.params.id]);
         
-        invalidateCache();
+        invalidateCache('stats');
         
         res.json({ success: true, message: 'Template deleted successfully' });
     } catch (error) {
@@ -1285,7 +1296,7 @@ router.post('/templates', verifyToken, async (req, res) => {
         );
         
         // Invalidate cache after template creation
-        invalidateCache();
+        invalidateCache('stats');
         res.json({ success: true });
     } catch (error) {
         console.error('Template create error:', error);
@@ -1302,7 +1313,7 @@ router.put('/templates/:id', verifyToken, async (req, res) => {
         );
         
         // Invalidate cache after template update
-        invalidateCache();
+        invalidateCache('stats');
         res.json({ success: true });
     } catch (error) {
         console.error('Template update error:', error);
@@ -1315,7 +1326,7 @@ router.delete('/templates/:id', verifyToken, async (req, res) => {
         await dbAdapter.query('DELETE FROM templates WHERE id=?', [req.params.id]);
         
         // Invalidate cache after template deletion
-        invalidateCache();
+        invalidateCache('stats');
         res.json({ success: true });
     } catch (error) {
         console.error('Template delete error:', error);
@@ -1572,7 +1583,7 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
         }
         
         // Invalidate cache after ticket status change
-        invalidateCache();
+        invalidateCache('stats');
 
         res.json({ success: true, message: 'Ticket updated successfully' });
     } catch (error) {
@@ -1587,7 +1598,7 @@ router.patch('/support-tickets/:id/mark-read', verifyToken, async (req, res) => 
         const { id } = req.params;
 
         await dbAdapter.query(
-            `UPDATE support_tickets SET is_read = 1 WHERE id = ?`,
+            `UPDATE support_tickets SET is_read = true WHERE id = ?`,
             [id]
         );
 
@@ -1609,7 +1620,7 @@ router.patch('/support-tickets/bulk/mark-read', verifyToken, async (req, res) =>
 
         const placeholders = ids.map(() => '?').join(',');
         await dbAdapter.query(
-            `UPDATE support_tickets SET is_read = 1 WHERE id IN (${placeholders})`,
+            `UPDATE support_tickets SET is_read = true WHERE id IN (${placeholders})`,
             ids
         );
 
@@ -1632,7 +1643,7 @@ router.post('/support-tickets/:id/assign-portal', verifyToken, async (req, res) 
             [portalId || null, id]
         );
 
-        invalidateCache();
+        invalidateCache('stats');
         res.json({ 
             success: true, 
             message: portalId ? 'Ticket assigned to portal' : 'Ticket removed from portal'
@@ -1673,7 +1684,7 @@ router.delete('/support-tickets/:id', verifyToken, async (req, res) => {
         }
         
         // Invalidate cache after ticket deletion
-        invalidateCache();
+        invalidateCache('stats');
 
         res.json({ success: true, message: 'Ticket deleted successfully' });
     } catch (error) {
@@ -1699,7 +1710,7 @@ router.delete('/support-tickets/bulk/delete', verifyToken, async (req, res) => {
         );
 
         // Invalidate cache after bulk ticket deletion
-        invalidateCache();
+        invalidateCache('stats');
 
         res.json({ success: true, message: `${ids.length} ticket(s) deleted successfully` });
     } catch (error) {
@@ -1874,7 +1885,7 @@ router.put('/shoppers/:id', verifyToken, async (req, res) => {
         await dbAdapter.update('store_shoppers', updateData, { id });
         
         // Invalidate cache after shopper update
-        invalidateCache();
+        invalidateCache('shoppers');
         res.json({ success: true, message: 'Shopper updated successfully' });
     } catch (error) {
         console.error('Shopper update error:', error);
@@ -1905,7 +1916,7 @@ router.post('/shoppers/:id/status', verifyToken, async (req, res) => {
         await dbAdapter.update('store_shoppers', updateData, { id });
 
         // Invalidate cache after shopper status change
-        invalidateCache();
+        invalidateCache('shoppers');
         res.json({ success: true, message: `Status updated to ${status}` });
     } catch (error) {
         console.error('Shopper status update error:', error);
@@ -1926,7 +1937,7 @@ router.delete('/shoppers/bulk', verifyToken, async (req, res) => {
         await dbAdapter.query(sql, ids);
 
         // Invalidate cache after bulk shopper deletion
-        invalidateCache();
+        invalidateCache('shoppers');
         res.json({ success: true, message: `Successfully deleted ${ids.length} records` });
     } catch (error) {
         console.error('Shoppers bulk delete error:', error);
@@ -2248,8 +2259,8 @@ router.get('/shoppers/export', verifyToken, async (req, res) => {
 
         // Handle different export formats
         if (format === 'csv') {
-            const ws = xlsx.utils.json_to_sheet(exportData);
-            const csv = xlsx.utils.sheet_to_csv(ws);
+            const ws = getXlsx().utils.json_to_sheet(exportData);
+            const csv = getXlsx().utils.sheet_to_csv(ws);
             const istDate = toIST(new Date(), 'date');
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', `attachment; filename=shoppers_${istDate}.csv`);
@@ -2257,11 +2268,11 @@ router.get('/shoppers/export', verifyToken, async (req, res) => {
         }
 
         // Create Excel workbook
-        const wb = xlsx.utils.book_new();
-        const ws = xlsx.utils.json_to_sheet(exportData);
-        xlsx.utils.book_append_sheet(wb, ws, exportType === 'daily' ? "Daily Report" : "Shoppers");
+        const wb = getXlsx().utils.book_new();
+        const ws = getXlsx().utils.json_to_sheet(exportData);
+        getXlsx().utils.book_append_sheet(wb, ws, exportType === 'daily' ? "Daily Report" : "Shoppers");
 
-        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        const buffer = getXlsx().write(wb, { type: 'buffer', bookType: 'xlsx' });
 
         const istDate = toIST(new Date(), 'date');
         const filename = exportType === 'daily' 
@@ -2421,17 +2432,17 @@ router.get('/inbox/export', verifyToken, async (req, res) => {
         const tabLabel = tab === 'confirmed' ? 'confirmed_orders' : 'inbox';
 
         if (format === 'csv') {
-            const ws = xlsx.utils.json_to_sheet(exportData);
-            const csv = xlsx.utils.sheet_to_csv(ws);
+            const ws = getXlsx().utils.json_to_sheet(exportData);
+            const csv = getXlsx().utils.sheet_to_csv(ws);
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', `attachment; filename=${tabLabel}_${istDate}.csv`);
             return res.send(csv);
         }
 
-        const wb = xlsx.utils.book_new();
-        const ws = xlsx.utils.json_to_sheet(exportData);
-        xlsx.utils.book_append_sheet(wb, ws, 'Inbox Export');
-        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        const wb = getXlsx().utils.book_new();
+        const ws = getXlsx().utils.json_to_sheet(exportData);
+        getXlsx().utils.book_append_sheet(wb, ws, 'Inbox Export');
+        const buffer = getXlsx().write(wb, { type: 'buffer', bookType: 'xlsx' });
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=${tabLabel}_${istDate}.xlsx`);
         res.send(buffer);
@@ -2870,7 +2881,7 @@ router.get('/analytics/orders', verifyToken, async (req, res) => {
         `, [utcStartDate, utcEndDate]);
         
         // Invalidate cache to ensure fresh analytics data
-        invalidateCache();
+        invalidateCache('stats');
         
         res.json({
             success: true,
@@ -3215,10 +3226,10 @@ router.post('/follow-up/campaigns/:id/import', verifyToken, async (req, res) => 
         
         // Parse Excel file
         const buffer = Buffer.from(fileBase64, 'base64');
-        const workbook = xlsx.read(buffer, { type: 'buffer' });
+        const workbook = getXlsx().read(buffer, { type: 'buffer' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        const data = xlsx.utils.sheet_to_json(worksheet);
+        const data = getXlsx().utils.sheet_to_json(worksheet);
         
         // Extract order IDs or phone numbers
         const orderIds = [];
@@ -3319,19 +3330,19 @@ router.get('/follow-up/campaigns/:id/export', verifyToken, async (req, res) => {
         }));
         
         if (format === 'csv') {
-            const ws = xlsx.utils.json_to_sheet(exportData);
-            const csv = xlsx.utils.sheet_to_csv(ws);
+            const ws = getXlsx().utils.json_to_sheet(exportData);
+            const csv = getXlsx().utils.sheet_to_csv(ws);
             res.setHeader('Content-Type', 'text/csv');
             res.setHeader('Content-Disposition', `attachment; filename=follow_up_campaign_${id}.csv`);
             return res.send(csv);
         }
         
         // Excel format
-        const wb = xlsx.utils.book_new();
-        const ws = xlsx.utils.json_to_sheet(exportData);
-        xlsx.utils.book_append_sheet(wb, ws, 'Recipients');
+        const wb = getXlsx().utils.book_new();
+        const ws = getXlsx().utils.json_to_sheet(exportData);
+        getXlsx().utils.book_append_sheet(wb, ws, 'Recipients');
         
-        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        const buffer = getXlsx().write(wb, { type: 'buffer', bookType: 'xlsx' });
         
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=follow_up_campaign_${id}.xlsx`);
@@ -3490,7 +3501,7 @@ router.delete('/support-portals/:id', verifyToken, async (req, res) => {
             [id]
         );
 
-        invalidateCache();
+        invalidateCache('stats');
         res.json({ success: true, message: 'Portal deleted successfully' });
     } catch (error) {
         console.error('Delete support portal error:', error);
@@ -3525,7 +3536,7 @@ router.post('/support-portals/:id/assign', verifyToken, async (req, res) => {
             [newCount, id]
         );
 
-        invalidateCache();
+        invalidateCache('stats');
         res.json({ success: true, message: `${ticketIds.length} tickets assigned to portal` });
     } catch (error) {
         console.error('Assign tickets error:', error);
@@ -3543,7 +3554,7 @@ router.post('/support-portals/:id/clear', verifyToken, async (req, res) => {
             [id]
         );
 
-        invalidateCache();
+        invalidateCache('stats');
         res.json({ success: true, message: 'All tickets cleared from portal' });
     } catch (error) {
         console.error('Clear portal tickets error:', error);
@@ -3741,7 +3752,7 @@ router.post('/support-portals/auto-distribute', verifyToken, async (req, res) =>
             [distributionMode, createdPortals.length, openTickets.length, JSON.stringify({ filters, shifts, portalSettings })]
         );
 
-        invalidateCache();
+        invalidateCache('stats');
         res.json({
             success: true,
             message: `${openTickets.length} tickets distributed across ${createdPortals.length} portals`,
@@ -3874,7 +3885,7 @@ router.post('/support-portals/:id/update-rules', verifyToken, async (req, res) =
             values
         );
 
-        invalidateCache();
+        invalidateCache('stats');
         res.json({ success: true, message: 'Portal rules updated successfully' });
     } catch (error) {
         console.error('Update portal rules error:', error);
@@ -3889,7 +3900,7 @@ router.post('/support-portals/rebalance', verifyToken, async (req, res) => {
 
         // Get all active auto portals
         const portals = await dbAdapter.query(
-            "SELECT id, max_tickets FROM support_portals WHERE type = 'auto' AND is_active = 1" +
+            "SELECT id, max_tickets FROM support_portals WHERE type = 'auto' AND is_active = true" +
             (portalIds && portalIds.length > 0 ? ` AND id IN (${portalIds.join(',')})` : '')
         );
 
@@ -3958,7 +3969,7 @@ router.post('/support-portals/rebalance', verifyToken, async (req, res) => {
             ['rebalance', portals.length, tickets.length, JSON.stringify({ portalIds })]
         );
 
-        invalidateCache();
+        invalidateCache('stats');
         res.json({
             success: true,
             message: `${tickets.length} tickets rebalanced across ${portals.length} portals`,
@@ -3980,7 +3991,7 @@ router.get('/support-portals/active-shifts', verifyToken, async (req, res) => {
         const currentTime = now.getHours() * 60 + now.getMinutes();
 
         const portals = await dbAdapter.query(
-            "SELECT id, name, shift_start, shift_end, is_active, assigned_count, max_tickets FROM support_portals WHERE type = 'auto' AND is_active = 1"
+            "SELECT id, name, shift_start, shift_end, is_active, assigned_count, max_tickets FROM support_portals WHERE type = 'auto' AND is_active = true"
         );
 
         const activePortals = portals.filter(portal => {

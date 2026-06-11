@@ -82,7 +82,7 @@ class ReengagementService {
     async markReengagementSent(ticketId) {
         await dbAdapter.query(
             `UPDATE support_tickets
-             SET reengagement_sent = 1,
+             SET reengagement_sent = true,
                  reengagement_sent_at = CURRENT_TIMESTAMP
              WHERE id = ?`,
             [ticketId]
