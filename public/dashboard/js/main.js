@@ -114,6 +114,9 @@ function setupEventListeners() {
     document.getElementById('portalFilter')?.addEventListener('change', applyFiltersAndSort);
     document.getElementById('resetFiltersBtn')?.addEventListener('click', resetAllFilters);
 
+    // Initialize custom dropdowns
+    initCustomDropdowns();
+
     // New filter controls
     document.getElementById('searchFilterToggle')?.addEventListener('click', toggleFiltersPanel);
     document.getElementById('urgentFilterBtn')?.addEventListener('click', toggleUrgentFilter);
@@ -1351,8 +1354,29 @@ function resetAllFilters() {
     
     // Reset quick presets
     document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+
+    // Reset custom dropdown labels and active states
+    resetCustomDropdown('ticketStatusFilter', 'All Statuses');
+    resetCustomDropdown('ticketSortBy', 'Newest First');
+    resetCustomDropdown('portalFilter', 'All Portals');
     
     loadSupportTickets();
+}
+
+function resetCustomDropdown(selectId, defaultLabel) {
+    const dropdown = document.querySelector(`.custom-dropdown[data-target="${selectId}"]`);
+    if (!dropdown) return;
+    const label = dropdown.querySelector('.custom-dropdown-label');
+    if (label) label.textContent = defaultLabel;
+    dropdown.querySelectorAll('.custom-dropdown-option').forEach(opt => {
+        opt.classList.toggle('active', opt.dataset.value === '');
+    });
+    // For sortBy, default is 'newest'
+    if (selectId === 'ticketSortBy') {
+        dropdown.querySelectorAll('.custom-dropdown-option').forEach(opt => {
+            opt.classList.toggle('active', opt.dataset.value === 'newest');
+        });
+    }
 }
 
 // Filter support tickets
@@ -1685,6 +1709,61 @@ function renderPortals() {
     }).join('');
 }
 
+function initCustomDropdowns() {
+    document.querySelectorAll('.custom-dropdown').forEach(dropdown => {
+        const selected = dropdown.querySelector('.custom-dropdown-selected');
+        if (!selected) return;
+
+        // Toggle open/close
+        selected.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Close all other open dropdowns first
+            document.querySelectorAll('.custom-dropdown.open').forEach(d => {
+                if (d !== dropdown) d.classList.remove('open');
+            });
+            dropdown.classList.toggle('open');
+        });
+
+        bindCustomDropdownOptions(dropdown);
+    });
+
+    // Close all custom dropdowns when clicking outside
+    document.addEventListener('click', () => {
+        document.querySelectorAll('.custom-dropdown.open').forEach(d => d.classList.remove('open'));
+    });
+}
+
+function bindCustomDropdownOptions(dropdown) {
+    const targetId = dropdown.dataset.target;
+    const select = document.getElementById(targetId);
+    const label = dropdown.querySelector('.custom-dropdown-label');
+    const options = dropdown.querySelectorAll('.custom-dropdown-option');
+
+    options.forEach(option => {
+        option.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const value = option.dataset.value;
+            const text = option.textContent;
+
+            // Update the label
+            if (label) label.textContent = text;
+
+            // Mark active
+            options.forEach(o => o.classList.remove('active'));
+            option.classList.add('active');
+
+            // Sync with the hidden select and trigger change
+            if (select) {
+                select.value = value;
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+
+            // Close the dropdown
+            dropdown.classList.remove('open');
+        });
+    });
+}
+
 function updateAssignPortalDropdown() {
     const select = document.getElementById('assignPortalSelect');
     if (!select) return;
@@ -1713,6 +1792,27 @@ function updatePortalFilterDropdown() {
     // Restore previous value if it still exists
     if (currentValue && select.querySelector(`option[value="${currentValue}"]`)) {
         select.value = currentValue;
+    }
+
+    // Also update the custom dropdown options
+    const customDropdown = document.querySelector('#portalFilterDropdown');
+    if (customDropdown) {
+        const optionsContainer = customDropdown.querySelector('.custom-dropdown-options');
+        if (optionsContainer) {
+            optionsContainer.innerHTML =
+                '<div class="custom-dropdown-option' + (!currentValue ? ' active' : '') + '" data-value="">All Portals</div>' +
+                '<div class="custom-dropdown-option' + (currentValue === 'unassigned' ? ' active' : '') + '" data-value="unassigned">Unassigned</div>' +
+                allPortals.map(p => `<div class="custom-dropdown-option${currentValue === String(p.id) ? ' active' : ''}" data-value="${p.id}">${escapeHtml(p.name)}</div>`).join('');
+            
+            // Re-bind click events on new options
+            bindCustomDropdownOptions(customDropdown);
+        }
+        // Update the label
+        const label = customDropdown.querySelector('.custom-dropdown-label');
+        if (label) {
+            const selectedOption = select.querySelector(`option[value="${select.value}"]`);
+            label.textContent = selectedOption ? selectedOption.textContent : 'All Portals';
+        }
     }
 }
 

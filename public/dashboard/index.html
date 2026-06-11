@@ -480,25 +480,56 @@
                                 <div class="filter-group">
                                     <label>Status & Sort</label>
                                     <div class="status-sort-row">
-                                        <select id="ticketStatusFilter">
+                                        <select id="ticketStatusFilter" class="custom-select-hidden">
                                             <option value="">All Statuses</option>
                                             <option value="open">Open</option>
                                             <option value="resolved">Resolved</option>
                                         </select>
-                                        <select id="ticketSortBy">
+                                        <div class="custom-dropdown" data-target="ticketStatusFilter">
+                                            <div class="custom-dropdown-selected">
+                                                <span class="custom-dropdown-label">All Statuses</span>
+                                                <svg class="custom-dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                                            </div>
+                                            <div class="custom-dropdown-options">
+                                                <div class="custom-dropdown-option" data-value="">All Statuses</div>
+                                                <div class="custom-dropdown-option" data-value="open">Open</div>
+                                                <div class="custom-dropdown-option" data-value="resolved">Resolved</div>
+                                            </div>
+                                        </div>
+                                        <select id="ticketSortBy" class="custom-select-hidden">
                                             <option value="newest">Newest First</option>
                                             <option value="oldest">Oldest First</option>
                                         </select>
+                                        <div class="custom-dropdown" data-target="ticketSortBy">
+                                            <div class="custom-dropdown-selected">
+                                                <span class="custom-dropdown-label">Newest First</span>
+                                                <svg class="custom-dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                                            </div>
+                                            <div class="custom-dropdown-options">
+                                                <div class="custom-dropdown-option" data-value="newest">Newest First</div>
+                                                <div class="custom-dropdown-option" data-value="oldest">Oldest First</div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
 
                                 <!-- Portal Filter -->
                                 <div class="filter-group">
                                     <label>Assigned Portal</label>
-                                    <select id="portalFilter">
+                                    <select id="portalFilter" class="custom-select-hidden">
                                         <option value="">All Portals</option>
                                         <option value="unassigned">Unassigned</option>
                                     </select>
+                                    <div class="custom-dropdown" data-target="portalFilter" id="portalFilterDropdown">
+                                        <div class="custom-dropdown-selected">
+                                            <span class="custom-dropdown-label">All Portals</span>
+                                            <svg class="custom-dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                                        </div>
+                                        <div class="custom-dropdown-options">
+                                            <div class="custom-dropdown-option" data-value="">All Portals</div>
+                                            <div class="custom-dropdown-option" data-value="unassigned">Unassigned</div>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <!-- Urgent Filter -->
