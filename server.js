@@ -211,12 +211,8 @@ app.post('/webhook', (req, res) => {
         return;
       }
 
-      // Debug logging
-      if (value?.messages) {
-        const fs = require('fs');
-        const debugData = `\n--- 📨 INCOMING WEBHOOK @ ${new Date().toISOString()} ---\nMsg Count: ${value.messages.length}\nFull Body: ${JSON.stringify(body)}\n`;
-        fs.appendFileSync('debug_webhook.txt', debugData);
-      }
+      // Debug logging — disabled to prevent unbounded file growth / memory pressure
+      // if (value?.messages) { ... appendFileSync('debug_webhook.txt') ... }
 
       if (value?.messages && value.messages.length > 0) {
         const message = value.messages[0];
@@ -428,37 +424,61 @@ async function startServer() {
         setInterval(() => {
             const used = process.memoryUsage();
             const memoryMB = Math.round(used.rss / 1024 / 1024);
+            const heapMB = Math.round(used.heapUsed / 1024 / 1024);
             const limitMB = 512;
             const usagePercent = Math.round((memoryMB / limitMB) * 100);
             
-            console.log(`[MEMORY] Usage: ${memoryMB}MB / ${limitMB}MB (${usagePercent}%)`);
+            console.log(`[MEMORY] RSS: ${memoryMB}MB | Heap: ${heapMB}MB / ${limitMB}MB (${usagePercent}%)`);
             
-            if (usagePercent > 80) {
+            // Destructure once to avoid duplicate const declarations
+            const { invalidateCache, purgeAllExpired, caches: lruCaches } = require('./src/utils/cache');
+            const Settings = require('./src/models/Settings');
+            
+            if (usagePercent > 75) {
                 console.warn(`⚠️ WARNING: Memory usage at ${usagePercent}%! Triggering cache cleanup...`);
-                // Clear all caches to free memory
-                const { invalidateCache } = require('./src/utils/cache');
+                // Clear all LRU caches
                 invalidateCache();
                 
+                // Purge expired entries from every LRU cache
+                const purged = purgeAllExpired();
+                if (purged > 0) console.log(`[MEMORY] Purged ${purged} expired cache entries`);
+                
                 // Clear Settings cache
-                const Settings = require('./src/models/Settings');
                 Settings._cache.clear();
                 
-                // Force garbage collection hint
-                if (global.gc) {
-                    global.gc();
-                }
+                // Clear followUpService Maps (timeout handles can leak)
+                try {
+                    const followUpService = require('./src/services/followUpService');
+                    for (const [id, timeoutId] of followUpService.activeQueues.entries()) {
+                        clearTimeout(timeoutId);
+                        followUpService.activeQueues.delete(id);
+                    }
+                    followUpService.isProcessing.clear();
+                } catch (e) { /* ignore */ }
+                
+                // Clear shiprocketService orderCache
+                try {
+                    const shiprocketService = require('./src/services/shiprocketService');
+                    shiprocketService.orderCache.clear();
+                } catch (e) { /* ignore */ }
+                
+                console.log(`[MEMORY] Cache cleanup done. Heap before: ${heapMB}MB`);
             }
             
-            if (usagePercent > 90) {
+            if (usagePercent > 85) {
                 console.error('🚨 CRITICAL: Memory usage too high! Aggressive cleanup...');
-                // Clear ALL caches
-                const { caches } = require('./src/utils/cache');
-                Object.values(caches).forEach(cache => {
-                    cache.clear();
-                    cache.stats = { hits: 0, misses: 0, evictions: 0 }; // Reset stats too
+                // Halve every LRU cache to reclaim memory immediately
+                Object.entries(lruCaches).forEach(([name, cache]) => {
+                    const targetSize = Math.floor(cache.cache.size / 2);
+                    let removed = 0;
+                    for (const key of cache.cache.keys()) {
+                        if (removed >= targetSize) break;
+                        cache.cache.delete(key);
+                        removed++;
+                    }
+                    if (removed > 0) console.log(`[MEMORY] Trimmed ${name} cache: removed ${removed} entries`);
                 });
                 
-                const Settings = require('./src/models/Settings');
                 Settings._cache.clear();
                 
                 console.log('[MEMORY] Aggressive cache cleanup completed');
@@ -466,18 +486,25 @@ async function startServer() {
             
             if (usagePercent > 95) {
                 console.error('🔥 EMERGENCY: Memory at 95%! Clearing task queue...');
-                // Clear task queue to prevent memory buildup
                 taskQueue.length = 0;
                 console.log('[MEMORY] Task queue cleared');
             }
-        }, 2 * 60 * 1000); // Every 2 minutes (more frequent)
+        }, 2 * 60 * 1000); // Every 2 minutes
 
         // NEW: Clear ALL caches every 30 minutes to prevent memory buildup
         setInterval(() => {
-            const { invalidateCache } = require('./src/utils/cache');
-            invalidateCache();
+            const { invalidateCache, purgeAllExpired } = require('./src/utils/cache');
+            purgeAllExpired(); // Remove stale entries first
+            invalidateCache(); // Then clear remaining
             console.log('[MEMORY] Scheduled cache cleanup (30 min interval)');
         }, 30 * 60 * 1000); // Every 30 minutes
+
+        // Periodic expired-cache purge every 10 minutes (lightweight)
+        setInterval(() => {
+            const { purgeAllExpired } = require('./src/utils/cache');
+            const purged = purgeAllExpired();
+            if (purged > 0) console.log(`[MEMORY] Periodic expired purge: removed ${purged} entries`);
+        }, 10 * 60 * 1000);
 
         // Start Express server
         app.listen(PORT, () => {

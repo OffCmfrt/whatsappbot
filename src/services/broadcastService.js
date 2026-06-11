@@ -1,7 +1,6 @@
 const whatsappService = require('./whatsappService');
 const { dbAdapter } = require('../database/db');
 const Customer = require('../models/Customer');
-const { caches, cachedQuery, generateQueryKey, invalidateCache } = require('../utils/cache');
 
 class BroadcastService {
     constructor() {
@@ -438,34 +437,19 @@ class BroadcastService {
         setTimeout(() => this.processQueue(), waitMs);
     }
 
-    // Helper methods
+    // Helper methods — no caching for broadcast queries (one-shot admin operations)
     async getAllCustomers() {
-        return await cachedQuery(
-            'customers',
-            'all_customers',
-            async () => await dbAdapter.select('customers'),
-            10 * 60 * 1000 // 10 minutes TTL
-        );
+        return await dbAdapter.select('customers') || [];
     }
 
     async getActiveCustomers(days) {
         const sql = `SELECT phone, name FROM customers WHERE order_count > 0`;
-        return await cachedQuery(
-            'customers',
-            'active_customers',
-            async () => (await dbAdapter.query(sql)) || [],
-            10 * 60 * 1000 // 10 minutes TTL
-        );
+        return (await dbAdapter.query(sql)) || [];
     }
 
     async getRecentCustomers(days) {
-        const sql = `SELECT phone, name FROM customers WHERE order_count > 0 AND updated_at >= date('now', '-${days} days')`;
-        return await cachedQuery(
-            'customers',
-            `recent_customers_${days}`,
-            async () => (await dbAdapter.query(sql)) || [],
-            10 * 60 * 1000 // 10 minutes TTL
-        );
+        const sql = `SELECT phone, name FROM customers WHERE order_count > 0 AND updated_at >= NOW() - INTERVAL '${days} days'`;
+        return (await dbAdapter.query(sql)) || [];
     }
     
     async getInactiveCustomers(days) {
@@ -478,37 +462,22 @@ class BroadcastService {
                 GROUP BY customer_phone
             ) o ON c.phone = o.customer_phone
             WHERE 
-                (o.last_order_date IS NULL AND c.created_at < date('now', '-${days} days'))
+                (o.last_order_date IS NULL AND c.created_at < NOW() - INTERVAL '${days} days')
                 OR 
-                (o.last_order_date < date('now', '-${days} days'))
+                (o.last_order_date < NOW() - INTERVAL '${days} days')
         `;
-        return await cachedQuery(
-            'customers',
-            `inactive_customers_${days}`,
-            async () => (await dbAdapter.query(sql)) || [],
-            10 * 60 * 1000 // 10 minutes TTL
-        );
+        return (await dbAdapter.query(sql)) || [];
+    }
+
+    async getCustomersWithOrders() {
+        const sql = `SELECT DISTINCT customer_phone as phone FROM orders WHERE customer_phone IS NOT NULL`;
+        return (await dbAdapter.query(sql)) || [];
     }
 
     async getCustomersByOrderCount(min, max) {
         const limitStr = max === 9999 ? `>= ${min}` : `BETWEEN ${min} AND ${max}`;
         const sql = `SELECT phone, name FROM customers WHERE order_count ${limitStr}`;
-        return await cachedQuery(
-            'customers',
-            `customers_by_order_count_${min}_${max}`,
-            async () => (await dbAdapter.query(sql)) || [],
-            10 * 60 * 1000 // 10 minutes TTL
-        );
-    }
-
-    async getCustomersWithOrders() {
-        const sql = `SELECT DISTINCT customer_phone as phone FROM orders WHERE customer_phone IS NOT NULL`;
-        return await cachedQuery(
-            'customers',
-            'customers_with_orders',
-            async () => (await dbAdapter.query(sql)) || [],
-            10 * 60 * 1000 // 10 minutes TTL
-        );
+        return (await dbAdapter.query(sql)) || [];
     }
 
     async createBroadcastRecord(broadcastData) {

@@ -85,27 +85,40 @@ class LRUCache {
   size() {
     return this.cache.size;
   }
+
+  // Purge all expired entries (used by memory monitor)
+  purgeExpired() {
+    const now = Date.now();
+    let purged = 0;
+    for (const [key, item] of this.cache.entries()) {
+      if (now > item.expiry) {
+        this.cache.delete(key);
+        purged++;
+      }
+    }
+    return purged;
+  }
 }
 
 // Create specialized caches for different use cases
 const caches = {
   // Customer lookups by phone (high frequency, small data)
-  customers: new LRUCache(300, 10 * 60 * 1000), // Reduced from 500 to 300, 10 min TTL
+  customers: new LRUCache(200, 8 * 60 * 1000),  // 200 entries, 8 min TTL
   
   // Order lookups (medium frequency)
-  orders: new LRUCache(200, 5 * 60 * 1000), // Reduced from 300 to 200, 5 min TTL
+  orders: new LRUCache(120, 4 * 60 * 1000),     // 120 entries, 4 min TTL
   
   // Stats and analytics (low frequency, expensive queries)
-  stats: new LRUCache(30, 3 * 60 * 1000), // Reduced from 50 to 30, 3 min TTL
+  stats: new LRUCache(20, 2 * 60 * 1000),       // 20 entries, 2 min TTL
   
   // Settings (very low frequency, should persist long)
-  settings: new LRUCache(15, 30 * 60 * 1000), // Reduced from 20 to 15, 30 min TTL
+  settings: new LRUCache(10, 20 * 60 * 1000),   // 10 entries, 20 min TTL
   
   // Query results (generic cache for arbitrary queries)
-  queries: new LRUCache(100, 5 * 60 * 1000), // Reduced from 200 to 100, 5 min TTL
+  queries: new LRUCache(60, 4 * 60 * 1000),     // 60 entries, 4 min TTL
   
   // Shopper data
-  shoppers: new LRUCache(150, 2 * 60 * 1000), // Reduced from 300 to 150, 2 min TTL
+  shoppers: new LRUCache(100, 90 * 1000),       // 100 entries, 90s TTL
 };
 
 // Cache key generator for queries
@@ -198,6 +211,15 @@ function startCacheStatsLogging(intervalMs = 5 * 60 * 1000) {
   }, intervalMs);
 }
 
+// Purge all expired entries across all caches (called by memory monitor)
+function purgeAllExpired() {
+  let total = 0;
+  for (const [name, cache] of Object.entries(caches)) {
+    total += cache.purgeExpired();
+  }
+  return total;
+}
+
 module.exports = {
   caches,
   LRUCache,
@@ -207,5 +229,6 @@ module.exports = {
   getCacheStats,
   getCached,
   setCache,
-  startCacheStatsLogging
+  startCacheStatsLogging,
+  purgeAllExpired
 };

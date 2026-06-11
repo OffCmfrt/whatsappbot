@@ -318,6 +318,8 @@ router.get('/orders', verifyToken, async (req, res) => {
     try {
         const { limit = 100, offset = 0 } = req.query;
         let formattedOrders = [];
+        const safeLimit = Math.min(parseInt(limit) || 100, 500);
+        const safeOffset = Math.max(0, parseInt(offset) || 0);
 
         const sql = `
             SELECT o.*, c.name as customer_name 
@@ -326,7 +328,7 @@ router.get('/orders', verifyToken, async (req, res) => {
             ORDER BY o.created_at DESC 
             LIMIT ? OFFSET ?
         `;
-        formattedOrders = await dbAdapter.query(sql, [parseInt(limit), parseInt(offset)]);
+        formattedOrders = await dbAdapter.query(sql, [safeLimit, safeOffset]);
 
         res.json({ success: true, orders: formattedOrders });
     } catch (error) {
@@ -340,7 +342,9 @@ router.get('/messages', verifyToken, async (req, res) => {
     try {
         const { limit = 100, offset = 0 } = req.query;
         let msgs = [];
-        msgs = await dbAdapter.query('SELECT * FROM messages ORDER BY created_at DESC LIMIT ? OFFSET ?', [parseInt(limit), parseInt(offset)]);
+        const safeLimit = Math.min(parseInt(limit) || 100, 500);
+        const safeOffset = Math.max(0, parseInt(offset) || 0);
+        msgs = await dbAdapter.query('SELECT * FROM messages ORDER BY created_at DESC LIMIT ? OFFSET ?', [safeLimit, safeOffset]);
         res.json({ success: true, messages: msgs });
     } catch (error) {
         console.error('Messages error:', error);
@@ -563,19 +567,64 @@ router.post('/offers', verifyToken, async (req, res) => {
     }
 });
 
-// Get analytics
+// Get analytics — uses SQL aggregation instead of loading ALL rows into memory
 router.get('/analytics', verifyToken, async (req, res) => {
     try {
-        let messageStats = [];
-        let orderStats = [];
+        // Aggregate by type in SQL (avoids loading all messages/orders into memory)
+        const typeCounts = await dbAdapter.query(
+            'SELECT message_type, COUNT(*) as count FROM messages GROUP BY message_type'
+        );
+        const statusCounts = await dbAdapter.query(
+            'SELECT status, COUNT(*) as count FROM orders GROUP BY status'
+        );
 
-        messageStats = await dbAdapter.query('SELECT message_type, created_at FROM messages');
-        orderStats = await dbAdapter.query('SELECT status, created_at FROM orders');
+        // Last 7 days message volume — single aggregation query
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+        sevenDaysAgo.setHours(0, 0, 0, 0);
+        const dailyCounts = await dbAdapter.query(
+            `SELECT DATE(created_at) as date, COUNT(*) as count 
+             FROM messages 
+             WHERE created_at >= ? 
+             GROUP BY DATE(created_at) 
+             ORDER BY date`,
+            [sevenDaysAgo.toISOString()]
+        );
+
+        // Build messagesByType
+        const messagesByType = {};
+        (typeCounts || []).forEach(row => {
+            messagesByType[row.message_type] = Number(row.count);
+        });
+
+        // Build ordersByStatus
+        const ordersByStatus = { labels: [], values: [] };
+        (statusCounts || []).forEach(row => {
+            ordersByStatus.labels.push(row.status || 'unknown');
+            ordersByStatus.values.push(Number(row.count));
+        });
+
+        // Build messagesOverTime (last 7 days, fill missing days with 0)
+        const messagesOverTime = {};
+        const today = new Date();
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            messagesOverTime[d.toISOString().split('T')[0]] = 0;
+        }
+        (dailyCounts || []).forEach(row => {
+            const dateStr = row.date instanceof Date
+                ? row.date.toISOString().split('T')[0]
+                : String(row.date).split('T')[0];
+            if (messagesOverTime.hasOwnProperty(dateStr)) {
+                messagesOverTime[dateStr] = Number(row.count);
+            }
+        });
 
         const analytics = {
-            messagesByType: processMessagesByType(messageStats),
-            ordersByStatus: processOrdersByStatus(orderStats),
-            messagesOverTime: processMessagesOverTime(messageStats)
+            messagesByType,
+            ordersByStatus,
+            messagesOverTime
         };
         res.json({ success: true, analytics });
     } catch (error) {
@@ -683,14 +732,19 @@ async function getMessageVolume() {
 }
 
 async function getOrderStatusDistribution() {
-    const orders = await dbAdapter.query('SELECT status FROM orders');
+    // Use SQL aggregation instead of loading ALL orders into memory
+    const rows = await dbAdapter.query(
+        'SELECT status, COUNT(*) as count FROM orders GROUP BY status'
+    );
 
-    const statusCounts = {};
-    (orders || []).forEach(order => {
-        statusCounts[order.status] = (statusCounts[order.status] || 0) + 1;
+    const labels = [];
+    const values = [];
+    (rows || []).forEach(row => {
+        labels.push(row.status || 'unknown');
+        values.push(Number(row.count));
     });
 
-    return { labels: Object.keys(statusCounts), values: Object.values(statusCounts) };
+    return { labels, values };
 }
 
 async function getCustomerGrowth() {
@@ -707,37 +761,6 @@ async function getCustomerGrowth() {
         values.push(rows[0]?.count || 0);
     }
     return { labels, values };
-}
-
-function processMessagesByType(messages) {
-    const counts = {};
-    messages.forEach(msg => {
-        counts[msg.message_type] = (counts[msg.message_type] || 0) + 1;
-    });
-    return counts;
-}
-
-function processOrdersByStatus(orders) {
-    const counts = {};
-    orders.forEach(order => {
-        counts[order.status] = (counts[order.status] || 0) + 1;
-    });
-    return counts;
-}
-
-function processMessagesOverTime(messages) {
-    const last7Days = {};
-    const today = new Date();
-    for (let i = 6; i >= 0; i--) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        last7Days[date.toISOString().split('T')[0]] = 0;
-    }
-    messages.forEach(msg => {
-        const dateStr = msg.created_at.split('T')[0];
-        if (last7Days.hasOwnProperty(dateStr)) last7Days[dateStr]++;
-    });
-    return last7Days;
 }
 
 // ===================================
@@ -2201,6 +2224,7 @@ router.get('/shoppers/export', verifyToken, async (req, res) => {
             LEFT JOIN orders o ON s.order_id = o.order_id
             ${whereClause} 
             ORDER BY s.created_at DESC
+            LIMIT 5000
         `;
         const shoppers = await dbAdapter.query(sql, params);
 
