@@ -2907,6 +2907,17 @@ textarea {
     background: var(--primary-dark);
 }
 
+.btn-filter-sm {
+    padding: 6px 10px;
+    font-size: 12px;
+    gap: 4px;
+}
+
+.btn-filter-sm svg {
+    width: 12px;
+    height: 12px;
+}
+
 /* Date and time filters */
 .date-filter,
 .time-filter {
