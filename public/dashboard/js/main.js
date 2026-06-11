@@ -111,6 +111,7 @@ function setupEventListeners() {
     document.getElementById('dateToFilter')?.addEventListener('change', applyFiltersAndSort);
     document.getElementById('timeFromFilter')?.addEventListener('change', applyFiltersAndSort);
     document.getElementById('timeToFilter')?.addEventListener('change', applyFiltersAndSort);
+    document.getElementById('portalFilter')?.addEventListener('change', applyFiltersAndSort);
     document.getElementById('resetFiltersBtn')?.addEventListener('click', resetAllFilters);
 
     // New filter controls
@@ -857,6 +858,7 @@ function updateActiveFiltersCount() {
     const timeTo = document.getElementById('timeToFilter')?.value;
     const unreadOnly = document.getElementById('unreadFilterBtn')?.classList.contains('active');
     const urgentOnly = document.getElementById('urgentFilterBtn')?.classList.contains('active');
+    const portalFilterVal = document.getElementById('portalFilter')?.value;
     
     if (searchQuery) count++;
     if (statusFilter) count++;
@@ -864,6 +866,7 @@ function updateActiveFiltersCount() {
     if (timeFrom || timeTo) count++;
     if (unreadOnly) count++;
     if (urgentOnly) count++;
+    if (portalFilterVal) count++;
     
     const countElement = document.getElementById('activeFiltersCount');
     if (countElement) {
@@ -882,12 +885,23 @@ function applyFiltersAndSort() {
     const dateTo = document.getElementById('dateToFilter')?.value || '';
     const timeFrom = document.getElementById('timeFromFilter')?.value || '';
     const timeTo = document.getElementById('timeToFilter')?.value || '';
+    const portalFilterVal = document.getElementById('portalFilter')?.value || '';
     
     // Filter
     filteredTickets = allTickets.filter(t => {
         if (statusFilter && t.status !== statusFilter) return false;
         if (unreadOnly && t.is_read) return false;
         if (urgentOnly && !isUrgentTicket(t.message)) return false;
+        
+        // Portal filter
+        if (portalFilterVal) {
+            if (portalFilterVal === 'unassigned') {
+                if (t.portal_id || t.portal_name) return false;
+            } else {
+                const ticketPortalId = t.portal_id ? String(t.portal_id) : null;
+                if (ticketPortalId !== portalFilterVal) return false;
+            }
+        }
         
         // Enhanced search across multiple fields
         if (searchQuery) {
@@ -1332,6 +1346,8 @@ function resetAllFilters() {
     if (timeFrom) timeFrom.value = '';
     if (timeTo) timeTo.value = '';
     if (searchInput) searchInput.value = '';
+    const portalFilterEl = document.getElementById('portalFilter');
+    if (portalFilterEl) portalFilterEl.value = '';
     
     // Reset quick presets
     document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
@@ -1555,6 +1571,7 @@ async function loadPortals() {
             allPortals = response.portals || [];
             renderPortals();
             updateAssignPortalDropdown();
+            updatePortalFilterDropdown();
         }
     } catch (error) {
         console.error('Failed to load portals:', error);
@@ -1680,6 +1697,23 @@ function updateAssignPortalDropdown() {
 
     select.innerHTML = '<option value="">Assign to Portal...</option>' +
         manualPortals.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+}
+
+function updatePortalFilterDropdown() {
+    const select = document.getElementById('portalFilter');
+    if (!select) return;
+
+    const currentValue = select.value;
+    
+    // Keep the default options
+    select.innerHTML = '<option value="">All Portals</option>' +
+        '<option value="unassigned">Unassigned</option>' +
+        allPortals.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    
+    // Restore previous value if it still exists
+    if (currentValue && select.querySelector(`option[value="${currentValue}"]`)) {
+        select.value = currentValue;
+    }
 }
 
 function openCreatePortalModal() {
