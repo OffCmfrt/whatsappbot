@@ -1712,25 +1712,52 @@ function renderPortals() {
 function initCustomDropdowns() {
     document.querySelectorAll('.custom-dropdown').forEach(dropdown => {
         const selected = dropdown.querySelector('.custom-dropdown-selected');
-        if (!selected) return;
+        const optionsPanel = dropdown.querySelector('.custom-dropdown-options');
+        if (!selected || !optionsPanel) return;
 
         // Toggle open/close
         selected.addEventListener('click', (e) => {
             e.stopPropagation();
             // Close all other open dropdowns first
             document.querySelectorAll('.custom-dropdown.open').forEach(d => {
-                if (d !== dropdown) d.classList.remove('open');
+                if (d !== dropdown) {
+                    d.classList.remove('open');
+                    const op = d.querySelector('.custom-dropdown-options');
+                    if (op) { op.style.top = ''; op.style.left = ''; op.style.width = ''; }
+                }
             });
+
+            const isOpening = !dropdown.classList.contains('open');
             dropdown.classList.toggle('open');
+
+            if (isOpening) {
+                // Calculate position using getBoundingClientRect (viewport-relative)
+                const rect = selected.getBoundingClientRect();
+                optionsPanel.style.position = 'fixed';
+                optionsPanel.style.top = (rect.bottom + 4) + 'px';
+                optionsPanel.style.left = rect.left + 'px';
+                optionsPanel.style.minWidth = rect.width + 'px';
+            } else {
+                optionsPanel.style.top = '';
+                optionsPanel.style.left = '';
+                optionsPanel.style.width = '';
+            }
         });
 
         bindCustomDropdownOptions(dropdown);
     });
 
-    // Close all custom dropdowns when clicking outside
-    document.addEventListener('click', () => {
-        document.querySelectorAll('.custom-dropdown.open').forEach(d => d.classList.remove('open'));
-    });
+    // Close all custom dropdowns when clicking outside or scrolling
+    const closeAllDropdowns = () => {
+        document.querySelectorAll('.custom-dropdown.open').forEach(d => {
+            d.classList.remove('open');
+            const op = d.querySelector('.custom-dropdown-options');
+            if (op) { op.style.top = ''; op.style.left = ''; op.style.width = ''; }
+        });
+    };
+    document.addEventListener('click', closeAllDropdowns);
+    window.addEventListener('scroll', closeAllDropdowns, true);
+    window.addEventListener('resize', closeAllDropdowns);
 }
 
 function bindCustomDropdownOptions(dropdown) {
