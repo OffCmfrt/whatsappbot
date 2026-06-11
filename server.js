@@ -419,30 +419,30 @@ async function startServer() {
             }
         }, 10 * 60 * 1000); // Every 10 minutes
 
-        // NEW: Memory monitoring - log every 2 minutes (more frequent)
+        // Memory monitoring - log every 2 minutes
+        // NOTE: RSS includes Node.js runtime, pg driver, SSL, V8 internals (~300-400MB baseline)
+        //       Heap is what we control (caches, data). Only heap growth = real leak.
         setInterval(() => {
             const used = process.memoryUsage();
             const memoryMB = Math.round(used.rss / 1024 / 1024);
             const heapMB = Math.round(used.heapUsed / 1024 / 1024);
+            const externalMB = Math.round((used.external || 0) / 1024 / 1024);
             const limitMB = 512;
             const usagePercent = Math.round((memoryMB / limitMB) * 100);
             
-            console.log(`[MEMORY] RSS: ${memoryMB}MB | Heap: ${heapMB}MB / ${limitMB}MB (${usagePercent}%)`);
+            console.log(`[MEMORY] RSS: ${memoryMB}MB | Heap: ${heapMB}MB | External: ${externalMB}MB | ${usagePercent}% of ${limitMB}MB`);
             
-            // Destructure once to avoid duplicate const declarations
-            const { invalidateCache, purgeAllExpired, caches: lruCaches } = require('./src/utils/cache');
-            const Settings = require('./src/models/Settings');
-            
-            if (usagePercent > 75) {
-                console.warn(`⚠️ WARNING: Memory usage at ${usagePercent}%! Triggering cache cleanup...`);
+            // Only trigger cleanup when HEAP is high (real JS memory pressure)
+            // High RSS with low heap = native overhead, cleanup can't help
+            if (heapMB > 100) {
+                console.warn(`⚠️ HEAP HIGH (${heapMB}MB) — running GC + cache cleanup...`);
+                
+                const { invalidateCache, purgeAllExpired, caches: lruCaches } = require('./src/utils/cache');
+                const Settings = require('./src/models/Settings');
+                
                 // Clear all LRU caches
                 invalidateCache();
-                
-                // Purge expired entries from every LRU cache
-                const purged = purgeAllExpired();
-                if (purged > 0) console.log(`[MEMORY] Purged ${purged} expired cache entries`);
-                
-                // Clear Settings cache
+                purgeAllExpired();
                 Settings._cache.clear();
                 
                 // Clear followUpService Maps (timeout handles can leak)
@@ -461,32 +461,30 @@ async function startServer() {
                     shiprocketService.orderCache.clear();
                 } catch (e) { /* ignore */ }
                 
-                console.log(`[MEMORY] Cache cleanup done. Heap before: ${heapMB}MB`);
+                // Force V8 garbage collection (requires --expose-gc flag in Procfile)
+                if (typeof global.gc === 'function') {
+                    global.gc();
+                    const afterGC = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+                    console.log(`[MEMORY] GC done. Heap: ${heapMB}MB → ${afterGC}MB`);
+                } else {
+                    console.log(`[MEMORY] Cache cleanup done. Heap: ${heapMB}MB (GC not available)`);
+                }
             }
             
-            if (usagePercent > 85) {
-                console.error('🚨 CRITICAL: Memory usage too high! Aggressive cleanup...');
-                // Halve every LRU cache to reclaim memory immediately
-                Object.entries(lruCaches).forEach(([name, cache]) => {
-                    const targetSize = Math.floor(cache.cache.size / 2);
-                    let removed = 0;
-                    for (const key of cache.cache.keys()) {
-                        if (removed >= targetSize) break;
-                        cache.cache.delete(key);
-                        removed++;
-                    }
-                    if (removed > 0) console.log(`[MEMORY] Trimmed ${name} cache: removed ${removed} entries`);
-                });
-                
-                Settings._cache.clear();
-                
-                console.log('[MEMORY] Aggressive cache cleanup completed');
-            }
-            
-            if (usagePercent > 95) {
-                console.error('🔥 EMERGENCY: Memory at 95%! Clearing task queue...');
-                taskQueue.length = 0;
-                console.log('[MEMORY] Task queue cleared');
+            // Emergency: if RSS is dangerously close to Render limit
+            if (usagePercent > 92) {
+                console.error(`🔥 CRITICAL RSS: ${memoryMB}MB / ${limitMB}MB (${usagePercent}%) — risk of OOM kill`);
+                // Force GC even if heap seems ok — native memory might be reclaimable
+                if (typeof global.gc === 'function') {
+                    global.gc();
+                    console.log('[MEMORY] Emergency GC triggered');
+                }
+                // Clear everything as last resort
+                try {
+                    const { invalidateCache } = require('./src/utils/cache');
+                    invalidateCache();
+                    taskQueue.length = 0;
+                } catch (e) { /* ignore */ }
             }
         }, 2 * 60 * 1000); // Every 2 minutes
 
