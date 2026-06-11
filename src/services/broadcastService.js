@@ -432,8 +432,9 @@ class BroadcastService {
             this.isProcessingQueueThread = false;
         }
 
-        // Wait before processing next message using the exact delay set by the Admin in UI
+        // Extract delay BEFORE setTimeout so the `item` reference can be GC'd
         const waitMs = item && item.delay_seconds ? (item.delay_seconds * 1000) : (item && item.delaySeconds ? item.delaySeconds * 1000 : this.delayBetweenMessages);
+        item = null; // Release reference to DB row — don't hold it in the timer closure
         setTimeout(() => this.processQueue(), waitMs);
     }
 

@@ -21,30 +21,32 @@ app.use(helmet());
 // Apply compression middleware for response payload compression
 app.use(compression());
 
-// Monitor response sizes and log warnings for large responses
+// Monitor response sizes — override res.json to avoid double-serialization
 // Hard limit: block responses over 5MB to prevent memory exhaustion
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5MB
 app.use((req, res, next) => {
     const originalJson = res.json.bind(res);
     res.json = (data) => {
+        // Only serialize once — measure size from the serialized string,
+        // then send it directly via res.send() to avoid Express re-serializing
         const serialized = JSON.stringify(data);
         const responseSize = serialized.length;
         const sizeKB = Math.round(responseSize / 1024);
         
-        if (sizeKB > 500) {
-            console.warn(`⚠️ LARGE RESPONSE: ${req.method} ${req.path} - ${sizeKB}KB (${responseSize} bytes)`);
-        }
-        
         if (responseSize > MAX_RESPONSE_SIZE) {
             console.error(`🚨 BLOCKED RESPONSE: ${req.method} ${req.path} - ${sizeKB}KB exceeds 5MB limit`);
-            return res.status(413).json({
-                error: 'Response too large. Please use pagination or filters to reduce data size.'
-            });
+            // Small error response — safe to use originalJson
+            return originalJson({ error: 'Response too large. Please use pagination or filters to reduce data size.' });
         }
         
-        // Set Content-Length for accurate response tracking
+        if (sizeKB > 500) {
+            console.warn(`⚠️ LARGE RESPONSE: ${req.method} ${req.path} - ${sizeKB}KB`);
+        }
+        
+        // Send pre-serialized string directly — avoids Express's internal JSON.stringify
+        res.setHeader('Content-Type', 'application/json');
         res.setHeader('Content-Length', Buffer.byteLength(serialized));
-        return originalJson(data);
+        return res.send(serialized);
     };
     next();
 });
@@ -387,9 +389,10 @@ async function startServer() {
         console.log('🔄 Initializing database...');
         await initializeDatabase();
 
-        // Start cache statistics logging (every 5 minutes)
-        console.log('📊 Initializing cache statistics logging...');
-        startCacheStatsLogging(5 * 60 * 1000);
+        // Cache statistics logging — disabled in production to avoid unnecessary allocations
+        if (process.env.NODE_ENV !== 'production') {
+            startCacheStatsLogging(5 * 60 * 1000);
+        }
 
         // Warm up cache with frequently accessed data (optimized - skip slow message count)
         console.log('🔥 Warming up cache...');
