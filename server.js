@@ -435,10 +435,11 @@ async function startServer() {
             
             console.log(`[MEMORY] RSS: ${memoryMB}MB | Heap: ${heapMB}MB | External: ${externalMB}MB | ${usagePercent}% of ${limitMB}MB`);
             
-            // Only trigger cleanup when HEAP is high (real JS memory pressure)
-            // High RSS with low heap = native overhead, cleanup can't help
-            if (heapMB > 100) {
-                console.warn(`⚠️ HEAP HIGH (${heapMB}MB) — running GC + cache cleanup...`);
+            // Trigger cleanup when RSS (total memory) exceeds 465MB
+            // This is what matters for OOM on Render (512MB limit)
+            const CACHE_CLEAR_THRESHOLD_MB = 465;
+            if (memoryMB > CACHE_CLEAR_THRESHOLD_MB) {
+                console.warn(`⚠️ MEMORY HIGH (${memoryMB}MB > ${CACHE_CLEAR_THRESHOLD_MB}MB) — running GC + cache cleanup...`);
                 
                 const { invalidateCache, purgeAllExpired, caches: lruCaches } = require('./src/utils/cache');
                 const Settings = require('./src/models/Settings');
@@ -491,12 +492,11 @@ async function startServer() {
             }
         }, 2 * 60 * 1000); // Every 2 minutes
 
-        // NEW: Clear ALL caches every 30 minutes to prevent memory buildup
+        // Purge expired cache entries every 30 minutes (don't clear valid entries)
         setInterval(() => {
-            const { invalidateCache, purgeAllExpired } = require('./src/utils/cache');
-            purgeAllExpired(); // Remove stale entries first
-            invalidateCache(); // Then clear remaining
-            console.log('[MEMORY] Scheduled cache cleanup (30 min interval)');
+            const { purgeAllExpired } = require('./src/utils/cache');
+            const purged = purgeAllExpired();
+            console.log(`[MEMORY] Scheduled expired-entry purge: ${purged} entries removed`);
         }, 30 * 60 * 1000); // Every 30 minutes
 
         // Periodic expired-cache purge every 10 minutes (lightweight)
