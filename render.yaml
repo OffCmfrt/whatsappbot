@@ -4,7 +4,7 @@ services:
     env: node
     plan: free
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: node --expose-gc --max-old-space-size=256 --max-semi-space-size=16 server.js
     envVars:
       - key: NODE_ENV
         value: production

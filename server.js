@@ -465,7 +465,17 @@ async function startServer() {
                     shiprocketService.orderCache.clear();
                 } catch (e) { /* ignore */ }
                 
-                // Force V8 garbage collection (requires --expose-gc flag in Procfile)
+                // Close idle pg connections to free native TLS buffers (~5-10MB each)
+                try {
+                    const { pool } = require('./src/database/db');
+                    // endIdleClients() closes connections that aren't currently in use
+                    if (typeof pool.endIdleClients === 'function') {
+                        pool.endIdleClients();
+                        console.log('[MEMORY] Idle pg connections closed (freed native TLS buffers)');
+                    }
+                } catch (e) { /* ignore */ }
+                
+                // Force V8 garbage collection (requires --expose-gc flag)
                 if (typeof global.gc === 'function') {
                     global.gc();
                     const afterGC = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
@@ -488,6 +498,13 @@ async function startServer() {
                     const { invalidateCache } = require('./src/utils/cache');
                     invalidateCache();
                     taskQueue.length = 0;
+                } catch (e) { /* ignore */ }
+                // Aggressively close ALL idle pg connections
+                try {
+                    const { pool } = require('./src/database/db');
+                    if (typeof pool.endIdleClients === 'function') {
+                        pool.endIdleClients();
+                    }
                 } catch (e) { /* ignore */ }
             }
         }, 2 * 60 * 1000); // Every 2 minutes
