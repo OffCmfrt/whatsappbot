@@ -435,9 +435,9 @@ async function startServer() {
             
             console.log(`[MEMORY] RSS: ${memoryMB}MB | Heap: ${heapMB}MB | External: ${externalMB}MB | ${usagePercent}% of ${limitMB}MB`);
             
-            // Trigger cleanup when RSS (total memory) exceeds 465MB
-            // This is what matters for OOM on Render (512MB limit)
-            const CACHE_CLEAR_THRESHOLD_MB = 465;
+            // Trigger cleanup when RSS exceeds 400MB (was 465MB — too close to 512MB OOM)
+            // Earlier trigger gives more headroom for native memory fluctuations
+            const CACHE_CLEAR_THRESHOLD_MB = 400;
             if (memoryMB > CACHE_CLEAR_THRESHOLD_MB) {
                 console.warn(`⚠️ MEMORY HIGH (${memoryMB}MB > ${CACHE_CLEAR_THRESHOLD_MB}MB) — running GC + cache cleanup...`);
                 
@@ -468,7 +468,6 @@ async function startServer() {
                 // Close idle pg connections to free native TLS buffers (~5-10MB each)
                 try {
                     const { pool } = require('./src/database/db');
-                    // endIdleClients() closes connections that aren't currently in use
                     if (typeof pool.endIdleClients === 'function') {
                         pool.endIdleClients();
                         console.log('[MEMORY] Idle pg connections closed (freed native TLS buffers)');
@@ -508,6 +507,22 @@ async function startServer() {
                 } catch (e) { /* ignore */ }
             }
         }, 2 * 60 * 1000); // Every 2 minutes
+
+        // Periodic idle pg connection cleanup every 5 minutes
+        // Frees native TLS buffers (~5-10MB per idle connection) before they accumulate
+        setInterval(() => {
+            try {
+                const { pool } = require('./src/database/db');
+                if (typeof pool.endIdleClients === 'function') {
+                    const before = pool.totalCount;
+                    pool.endIdleClients();
+                    const after = pool.totalCount;
+                    if (before > after) {
+                        console.log(`[MEMORY] Periodic pg cleanup: closed ${before - after} idle connections (${after} remaining)`);
+                    }
+                }
+            } catch (e) { /* ignore */ }
+        }, 5 * 60 * 1000); // Every 5 minutes
 
         // Purge expired cache entries every 30 minutes (don't clear valid entries)
         setInterval(() => {
