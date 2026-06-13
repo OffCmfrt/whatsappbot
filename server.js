@@ -435,9 +435,9 @@ async function startServer() {
             
             console.log(`[MEMORY] RSS: ${memoryMB}MB | Heap: ${heapMB}MB | External: ${externalMB}MB | ${usagePercent}% of ${limitMB}MB`);
             
-            // Trigger cleanup when RSS exceeds 400MB (was 465MB — too close to 512MB OOM)
-            // Earlier trigger gives more headroom for native memory fluctuations
-            const CACHE_CLEAR_THRESHOLD_MB = 400;
+            // Trigger cleanup when RSS exceeds 300MB (lowered from 400MB — native TLS buffers
+            // accumulate steadily and we need headroom before hitting 512MB OOM)
+            const CACHE_CLEAR_THRESHOLD_MB = 300;
             if (memoryMB > CACHE_CLEAR_THRESHOLD_MB) {
                 console.warn(`⚠️ MEMORY HIGH (${memoryMB}MB > ${CACHE_CLEAR_THRESHOLD_MB}MB) — running GC + cache cleanup...`);
                 
@@ -485,7 +485,7 @@ async function startServer() {
             }
             
             // Emergency: if RSS is dangerously close to Render limit
-            if (usagePercent > 92) {
+            if (usagePercent > 80) {
                 console.error(`🔥 CRITICAL RSS: ${memoryMB}MB / ${limitMB}MB (${usagePercent}%) — risk of OOM kill`);
                 // Force GC even if heap seems ok — native memory might be reclaimable
                 if (typeof global.gc === 'function') {
@@ -508,7 +508,7 @@ async function startServer() {
             }
         }, 2 * 60 * 1000); // Every 2 minutes
 
-        // Periodic idle pg connection cleanup every 5 minutes
+        // Periodic idle pg connection cleanup every 2 minutes
         // Frees native TLS buffers (~5-10MB per idle connection) before they accumulate
         setInterval(() => {
             try {
@@ -522,7 +522,31 @@ async function startServer() {
                     }
                 }
             } catch (e) { /* ignore */ }
-        }, 5 * 60 * 1000); // Every 5 minutes
+        }, 2 * 60 * 1000); // Every 2 minutes (was 5 — too slow for native TLS buffer growth)
+
+        // Native memory pressure monitor — runs every 60 seconds
+        // Proactively closes idle pg connections to prevent TLS buffer accumulation
+        // This is the KEY fix: native TLS buffers grow between cleanups, so we
+        // drain them aggressively before they stack up to 300MB+
+        setInterval(() => {
+            try {
+                const { pool } = require('./src/database/db');
+                const total = pool.totalCount || 0;
+                const idle = pool.idleCount || 0;
+                const waiting = pool.waitingCount || 0;
+                
+                // Always drain idle clients — even 1 idle connection holds ~5-10MB native TLS buffers
+                if (typeof pool.endIdleClients === 'function' && idle > 0) {
+                    pool.endIdleClients();
+                    console.log(`[NATIVE] Drained ${idle} idle pg connections (total=${total}, waiting=${waiting})`);
+                }
+                
+                // Force GC every minute to reclaim any reclaimable native memory
+                if (typeof global.gc === 'function') {
+                    global.gc();
+                }
+            } catch (e) { /* ignore */ }
+        }, 60 * 1000); // Every 60 seconds
 
         // Purge expired cache entries every 30 minutes (don't clear valid entries)
         setInterval(() => {
