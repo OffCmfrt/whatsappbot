@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables
+.env
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Excel files (after migration)
+*.xlsx
+*.xls
+
+# Build and Utility Scripts
+build-liquid*.js
+test-*.js
+force-*.js
+apply_*.js
+debug-*.js
+check-*.js
+read-err.js
+setup-turso.js
+
+# Temp/Output files
+*.log
+*.json
+!package.json
+!package-lock.json
+*.txt

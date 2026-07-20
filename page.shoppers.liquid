@@ -1,0 +1,4239 @@
+{% layout none %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shopper Management | OFFCOMFRT</title>
+    <!-- Google Fonts: Outfit, Inter, Archivo Narrow -->
+    {% # theme-check-disable RemoteAsset %}
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Inter:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&display=swap" rel="stylesheet">
+    {% # theme-check-enable RemoteAsset %}
+    <style>
+        /* Global Styles */
+        body {
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            background: #000;
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column;
+        }
+        a { color: inherit; text-decoration: none; }
+        .btn { cursor: pointer; border: none; padding: 0.6rem 1rem; border-radius: 6px; font-weight: 500; font-family: 'Archivo Narrow', sans-serif; text-transform: uppercase; letter-spacing: 1px; transition: all 0.2s; }
+        .btn:hover { transform: translateY(-1px); }
+        .btn-primary { background: #fff; color: #000; }
+        .btn-primary:hover { background: #e0e0e0; }
+        .btn-outline { background: transparent; border: 1px solid #fff; color: #fff; }
+        .btn-outline:hover { background: rgba(255,255,255,0.1); }
+        .btn-danger { background: #ff4757; color: #fff; border: 1px solid #ff4757; }
+        .btn-success { background: #2ed573; color: #000; border: 1px solid #2ed573; }
+        .btn-chat { background: #25d366; color: #000; border: none; }
+        .btn-chat:hover { background: #128c7e; color: #fff; }
+        /* Navigation */
+        .premium-nav { background: rgba(20,20,20,0.8); backdrop-filter: blur(12px); padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .nav-brand { display: flex; align-items: center; gap: 0.5rem; }
+        .nav-brand h1 { margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.8rem; }
+        .brand-subtitle { font-size: 0.9rem; opacity: 0.7; }
+        .nav-actions { display: flex; gap: 0.5rem; }
+        /* Header */
+        .page-header { padding: 2rem; background: rgba(255,255,255,0.02); }
+        .header-content h2 { margin: 0 0 0.5rem 0; font-family: 'Outfit', sans-serif; }
+        .header-content p { margin: 0; opacity: 0.7; font-size: 0.9rem; }
+        .stats-overview { display: flex; gap: 1rem; margin-top: 1rem; }
+        .stat-box { flex: 1; background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 8px; text-align: center; transition: all 0.3s; }
+        .stat-box:hover { background: rgba(255,255,255,0.08); transform: translateY(-2px); }
+        .stat-value { display: block; font-size: 1.5rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; }
+        .stat-label { font-size: 0.85rem; opacity: 0.8; }
+        .text-success { color: #2ed573; }
+        .text-warning { color: #ffa502; }
+        .text-danger { color: #ff4757; }
+        /* ==========================================
+           PROFESSIONAL FILTER BAR STYLES
+           ========================================== */
+        .control-bar { 
+            display: flex; 
+            flex-direction: column;
+            padding: 1.5rem 2.5rem; 
+            margin-bottom: 1.5rem; 
+            background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            gap: 1.25rem;
+        }
+        
+        /* Filter Section Headers */
+        .filter-section-title {
+            font-size: 0.65rem;
+            color: rgba(255,255,255,0.4);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .filter-section-title::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.1) 0%, transparent 100%);
+        }
+        
+        .control-row { 
+            display: flex; 
+            justify-content: flex-start; 
+            align-items: flex-start; 
+            gap: 1.5rem; 
+            flex-wrap: wrap; 
+            width: 100%;
+        }
+        
+        /* Status Tabs - Pill Style */
+        .segment-tabs { 
+            display: flex; 
+            gap: 0.4rem; 
+            flex-wrap: wrap; 
+            background: rgba(0,0,0,0.3);
+            padding: 0.4rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .segment-tabs .tab { 
+            background: transparent; 
+            border: none; 
+            color: rgba(255,255,255,0.5); 
+            padding: 0.5rem 1rem; 
+            font-family: 'Archivo Narrow', sans-serif; 
+            letter-spacing: 1px; 
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            cursor: pointer;
+            border-radius: 8px;
+            text-transform: uppercase;
+        }
+        .segment-tabs .tab:hover { 
+            color: #fff; 
+            background: rgba(255,255,255,0.05);
+        }
+        .segment-tabs .tab.active { 
+            color: #000;
+            background: #fff;
+            box-shadow: 0 2px 8px rgba(255,255,255,0.15);
+        }
+        .segment-tabs .tab .tab-count {
+            font-size: 0.65rem;
+            margin-left: 0.3rem;
+            opacity: 0.7;
+        }
+        
+        /* View Toggle */
+        .view-toggle-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            margin-left: auto;
+        }
+        .view-toggle-btn {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: rgba(255,255,255,0.6);
+            padding: 0.5rem 0.9rem;
+            border-radius: 8px;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .view-toggle-btn:hover {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            border-color: rgba(255,255,255,0.3);
+        }
+        .view-toggle-btn.active {
+            background: #fff;
+            color: #000;
+            border-color: #fff;
+        }
+        
+        /* Filter Groups */
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            flex: 1;
+            min-width: 280px;
+            max-width: 100%;
+        }
+        
+        /* Filter Row Layout */
+        .filters-row {
+            display: flex;
+            gap: 2rem;
+            flex-wrap: nowrap;
+            align-items: flex-start;
+        }
+        
+        @media (max-width: 1200px) {
+            .filters-row {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            .filter-group {
+                width: 100%;
+                max-width: none;
+            }
+        }
+        
+        /* Search Box - Enhanced */
+        .search-box { 
+            position: relative; 
+            width: 100%;
+            max-width: 350px;
+        }
+        .search-box input { 
+            width: 100%;
+            padding: 0.75rem 0.75rem 0.75rem 2.75rem; 
+            border-radius: 10px; 
+            border: 1px solid rgba(255,255,255,0.08); 
+            background: rgba(0,0,0,0.3); 
+            color: #fff; 
+            font-family: 'Inter', sans-serif;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        .search-box input:focus { 
+            border-color: rgba(255,255,255,0.3); 
+            background: rgba(0,0,0,0.5); 
+            outline: none; 
+            box-shadow: 0 0 0 3px rgba(255,255,255,0.05), 0 4px 12px rgba(0,0,0,0.3); 
+        }
+        .search-box input::placeholder { color: rgba(255,255,255,0.3); }
+        .search-box svg { 
+            position: absolute; 
+            left: 1rem; 
+            top: 50%; 
+            transform: translateY(-50%); 
+            stroke: rgba(255,255,255,0.4); 
+            transition: stroke 0.3s; 
+        }
+        .search-box input:focus + svg { stroke: rgba(255,255,255,0.8); }
+        
+        /* Date Filter - Compact */
+        .date-filter-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(0,0,0,0.3);
+            padding: 0.4rem;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .date-filter input { 
+            padding: 0.6rem 0.75rem; 
+            border-radius: 6px; 
+            border: 1px solid rgba(255,255,255,0.08); 
+            background: rgba(255,255,255,0.03); 
+            color: #fff; 
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            width: 130px;
+        }
+        .date-filter input:focus {
+            border-color: rgba(255,255,255,0.2);
+            outline: none;
+        }
+        .date-separator { 
+            color: rgba(255,255,255,0.3); 
+            font-weight: 300;
+            font-size: 0.8rem;
+        }
+        
+        /* Quick Date Filters - Chip Style */
+        .quick-date-filters { 
+            display: flex; 
+            gap: 0.4rem; 
+            flex-wrap: wrap; 
+            align-items: center; 
+        }
+        .quick-date-btn {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.5);
+            padding: 0.4rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .quick-date-btn:hover { 
+            border-color: rgba(255,255,255,0.2); 
+            color: #fff; 
+            background: rgba(255,255,255,0.06);
+        }
+        .quick-date-btn.active { 
+            background: rgba(255,255,255,0.12); 
+            color: #fff; 
+            border-color: rgba(255,255,255,0.25);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        }
+        
+        /* Advanced Filters Row */
+        .advanced-filters {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: flex-start;
+        }
+        
+        /* Dropdown Filters */
+        .filter-dropdown {
+            position: relative;
+        }
+        .filter-dropdown select {
+            padding: 0.6rem 2rem 0.6rem 0.75rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            cursor: pointer;
+            appearance: none;
+            min-width: 140px;
+        }
+        .filter-dropdown::after {
+            content: '▼';
+            position: absolute;
+            right: 0.75rem;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 0.6rem;
+            color: rgba(255,255,255,0.4);
+            pointer-events: none;
+        }
+        .filter-dropdown select:focus {
+            border-color: rgba(255,255,255,0.2);
+            outline: none;
+        }
+        .filter-dropdown select option {
+            background: #1a1a1a;
+            color: #fff;
+        }
+        
+        /* Order ID Range Filter - Compact */
+        .order-id-filter { 
+            display: flex; 
+            align-items: center; 
+            gap: 0.5rem; 
+            background: rgba(0,0,0,0.3);
+            padding: 0.4rem;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .order-id-input {
+            width: 110px;
+            padding: 0.5rem 0.6rem;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.03);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+        }
+        .order-id-input:focus { 
+            border-color: rgba(255,255,255,0.2); 
+            outline: none; 
+        }
+        .order-id-input::placeholder { color: rgba(255,255,255,0.3); }
+        .order-id-separator { 
+            color: rgba(255,255,255,0.3); 
+            font-size: 0.75rem;
+            text-transform: lowercase;
+        }
+        .btn-apply-small {
+            padding: 0.5rem 0.75rem;
+            font-size: 0.7rem;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #fff;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            transition: all 0.2s;
+        }
+        .btn-apply-small:hover {
+            background: rgba(255,255,255,0.15);
+            border-color: rgba(255,255,255,0.25);
+        }
+        
+        /* Clear Filters Button */
+        .clear-filters-btn {
+            background: rgba(255,71,87,0.08);
+            border: 1px solid rgba(255,71,87,0.2);
+            color: #ff6b7a;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .clear-filters-btn:hover { 
+            background: rgba(255,71,87,0.15); 
+            border-color: rgba(255,71,87,0.35);
+            color: #ff4757;
+        }
+        .clear-filters-btn svg {
+            width: 12px;
+            height: 12px;
+        }
+        
+        /* Bulk Actions Bar */
+        .bulk-actions-bar {
+            display: none;
+            flex-direction: column;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            background: linear-gradient(90deg, rgba(46,213,115,0.1) 0%, rgba(46,213,115,0.05) 100%);
+            border: 1px solid rgba(46,213,115,0.2);
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            animation: slideDown 0.3s ease;
+        }
+        .bulk-actions-bar.active {
+            display: flex;
+        }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .bulk-actions-left, .bulk-actions-right {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .bulk-actions-right {
+            border-top: 1px solid rgba(46,213,115,0.15);
+            padding-top: 0.75rem;
+        }
+        .bulk-actions-bar .selected-count {
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            color: #2ed573;
+            font-size: 0.9rem;
+            min-width: 80px;
+        }
+        .bulk-actions-bar .bulk-btn {
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+        }
+        .bulk-btn-delete {
+            background: rgba(255,71,87,0.15);
+            color: #ff6b7a;
+            border: 1px solid rgba(255,71,87,0.3);
+        }
+        .bulk-btn-delete:hover {
+            background: rgba(255,71,87,0.25);
+            color: #ff4757;
+        }
+        .bulk-btn-status {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .bulk-btn-status:hover {
+            background: rgba(255,255,255,0.15);
+        }
+        .bulk-btn-select-all {
+            background: rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.8);
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        .bulk-btn-select-all:hover {
+            background: rgba(255,255,255,0.12);
+            color: #fff;
+            border-color: rgba(255,255,255,0.25);
+        }
+        .bulk-btn-select-all.active {
+            background: rgba(46,213,115,0.2);
+            color: #2ed573;
+            border-color: rgba(46,213,115,0.4);
+        }
+        .bulk-btn-close {
+            background: transparent;
+            color: rgba(255,255,255,0.5);
+            border: none;
+            margin-left: auto;
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 0.2rem;
+        }
+        .bulk-btn-close:hover { color: #fff; }
+        
+        /* Export Modal */
+        #exportModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(10px); z-index: 1500; justify-content: center; align-items: center; }
+        #exportModal.active { display: flex; }
+        .export-modal-content { background: #0a0a0a; border: 1px solid rgba(255,255,255,0.2); padding: 2rem; border-radius: 12px; width: 90%; max-width: 500px; max-height: 90vh; overflow-y: auto; }
+        .export-modal-content h3 { margin-top: 0; font-family: 'Outfit', sans-serif; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 2px; }
+        .export-options { display: grid; gap: 1rem; }
+        .export-option-group label { display: block; font-size: 0.75rem; color: #888; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 1px; font-family: 'Archivo Narrow', sans-serif; }
+        .export-option-group select, .export-option-group input {
+            width: 100%;
+            padding: 0.7rem;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 6px;
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+        }
+        .export-option-group select:focus, .export-option-group input:focus { outline: none; border-color: #fff; }
+        .export-checkbox-group { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+        .export-checkbox-group input[type="checkbox"] { width: 18px; height: 18px; accent-color: #fff; }
+        .export-checkbox-group label { font-size: 0.85rem; color: #ccc; cursor: pointer; }
+        .export-btn-row { display: flex; gap: 1rem; margin-top: 2rem; }
+        .export-btn-row button { flex: 1; padding: 0.8rem; }
+        
+        /* Filter Label */
+        .filter-label {
+            font-size: 0.7rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: 'Archivo Narrow', sans-serif;
+            margin-right: 0.5rem;
+        }
+        /* Shoppers List (Horizontal Rows) */
+        .shoppers-grid {
+            display: flex;
+            flex-direction: column;
+            padding: 0 2.5rem;
+            gap: 0.6rem;
+            margin-bottom: 3rem;
+        }
+        @media (max-width: 768px) {
+            .shoppers-grid { padding: 0 0.75rem; gap: 0.5rem; }
+        }
+
+        @keyframes staggeredFadeIn {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .shopper-card {
+            background: rgba(255,255,255,0.03);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 1rem;
+            transition: all 0.25s ease;
+            position: relative;
+            animation: staggeredFadeIn 0.4s ease both;
+            animation-delay: calc(var(--index, 0) * 0.02s);
+            min-height: 72px;
+        }
+        .shopper-card:hover {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.25);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        .shopper-card.has-message { border-left: 3px solid #25d366; }
+        .shopper-card.status-confirmed { border-left: 3px solid #2ed573; }
+        .shopper-card.status-cancelled { border-left: 3px solid #ff4757; }
+        .shopper-card.status-edit_details { border-left: 3px solid #ffa502; }
+
+        /* Card Selection */
+        .shopper-card.selected {
+            border-color: #2ed573;
+            background: rgba(46,213,115,0.08);
+            box-shadow: 0 0 0 1px rgba(46,213,115,0.4);
+        }
+        .card-select-checkbox {
+            width: 22px;
+            height: 22px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 6px;
+            background: rgba(0,0,0,0.3);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .card-select-checkbox:hover {
+            border-color: rgba(255,255,255,0.6);
+        }
+        .card-select-checkbox.checked {
+            background: #2ed573;
+            border-color: #2ed573;
+        }
+        .card-select-checkbox.checked::after {
+            content: '✓';
+            color: #000;
+            font-size: 13px;
+            font-weight: bold;
+        }
+        .card-select-hint { display: none; }
+
+        /* Row Layout Elements */
+        .row-status { flex-shrink: 0; }
+        .row-order-info { min-width: 110px; flex-shrink: 0; }
+        .row-order-info .order-id-small { font-size: 0.85rem; color: #fff; font-weight: 700; margin-bottom: 0.15rem; font-family: 'Inter', monospace; letter-spacing: 0.5px; }
+        .row-order-info .timestamp-row { font-size: 0.72rem; color: #777; margin-top: 0.15rem; }
+        .row-customer { flex: 1; min-width: 160px; }
+        .row-customer .customer-name-big { font-family: 'Archivo Narrow', sans-serif; font-size: 0.95rem; font-weight: 700; color: #fff; margin: 0 0 0.2rem 0; letter-spacing: 0.3px; text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row-customer .customer-meta { font-size: 0.78rem; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row-products { flex: 1.2; min-width: 120px; max-width: 280px; font-size: 0.82rem; color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row-location { font-size: 0.82rem; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; min-width: 90px; }
+        .row-price { text-align: right; min-width: 80px; flex-shrink: 0; }
+        .row-price .price-big { font-size: 1.1rem; font-family: 'Archivo Narrow', sans-serif; font-weight: 700; color: #fff; line-height: 1.2; }
+        .row-price .pay-method-badge { font-size: 0.7rem; color: #888; }
+
+        /* Compact Action Icons */
+        .row-actions-compact { display: flex; gap: 0.35rem; flex-shrink: 0; }
+        .action-icon-btn {
+            width: 38px;
+            height: 38px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: transparent;
+            color: #fff;
+            cursor: pointer;
+            transition: all 0.2s;
+            padding: 0;
+            text-decoration: none;
+        }
+        .action-icon-btn:hover { background: #fff; color: #000; border-color: #fff; }
+        .action-icon-btn svg { width: 16px; height: 16px; }
+        .btn-call-icon { border-color: rgba(74,222,128,0.4); color: #4ade80; }
+        .btn-call-icon:hover { background: #4ade80; color: #000; }
+
+        /* Mini Status Pills */
+        .row-status-pills { display: flex; gap: 0.35rem; flex-shrink: 0; }
+        .status-pill-mini {
+            width: 34px;
+            height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: transparent;
+            color: #aaa;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            padding: 0;
+            line-height: 1;
+        }
+        .status-pill-mini:hover { background: rgba(255,255,255,0.1); color: #fff; border-color: rgba(255,255,255,0.3); }
+        .status-pill-mini.active { background: #fff; color: #000; border-color: #fff; }
+
+        /* Message Dot Indicator */
+        .msg-indicator {
+            width: 8px;
+            height: 8px;
+            background: #25d366;
+            border-radius: 50%;
+            display: inline-block;
+            margin-left: 0.4rem;
+            box-shadow: 0 0 6px rgba(37,211,102,0.4);
+            vertical-align: middle;
+        }
+
+        /* Status Badges */
+        .badge { font-family: 'Archivo Narrow', sans-serif; font-size: 0.68rem; padding: 0.2rem 0.5rem; border-radius: 6px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+        .badge-status.confirmed { background: #2ed573; color: #000; }
+        .badge-status.cancelled { background: #ff4757; color: #fff; }
+        .badge-status.edit_details { background: #ffa502; color: #000; }
+        .badge-status.pending { background: #666; color: #fff; }
+
+        /* Responsive Row */
+        @media (max-width: 1100px) {
+            .shopper-card { flex-wrap: wrap; gap: 0.5rem 0.75rem; padding: 0.875rem 1rem; }
+            .row-products, .row-location { width: 100%; max-width: none; order: 5; }
+        }
+        @media (max-width: 768px) {
+            .shopper-card {
+                flex-wrap: wrap;
+                gap: 0.5rem 0.6rem;
+                padding: 0.875rem;
+                min-height: auto;
+                border-radius: 14px;
+            }
+            .row-status { order: 1; }
+            .card-select-checkbox { order: 0; width: 24px; height: 24px; }
+            .row-order-info { order: 2; min-width: auto; flex: 1; }
+            .row-price { order: 3; min-width: auto; }
+            .row-customer { order: 4; width: 100%; min-width: auto; }
+            .row-products { order: 5; width: 100%; max-width: none; font-size: 0.8rem; color: #bbb; }
+            .row-location { order: 6; width: 100%; max-width: none; font-size: 0.8rem; }
+            .row-actions-compact { order: 7; margin-top: 0.25rem; }
+            .row-status-pills { order: 8; margin-top: 0.25rem; margin-left: auto; }
+            .action-icon-btn { width: 36px; height: 36px; }
+            .action-icon-btn svg { width: 16px; height: 16px; }
+            .status-pill-mini { width: 32px; height: 32px; font-size: 0.85rem; }
+            .customer-name-big { font-size: 1rem; }
+        }
+
+        /* Cards View Overrides */
+        .shoppers-grid.cards-view {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.25rem;
+        }
+        @media (max-width: 1200px) { .shoppers-grid.cards-view { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 768px) { .shoppers-grid.cards-view { grid-template-columns: 1fr; gap: 0.75rem; } }
+
+        .cards-view .shopper-card {
+            flex-direction: column;
+            border-radius: 20px;
+            padding: 1.75rem;
+            gap: 1.25rem;
+            min-height: auto;
+            background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%);
+            border: 1px solid rgba(255,255,255,0.12);
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+            transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .cards-view .shopper-card:hover {
+            transform: translateY(-6px);
+            box-shadow: 0 20px 48px rgba(0,0,0,0.55);
+            border-color: rgba(255,255,255,0.25);
+            background: linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.025) 100%);
+        }
+        .cards-view .shopper-card.selected {
+            box-shadow: 0 0 0 2px rgba(46,213,115,0.3), 0 20px 48px rgba(0,0,0,0.55);
+        }
+        .cards-view .card-select-checkbox {
+            position: absolute;
+            top: 1.25rem;
+            right: 1.25rem;
+            width: 24px;
+            height: 24px;
+            border-radius: 7px;
+            z-index: 5;
+        }
+        .cards-view .card-select-checkbox.checked::after {
+            font-size: 15px;
+        }
+        .cards-view .card-select-hint {
+            display: block;
+            position: absolute;
+            top: 1.25rem;
+            right: 1.25rem;
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.35);
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+        .cards-view .shopper-card:hover .card-select-hint {
+            opacity: 1;
+        }
+        .cards-view .shopper-card.selected .card-select-hint {
+            display: none;
+        }
+        .cards-view .customer-name-big {
+            font-size: 1.4rem;
+            text-transform: uppercase;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.5rem;
+        }
+        .cards-view .order-id-small {
+            color: #777;
+            font-weight: normal;
+            margin-bottom: 0.25rem;
+            font-size: 0.85rem;
+        }
+        .cards-view .timestamp-row {
+            font-size: 0.78rem;
+            color: #555;
+        }
+        .cards-view .price-big {
+            font-size: 1.7rem;
+            letter-spacing: -0.5px;
+        }
+
+        /* Card Layout Elements (used only in card mode) */
+        .card-header-main {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .source-info { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        .badge-shopify { background: #fff; color: #000; border: 1px solid #fff; }
+        .badge-delivery { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.4); }
+        .amount-info { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 0.15rem; }
+        .customer-basics {
+            margin-top: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+        }
+        .btn-text-edit {
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 0.75rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            letter-spacing: 1px;
+            cursor: pointer;
+            padding: 0.2rem 0.4rem;
+            line-height: 1.5;
+            font-weight: 600;
+            text-decoration: none;
+            opacity: 0.6;
+            border-radius: 4px;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .btn-text-edit:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+        .customer-email { font-size: 0.82rem; color: #999; }
+        .customer-meta-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .customer-meta-row .order-id-small,
+        .customer-meta-row .timestamp-row {
+            font-size: 0.75rem;
+            color: #666;
+        }
+        .customer-meta-row .timestamp-row:not(:empty)::before {
+            content: '•';
+            margin-right: 0.5rem;
+            color: #444;
+        }
+        .customer-message-preview {
+            background: rgba(37, 211, 102, 0.08);
+            border: 1px solid rgba(37, 211, 102, 0.18);
+            border-radius: 10px;
+            padding: 0.875rem 1rem;
+        }
+        .customer-message-preview .msg-label {
+            font-size: 0.68rem;
+            color: #25d366;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin-bottom: 0.4rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .customer-message-preview .msg-label::before {
+            content: '';
+            width: 7px;
+            height: 7px;
+            background: #25d366;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .customer-message-preview .msg-content {
+            font-size: 0.88rem;
+            color: #e8e8e8;
+            line-height: 1.5;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .customer-message-preview .msg-time {
+            font-size: 0.72rem;
+            color: #777;
+            margin-top: 0.4rem;
+        }
+        .card-section {
+            background: rgba(0,0,0,0.35);
+            border-radius: 10px;
+            padding: 1rem;
+            border: 1px solid rgba(255,255,255,0.07);
+        }
+        .section-label {
+            font-size: 0.68rem;
+            color: #777;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 700;
+            letter-spacing: 2px;
+            margin-bottom: 0.6rem;
+            text-transform: uppercase;
+        }
+        .product-list-simple { margin: 0; padding: 0; list-style: none; font-size: 0.88rem; color: #ccc; }
+        .product-list-simple li { margin-bottom: 0.35rem; line-height: 1.4; }
+        .product-list-simple li:last-child { margin-bottom: 0; }
+        .product-list-simple .product-size {
+            color: #888;
+            font-size: 0.8rem;
+        }
+        .address-text { margin: 0 0 0.5rem 0; font-size: 0.88rem; color: #bbb; line-height: 1.5; }
+        .state-badge {
+            font-size: 0.72rem;
+            background: rgba(255,255,255,0.08);
+            padding: 0.2rem 0.5rem;
+            border-radius: 5px;
+            color: #999;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .card-actions-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 0.6rem;
+            margin-top: 0.25rem;
+        }
+        .action-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.7rem 0.5rem;
+            border-radius: 8px;
+            font-size: 0.78rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            text-decoration: none;
+            transition: all 0.2s;
+            color: #fff;
+            cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.03);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .action-btn:hover { background: #fff; color: #000; border-color: #fff; }
+        .action-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+        .btn-call { border-color: #4ade80; color: #4ade80; background: rgba(74,222,128,0.05); }
+        .btn-call:hover { background: #4ade80; color: #000; }
+        .btn-chat { border-color: #25d366; color: #25d366; background: rgba(37,211,102,0.05); }
+        .btn-chat:hover { background: #25d366; color: #000; }
+        .status-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: auto;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            padding-top: 1.25rem;
+        }
+        .status-pill {
+            flex: 1;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #999;
+            padding: 0.7rem 0.3rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-align: center;
+        }
+        .status-pill:hover { background: rgba(255,255,255,0.1); color: #fff; border-color: rgba(255,255,255,0.3); }
+        .status-pill.active { background: #fff; color: #000; border-color: #fff; box-shadow: 0 0 12px rgba(255,255,255,0.15); }
+
+        /* Card Mobile */
+        @media (max-width: 768px) {
+            .cards-view .shopper-card {
+                padding: 1.25rem;
+                border-radius: 16px;
+                gap: 1rem;
+            }
+            .cards-view .card-select-checkbox,
+            .cards-view .card-select-hint {
+                top: 1rem;
+                right: 1rem;
+                width: 22px;
+                height: 22px;
+            }
+            .cards-view .card-select-hint {
+                width: auto;
+                height: auto;
+            }
+            .cards-view .customer-name-big {
+                font-size: 1.15rem;
+            }
+            .cards-view .price-big {
+                font-size: 1.4rem;
+            }
+            .card-actions-grid {
+                grid-template-columns: 1fr 1fr 1fr;
+                gap: 0.5rem;
+            }
+            .action-btn {
+                padding: 0.6rem 0.3rem;
+                font-size: 0.72rem;
+            }
+            .status-actions {
+                gap: 0.35rem;
+                padding-top: 1rem;
+            }
+            .status-pill {
+                padding: 0.6rem 0.15rem;
+                font-size: 0.65rem;
+            }
+            .card-section {
+                padding: 0.875rem;
+            }
+        }
+        
+        /* Edit Modal */
+        #editModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(10px); z-index: 1000; justify-content: center; align-items: center; }
+        #editModal.active { display: flex; }
+        .modal-content { background: #0a0a0a; border: 1px solid rgba(255,255,255,0.2); padding: 2.5rem; border-radius: 12px; width: 90%; max-width: 600px; max-height: 90vh; overflow-y: auto; box-shadow: 0 15px 40px rgba(0,0,0,0.8); }
+        .modal-content h3 { margin-top: 0; font-family: 'Outfit', sans-serif; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 2px; }
+        .form-group { margin-bottom: 1rem; text-align: left; }
+        .form-group label { display: block; font-size: 0.8rem; font-family: 'Archivo Narrow', sans-serif; color: #fff; margin-bottom: 0.4rem; text-transform: uppercase; letter-spacing: 1px; }
+        .form-group input, .form-group textarea { width: 100%; padding: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff; box-sizing: border-box; font-family: 'Inter', sans-serif; transition: border-color 0.2s; }
+        .form-group input:focus, .form-group textarea:focus { outline: none; border-color: #fff; }
+        .form-group textarea { resize: vertical; min-height: 80px; }
+        
+        /* Customer Message in Edit Modal */
+        .customer-message-box {
+            background: rgba(37, 211, 102, 0.1);
+            border: 1px solid rgba(37, 211, 102, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .customer-message-box .msg-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .customer-message-box .msg-header span {
+            font-size: 0.75rem;
+            color: #25d366;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        .customer-message-box .msg-content {
+            font-size: 0.9rem;
+            color: #fff;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+        
+        /* Product Editor */
+        #productEditor { border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; margin-top: 1rem; }
+        .product-item-row { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; }
+        .product-item-row input[type="text"] { flex: 2; font-size: 0.85rem; padding: 0.5rem; }
+        .product-item-row input[type="text"].item-size { flex: 0 0 80px; font-size: 0.85rem; padding: 0.5rem; text-align: center; }
+        .product-item-row input[type="number"] { width: 60px; font-size: 0.85rem; padding: 0.5rem; }
+        .btn-remove-item { background: none; border: 1px solid rgba(255,0,0,0.3); color: #ff4757; border-radius: 4px; padding: 0.4rem; cursor: pointer; }
+        .btn-remove-item:hover { background: rgba(255,0,0,0.1); }
+        .btn-add-item { width: 100%; background: transparent; border: 1px dashed rgba(255,255,255,0.2); color: #aaa; padding: 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; margin-top: 0.5rem; }
+        .btn-add-item:hover { border-color: #fff; color: #fff; }
+
+        .modal-actions { display: flex; gap: 1rem; margin-top: 2rem; }
+        .modal-actions button { flex: 1; height: 44px; }
+
+        /* Live Chat Modal */
+        #chatModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.95); backdrop-filter: blur(10px); z-index: 3000; }
+        #chatModal.active { display: flex; }
+        .chat-container { display: flex; width: 100%; height: 100%; }
+        .chat-sidebar { width: 300px; background: #0a0a0a; border-right: 1px solid rgba(255,255,255,0.1); padding: 1.5rem; display: flex; flex-direction: column; }
+        .chat-sidebar h3 { margin: 0 0 1rem 0; font-family: 'Outfit', sans-serif; font-size: 1.2rem; }
+        .chat-customer-info { padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 1rem; }
+        .chat-customer-info .info-row { display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.85rem; }
+        .chat-customer-info .info-label { color: #888; }
+        .chat-customer-info .info-value { color: #fff; font-weight: 500; }
+        .chat-main { flex: 1; display: flex; flex-direction: column; background: #080808; }
+        .chat-header { padding: 0.75rem 1.5rem; background: rgba(255,255,255,0.04); border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; }
+        .chat-header h4 { margin: 0; font-family: 'Outfit', sans-serif; font-size: 0.95rem; font-weight: 500; }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 1rem 1.5rem; display: flex; flex-direction: column; gap: 0.4rem; background: #0b0b0b; }
+        .chat-date-separator { display: flex; align-items: center; justify-content: center; margin: 0.8rem 0; }
+        .chat-date-separator span { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5); font-size: 0.7rem; padding: 0.3rem 0.8rem; border-radius: 6px; letter-spacing: 0.5px; font-weight: 500; }
+        .chat-message { display: flex; max-width: 72%; animation: msgFadeIn 0.15s ease; }
+        .chat-message.customer { align-self: flex-start; }
+        .chat-message.agent { align-self: flex-end; }
+        
+        /* Unread message styling */
+        .chat-message.unread-message .msg-bubble {
+            border-left: 3px solid #00a884;
+            background: rgba(0, 168, 132, 0.15);
+        }
+        .unread-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #00a884;
+            border-radius: 50%;
+            margin-right: 4px;
+            animation: unreadPulse 2s ease-in-out infinite;
+        }
+        @keyframes unreadPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.2); }
+        }
+        
+        .msg-bubble { padding: 0.55rem 0.85rem; border-radius: 10px; font-size: 0.875rem; line-height: 1.45; position: relative; }
+        .chat-message.customer .msg-bubble { background: rgba(255,255,255,0.08); border-bottom-left-radius: 3px; color: #e8e8e8; }
+        .chat-message.agent .msg-bubble { background: #005c4b; border-bottom-right-radius: 3px; color: #e8f5e9; }
+        .msg-content { word-break: break-word; white-space: pre-wrap; }
+        .msg-meta { display: flex; align-items: center; gap: 0.35rem; justify-content: flex-end; margin-top: 0.2rem; }
+        .msg-time { font-size: 0.65rem; opacity: 0.6; }
+        .msg-type-badge { font-size: 0.55rem; background: rgba(255,255,255,0.12); padding: 0.1rem 0.35rem; border-radius: 3px; opacity: 0.7; letter-spacing: 0.3px; text-transform: uppercase; font-weight: 600; }
+        
+        /* WhatsApp-style message status indicators */
+        .msg-status { font-size: 0.7rem; font-weight: 500; line-height: 1; }
+        .msg-status-sent { color: rgba(255,255,255,0.5); }
+        .msg-status-delivered { color: rgba(255,255,255,0.6); }
+        .msg-status-read { color: #53bdeb; }
+        .msg-status-failed { color: #ff4757; font-weight: 700; }
+        
+        .msg-error { font-size: 0.65rem; color: #ff4757; font-weight: 500; }
+        .chat-message.msg-failed .msg-bubble { border: 1px solid rgba(255,71,87,0.3); }
+        .chat-empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #555; gap: 0.5rem; }
+        .chat-empty-state svg { opacity: 0.3; }
+        .chat-empty-text { font-size: 0.9rem; font-weight: 500; }
+        .chat-empty-sub { font-size: 0.75rem; opacity: 0.5; }
+        @keyframes msgFadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        .chat-input-area { padding: 0.75rem 1.5rem; background: rgba(255,255,255,0.04); border-top: 1px solid rgba(255,255,255,0.08); display: flex; gap: 0.5rem; align-items: flex-end; }
+        .chat-input-area textarea { flex: 1; padding: 0.6rem 0.85rem; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; color: #fff; font-family: 'Inter', sans-serif; font-size: 0.875rem; resize: none; height: 44px; min-height: 44px; max-height: 120px; line-height: 1.4; }
+        .chat-input-area textarea:focus { outline: none; border-color: #005c4b; background: rgba(255,255,255,0.08); }
+        .chat-input-area textarea::placeholder { color: rgba(255,255,255,0.3); }
+        .chat-input-area button { padding: 0 1.5rem; height: 44px; background: #005c4b; border: none; color: #e8f5e9; border-radius: 10px; font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: background 0.2s; }
+        .chat-input-area button:hover { background: #00735e; }
+        .chat-close { background: none; border: none; color: #fff; font-size: 1.5rem; cursor: pointer; opacity: 0.7; transition: opacity 0.2s; }
+        .chat-close:hover { opacity: 1; }
+        .chat-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #555; gap: 0.5rem; }
+
+        /* Pagination */
+        .pagination { display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; border-top: 1px solid rgba(255,255,255,0.1); margin-top: 2rem; }
+        .page-controls .btn { margin-left: 0.5rem; }
+        /* Loading Spinner */
+        .table-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 200px; width: 100%; }
+        .spinner { border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid #fff; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 1rem; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (max-width: 768px) {
+            .stats-overview, .control-bar { flex-direction: column; align-items: stretch; }
+            .segment-tabs { margin-bottom: 0.5rem; }
+            .chat-sidebar { display: none; }
+        }
+
+        /* ==========================================
+           ANALYTICS DASHBOARD STYLES
+           ========================================== */
+        .analytics-header {
+            position: sticky;
+            top: 0;
+            background: rgba(10, 10, 10, 0.95);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+        .analytics-header-left {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+        .analytics-header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .analytics-date-filter {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .analytics-date-filter input[type="date"] {
+            padding: 0.5rem 0.8rem;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.85rem;
+        }
+        .analytics-date-filter #applyAnalyticsDate {
+            background: #fff;
+            color: #000;
+            border: 1px solid #fff;
+            padding: 0.5rem 1.2rem;
+            border-radius: 6px;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 8px rgba(255,255,255,0.1);
+        }
+        .analytics-date-filter #applyAnalyticsDate:hover {
+            background: #e0e0e0;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(255,255,255,0.15);
+        }
+        .analytics-date-filter #applyAnalyticsDate:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(255,255,255,0.1);
+        }
+        
+        /* Analytics Filter Section */
+        .analytics-filter-section {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            align-items: flex-end;
+        }
+        
+        /* Quick Filter Buttons */
+        .analytics-quick-filters {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .quick-filter-btn {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.6);
+            padding: 0.4rem 0.9rem;
+            border-radius: 20px;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+        .quick-filter-btn:hover {
+            background: rgba(255,255,255,0.1);
+            border-color: rgba(255,255,255,0.2);
+            color: #fff;
+        }
+        .quick-filter-btn.active {
+            background: #fff;
+            border-color: #fff;
+            color: #000;
+            box-shadow: 0 2px 8px rgba(255,255,255,0.2);
+        }
+        .analytics-content {
+            padding: 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* Stats Row */
+        .analytics-stats-row {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .analytics-stat-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            transition: all 0.3s ease;
+        }
+        .analytics-stat-card:hover {
+            transform: translateY(-2px);
+            background: rgba(255,255,255,0.05);
+            border-color: rgba(255,255,255,0.15);
+        }
+        .analytics-stat-card .stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255,255,255,0.08);
+        }
+        .analytics-stat-card.total .stat-icon { color: #fff; }
+        .analytics-stat-card.confirmed .stat-icon { background: rgba(46, 213, 115, 0.15); color: #2ed573; }
+        .analytics-stat-card.pending .stat-icon { background: rgba(255, 165, 2, 0.15); color: #ffa502; }
+        .analytics-stat-card.cancelled .stat-icon { background: rgba(255, 71, 87, 0.15); color: #ff4757; }
+        .analytics-stat-card.edits .stat-icon { background: rgba(83, 189, 235, 0.15); color: #53bdeb; }
+        .analytics-stat-card .stat-info {
+            display: flex;
+            flex-direction: column;
+        }
+        .analytics-stat-card .stat-number {
+            font-size: 1.8rem;
+            font-weight: 700;
+            font-family: 'Archivo Narrow', sans-serif;
+            color: #fff;
+            line-height: 1;
+        }
+        .analytics-stat-card .stat-label {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.6);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 0.25rem;
+        }
+        .analytics-stat-card .stat-percent {
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-top: 0.25rem;
+        }
+        .analytics-stat-card.confirmed .stat-percent { color: #2ed573; }
+        .analytics-stat-card.pending .stat-percent { color: #ffa502; }
+        .analytics-stat-card.cancelled .stat-percent { color: #ff4757; }
+        .analytics-stat-card.edits .stat-percent { color: #53bdeb; }
+
+        /* Charts Grid */
+        .analytics-charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1.5fr;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .analytics-card {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+        .analytics-card.wide {
+            grid-column: span 1;
+        }
+        .analytics-card-title {
+            margin: 0 0 1.5rem 0;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: rgba(255,255,255,0.8);
+        }
+
+        /* Circular Charts */
+        .circular-charts-container {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+        }
+        .circular-chart-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+        .circular-chart {
+            width: 100px;
+            height: 100px;
+            transform: rotate(-90deg);
+        }
+        .circular-chart-bg {
+            fill: none;
+            stroke: rgba(255,255,255,0.1);
+            stroke-width: 8;
+        }
+        .circular-chart-progress {
+            fill: none;
+            stroke-width: 8;
+            stroke-linecap: round;
+            stroke-dasharray: 283;
+            stroke-dashoffset: 283;
+            transition: stroke-dashoffset 1.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .circular-chart-progress.confirmed { stroke: #2ed573; }
+        .circular-chart-progress.pending { stroke: #ffa502; }
+        .circular-chart-progress.cancelled { stroke: #ff4757; }
+        .circular-chart-progress.edits { stroke: #53bdeb; }
+        .circular-chart-value {
+            position: absolute;
+            top: 35px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            font-family: 'Archivo Narrow', sans-serif;
+        }
+        .circular-chart-label {
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.6);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Bar Chart */
+        .bar-chart-container {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            height: 200px;
+            gap: 0.5rem;
+            padding: 1rem 0;
+        }
+        .bar-chart-item {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .bar-chart-bar-wrapper {
+            width: 100%;
+            height: 160px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            position: relative;
+        }
+        .bar-chart-bar {
+            width: 80%;
+            background: linear-gradient(to top, rgba(255,255,255,0.3), rgba(255,255,255,0.6));
+            border-radius: 4px 4px 0 0;
+            transition: height 1s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+            min-height: 4px;
+        }
+        .bar-chart-bar::after {
+            content: attr(data-value);
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.8);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .bar-chart-item:hover .bar-chart-bar::after {
+            opacity: 1;
+        }
+        .bar-chart-label {
+            font-size: 0.65rem;
+            color: rgba(255,255,255,0.5);
+            text-align: center;
+            transform: rotate(-45deg);
+            transform-origin: center;
+            white-space: nowrap;
+        }
+
+        /* Trend Chart */
+        .trend-chart-container {
+            position: relative;
+            height: 200px;
+            padding: 1rem 0;
+        }
+        .trend-chart-container svg {
+            width: 100%;
+            height: 100%;
+        }
+        .trend-line {
+            fill: none;
+            stroke: #2ed573;
+            stroke-width: 3;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            stroke-dasharray: 2000;
+            stroke-dashoffset: 2000;
+            animation: drawLine 2s ease forwards;
+        }
+        @keyframes drawLine {
+            to { stroke-dashoffset: 0; }
+        }
+        .trend-area {
+            fill: url(#trendGradient);
+            opacity: 0.3;
+        }
+        .trend-dot {
+            fill: #2ed573;
+            stroke: #000;
+            stroke-width: 2;
+            r: 5;
+            opacity: 0;
+            animation: fadeInDot 0.3s ease forwards;
+        }
+        .trend-chart-labels {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 1rem 0;
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.4);
+        }
+        @keyframes fadeInDot {
+            to { opacity: 1; }
+        }
+
+        /* Analytics Table */
+        .analytics-table-container {
+            overflow-x: auto;
+        }
+        .analytics-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        .analytics-table th {
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.6);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+        }
+        .analytics-table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.9);
+        }
+        .analytics-table tr:hover td {
+            background: rgba(255,255,255,0.03);
+        }
+        .analytics-table .status-count {
+            font-weight: 600;
+        }
+        .analytics-table .status-count.confirmed { color: #2ed573; }
+        .analytics-table .status-count.pending { color: #ffa502; }
+        .analytics-table .status-count.cancelled { color: #ff4757; }
+        .analytics-table .status-count.edits { color: #53bdeb; }
+        .analytics-table .status-pct {
+            font-size: 0.75rem;
+            opacity: 0.6;
+            font-weight: 400;
+            margin-left: 4px;
+        }
+        
+        /* Download button for each day */
+        .btn-download-day {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.7);
+            padding: 6px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-download-day:hover {
+            background: rgba(46, 213, 115, 0.15);
+            border-color: rgba(46, 213, 115, 0.3);
+            color: #2ed573;
+            transform: translateY(-1px);
+        }
+        .btn-download-day svg {
+            transition: transform 0.2s ease;
+        }
+        .btn-download-day:hover svg {
+            transform: translateY(1px);
+        }
+        
+        /* Day action buttons container */
+        .day-actions {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .day-actions .btn-download-day {
+            padding: 5px 8px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            gap: 4px;
+        }
+        .day-actions .btn-download-day span {
+            font-family: 'Archivo Narrow', sans-serif;
+        }
+        
+        /* Confirmed download button - green */
+        .btn-download-confirmed:hover {
+            background: rgba(46, 213, 115, 0.15) !important;
+            border-color: rgba(46, 213, 115, 0.4) !important;
+            color: #2ed573 !important;
+        }
+        
+        /* Cancelled download button - red */
+        .btn-download-cancelled:hover {
+            background: rgba(255, 71, 87, 0.15) !important;
+            border-color: rgba(255, 71, 87, 0.4) !important;
+            color: #ff4757 !important;
+        }
+        
+        /* Edit download button - cyan */
+        .btn-download-edit:hover {
+            background: rgba(56, 212, 255, 0.15) !important;
+            border-color: rgba(56, 212, 255, 0.4) !important;
+            color: #38d4ff !important;
+        }
+        
+        /* Show More button */
+        .show-more-row {
+            background: rgba(255,255,255,0.01);
+        }
+        .show-more-row:hover {
+            background: rgba(255,255,255,0.02);
+        }
+        .btn-show-more {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.15);
+            color: rgba(255,255,255,0.6);
+            padding: 0.6rem 1.2rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+        }
+        .btn-show-more:hover {
+            background: rgba(255,255,255,0.05);
+            border-color: rgba(255,255,255,0.3);
+        }
+
+        /* ==========================================
+           FOLLOW-UP SYSTEM STYLES
+           ========================================== */
+        /* Note: follow-up-view uses inline style for display:none;position:fixed etc. - same pattern as analytics/multiOrders/inbox */
+        
+        .follow-up-header {
+            position: sticky;
+            top: 0;
+            background: rgba(10, 10, 10, 0.95);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255,165,2,0.2);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+        .follow-up-header-left {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+        .follow-up-header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .follow-up-content {
+            padding: 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        /* Campaign Cards */
+        .campaigns-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .campaign-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .campaign-card:hover {
+            transform: translateY(-2px);
+            background: rgba(255,255,255,0.05);
+            border-color: rgba(255,165,2,0.3);
+        }
+        .campaign-card.running {
+            border-color: rgba(46,213,115,0.3);
+            box-shadow: 0 0 20px rgba(46,213,115,0.1);
+        }
+        .campaign-card.paused {
+            border-color: rgba(255,165,2,0.3);
+        }
+        .campaign-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+        .campaign-name {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin: 0;
+            color: #fff;
+        }
+        .campaign-status {
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .campaign-status.draft { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.7); }
+        .campaign-status.running { background: rgba(46,213,115,0.15); color: #2ed573; }
+        .campaign-status.paused { background: rgba(255,165,2,0.15); color: #ffa502; }
+        .campaign-status.completed { background: rgba(83,189,235,0.15); color: #53bdeb; }
+        
+        .campaign-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin: 1rem 0;
+            padding: 1rem 0;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .campaign-stat {
+            text-align: center;
+        }
+        .campaign-stat-value {
+            font-size: 1.3rem;
+            font-weight: 700;
+            font-family: 'Archivo Narrow', sans-serif;
+            color: #fff;
+        }
+        .campaign-stat-label {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.5);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .campaign-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .campaign-btn {
+            flex: 1;
+            padding: 0.5rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+        }
+        .campaign-btn-primary {
+            background: #ffa502;
+            color: #000;
+        }
+        .campaign-btn-primary:hover {
+            background: #ff9500;
+        }
+        .campaign-btn-outline {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+        }
+        .campaign-btn-outline:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        
+        /* Campaign Wizard Modal */
+        .campaign-wizard {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.9);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            overflow-y: auto;
+        }
+        .campaign-wizard.active { display: block; }
+        .wizard-content {
+            max-width: 900px;
+            margin: 2rem auto;
+            background: #111;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+        .wizard-header {
+            background: linear-gradient(90deg, rgba(255,165,2,0.1) 0%, transparent 100%);
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid rgba(255,165,2,0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .wizard-header h2 {
+            margin: 0;
+            font-family: 'Outfit', sans-serif;
+            color: #ffa502;
+        }
+        .wizard-close {
+            background: none;
+            border: none;
+            color: rgba(255,255,255,0.6);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.5rem;
+            transition: color 0.2s;
+        }
+        .wizard-close:hover { color: #fff; }
+        
+        .wizard-body {
+            padding: 2rem;
+        }
+        .wizard-step {
+            display: none;
+        }
+        .wizard-step.active { display: block; }
+        
+        .step-indicator {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .step-dot {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            color: rgba(255,255,255,0.5);
+            border: 2px solid transparent;
+            transition: all 0.3s;
+        }
+        .step-dot.active {
+            background: rgba(255,165,2,0.2);
+            color: #ffa502;
+            border-color: #ffa502;
+        }
+        .step-dot.completed {
+            background: rgba(46,213,115,0.2);
+            color: #2ed573;
+            border-color: #2ed573;
+        }
+        
+        /* Recipient Selection Tabs */
+        .recipient-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 1rem;
+        }
+        .recipient-tab {
+            padding: 0.6rem 1.2rem;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            color: rgba(255,255,255,0.7);
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .recipient-tab:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        .recipient-tab.active {
+            background: rgba(255,165,2,0.15);
+            border-color: rgba(255,165,2,0.3);
+            color: #ffa502;
+        }
+        
+        .recipient-tab-content {
+            display: none;
+        }
+        .recipient-tab-content.active { display: block; }
+        
+        /* Pending Shoppers Table in Wizard */
+        .pending-shoppers-table {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+        }
+        .pending-shoppers-table table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .pending-shoppers-table th {
+            background: rgba(255,255,255,0.05);
+            padding: 0.75rem;
+            text-align: left;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255,255,255,0.6);
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+        .pending-shoppers-table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.9);
+        }
+        .pending-shoppers-table tr:hover td {
+            background: rgba(255,255,255,0.03);
+        }
+        
+        /* File Upload Area */
+        .file-upload-area {
+            border: 2px dashed rgba(255,255,255,0.2);
+            border-radius: 12px;
+            padding: 3rem 2rem;
+            text-align: center;
+            transition: all 0.3s;
+        }
+        .file-upload-area:hover {
+            border-color: rgba(255,165,2,0.4);
+            background: rgba(255,165,2,0.05);
+        }
+        .file-upload-area input[type="file"] {
+            display: none;
+        }
+        .file-upload-btn {
+            background: rgba(255,165,2,0.1);
+            border: 1px solid rgba(255,165,2,0.3);
+            color: #ffa502;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .file-upload-btn:hover {
+            background: rgba(255,165,2,0.2);
+        }
+        
+        /* Wizard Footer */
+        .wizard-footer {
+            display: flex;
+            justify-content: space-between;
+            padding: 1.5rem 2rem;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            background: rgba(0,0,0,0.3);
+        }
+        .wizard-btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+        }
+        .wizard-btn-secondary {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+        .wizard-btn-secondary:hover {
+            background: rgba(255,255,255,0.15);
+        }
+        .wizard-btn-primary {
+            background: #ffa502;
+            color: #000;
+        }
+        .wizard-btn-primary:hover {
+            background: #ff9500;
+        }
+        .wizard-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+            color: #fff;
+        }
+
+        /* ==========================================
+           INBOX VIEW - Full Page (Unread & Confirmed)
+           ========================================== */
+        /* Note: inbox-view uses inline style for display:none;position:fixed etc. - same pattern as analytics/multiOrders */
+
+        .inbox-header {
+            position: sticky;
+            top: 0;
+            background: rgba(10, 10, 10, 0.95);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+        .inbox-header-left {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+        .inbox-header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        /* Inbox Tabs */
+        .inbox-tabs {
+            display: flex;
+            gap: 0.4rem;
+            background: rgba(0,0,0,0.3);
+            padding: 0.4rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .inbox-tabs .inbox-tab {
+            background: transparent;
+            border: none;
+            color: rgba(255,255,255,0.5);
+            padding: 0.6rem 1.2rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            letter-spacing: 1px;
+            font-weight: 600;
+            font-size: 0.8rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            cursor: pointer;
+            border-radius: 8px;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .inbox-tabs .inbox-tab:hover { color: #fff; background: rgba(255,255,255,0.05); }
+        .inbox-tabs .inbox-tab.active {
+            color: #000;
+            background: #25d366;
+            box-shadow: 0 2px 8px rgba(37, 211, 102, 0.15);
+        }
+        .inbox-tabs .inbox-tab.active.confirmed-tab {
+            background: #2ed573;
+        }
+        .inbox-tab-count {
+            font-size: 0.65rem;
+            background: rgba(255,255,255,0.15);
+            padding: 0.1rem 0.45rem;
+            border-radius: 10px;
+            font-weight: 700;
+            min-width: 18px;
+            text-align: center;
+        }
+        .inbox-tabs .inbox-tab.active .inbox-tab-count {
+            background: rgba(0,0,0,0.2);
+            color: #000;
+        }
+
+        /* Inbox Content */
+        .inbox-content {
+            padding: 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* Inbox Stats Row */
+        .inbox-stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .inbox-stat-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            transition: all 0.3s ease;
+        }
+        .inbox-stat-card:hover {
+            transform: translateY(-2px);
+            background: rgba(255,255,255,0.05);
+            border-color: rgba(255,255,255,0.15);
+        }
+        .inbox-stat-card .stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .inbox-stat-card.unread-stat .stat-icon { background: rgba(37,211,102,0.12); color: #25d366; }
+        .inbox-stat-card.confirmed-stat .stat-icon { background: rgba(46,213,115,0.12); color: #2ed573; }
+        .inbox-stat-card.pending-stat .stat-icon { background: rgba(255,165,2,0.12); color: #ffa502; }
+        .inbox-stat-card.edits-stat .stat-icon { background: rgba(83,189,235,0.12); color: #53bdeb; }
+        .inbox-stat-card .stat-number {
+            font-size: 1.6rem;
+            font-weight: 700;
+            font-family: 'Archivo Narrow', sans-serif;
+            color: #fff;
+        }
+        .inbox-stat-card .stat-label {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.5);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Inbox List */
+        .inbox-list-container {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .inbox-list-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .inbox-list-header h3 {
+            margin: 0;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: rgba(255,255,255,0.6);
+        }
+
+        /* Inbox Item Row */
+        .inbox-item {
+            display: grid;
+            grid-template-columns: 44px 1.5fr 2fr 0.8fr 0.6fr 100px;
+            gap: 1rem;
+            align-items: center;
+            padding: 1rem 1.25rem;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+        .inbox-item:hover {
+            background: rgba(255,255,255,0.05);
+            border-color: rgba(255,255,255,0.15);
+            transform: translateY(-1px);
+        }
+
+        /* Inbox Avatar */
+        .inbox-avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 700;
+            font-size: 0.9rem;
+            flex-shrink: 0;
+        }
+        .inbox-avatar.unread { background: rgba(37, 211, 102, 0.15); color: #25d366; }
+        .inbox-avatar.confirmed { background: rgba(46, 213, 115, 0.15); color: #2ed573; }
+
+        /* Inbox Customer Info */
+        .inbox-customer-info { min-width: 0; }
+        .inbox-customer-name {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .inbox-customer-order {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.4);
+            font-family: 'Inter', monospace;
+            margin-top: 0.15rem;
+        }
+
+        /* Inbox Message / Items Preview */
+        .inbox-preview {
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.6);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.5;
+        }
+        .inbox-preview .msg-prefix {
+            color: #25d366;
+            font-weight: 600;
+            font-size: 0.7rem;
+            margin-right: 0.3rem;
+        }
+
+        /* Inbox Amount */
+        .inbox-amount {
+            font-size: 1.1rem;
+            font-weight: 700;
+            font-family: 'Archivo Narrow', sans-serif;
+            color: #fff;
+            text-align: right;
+        }
+        .inbox-pay-method {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.4);
+            text-align: right;
+        }
+
+        /* Inbox Time */
+        .inbox-time {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.4);
+            text-align: right;
+        }
+        .inbox-time-relative {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.6);
+            font-weight: 500;
+        }
+        .inbox-time-absolute {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.3);
+            margin-top: 0.15rem;
+        }
+
+        /* Dual timestamp display for confirmed tab */
+        .inbox-time-dual {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            min-width: 120px;
+        }
+        .inbox-time-block {
+            padding: 0.4rem;
+            background: rgba(255,255,255,0.03);
+            border-radius: 6px;
+            border-left: 2px solid rgba(255,255,255,0.1);
+        }
+        .inbox-time-block:first-child {
+            border-left-color: #ffa502;
+        }
+        .inbox-time-block:last-child {
+            border-left-color: #2ed573;
+        }
+        .inbox-time-label {
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: rgba(255,255,255,0.5);
+            margin-bottom: 0.2rem;
+        }
+        .inbox-time-block .inbox-time-relative {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.7);
+        }
+        .inbox-time-block .inbox-time-absolute {
+            font-size: 0.65rem;
+            color: rgba(255,255,255,0.4);
+        }
+
+        /* Inbox Actions */
+        .inbox-actions {
+            display: flex;
+            gap: 0.4rem;
+            justify-content: flex-end;
+        }
+        .inbox-action-btn {
+            padding: 0.4rem 0.7rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+        .inbox-action-btn.chat { background: #25d366; color: #000; }
+        .inbox-action-btn.chat:hover { background: #128c7e; color: #fff; }
+        .inbox-action-btn.wa { background: transparent; border: 1px solid #25d366; color: #25d366; }
+        .inbox-action-btn.wa:hover { background: #25d366; color: #000; }
+        .inbox-action-btn.mark-read { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: rgba(255,255,255,0.7); }
+        .inbox-action-btn.mark-read:hover { background: rgba(255,255,255,0.1); color: #fff; border-color: #fff; }
+
+        /* Inbox Method Badge */
+        .inbox-method-badge {
+            font-size: 0.6rem;
+            padding: 0.1rem 0.5rem;
+            border-radius: 10px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            margin-left: 0.4rem;
+            vertical-align: middle;
+        }
+        .inbox-method-badge.whatsapp { background: rgba(37,211,102,0.2); color: #25d366; border: 1px solid rgba(37,211,102,0.3); }
+        .inbox-method-badge.manual { background: rgba(83,189,235,0.2); color: #53bdeb; border: 1px solid rgba(83,189,235,0.3); }
+
+        /* Inbox Unread Count */
+        .inbox-unread-count {
+            font-size: 0.65rem;
+            background: rgba(255,71,87,0.15);
+            color: #ff4757;
+            padding: 0.1rem 0.4rem;
+            border-radius: 8px;
+            font-weight: 700;
+            margin-left: 0.4rem;
+        }
+
+        /* Inbox Date Filter Bar */
+        .inbox-date-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+        .inbox-date-bar-label {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.5);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            margin-right: 0.25rem;
+        }
+        .inbox-date-bar label {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.4);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: 'Archivo Narrow', sans-serif;
+        }
+        .inbox-date-bar input[type="date"] {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: #fff;
+            padding: 0.4rem 0.6rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-family: 'Inter', sans-serif;
+        }
+        .inbox-date-bar input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(1);
+        }
+        .inbox-quick-date {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.15);
+            color: rgba(255,255,255,0.5);
+            padding: 0.35rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .inbox-quick-date:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .inbox-quick-date.active { background: #25d366; color: #000; border-color: #25d366; }
+        .inbox-date-bar .clear-btn {
+            background: transparent;
+            border: 1px solid rgba(255,71,87,0.3);
+            color: #ff4757;
+            padding: 0.35rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .inbox-date-bar .clear-btn:hover { background: rgba(255,71,87,0.15); }
+
+        /* Inbox Active Date Chip */
+        .inbox-active-filter-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            background: rgba(37,211,102,0.12);
+            border: 1px solid rgba(37,211,102,0.25);
+            color: #25d366;
+            padding: 0.25rem 0.7rem;
+            border-radius: 20px;
+            font-size: 0.72rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            margin-left: 0.5rem;
+        }
+        .inbox-active-filter-chip .chip-close {
+            cursor: pointer;
+            opacity: 0.7;
+            font-size: 0.85rem;
+            line-height: 1;
+            transition: opacity 0.2s;
+        }
+        .inbox-active-filter-chip .chip-close:hover { opacity: 1; }
+        .inbox-active-filter-chip .chip-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            cursor: pointer;
+        }
+        .inbox-active-filter-chip .chip-tag:hover { opacity: 0.8; }
+
+        /* Inbox Filter Bar */
+        .inbox-filter-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+        .inbox-search-input {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: #fff;
+            padding: 0.4rem 0.7rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-family: 'Inter', sans-serif;
+            width: 200px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .inbox-search-input:focus { border-color: rgba(37,211,102,0.5); }
+        .inbox-search-input::placeholder { color: rgba(255,255,255,0.3); }
+        .inbox-filter-select {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: #fff;
+            padding: 0.4rem 0.6rem;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            cursor: pointer;
+            outline: none;
+        }
+        .inbox-filter-select option { background: #111; color: #fff; }
+        .inbox-filter-spacer { flex: 1; }
+        .inbox-filter-action {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.15);
+            color: rgba(255,255,255,0.6);
+            padding: 0.4rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .inbox-filter-action:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .inbox-filter-action.export { border-color: rgba(37,211,102,0.3); color: #25d366; }
+        .inbox-filter-action.export:hover { background: rgba(37,211,102,0.12); }
+        .inbox-filter-action.active { background: rgba(37,211,102,0.15); color: #25d366; border-color: rgba(37,211,102,0.3); }
+
+        /* Inbox Item Checkbox */
+        .inbox-item-checkbox-wrap {
+            display: flex;
+            align-items: center;
+            padding-right: 0.3rem;
+        }
+        .inbox-item-checkbox {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+            accent-color: #25d366;
+        }
+
+        /* Inbox Bulk Action Bar */
+        .inbox-bulk-bar {
+            position: sticky;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1.5rem;
+            background: rgba(10,10,10,0.95);
+            border-top: 1px solid rgba(37,211,102,0.2);
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+        .inbox-bulk-bar #inboxSelectedCount {
+            font-size: 0.8rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            color: #25d366;
+            letter-spacing: 0.5px;
+        }
+        .inbox-bulk-btn {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.2);
+            color: rgba(255,255,255,0.7);
+            padding: 0.4rem 0.85rem;
+            border-radius: 8px;
+            font-size: 0.72rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .inbox-bulk-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .inbox-bulk-btn.export { border-color: rgba(37,211,102,0.4); color: #25d366; }
+        .inbox-bulk-btn.export:hover { background: rgba(37,211,102,0.12); }
+        .inbox-bulk-btn.read { border-color: rgba(83,189,235,0.4); color: #53bdeb; }
+        .inbox-bulk-btn.read:hover { background: rgba(83,189,235,0.12); }
+        .inbox-bulk-btn.deselect { border-color: rgba(255,71,87,0.3); color: #ff4757; }
+        .inbox-bulk-btn.deselect:hover { background: rgba(255,71,87,0.1); }
+
+        /* Confirmed-only filters visibility */
+        .inbox-confirmed-filter { transition: opacity 0.2s; }
+        .inbox-confirmed-filter.hidden { display: none; }
+        .inbox-unread-filter.hidden { display: none; }
+
+        /* Inbox Status Badge */
+        .inbox-status {
+            font-size: 0.65rem;
+            padding: 0.15rem 0.45rem;
+            border-radius: 4px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            display: inline-block;
+            margin-top: 0.2rem;
+        }
+        .inbox-status.pending { background: rgba(255,165,2,0.15); color: #ffa502; }
+        .inbox-status.confirmed { background: rgba(46,213,115,0.15); color: #2ed573; }
+        .inbox-status.edit_details { background: rgba(83,189,235,0.15); color: #53bdeb; }
+        .inbox-status.cancelled { background: rgba(255,71,87,0.15); color: #ff4757; }
+
+        /* Inbox Empty State */
+        .inbox-empty {
+            text-align: center;
+            padding: 5rem 2rem;
+            color: rgba(255,255,255,0.3);
+        }
+        .inbox-empty-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.3;
+        }
+        .inbox-empty-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: rgba(255,255,255,0.5);
+            margin-bottom: 0.5rem;
+        }
+        .inbox-empty-text {
+            font-size: 0.9rem;
+            color: rgba(255,255,255,0.3);
+        }
+
+        /* Inbox Pagination */
+        .inbox-pagination {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem 0;
+            margin-top: 1rem;
+        }
+        .inbox-pagination .page-info { font-size: 0.85rem; color: rgba(255,255,255,0.5); }
+
+        /* Unread indicator dot */
+        .unread-dot {
+            width: 8px;
+            height: 8px;
+            background: #25d366;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 0.3rem;
+            animation: pulse-dot 2s infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Responsive Inbox */
+        @media (max-width: 1200px) {
+            .inbox-item {
+                grid-template-columns: 44px 1fr 0.8fr 100px;
+            }
+            .inbox-preview,
+            .inbox-amount + .inbox-pay-method { display: none; }
+        }
+        @media (max-width: 768px) {
+            .inbox-header {
+                flex-direction: column;
+                gap: 1rem;
+                padding: 1rem;
+            }
+            .inbox-stats-row {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .inbox-content {
+                padding: 1rem;
+            }
+            .inbox-item {
+                grid-template-columns: 40px 1fr 80px;
+                gap: 0.5rem;
+                padding: 0.75rem;
+            }
+            .inbox-amount, .inbox-time, .inbox-actions { display: none; }
+        }
+
+        /* Responsive Analytics */
+        @media (max-width: 1200px) {
+            .analytics-stats-row {
+                grid-template-columns: repeat(3, 1fr);
+            }
+            .analytics-charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        @media (max-width: 768px) {
+            .analytics-header {
+                flex-direction: column;
+                gap: 1rem;
+                padding: 1rem;
+            }
+            .analytics-header-right {
+                flex-direction: column;
+                width: 100%;
+            }
+            .analytics-date-filter {
+                width: 100%;
+                justify-content: center;
+            }
+            .analytics-stats-row {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .analytics-content {
+                padding: 1rem;
+            }
+            .circular-charts-container {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* Multi Orders View Styles */
+        .multi-orders-view { font-family: 'Inter', sans-serif; }
+        .multi-customer-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+            transition: all 0.3s;
+        }
+        .multi-customer-card:hover {
+            border-color: rgba(255,71,87,0.3);
+            background: rgba(255,255,255,0.04);
+        }
+        .multi-customer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 1.5rem;
+            background: rgba(255,71,87,0.06);
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .multi-customer-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .multi-customer-avatar {
+            width: 44px; height: 44px;
+            background: linear-gradient(135deg, #ff4757, #ffa502);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700; font-size: 1.1rem; color: #fff;
+        }
+        .multi-customer-name {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.1rem; font-weight: 600; margin: 0;
+        }
+        .multi-customer-phone {
+            font-size: 0.85rem; opacity: 0.7; margin: 0;
+            font-family: 'Archivo Narrow', sans-serif;
+            letter-spacing: 0.5px;
+        }
+        .multi-customer-badge {
+            background: rgba(255,71,87,0.15);
+            color: #ff4757;
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.75rem; font-weight: 600;
+            font-family: 'Archivo Narrow', sans-serif;
+            letter-spacing: 0.5px;
+        }
+        .multi-orders-list {
+            padding: 1rem 1.5rem;
+        }
+        .multi-order-item {
+            display: grid;
+            grid-template-columns: 1fr auto auto auto 180px;
+            gap: 1rem; align-items: center;
+            padding: 1rem;
+            background: rgba(255,255,255,0.02);
+            border-radius: 8px;
+            margin-bottom: 0.75rem;
+            border: 1px solid rgba(255,255,255,0.04);
+            transition: all 0.2s;
+        }
+        .multi-order-item:hover {
+            background: rgba(255,255,255,0.04);
+            border-color: rgba(255,255,255,0.08);
+        }
+        .multi-order-item:last-child { margin-bottom: 0; }
+        .multi-order-details h4 { margin: 0 0 0.25rem 0; font-family: 'Outfit', sans-serif; font-size: 0.95rem; font-weight: 500; }
+        .multi-order-details p { margin: 0; font-size: 0.8rem; opacity: 0.6; }
+        .multi-order-amount {
+            font-family: 'Archivo Narrow', sans-serif;
+            font-size: 1.1rem; font-weight: 600; color: #ffa502;
+        }
+        .multi-order-date {
+            font-size: 0.8rem; opacity: 0.6; text-align: center;
+        }
+        .multi-order-status {
+            padding: 0.35rem 0.7rem; border-radius: 4px;
+            font-size: 0.7rem; font-weight: 600;
+            font-family: 'Archivo Narrow', sans-serif;
+            text-transform: uppercase; letter-spacing: 1px;
+            text-align: center;
+        }
+        .multi-order-status.pending { background: rgba(255,165,2,0.15); color: #ffa502; border: 1px solid rgba(255,165,2,0.3); }
+        .multi-order-status.confirmed { background: rgba(46,213,115,0.15); color: #2ed573; border: 1px solid rgba(46,213,115,0.3); }
+        .multi-order-status.cancelled { background: rgba(255,71,87,0.15); color: #ff4757; border: 1px solid rgba(255,71,87,0.3); }
+        .multi-order-status.edit_details { background: rgba(116,185,255,0.15); color: #74b9ff; border: 1px solid rgba(116,185,255,0.3); }
+        .multi-order-actions {
+            display: flex; gap: 0.4rem; justify-content: flex-end;
+        }
+        .multi-order-actions .btn {
+            padding: 0.4rem 0.7rem; font-size: 0.7rem; border-radius: 4px;
+        }
+        .multi-orders-empty {
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            padding: 4rem; opacity: 0.6;
+        }
+        .multi-orders-empty-icon { font-size: 3rem; margin-bottom: 1rem; }
+        .multi-orders-empty-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.25rem; margin-bottom: 0.5rem;
+        }
+        .multi-orders-empty-text { font-size: 0.9rem; opacity: 0.7; }
+
+        /* ==========================================
+           MULTI ORDERS CONTROL BAR STYLES
+           ========================================== */
+        .mo-control-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            padding: 1.25rem 2rem;
+            background: linear-gradient(180deg, rgba(255,71,87,0.04) 0%, rgba(255,255,255,0.01) 100%);
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .mo-control-row {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .mo-section-label {
+            font-size: 0.6rem;
+            color: rgba(255,255,255,0.35);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            min-width: 50px;
+            flex-shrink: 0;
+        }
+
+        /* Sort Dropdown */
+        .mo-sort-select {
+            padding: 0.55rem 2rem 0.55rem 0.75rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            cursor: pointer;
+            appearance: none;
+            min-width: 180px;
+        }
+        .mo-sort-select:focus {
+            border-color: rgba(255,71,87,0.4);
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(255,71,87,0.1);
+        }
+        .mo-sort-select option { background: #1a1a1a; color: #fff; }
+
+        /* Status Filter Pills */
+        .mo-status-pills {
+            display: flex;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+            background: rgba(0,0,0,0.3);
+            padding: 0.35rem;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .mo-status-pill {
+            background: transparent;
+            border: none;
+            color: rgba(255,255,255,0.45);
+            padding: 0.45rem 0.85rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            letter-spacing: 1px;
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            cursor: pointer;
+            border-radius: 7px;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .mo-status-pill:hover { color: #fff; background: rgba(255,255,255,0.05); }
+        .mo-status-pill.active {
+            color: #000;
+            background: #ff4757;
+            box-shadow: 0 2px 8px rgba(255,71,87,0.25);
+        }
+        .mo-status-pill .pill-count {
+            font-size: 0.6rem;
+            margin-left: 0.25rem;
+            opacity: 0.7;
+        }
+
+        /* Search in Multi Orders */
+        .mo-search {
+            position: relative;
+            width: 100%;
+            max-width: 280px;
+        }
+        .mo-search input {
+            width: 100%;
+            padding: 0.6rem 0.6rem 0.6rem 2.5rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+        }
+        .mo-search input:focus {
+            border-color: rgba(255,71,87,0.3);
+            background: rgba(0,0,0,0.5);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(255,71,87,0.06), 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .mo-search input::placeholder { color: rgba(255,255,255,0.25); }
+        .mo-search svg {
+            position: absolute;
+            left: 0.85rem;
+            top: 50%;
+            transform: translateY(-50%);
+            stroke: rgba(255,255,255,0.35);
+            pointer-events: none;
+        }
+        .mo-search input:focus ~ svg { stroke: rgba(255,71,87,0.6); }
+
+        /* Date Range */
+        .mo-date-range {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(0,0,0,0.3);
+            padding: 0.35rem;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .mo-date-range input {
+            padding: 0.5rem 0.65rem;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.03);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.78rem;
+            width: 125px;
+        }
+        .mo-date-range input:focus {
+            border-color: rgba(255,71,87,0.3);
+            outline: none;
+        }
+        .mo-date-sep {
+            color: rgba(255,255,255,0.25);
+            font-size: 0.75rem;
+        }
+
+        /* Quick Date Chips */
+        .mo-quick-dates {
+            display: flex;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+        }
+        .mo-quick-date {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.45);
+            padding: 0.35rem 0.7rem;
+            border-radius: 6px;
+            font-size: 0.68rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .mo-quick-date:hover {
+            border-color: rgba(255,71,87,0.25);
+            color: #fff;
+            background: rgba(255,71,87,0.05);
+        }
+        .mo-quick-date.active {
+            background: rgba(255,71,87,0.12);
+            color: #ff6b7a;
+            border-color: rgba(255,71,87,0.3);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        }
+
+        /* Clear Filters */
+        .mo-clear-btn {
+            background: rgba(255,71,87,0.06);
+            border: 1px solid rgba(255,71,87,0.2);
+            color: #ff6b7a;
+            padding: 0.45rem 0.9rem;
+            border-radius: 6px;
+            font-size: 0.68rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin-left: auto;
+        }
+        .mo-clear-btn:hover {
+            background: rgba(255,71,87,0.12);
+            border-color: rgba(255,71,87,0.35);
+            color: #ff4757;
+        }
+        .mo-clear-btn svg { width: 12px; height: 12px; }
+
+        /* Results Summary Bar */
+        .mo-results-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.6rem 0;
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.4);
+        }
+        .mo-results-count {
+            font-family: 'Archivo Narrow', sans-serif;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+        .mo-results-count strong {
+            color: #ff6b7a;
+            font-weight: 700;
+        }
+        .mo-active-filters {
+            display: flex;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+        }
+        .mo-filter-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            background: rgba(255,71,87,0.1);
+            border: 1px solid rgba(255,71,87,0.2);
+            color: #ff6b7a;
+            padding: 0.2rem 0.55rem;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .mo-filter-tag:hover {
+            background: rgba(255,71,87,0.2);
+            border-color: rgba(255,71,87,0.4);
+        }
+        .mo-filter-tag .tag-close {
+            font-size: 0.75rem;
+            line-height: 1;
+            opacity: 0.7;
+        }
+        .mo-filter-tag:hover .tag-close { opacity: 1; }
+
+        /* Order Count Filter Dropdown */
+        .mo-count-select {
+            padding: 0.55rem 2rem 0.55rem 0.75rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            cursor: pointer;
+            appearance: none;
+            min-width: 140px;
+        }
+        .mo-count-select:focus {
+            border-color: rgba(255,71,87,0.4);
+            outline: none;
+        }
+        .mo-count-select option { background: #1a1a1a; color: #fff; }
+
+        /* Expanded/Collapsed Card Toggle */
+        .mo-card-toggle {
+            background: none;
+            border: 1px solid rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.5);
+            padding: 0.35rem 0.65rem;
+            border-radius: 6px;
+            font-size: 0.65rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .mo-card-toggle:hover {
+            border-color: rgba(255,255,255,0.25);
+            color: #fff;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .mo-control-bar { padding: 1rem; }
+            .mo-control-row { gap: 0.75rem; }
+            .mo-search { max-width: 100%; }
+            .mo-date-range { flex-wrap: wrap; }
+            .mo-date-range input { width: 100px; }
+        }
+
+        /* Multi Orders Header Action Buttons */
+        .mo-header-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.4rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid;
+            white-space: nowrap;
+        }
+        .mo-call-btn {
+            background: rgba(74,222,128,0.08);
+            border-color: rgba(74,222,128,0.25);
+            color: #4ade80;
+        }
+        .mo-call-btn:hover {
+            background: #4ade80;
+            color: #000;
+            border-color: #4ade80;
+            box-shadow: 0 2px 8px rgba(74,222,128,0.3);
+        }
+        .mo-wa-btn {
+            background: rgba(37,211,102,0.08);
+            border-color: rgba(37,211,102,0.25);
+            color: #25d366;
+        }
+        .mo-wa-btn:hover {
+            background: #25d366;
+            color: #000;
+            border-color: #25d366;
+            box-shadow: 0 2px 8px rgba(37,211,102,0.3);
+        }
+        /* Template message card styling */
+        .template-message-card {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 12px;
+            margin: -4px;
+        }
+        .template-card-header {
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        .template-badge {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.15);
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+        }
+        .template-card-content {
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .template-param {
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .template-param:last-child {
+            border-bottom: none;
+        }
+        .template-param strong {
+            font-weight: 600;
+            margin-right: 6px;
+        }
+    </style>
+</head>
+<body class="dark-theme">
+    <!-- Login View -->
+    <div id="loginView" style="display: none; height: 100vh; align-items: center; justify-content: center; background: #0a0a0a;">
+        <div style="background: rgba(20, 20, 20, 0.8); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; padding: 48px; width: 100%; max-width: 440px; text-align: center; box-shadow: 0 24px 40px rgba(0, 0, 0, 0.5);">
+            <img src="{{ 'logo.png' | asset_url }}" alt="OFFCOMFRT" style="height:48px; margin-bottom:16px;">
+            <h1 style="font-family: 'Outfit', sans-serif; font-size: 28px; letter-spacing: 4px; margin: 0 0 8px 0; text-transform: uppercase;">OFFCOMFRT</h1>
+            <span style="font-size: 11px; font-weight: 600; letter-spacing: 2px; padding: 4px 10px; background: #fff; color: #000; border-radius: 20px; text-transform: uppercase; display: inline-block;">SHOPPER HUB</span>
+            
+            <form id="shopperLoginForm" style="margin-top: 40px; text-align: left;">
+                <label style="display: block; font-size: 12px; font-weight: 500; color: rgba(255, 255, 255, 0.6); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Access Credentials</label>
+                <input type="password" id="hubPassword" placeholder="Enter Secure Code" required autofocus style="width: 100%; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.12); color: #fff; padding: 16px; border-radius: 8px; outline: none; box-sizing: border-box; margin-bottom: 16px; font-family: 'Inter', sans-serif; font-size: 16px;">
+                <div id="errorMessage" style="color: #ff4757; font-size: 13px; font-weight: 500; text-align: center; margin-bottom: 15px; display: none;"></div>
+                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 16px; font-weight: 600; letter-spacing: 1.5px; border-radius: 8px; background: #fff; color: #000;">
+                    <span>AUTHENTICATE</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Dashboard View -->
+    <div id="dashboardView" style="display: none;">
+        <!-- Premium Navigation -->
+        <nav class="premium-nav">
+            <div class="nav-brand">
+                <img src="{{ 'logo.png' | asset_url }}" alt="OFFCOMFRT" style="height:32px;">
+                <h1>OFFCOMFRT</h1>
+                <span class="brand-subtitle">SHOPPER HUB</span>
+            </div>
+            <div class="nav-actions">
+                <button id="inboxBtn" class="btn btn-outline" style="border-color: #25d366; color: #25d366;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    Inbox
+                    <span id="inboxNavBadge" style="background: #25d366; color: #000; font-size: 0.65rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 10px; margin-left: 0.3rem; display: none;">0</span>
+                </button>
+                <button id="followUpBtn" class="btn btn-outline" style="border-color: #ffa502; color: #ffa502;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    Follow-Up
+                </button>
+                <button id="multiOrdersBtn" class="btn btn-outline" style="border-color: #ff4757; color: #ff4757;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                    Multi Orders
+                </button>
+                <button id="analyticsBtn" class="btn btn-outline">Analytics</button>
+                <button id="exportBtn" class="btn btn-primary">
+                    <img src="{{ 'export-icon.svg' | asset_url }}" width="18" height="18" alt="Export Icon" style="vertical-align: middle; margin-right: 6px;" />
+                    Export
+                </button>
+            </div>
+        </nav>
+        
+        <!-- Main Content Area -->
+        <main class="dashboard-main">
+            <header class="page-header">
+                <div class="header-content">
+                    <h2>Shopper Confirmations</h2>
+                    <p>Monitor, track, and manage all automated WhatsApp confirmations in real-time.</p>
+                </div>
+
+            </header>
+            
+            <!-- Bulk Actions Bar (Hidden by default) -->
+            <div class="bulk-actions-bar" id="bulkActionsBar">
+                <div class="bulk-actions-left">
+                    <span class="selected-count"><span id="selectedCount">0</span> selected</span>
+                    <button class="bulk-btn bulk-btn-select-all" id="selectAllBtn" onclick="selectAllVisible()">Select All Visible</button>
+                    <button class="bulk-btn bulk-btn-select-all" id="selectAllMatchingBtn" onclick="selectAllMatching()">Select All Matching Filters</button>
+                </div>
+                <div class="bulk-actions-right">
+                    <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('confirmed')">Mark Confirmed</button>
+                    <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('pending')">Mark Pending</button>
+                    <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('cancelled')">Mark Cancelled</button>
+                    <button class="bulk-btn bulk-btn-delete" onclick="bulkDelete()">Delete Selected</button>
+                    <button class="bulk-btn-close" onclick="clearSelection()">&times;</button>
+                </div>
+            </div>
+            
+            <!-- Segment & Filter Bar -->
+            <div class="control-bar">
+                <!-- Row 1: Status Tabs -->
+                <div class="control-row">
+                    <div class="filter-group">
+                        <div class="filter-section-title">Status</div>
+                        <div class="segment-tabs">
+                            <button class="tab active" data-filter="all">All <span class="tab-count" id="countAll"></span></button>
+                            <button class="tab" data-filter="pending">Pending <span class="tab-count" id="countPending"></span></button>
+                            <button class="tab" data-filter="confirmed">Confirmed <span class="tab-count" id="countConfirmed"></span></button>
+                            <button class="tab" data-filter="cancelled">Cancelled <span class="tab-count" id="countCancelled"></span></button>
+                            <button class="tab" data-filter="edit_details">Edits <span class="tab-count" id="countEdits"></span></button>
+                        </div>
+                    </div>
+                    <button class="clear-filters-btn" id="clearFiltersBtn" style="display: none;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        Clear Filters
+                    </button>
+                    <div class="view-toggle-wrapper">
+                        <button class="view-toggle-btn active" id="viewRowsBtn" title="List view">☰ List</button>
+                        <button class="view-toggle-btn" id="viewCardsBtn" title="Card view">▦ Cards</button>
+                    </div>
+                </div>
+                
+                <!-- Row 2: Search + Date Filters -->
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <div class="filter-section-title">Search</div>
+                        <div class="search-box">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                            <input type="text" id="searchInput" placeholder="Search by ID, Name, Phone, Email...">
+                        </div>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <div class="filter-section-title">Date Range</div>
+                        <div class="date-filter-container">
+                            <div class="date-filter"><input type="date" id="startDate"></div>
+                            <span class="date-separator">to</span>
+                            <div class="date-filter"><input type="date" id="endDate"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <div class="filter-section-title">Quick Select</div>
+                        <div class="quick-date-filters">
+                            <button class="quick-date-btn" data-range="today">Today</button>
+                            <button class="quick-date-btn" data-range="yesterday">Yesterday</button>
+                            <button class="quick-date-btn" data-range="last7">Last 7 Days</button>
+                            <button class="quick-date-btn" data-range="last30">Last 30 Days</button>
+                            <button class="quick-date-btn" data-range="thisMonth">This Month</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Row 3: Advanced Filters -->
+                <div class="control-row">
+                    <div class="filter-group">
+                        <div class="filter-section-title">Advanced Filters</div>
+                        <div class="advanced-filters">
+                            <div class="order-id-filter">
+                                <input type="text" id="orderIdFrom" class="order-id-input" placeholder="From Order #">
+                                <span class="order-id-separator">to</span>
+                                <input type="text" id="orderIdTo" class="order-id-input" placeholder="To Order #">
+                                <button class="btn-apply-small" id="applyOrderIdFilter">Apply</button>
+                            </div>
+                            
+                            <div class="filter-dropdown">
+                                <select id="paymentMethodFilter">
+                                    <option value="">All Payment Methods</option>
+                                    <option value="COD">Cash on Delivery</option>
+                                    <option value="Prepaid">Prepaid</option>
+                                </select>
+                            </div>
+                            
+                            <div class="filter-dropdown">
+                                <select id="deliveryTypeFilter">
+                                    <option value="">All Delivery Types</option>
+                                    <option value="Standard">Standard</option>
+                                    <option value="Express">Express</option>
+                                    <option value="Same Day">Same Day</option>
+                                </select>
+                            </div>
+                            
+                            <div class="filter-dropdown">
+                                <select id="sortByFilter">
+                                    <option value="newest">Newest First</option>
+                                    <option value="oldest">Oldest First</option>
+                                    <option value="amount_high">Amount: High to Low</option>
+                                    <option value="amount_low">Amount: Low to High</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Shoppers Grid -->
+            <div id="shoppersGrid" class="shoppers-grid">
+                <div class="table-loading"><div class="spinner"></div><span>Fetching data...</span></div>
+            </div>
+            
+            <!-- Pagination -->
+            <div class="pagination">
+                <div class="page-info" id="pageInfo">Showing 0-0 of 0</div>
+                <div class="page-controls">
+                    <button class="btn btn-primary" id="showMoreBtn" style="display: none;">SHOW MORE</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Edit Modal -->
+    <div id="editModal">
+        <div class="modal-content">
+            <h3>Edit Shopper Details</h3>
+            <div id="editCustomerMessage" class="customer-message-box" style="display: none;">
+                <div class="msg-header">
+                    <span>Customer Message</span>
+                    <span id="editMsgTime" style="color: #888; font-size: 0.7rem;"></span>
+                </div>
+                <div class="msg-content" id="editMsgContent"></div>
+            </div>
+            <form id="editForm">
+                <input type="hidden" id="editShopperId">
+                <input type="hidden" id="editOrderId">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="editName" required>
+                </div>
+                <div class="form-group">
+                    <label>Phone</label>
+                    <input type="text" id="editPhone" required>
+                </div>
+                <div class="form-group">
+                    <label>Address Info</label>
+                    <textarea id="editAddress" placeholder="Street, City, Zip"></textarea>
+                </div>
+                <div id="productEditor">
+                    <label style="font-size: 0.8rem; font-family: 'Archivo Narrow', sans-serif; color: #fff; display: block; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 1px;">Product Checklist</label>
+                    <div id="productEditorItems"></div>
+                    <button type="button" class="btn-add-item" id="addProductRowBtn">+ ADD PRODUCT</button>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-outline" id="cancelEdit">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Details</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Live Chat Modal -->
+    <div id="chatModal">
+        <div class="chat-container">
+            <div class="chat-sidebar">
+                <h3>Customer Info</h3>
+                <div class="chat-customer-info" id="chatCustomerInfo">
+                    <div class="info-row">
+                        <span class="info-label">Name:</span>
+                        <span class="info-value" id="chatCustomerName">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Phone:</span>
+                        <span class="info-value" id="chatCustomerPhone">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Order:</span>
+                        <span class="info-value" id="chatCustomerOrder">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Status:</span>
+                        <span class="info-value" id="chatCustomerStatus">-</span>
+                    </div>
+                </div>
+                <button class="btn btn-outline" id="viewOrderBtn" style="width: 100%; margin-bottom: 0.5rem;">View Order Details</button>
+                <button class="btn btn-primary" id="markResolvedBtn" style="width: 100%;">Mark as Resolved</button>
+            </div>
+            <div class="chat-main">
+                <div class="chat-header">
+                    <h4 id="chatHeaderTitle">Live Chat</h4>
+                    <button class="chat-close" id="closeChat">&times;</button>
+                </div>
+                <div class="chat-messages" id="chatMessages">
+                    <div class="chat-loading">Loading conversation...</div>
+                </div>
+                <div class="chat-input-area">
+                    <textarea id="chatInput" placeholder="Type your message..."></textarea>
+                    <button class="btn btn-chat" id="sendChatBtn">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Full Screen Analytics View -->
+    <div id="analyticsView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <!-- Analytics Header -->
+        <div class="analytics-header">
+            <div class="analytics-header-left">
+                <button id="backToShoppers" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back to Shoppers
+                </button>
+                <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Analytics Dashboard</h2>
+            </div>
+            <div class="analytics-header-right">
+                <div class="analytics-filter-section">
+                    <!-- Quick Preset Buttons -->
+                    <div class="analytics-quick-filters">
+                        <button class="quick-filter-btn" data-range="today">Today</button>
+                        <button class="quick-filter-btn" data-range="yesterday">Yesterday</button>
+                        <button class="quick-filter-btn active" data-range="last7">Last 7 Days</button>
+                        <button class="quick-filter-btn" data-range="last30">Last 30 Days</button>
+                        <button class="quick-filter-btn" data-range="thisMonth">This Month</button>
+                    </div>
+                    <!-- Custom Date Range -->
+                    <div class="analytics-date-filter">
+                        <span class="filter-label">Custom:</span>
+                        <input type="date" id="analyticsStartDate">
+                        <span style="color: #666;">to</span>
+                        <input type="date" id="analyticsEndDate">
+                        <button id="applyAnalyticsDate" class="btn btn-primary">Apply</button>
+                    </div>
+                </div>
+                <button id="exportAnalyticsBtn" class="btn btn-success">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Export to Excel
+                </button>
+            </div>
+        </div>
+
+        <!-- Analytics Content -->
+        <div class="analytics-content">
+            <!-- Summary Stats Row -->
+            <div class="analytics-stats-row">
+                <div class="analytics-stat-card total">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                            <circle cx="9" cy="7" r="4"/>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsTotalOrders">0</span>
+                        <span class="stat-label">Total Orders</span>
+                    </div>
+                </div>
+                <div class="analytics-stat-card confirmed">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsConfirmed">0</span>
+                        <span class="stat-label">Confirmed</span>
+                        <span class="stat-percent" id="analyticsConfirmedPct">0%</span>
+                    </div>
+                </div>
+                <div class="analytics-stat-card pending">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsPending">0</span>
+                        <span class="stat-label">Pending</span>
+                        <span class="stat-percent" id="analyticsPendingPct">0%</span>
+                    </div>
+                </div>
+                <div class="analytics-stat-card cancelled">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsCancelled">0</span>
+                        <span class="stat-label">Cancelled</span>
+                        <span class="stat-percent" id="analyticsCancelledPct">0%</span>
+                    </div>
+                </div>
+                <div class="analytics-stat-card edits">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsEdits">0</span>
+                        <span class="stat-label">Edit Requests</span>
+                        <span class="stat-percent" id="analyticsEditsPct">0%</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="analytics-charts-grid">
+                <!-- Circular Charts -->
+                <div class="analytics-card">
+                    <h3 class="analytics-card-title">Order Status Distribution</h3>
+                    <div class="circular-charts-container">
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress confirmed" id="circleConfirmed" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartConfirmedValue">0%</div>
+                            <div class="circular-chart-label">Confirmed</div>
+                        </div>
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress pending" id="circlePending" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartPendingValue">0%</div>
+                            <div class="circular-chart-label">Pending</div>
+                        </div>
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress cancelled" id="circleCancelled" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartCancelledValue">0%</div>
+                            <div class="circular-chart-label">Cancelled</div>
+                        </div>
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress edits" id="circleEdits" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartEditsValue">0%</div>
+                            <div class="circular-chart-label">Edits</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Daily Breakdown Bar Chart -->
+                <div class="analytics-card wide">
+                    <h3 class="analytics-card-title">Daily Order Breakdown</h3>
+                    <div class="bar-chart-container" id="dailyBarChart">
+                        <!-- Bars will be rendered here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trend Chart -->
+            <div class="analytics-card">
+                <h3 class="analytics-card-title">Order Trend Over Time</h3>
+                <div class="trend-chart-container">
+                    <svg id="trendChart" viewBox="0 0 800 200" preserveAspectRatio="none">
+                        <!-- Trend line will be rendered here -->
+                    </svg>
+                    <div class="trend-chart-labels" id="trendLabels">
+                        <!-- Labels will be rendered here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Daily Statistics Table -->
+            <div class="analytics-card">
+                <h3 class="analytics-card-title">Daily Statistics</h3>
+                <div class="analytics-table-container">
+                    <table class="analytics-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Total Orders</th>
+                                <th>Confirmed</th>
+                                <th>Pending</th>
+                                <th>Cancelled</th>
+                                <th>Edit Requests</th>
+                                <th>Response Rate</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="analyticsTableBody">
+                            <!-- Table rows will be rendered here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Follow-Up View -->
+    <div id="followUpView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <div class="follow-up-header">
+            <div class="follow-up-header-left">
+                <button id="backToShoppersFromFollowUp" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back to Shoppers
+                </button>
+                <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Follow-Up Campaigns</h2>
+            </div>
+            <div class="follow-up-header-right">
+                <button id="followUpAnalyticsBtn" class="btn btn-outline" style="border-color: #53bdeb; color: #53bdeb;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M3 3v18h18"/>
+                        <path d="m19 9-5 5-4-4-3 3"/>
+                    </svg>
+                    Analytics
+                </button>
+                <button id="createCampaignBtn" class="btn btn-primary" style="background: #ffa502; color: #000; border-color: #ffa502;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <line x1="12" y1="5" x2="12" y2="19"/>
+                        <line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    Create Campaign
+                </button>
+            </div>
+        </div>
+
+        <div class="follow-up-content">
+            <!-- Campaigns Grid -->
+            <div id="campaignsGrid" class="campaigns-grid">
+                <div class="table-loading"><div class="spinner"></div><span>Loading campaigns...</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inbox View - Unread Messages & Recent Confirmations -->
+    <div id="inboxView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <div class="inbox-header">
+            <div class="inbox-header-left">
+                <button id="backToShoppersFromInbox" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back to Shoppers
+                </button>
+                <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Inbox</h2>
+                <div class="inbox-tabs">
+                    <button class="inbox-tab active" data-inbox-tab="unread">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        Unread
+                        <span class="inbox-tab-count" id="inboxUnreadCount">0</span>
+                    </button>
+                    <button class="inbox-tab confirmed-tab" data-inbox-tab="confirmed">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                        Confirmed
+                        <span class="inbox-tab-count" id="inboxConfirmedCount">0</span>
+                    </button>
+                </div>
+            </div>
+            <div class="inbox-header-right">
+                <button id="refreshInboxBtn" class="btn btn-outline" style="padding: 0.5rem 1rem;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <div class="inbox-content">
+            <!-- Stats Row -->
+            <div class="inbox-stats-row">
+                <div class="inbox-stat-card unread-stat">
+                    <div class="stat-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="inboxStatUnread">0</div>
+                        <div class="stat-label">Unread Messages</div>
+                    </div>
+                </div>
+                <div class="inbox-stat-card confirmed-stat">
+                    <div class="stat-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="inboxStatConfirmed">0</div>
+                        <div class="stat-label">Total Confirmed</div>
+                    </div>
+                </div>
+                <div class="inbox-stat-card pending-stat">
+                    <div class="stat-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="inboxStatPending">0</div>
+                        <div class="stat-label">Pending</div>
+                    </div>
+                </div>
+                <div class="inbox-stat-card edits-stat">
+                    <div class="stat-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="inboxStatEdits">0</div>
+                        <div class="stat-label">Edit Requests</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Date Filter Bar -->
+            <div class="inbox-date-bar">
+                <span class="inbox-date-bar-label" id="inboxDateBarLabel">📅 Orders from:</span>
+                <select id="inboxDateField" class="inbox-filter-select inbox-confirmed-filter hidden">
+                    <option value="updated_at">Confirmed Date</option>
+                    <option value="created_at">Order Date</option>
+                </select>
+                <button class="inbox-quick-date" data-inbox-range="today">Today</button>
+                <button class="inbox-quick-date" data-inbox-range="yesterday">Yesterday</button>
+                <button class="inbox-quick-date" data-inbox-range="last7">Last 7 Days</button>
+                <button class="inbox-quick-date" data-inbox-range="last30">Last 30 Days</button>
+                <button class="inbox-quick-date" data-inbox-range="thisMonth">This Month</button>
+                <span style="color: rgba(255,255,255,0.2); margin: 0 0.3rem;">|</span>
+                <label>From</label>
+                <input type="date" id="inboxStartDate">
+                <label>To</label>
+                <input type="date" id="inboxEndDate">
+                <button class="clear-btn" id="clearInboxFiltersBtn">Clear</button>
+            </div>
+
+            <!-- Filter & Actions Bar -->
+            <div class="inbox-filter-bar">
+                <input type="text" id="inboxSearch" placeholder="Search name, phone, order..." class="inbox-search-input">
+
+                <select id="inboxActionType" class="inbox-filter-select inbox-unread-filter hidden">
+                    <option value="">All Actions</option>
+                    <option value="edit_details">Edit</option>
+                    <option value="confirmed">Confirm</option>
+                    <option value="cancelled">Cancel</option>
+                    <option value="pending">Pending</option>
+                </select>
+
+                <select id="inboxConfirmedBy" class="inbox-filter-select inbox-confirmed-filter hidden">
+                    <option value="">All Methods</option>
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="manual">Manual</option>
+                </select>
+                <select id="inboxPaymentMethod" class="inbox-filter-select inbox-confirmed-filter hidden">
+                    <option value="">All Payment</option>
+                    <option value="COD">COD</option>
+                    <option value="Prepaid">Prepaid</option>
+                </select>
+                <select id="inboxDeliveryType" class="inbox-filter-select inbox-confirmed-filter hidden">
+                    <option value="">All Delivery</option>
+                    <option value="Express">Express</option>
+                    <option value="Standard">Standard</option>
+                </select>
+
+                <div class="inbox-filter-spacer"></div>
+
+                <button id="inboxSelectAllBtn" class="inbox-filter-action">Select All</button>
+                <button id="inboxExportBtn" class="inbox-filter-action export">Export</button>
+            </div>
+
+            <!-- List Header -->
+            <div class="inbox-list-header">
+                <h3 id="inboxListTitle">Unread Customer Messages</h3>
+                <span class="inbox-active-filter-chip" id="inboxActiveFilterChip" style="display: none;"></span>
+            </div>
+
+            <!-- List Container -->
+            <div class="inbox-list-container" id="inboxListContainer">
+                <div class="inbox-empty">
+                    <div class="inbox-empty-icon">💬</div>
+                    <div class="inbox-empty-title">No unread messages</div>
+                    <div class="inbox-empty-text">All customer messages have been attended to</div>
+                </div>
+            </div>
+
+            <!-- Pagination -->
+            <div class="inbox-pagination">
+                <div class="page-info" id="inboxPageInfo">Showing 0-0 of 0</div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="btn btn-outline" id="inboxPrevBtn" disabled>PREVIOUS</button>
+                    <button class="btn btn-outline" id="inboxNextBtn" disabled>NEXT</button>
+                </div>
+            </div>
+
+            <!-- Bulk Actions Bar -->
+            <div id="inboxBulkBar" class="inbox-bulk-bar" style="display:none;">
+                <span id="inboxSelectedCount">0 selected</span>
+                <button id="inboxExportSelectedBtn" class="inbox-bulk-btn export">Export Selected</button>
+                <button id="inboxMarkReadSelectedBtn" class="inbox-bulk-btn read">Mark Read</button>
+                <button id="inboxDeselectAllBtn" class="inbox-bulk-btn deselect">Deselect</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Multi Orders View - Customers with 2+ Orders within 24h -->
+    <div id="multiOrdersView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <div class="multi-orders-header" style="display: flex; justify-content: space-between; align-items: center; padding: 1.5rem 2rem; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.08);">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <button id="backToShoppersFromMultiOrders" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back
+                </button>
+                <div>
+                    <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Multi Orders (24h)</h2>
+                    <p style="margin: 0; opacity: 0.7; font-size: 0.85rem;">Customers who placed 2 or more orders within 24 hours</p>
+                </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <button id="moCollapseAll" class="mo-card-toggle" title="Collapse All">Collapse All</button>
+                <button id="moExpandAll" class="mo-card-toggle" title="Expand All">Expand All</button>
+                <button id="refreshMultiOrdersBtn" class="btn btn-primary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                    </svg>
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- Multi Orders Control Bar -->
+        <div class="mo-control-bar">
+            <!-- Row 1: Sort + Status + Search -->
+            <div class="mo-control-row">
+                <span class="mo-section-label">Sort</span>
+                <div class="filter-dropdown">
+                    <select id="moSortBy" class="mo-sort-select">
+                        <option value="newest">Newest Orders First</option>
+                        <option value="oldest">Oldest Orders First</option>
+                        <option value="order_count_desc">Most Orders First</option>
+                        <option value="order_count_asc">Fewest Orders First</option>
+                        <option value="total_desc">Highest Total Value</option>
+                        <option value="total_asc">Lowest Total Value</option>
+                        <option value="name_asc">Customer Name A-Z</option>
+                        <option value="name_desc">Customer Name Z-A</option>
+                        <option value="recent_order">Most Recent Order</option>
+                    </select>
+                </div>
+
+                <span class="mo-section-label" style="margin-left: 0.5rem;">Status</span>
+                <div class="mo-status-pills">
+                    <button class="mo-status-pill active" data-mo-status="all">All<span class="pill-count" id="moCountAll"></span></button>
+                    <button class="mo-status-pill" data-mo-status="pending">Pending<span class="pill-count" id="moCountPending"></span></button>
+                    <button class="mo-status-pill" data-mo-status="confirmed">Confirmed<span class="pill-count" id="moCountConfirmed"></span></button>
+                    <button class="mo-status-pill" data-mo-status="cancelled">Cancelled<span class="pill-count" id="moCountCancelled"></span></button>
+                    <button class="mo-status-pill" data-mo-status="edit_details">Edit Req<span class="pill-count" id="moCountEdit"></span></button>
+                </div>
+
+                <div class="mo-search">
+                    <input type="text" id="moSearchInput" placeholder="Search name, phone, or order ID...">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </div>
+
+                <button class="mo-clear-btn" id="moClearFilters">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    Clear All
+                </button>
+            </div>
+
+            <!-- Row 2: Min Orders + Date Range + Quick Dates -->
+            <div class="mo-control-row">
+                <span class="mo-section-label">Orders</span>
+                <div class="filter-dropdown">
+                    <select id="moMinOrders" class="mo-count-select">
+                        <option value="2">2+ Orders</option>
+                        <option value="3">3+ Orders</option>
+                        <option value="4">4+ Orders</option>
+                        <option value="5">5+ Orders</option>
+                    </select>
+                </div>
+
+                <span class="mo-section-label" style="margin-left: 0.5rem;">Date</span>
+                <div class="mo-date-range">
+                    <input type="date" id="moStartDate" title="Start date">
+                    <span class="mo-date-sep">to</span>
+                    <input type="date" id="moEndDate" title="End date">
+                </div>
+
+                <div class="mo-quick-dates">
+                    <button class="mo-quick-date" data-mo-range="today">Today</button>
+                    <button class="mo-quick-date" data-mo-range="yesterday">Yesterday</button>
+                    <button class="mo-quick-date" data-mo-range="last7">7 Days</button>
+                    <button class="mo-quick-date" data-mo-range="last30">30 Days</button>
+                    <button class="mo-quick-date" data-mo-range="thisMonth">This Month</button>
+                </div>
+            </div>
+        </div>
+
+        <div style="padding: 2rem;">
+            <div id="multiOrdersStats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #ff4757;" id="multiOrdersCustomerCount">0</span>
+                    <span style="font-size: 0.85rem; opacity: 0.8;">Customers</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #ffa502;" id="multiOrdersTotalCount">0</span>
+                    <span style="font-size: 0.85rem; opacity: 0.8;">Total Orders</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #2ed573;" id="multiOrdersTotalValue">₹0</span>
+                    <span style="font-size: 0.85rem; opacity: 0.8;">Total Value</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #53bdeb;" id="multiOrdersAvgValue">₹0</span>
+                    <span style="font-size: 0.85rem; opacity: 0.8;">Avg Order Value</span>
+                </div>
+            </div>
+
+            <!-- Results Bar -->
+            <div class="mo-results-bar" id="moResultsBar" style="display: none;">
+                <span class="mo-results-count">Showing <strong id="moShowingCount">0</strong> of <strong id="moTotalCount">0</strong> customers</span>
+                <div class="mo-active-filters" id="moActiveFilters"></div>
+            </div>
+
+            <div id="multiOrdersContainer">
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem; opacity: 0.6;">
+                    <div class="spinner" style="width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #ff4757; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 1rem;"></div>
+                    <span style="font-family: 'Archivo Narrow', sans-serif; letter-spacing: 2px; font-weight: 500;">FETCHING DATA...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Campaign Wizard Modal -->
+    <div id="campaignWizard" class="campaign-wizard">
+        <div class="wizard-content">
+            <div class="wizard-header">
+                <h2>Create Follow-Up Campaign</h2>
+                <button class="wizard-close" id="closeCampaignWizard">&times;</button>
+            </div>
+            
+            <div class="wizard-body">
+                <!-- Step Indicator -->
+                <div class="step-indicator">
+                    <div class="step-dot active" data-step="1">1</div>
+                    <div class="step-dot" data-step="2">2</div>
+                    <div class="step-dot" data-step="3">3</div>
+                </div>
+
+                <!-- Step 1: Campaign Details -->
+                <div class="wizard-step active" data-step="1">
+                    <h3 style="margin-bottom: 1.5rem; color: #ffa502;">Campaign Details</h3>
+                    <div style="margin-bottom: 1.5rem;">
+                        <label style="display: block; margin-bottom: 0.5rem; font-size: 0.85rem; color: rgba(255,255,255,0.7);">Campaign Name</label>
+                        <input type="text" id="campaignName" placeholder="e.g., Weekend Follow-Up" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #fff; font-size: 1rem;">
+                    </div>
+                    <div style="margin-bottom: 1.5rem;">
+                        <label style="display: block; margin-bottom: 0.5rem; font-size: 0.85rem; color: rgba(255,255,255,0.7);">Template</label>
+                        <select id="campaignTemplate" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #fff; font-size: 1rem;">
+                            <option value="order_follow_up_v1">Order Follow-Up v1 (Confirm/Cancel/Edit)</option>
+                        </select>
+                    </div>
+                    <div style="background: rgba(255,165,2,0.1); border-left: 3px solid #ffa502; padding: 1rem; border-radius: 0 8px 8px 0;">
+                        <p style="margin: 0; font-size: 0.85rem; color: rgba(255,255,255,0.8);">
+                            <strong style="color: #ffa502;">Template Preview:</strong><br>
+                            Hi {Customer Name},<br><br>
+                            We noticed you haven't confirmed your Offcomfrt order yet.<br><br>
+                            ▫️ Order ID: {Order ID}<br>
+                            ▫️ Amount: Rs.{Amount}<br>
+                            ▫️ Products: {Products}<br><br>
+                            Please select an option below to proceed:
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Step 2: Recipient Selection -->
+                <div class="wizard-step" data-step="2">
+                    <h3 style="margin-bottom: 1.5rem; color: #ffa502;">Select Recipients</h3>
+                    
+                    <div class="recipient-tabs">
+                        <button class="recipient-tab active" data-tab="all-pending">All Pending</button>
+                        <button class="recipient-tab" data-tab="select-pending">Select from Pending</button>
+                        <button class="recipient-tab" data-tab="import-file">Import File</button>
+                        <button class="recipient-tab" data-tab="manual-entry">Manual Entry</button>
+                    </div>
+
+                    <!-- All Pending Tab -->
+                    <div class="recipient-tab-content active" data-tab="all-pending">
+                        <p style="color: rgba(255,255,255,0.7); margin-bottom: 1rem;">
+                            This will send follow-up messages to <strong id="allPendingCount" style="color: #ffa502;">0</strong> pending shoppers who haven't been contacted yet.
+                        </p>
+                        <div style="background: rgba(46,213,115,0.1); border: 1px solid rgba(46,213,115,0.2); padding: 1rem; border-radius: 8px;">
+                            <p style="margin: 0; font-size: 0.85rem; color: #2ed573;">
+                                ✅ All pending shoppers will receive the follow-up message.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Select from Pending Tab -->
+                    <div class="recipient-tab-content" data-tab="select-pending">
+                        <div style="margin-bottom: 1rem;">
+                            <input type="text" id="searchPendingShoppers" placeholder="Search by name, phone, or order ID..." style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #fff;">
+                        </div>
+                        <div class="pending-shoppers-table">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th><input type="checkbox" id="selectAllPending"></th>
+                                        <th>Order ID</th>
+                                        <th>Name</th>
+                                        <th>Phone</th>
+                                        <th>Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pendingShoppersTableBody">
+                                    <tr><td colspan="5" style="text-align: center; padding: 2rem;">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p style="margin-top: 1rem; color: rgba(255,255,255,0.6); font-size: 0.85rem;">
+                            <span id="selectedPendingCount">0</span> shoppers selected
+                        </p>
+                    </div>
+
+                    <!-- Import File Tab -->
+                    <div class="recipient-tab-content" data-tab="import-file">
+                        <div class="file-upload-area" id="fileUploadArea">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 1rem; opacity: 0.5;">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="17 8 12 3 7 8"/>
+                                <line x1="12" y1="3" x2="12" y2="15"/>
+                            </svg>
+                            <p style="color: rgba(255,255,255,0.7); margin-bottom: 1rem;">Upload Excel or CSV file with Order IDs or Phone numbers</p>
+                            <input type="file" id="campaignFileUpload" accept=".xlsx,.xls,.csv">
+                            <button class="file-upload-btn" onclick="document.getElementById('campaignFileUpload').click()">Choose File</button>
+                            <p id="selectedFileName" style="margin-top: 1rem; color: #ffa502; font-size: 0.85rem;"></p>
+                        </div>
+                    </div>
+
+                    <!-- Manual Entry Tab -->
+                    <div class="recipient-tab-content" data-tab="manual-entry">
+                        <p style="color: rgba(255,255,255,0.7); margin-bottom: 1rem;">Enter phone numbers or order IDs (one per line or comma-separated):</p>
+                        <textarea id="manualPhoneEntry" rows="8" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #fff; font-family: monospace; resize: vertical;" placeholder="919876543210&#10;919876543211&#10;ORD-123456&#10;ORD-123457"></textarea>
+                        <p style="margin-top: 0.5rem; color: rgba(255,255,255,0.5); font-size: 0.8rem;">Enter phone numbers with country code (e.g., 91 for India) or Order IDs</p>
+                    </div>
+                </div>
+
+                <!-- Step 3: Review & Send -->
+                <div class="wizard-step" data-step="3">
+                    <h3 style="margin-bottom: 1.5rem; color: #ffa502;">Review & Send</h3>
+                    
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem;">
+                        <h4 style="margin: 0 0 1rem 0; color: #fff;">Campaign Summary</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div>
+                                <p style="margin: 0; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Campaign Name</p>
+                                <p id="reviewCampaignName" style="margin: 0.25rem 0 0 0; color: #fff; font-weight: 500;">-</p>
+                            </div>
+                            <div>
+                                <p style="margin: 0; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Template</p>
+                                <p id="reviewTemplate" style="margin: 0.25rem 0 0 0; color: #fff; font-weight: 500;">-</p>
+                            </div>
+                            <div>
+                                <p style="margin: 0; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Recipients</p>
+                                <p id="reviewRecipientCount" style="margin: 0.25rem 0 0 0; color: #ffa502; font-weight: 600; font-size: 1.2rem;">0</p>
+                            </div>
+                            <div>
+                                <p style="margin: 0; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Est. Time</p>
+                                <p id="reviewEstTime" style="margin: 0.25rem 0 0 0; color: #fff; font-weight: 500;">~0 minutes</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="background: rgba(255,165,2,0.1); border-left: 3px solid #ffa502; padding: 1rem; border-radius: 0 8px 8px 0;">
+                        <p style="margin: 0; font-size: 0.85rem; color: rgba(255,255,255,0.8);">
+                            <strong style="color: #ffa502;">⚠️ Important:</strong><br>
+                            Once sent, follow-up messages cannot be recalled. The messages will be sent at a rate of 20 messages per minute to comply with WhatsApp rate limits.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="wizard-footer">
+                <button class="wizard-btn wizard-btn-secondary" id="wizardPrevBtn" style="visibility: hidden;">Previous</button>
+                <button class="wizard-btn wizard-btn-primary" id="wizardNextBtn">Next</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export Modal -->
+    <div id="exportModal">
+        <div class="export-modal-content">
+            <h3>Export Options</h3>
+            <div class="export-options">
+                <div class="export-option-group">
+                    <label>Export Type</label>
+                    <select id="exportType">
+                        <option value="all">All Records (Current Filters)</option>
+                        <option value="daily">Daily Report</option>
+                        <option value="confirmed">Confirmed Orders Only</option>
+                        <option value="cancelled">Cancelled Orders Only</option>
+                        <option value="pending">Pending Orders Only</option>
+                    </select>
+                </div>
+                
+                <div class="export-option-group">
+                    <label>Date Range</label>
+                    <select id="exportDateRange">
+                        <option value="current">Current Filter Dates</option>
+                        <option value="today">Today</option>
+                        <option value="yesterday">Yesterday</option>
+                        <option value="last7">Last 7 Days</option>
+                        <option value="last30">Last 30 Days</option>
+                        <option value="thisMonth">This Month</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+                </div>
+                
+                <div class="export-option-group" id="customDateRange" style="display: none;">
+                    <label>Custom Date Range</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="date" id="exportStartDate" style="flex: 1;">
+                        <span style="color: #666;">to</span>
+                        <input type="date" id="exportEndDate" style="flex: 1;">
+                    </div>
+                </div>
+                
+                <div class="export-option-group">
+                    <label>Order ID Range (Optional)</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="text" id="exportOrderIdFrom" placeholder="From Order #" style="flex: 1;">
+                        <span style="color: #666;">to</span>
+                        <input type="text" id="exportOrderIdTo" placeholder="To Order #" style="flex: 1;">
+                    </div>
+                </div>
+                
+                <div class="export-option-group">
+                    <label>Format</label>
+                    <select id="exportFormat">
+                        <option value="xlsx">Excel (.xlsx)</option>
+                        <option value="csv">CSV (.csv)</option>
+                    </select>
+                </div>
+                
+                <div class="export-checkbox-group">
+                    <input type="checkbox" id="includeCustomerMessage" checked>
+                    <label for="includeCustomerMessage">Include Customer Messages</label>
+                </div>
+                
+                <div class="export-checkbox-group">
+                    <input type="checkbox" id="includeAddress" checked>
+                    <label for="includeAddress">Include Address Details</label>
+                </div>
+            </div>
+            
+            <div class="export-btn-row">
+                <button class="btn btn-outline" id="cancelExport">Cancel</button>
+                <button class="btn btn-primary" id="confirmExport">
+                    <img src="{{ 'export-icon.svg' | asset_url }}" width="16" height="16" alt="Export" style="vertical-align: middle; margin-right: 6px;" />
+                    Export Now
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="{{ 'shoppers-app.js' | asset_url }}?v=1712700000"></script>
+</body>
+</html>
