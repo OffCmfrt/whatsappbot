@@ -1474,6 +1474,26 @@ function isTicketInTimeRangeForAdmin(ticket, config) {
     return inRange;
 }
 
+// Build a Postgres WHERE fragment matching tickets whose created_at (stored as UTC) falls
+// within a time-based portal's IST time-of-day window. Returns null when the config has no
+// range. Bounds are validated integers and the timezone is whitelisted, so inlining is
+// injection-safe. Mirrors the JS logic in isTicketInTimeRangeForAdmin but runs in the DB so
+// counts/queries cover every matching ticket without loading the whole table into memory.
+function timeRangeSqlClause(config, col = 'created_at') {
+    if (!config || !config.time_start || !config.time_end) return null;
+    const tz = /^[A-Za-z0-9_+\-/]+$/.test(config.timezone || '') ? config.timezone : 'Asia/Kolkata';
+    const [sh, sm] = String(config.time_start).split(':').map(Number);
+    const [eh, em] = String(config.time_end).split(':').map(Number);
+    if ([sh, sm, eh, em].some(n => !Number.isFinite(n))) return null;
+    const start = sh * 60 + sm;
+    const end = eh * 60 + em;
+    const local = `(${col} AT TIME ZONE 'UTC' AT TIME ZONE '${tz}')`;
+    const mins = `(EXTRACT(HOUR FROM ${local}) * 60 + EXTRACT(MINUTE FROM ${local}))`;
+    return start <= end
+        ? `${mins} >= ${start} AND ${mins} < ${end}`
+        : `(${mins} >= ${start} OR ${mins} < ${end})`;
+}
+
 router.get('/support-tickets', verifyToken, async (req, res) => {
     try {
         const { status, is_read, date_from, date_to, time_from, time_to } = req.query;
@@ -3477,37 +3497,23 @@ router.get('/support-portals', verifyToken, async (req, res) => {
             if (portal.type === 'time_based' && portal.config) {
                 try {
                     const config = typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config;
-                    if (config.time_start && config.time_end) {
-                        // Count tickets that fall within the time range
-                        const allTickets = await dbAdapter.query(
-                            'SELECT id, created_at, status, portal_id FROM support_tickets ORDER BY created_at DESC LIMIT 500'
+                    const rangeClause = timeRangeSqlClause(config);
+                    if (rangeClause) {
+                        // Count ALL unassigned tickets whose IST created-time falls in the range.
+                        // Done in SQL so the count reflects every matching ticket, not just the
+                        // newest 500 rows (which severely undercounted with thousands of tickets).
+                        const [row] = await dbAdapter.query(
+                            `SELECT COUNT(*) AS ticket_count,
+                                    COUNT(*) FILTER (WHERE status = 'open') AS open_count
+                             FROM support_tickets
+                             WHERE portal_id IS NULL AND ${rangeClause}`
                         );
-                        
-                        let matchingCount = 0;
-                        let openCount = 0;
-                        
-                        // Debug logging
-                        console.log(`\n🔍 Portal "${portal.name}" checking ${allTickets.length} tickets...`);
-                        console.log(`   Time range: ${config.time_start} - ${config.time_end} (${config.timezone || 'Asia/Kolkata'})`);
-                        
-                        for (const ticket of allTickets) {
-                            // Skip tickets explicitly assigned to another portal (split/transfer)
-                            if (ticket.portal_id) continue;
-                            if (isTicketInTimeRangeForAdmin(ticket, config)) {
-                                matchingCount++;
-                                if (ticket.status === 'open') {
-                                    openCount++;
-                                }
-                            }
-                        }
-                        
-                        console.log(`   ✅ Matched ${matchingCount} tickets (${openCount} open)`);
-                        
+
                         return {
                             ...portal,
-                            ticket_count: matchingCount,
-                            assigned_count: openCount,
-                            config: typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config,
+                            ticket_count: Number(row?.ticket_count || 0),
+                            assigned_count: Number(row?.open_count || 0),
+                            config,
                             url: `${req.protocol}://${req.get('host')}/portal/support/?slug=${portal.slug}`
                         };
                     }
@@ -3619,11 +3625,13 @@ async function getPortalTicketRows(portal, onlyOpen = true) {
         const config = portal.config
             ? (typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config)
             : {};
-        // Only unassigned tickets are part of a time-based portal's shared pool
-        const rows = await dbAdapter.query(
-            `SELECT id, created_at, status, portal_id FROM support_tickets WHERE portal_id IS NULL${statusClause} ORDER BY created_at DESC LIMIT 1000`
+        const rangeClause = timeRangeSqlClause(config);
+        // Only unassigned tickets are part of a time-based portal's shared pool. Filter the
+        // time window in SQL so a split distributes ALL matching tickets, not just recent rows.
+        const rangeSql = rangeClause ? ` AND (${rangeClause})` : '';
+        return await dbAdapter.query(
+            `SELECT id, created_at, status, portal_id FROM support_tickets WHERE portal_id IS NULL${statusClause}${rangeSql} ORDER BY created_at DESC`
         );
-        return rows.filter(t => isTicketInTimeRangeForAdmin(t, config));
     }
     return await dbAdapter.query(
         `SELECT id, created_at, status, portal_id FROM support_tickets WHERE portal_id = ?${statusClause} ORDER BY created_at DESC LIMIT 1000`,

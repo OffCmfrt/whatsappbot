@@ -2,46 +2,76 @@
  * Shared utility: assign a new support ticket to the correct portal
  * based on the current time-period (shift) configuration.
  *
- * Active portals are those with type='auto', is_active=true, and whose
- * shift_start/shift_end window covers the current wall-clock time.
+ * A portal is "active for now" when it is is_active=true and the current
+ * IST wall-clock time falls inside its window:
+ *   - auto        → shift_start / shift_end columns
+ *   - time_based  → config.time_start / config.time_end
  *
- * Among matching portals the selection is round-robin, respecting the
- * optional max_tickets capacity limit.
+ * Among the active portals selection is round-robin, respecting the optional
+ * max_tickets capacity limit. This lets an auto portal and a time-based portal
+ * that share the same period (e.g. 9-5 "9-5 Support" + "Atharva D") split new
+ * tickets evenly. When an auto portal is picked the ticket is stamped with its
+ * portal_id; when a time-based portal is picked the ticket is left unassigned
+ * (portal_id NULL) so it is claimed dynamically by created-time matching — this
+ * keeps time-based ticket counts (which count only unassigned rows) accurate.
  */
 
 const { dbAdapter } = require('../database/db');
+const { getCurrentIST } = require('./timezone');
 
 // In-memory round-robin cursor (reset on process restart – good enough)
 let rrCursor = 0;
 
+// True when `currentTime` (minutes-of-day, IST) falls inside [start, end).
+// Handles overnight windows (e.g. 21:00–06:00). Returns null for missing/invalid times.
+function timeInWindow(currentTime, startStr, endStr) {
+    if (!startStr || !endStr) return null;
+    const [startH, startM] = String(startStr).split(':').map(Number);
+    const [endH, endM] = String(endStr).split(':').map(Number);
+    if ([startH, startM, endH, endM].some(n => !Number.isFinite(n))) return null;
+
+    const startTime = startH * 60 + startM;
+    const endTime = endH * 60 + endM;
+
+    if (endTime < startTime) {
+        return currentTime >= startTime || currentTime < endTime;
+    }
+    return currentTime >= startTime && currentTime < endTime;
+}
+
 /**
- * Return all active portals whose shift window covers `now`.
- * Portals without shift times are considered always-active.
+ * Return all active auto/time-based portals whose window covers `now` (IST).
+ * Auto portals without a shift window are considered always-active.
  */
 async function getActivePortalsForNow() {
     const portals = await dbAdapter.query(
-        "SELECT id, name, shift_start, shift_end, max_tickets, assigned_count " +
-        "FROM support_portals WHERE type = 'auto' AND is_active = true"
+        "SELECT id, name, type, config, shift_start, shift_end, max_tickets, assigned_count " +
+        "FROM support_portals WHERE type IN ('auto', 'time_based') AND is_active = true"
     );
 
     if (!portals || portals.length === 0) return [];
 
-    const now = new Date();
-    const currentTime = now.getHours() * 60 + now.getMinutes();
+    // Windows are configured in IST, so the "current time" must also be evaluated in IST —
+    // NOT server local time (Render runs in UTC, which previously shifted every window by
+    // +5:30 and made portals active during the wrong hours).
+    const istNow = getCurrentIST();
+    const currentTime = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();
 
     return portals.filter(portal => {
-        if (!portal.shift_start || !portal.shift_end) return true; // no shift = always active
-
-        const [startH, startM] = portal.shift_start.split(':').map(Number);
-        const [endH, endM] = portal.shift_end.split(':').map(Number);
-        const startTime = startH * 60 + startM;
-        const endTime = endH * 60 + endM;
-
-        // Handle overnight shifts (e.g. 17:00 – 01:00)
-        if (endTime < startTime) {
-            return currentTime >= startTime || currentTime < endTime;
+        if (portal.type === 'auto') {
+            const res = timeInWindow(currentTime, portal.shift_start, portal.shift_end);
+            return res === null ? true : res; // no shift window = always active
         }
-        return currentTime >= startTime && currentTime < endTime;
+
+        // time_based: window comes from the JSON config
+        let config = portal.config;
+        try {
+            config = typeof config === 'string' ? JSON.parse(config) : config;
+        } catch (e) {
+            config = null;
+        }
+        if (!config || !config.time_start || !config.time_end) return false;
+        return timeInWindow(currentTime, config.time_start, config.time_end) === true;
     });
 }
 
@@ -69,8 +99,12 @@ function selectPortalForAssignment(portals) {
 }
 
 /**
- * High-level helper: find the right portal for *right now* and return
- * its id (or null if no portal matches / all are full).
+ * High-level helper: round-robin across the portals active *right now* and
+ * decide how a new ticket is assigned.
+ *   - auto portal picked       → return its id (ticket is stamped with portal_id)
+ *   - time-based portal picked → return null   (ticket stays unassigned and is
+ *                                               claimed dynamically by its window)
+ * Returns null when no portal matches / all are at capacity.
  */
 async function getPortalIdForNewTicket() {
     try {
@@ -79,6 +113,12 @@ async function getPortalIdForNewTicket() {
 
         const selected = selectPortalForAssignment(activePortals);
         if (!selected) return null;
+
+        // Time-based portals do not take explicit ownership — leaving portal_id NULL lets the
+        // created-time matcher assign the ticket and keeps its dynamic count correct.
+        if (selected.type !== 'auto') {
+            return null;
+        }
 
         // Increment assigned_count so the next call sees updated load
         await dbAdapter.run(

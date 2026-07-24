@@ -52,21 +52,50 @@ function isTicketInTimeRange(ticket, config) {
     }
 }
 
-// Helper to get portal tickets (optimized)
+// Build a Postgres WHERE fragment matching tickets whose created_at (stored as UTC) falls
+// within the portal's IST time-of-day window. Returns null when the config has no range.
+// Bounds are validated integers and the timezone is whitelisted, so inlining is injection-safe.
+function timeRangeSqlClause(config, col = 'created_at') {
+    if (!config || !config.time_start || !config.time_end) return null;
+    const tz = /^[A-Za-z0-9_+\-/]+$/.test(config.timezone || '') ? config.timezone : 'Asia/Kolkata';
+    const [sh, sm] = String(config.time_start).split(':').map(Number);
+    const [eh, em] = String(config.time_end).split(':').map(Number);
+    if ([sh, sm, eh, em].some(n => !Number.isFinite(n))) return null;
+    const start = sh * 60 + sm;
+    const end = eh * 60 + em;
+    const local = `(${col} AT TIME ZONE 'UTC' AT TIME ZONE '${tz}')`;
+    const mins = `(EXTRACT(HOUR FROM ${local}) * 60 + EXTRACT(MINUTE FROM ${local}))`;
+    return start <= end
+        ? `${mins} >= ${start} AND ${mins} < ${end}`
+        : `(${mins} >= ${start} OR ${mins} < ${end})`;
+}
+
+// Helper to get portal tickets
 async function getPortalTickets(portalId, portalType, portalConfig) {
     if (portalType === 'time_based') {
-        const config = portalConfig ? JSON.parse(portalConfig) : {};
-        // OPTIMIZED: Limit to last 200 tickets to avoid loading entire table
-        const allTickets = await dbAdapter.query(
-            'SELECT * FROM support_tickets ORDER BY created_at DESC LIMIT 200'
-        );
+        const config = portalConfig
+            ? (typeof portalConfig === 'string' ? JSON.parse(portalConfig) : portalConfig)
+            : {};
         // Ownership rule: explicitly-assigned tickets (split/transfer) belong ONLY to their
         // portal and always show there regardless of time; unassigned tickets belong to this
         // time-based portal's shared pool if their created time falls within the range.
-        return allTickets.filter(t => {
-            if (t.portal_id) return String(t.portal_id) === String(portalId);
-            return isTicketInTimeRange(t, config);
-        });
+        // The time filter runs in SQL so ALL matching tickets are considered — not just the
+        // newest N rows (which previously hid a portal's tickets when recent traffic clustered
+        // in another portal's window).
+        const rangeClause = timeRangeSqlClause(config);
+        if (!rangeClause) {
+            return await dbAdapter.query(
+                'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC LIMIT 200',
+                [portalId]
+            );
+        }
+        return await dbAdapter.query(
+            `SELECT * FROM support_tickets
+             WHERE portal_id = ?
+                OR (portal_id IS NULL AND ${rangeClause})
+             ORDER BY created_at DESC LIMIT 200`,
+            [portalId]
+        );
     } else {
         // manual or auto
         return await dbAdapter.query(
