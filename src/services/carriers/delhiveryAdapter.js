@@ -131,13 +131,17 @@ class DelhiveryAdapter extends BaseCarrier {
                 }
             };
 
-            // Delhivery CMU expects a form-style body: format=json&data=<json>
-            const body = `format=json&data=${JSON.stringify(cmuPayload)}`;
+            // Delhivery CMU expects a form-encoded body: format=json&data=<json>
+            // (URLSearchParams also escapes &/+/# inside addresses & product names)
+            const body = new URLSearchParams({
+                format: 'json',
+                data: JSON.stringify(cmuPayload)
+            });
 
-            const response = await axios.post(`${this.baseURL}/api/cmu/create.json`, body, {
+            const response = await axios.post(`${this.baseURL}/api/cmu/create.json`, body.toString(), {
                 headers: {
                     ...this.authHeaders(),
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/x-www-form-urlencoded'
                 },
                 timeout: 30000
             });
