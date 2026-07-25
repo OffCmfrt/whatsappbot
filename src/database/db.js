@@ -11,20 +11,40 @@ const pool = new Pool({
   connectionTimeoutMillis: 5000 // Fail fast if no connection available
 });
 
+// CRITICAL: handle background errors from idle pooled connections.
+// Supabase's pooler drops idle/half-open connections routinely; without this
+// listener pg emits 'error' on the pool with no handler → uncaught exception
+// → process crash (giant Client dump in logs followed by restart).
+pool.on('error', (err) => {
+  console.error('⚠️ pg pool: idle client error (connection reset by pooler):', err.message);
+});
+
 // CRITICAL FIX: pg Pool does NOT have endIdleClients() — implement it manually
 // This drains idle connections to free native TLS buffers (~5-10MB per idle connection)
 // Without this, native memory grows unbounded and causes OOM at 512MB
-// pg-pool v3 stores idle clients in this._idle array
+// pg-pool v3 stores IdleItem wrappers ({ client, idleListener, timeoutId }) in
+// this._idle — we must unwrap the client and use pool._remove() so the pool's
+// bookkeeping (_clients, idle timers, listeners) stays consistent. Calling
+// .end() on the wrapper itself silently no-ops and leaks/orphans connections.
 pool.endIdleClients = function() {
   let closed = 0;
-  // Drain all idle clients from the pool's idle queue
   while (this._idle && this._idle.length > 0) {
-    const client = this._idle.pop();
-    if (client) {
-      try {
+    const item = this._idle[this._idle.length - 1];
+    const client = item && item.client ? item.client : item;
+    try {
+      if (typeof this._remove === 'function') {
+        // Proper path: clears idle timer, detaches listeners,
+        // removes from _clients, and ends the connection
+        this._remove(client);
+      } else {
+        this._idle.pop();
+        if (item && item.timeoutId) clearTimeout(item.timeoutId);
         client.end();
-        closed++;
-      } catch (e) { /* already closed */ }
+      }
+      closed++;
+    } catch (e) {
+      // Ensure we always make progress even if removal throws
+      if (this._idle[this._idle.length - 1] === item) this._idle.pop();
     }
   }
   return closed;

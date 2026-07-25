@@ -10,6 +10,15 @@ const adminRoutes = require('./src/routes/adminRoutes');
 const { testConnection, initializeDatabase } = require('./src/database/db');
 const { startCacheStatsLogging, getCacheStats } = require('./src/utils/cache');
 
+// Safety net: keep the process alive on stray async failures (e.g. pg
+// connection timeouts inside cron jobs). Log full details for diagnosis.
+process.on('unhandledRejection', (reason) => {
+    console.error('⚠️ Unhandled promise rejection:', reason && reason.message ? reason.message : reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('🔥 Uncaught exception (recovered):', err && err.stack ? err.stack : err);
+});
+
 const app = express();
 
 // Trust proxy for Render deployment to fix express-rate-limit X-Forwarded-For error
