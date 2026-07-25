@@ -1818,9 +1818,17 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         let whereClause = 'WHERE 1=1';
         const params = [];
 
+        // 'shipped' is a derived status: a confirmed shopper whose orders row carries an AWB / shipped status
+        const shippedExpr = `(o.awb IS NOT NULL OR o.status = 'shipped')`;
         if (status && status !== 'all') {
-            whereClause += ' AND s.status = ?';
-            params.push(status);
+            if (status === 'shipped') {
+                whereClause += ` AND s.status = 'confirmed' AND ${shippedExpr}`;
+            } else if (status === 'confirmed') {
+                whereClause += ` AND s.status = 'confirmed' AND NOT COALESCE(${shippedExpr}, false)`;
+            } else {
+                whereClause += ' AND s.status = ?';
+                params.push(status);
+            }
         }
 
         if (search) {
@@ -1880,7 +1888,8 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         }
 
         // Count total rows - use GROUP BY to count unique order_ids
-        const countSql = `SELECT COUNT(DISTINCT s.order_id) as total FROM store_shoppers s ${whereClause}`;
+        // (joins orders so the derived 'shipped'/'confirmed' filters can reference o.*)
+        const countSql = `SELECT COUNT(DISTINCT s.order_id) as total FROM store_shoppers s LEFT JOIN orders o ON o.order_id = s.order_id ${whereClause}`;
         const countRes = await dbAdapter.query(countSql, params);
         const total = countRes[0]?.total || 0;
 
@@ -1888,7 +1897,8 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         // Always apply LIMIT to prevent unbounded queries (max 2000)
         const sql = `
             SELECT s.id, s.phone, s.name, s.email, s.order_id, s.address, s.city, s.province, s.zip,
-                   s.payment_method, s.order_total, s.delivery_type, s.source, s.status,
+                   s.payment_method, s.order_total, s.delivery_type, s.source,
+                   CASE WHEN s.status = 'confirmed' AND ${shippedExpr} THEN 'shipped' ELSE s.status END as status,
                    s.customer_message, s.last_response_at, s.created_at, s.updated_at,
                    s.confirmed_by, s.items_json,
                    o.awb,
@@ -2220,9 +2230,17 @@ router.get('/shoppers/export', verifyToken, async (req, res) => {
         let whereClause = 'WHERE 1=1';
         const params = [];
 
+        // Same derived 'shipped' status semantics as the /shoppers list endpoint
+        const shippedExpr = `(o.awb IS NOT NULL OR o.status = 'shipped')`;
         if (status && status !== 'all') {
-            whereClause += ' AND s.status = ?';
-            params.push(status);
+            if (status === 'shipped') {
+                whereClause += ` AND s.status = 'confirmed' AND ${shippedExpr}`;
+            } else if (status === 'confirmed') {
+                whereClause += ` AND s.status = 'confirmed' AND NOT COALESCE(${shippedExpr}, false)`;
+            } else {
+                whereClause += ' AND s.status = ?';
+                params.push(status);
+            }
         }
         if (search) {
             whereClause += ' AND (s.name LIKE ? OR s.phone LIKE ? OR s.order_id LIKE ?)';
@@ -2257,7 +2275,9 @@ router.get('/shoppers/export', verifyToken, async (req, res) => {
 
         const sql = `
             SELECT s.name, s.phone, s.email, s.order_id, s.address, s.city, s.province, s.zip, s.country, 
-                   s.payment_method, s.items_json, s.status, s.created_at, s.customer_message,
+                   s.payment_method, s.items_json,
+                   CASE WHEN s.status = 'confirmed' AND ${shippedExpr} THEN 'shipped' ELSE s.status END as status,
+                   s.created_at, s.customer_message,
                    s.delivery_type, COALESCE(s.order_total, o.total) as order_total,
                    o.awb, o.courier_name
             FROM store_shoppers s
@@ -2299,6 +2319,7 @@ router.get('/shoppers/export', verifyToken, async (req, res) => {
             const statusMap = {
                 'pending': 'Pending',
                 'confirmed': 'Confirmed',
+                'shipped': 'Shipped',
                 'cancelled': 'Cancelled',
                 'edit_details': 'Edit Details'
             };

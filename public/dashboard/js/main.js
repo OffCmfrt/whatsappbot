@@ -4417,6 +4417,7 @@ function renderShoppersTable(shoppers, total, page) {
 function getShopperStatusClass(status) {
     switch (status) {
         case 'confirmed': return 'badge-success';
+        case 'shipped': return 'badge-primary';
         case 'cancelled': return 'badge-danger';
         case 'edit_details': return 'badge-warning';
         default: return 'badge-gray';

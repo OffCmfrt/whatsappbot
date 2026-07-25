@@ -573,6 +573,7 @@
         }
         .shopper-card.has-message { border-left: 3px solid #25d366; }
         .shopper-card.status-confirmed { border-left: 3px solid #2ed573; }
+        .shopper-card.status-shipped { border-left: 3px solid #1e90ff; }
         .shopper-card.status-cancelled { border-left: 3px solid #ff4757; }
         .shopper-card.status-edit_details { border-left: 3px solid #ffa502; }
 
@@ -682,6 +683,7 @@
         /* Status Badges */
         .badge { font-family: 'Archivo Narrow', sans-serif; font-size: 0.68rem; padding: 0.2rem 0.5rem; border-radius: 6px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
         .badge-status.confirmed { background: #2ed573; color: #000; }
+        .badge-status.shipped { background: #1e90ff; color: #fff; }
         .badge-status.cancelled { background: #ff4757; color: #fff; }
         .badge-status.edit_details { background: #ffa502; color: #000; }
         .badge-status.pending { background: #666; color: #fff; }
@@ -3808,6 +3810,7 @@
                             <button class="tab active" data-filter="all">All <span class="tab-count" id="countAll"></span></button>
                             <button class="tab" data-filter="pending">Pending <span class="tab-count" id="countPending"></span></button>
                             <button class="tab" data-filter="confirmed">Confirmed <span class="tab-count" id="countConfirmed"></span></button>
+                            <button class="tab" data-filter="shipped">Shipped <span class="tab-count" id="countShipped"></span></button>
                             <button class="tab" data-filter="cancelled">Cancelled <span class="tab-count" id="countCancelled"></span></button>
                             <button class="tab" data-filter="edit_details">Edits <span class="tab-count" id="countEdits"></span></button>
                         </div>
