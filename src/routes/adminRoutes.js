@@ -1433,6 +1433,18 @@ router.post('/settings', verifyToken, async (req, res) => {
 // ===================================
 // Support Tickets Endpoints
 // ===================================
+// Cache Intl.DateTimeFormat per timezone — each instance allocates native ICU memory
+// outside the V8 heap, so creating one per ticket bloats RSS without showing in heap stats
+const timeFormatterCache = new Map();
+function getTimeFormatter(timezone) {
+    let fmt = timeFormatterCache.get(timezone);
+    if (!fmt) {
+        fmt = new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour12: false, hour: '2-digit', minute: '2-digit' });
+        timeFormatterCache.set(timezone, fmt);
+    }
+    return fmt;
+}
+
 // Helper to check if a ticket's created time falls within portal time range (for admin)
 function isTicketInTimeRangeForAdmin(ticket, config) {
     if (!config || !config.time_start || !config.time_end) return true;
@@ -1440,9 +1452,8 @@ function isTicketInTimeRangeForAdmin(ticket, config) {
     const createdAt = new Date(ticket.created_at);
     const timezone = config.timezone || 'Asia/Kolkata';
 
-    // Convert to target timezone
-    const options = { timeZone: timezone, hour12: false, hour: '2-digit', minute: '2-digit' };
-    const timeStr = new Intl.DateTimeFormat('en-US', options).format(createdAt);
+    // Convert to target timezone using the cached formatter
+    const timeStr = getTimeFormatter(timezone).format(createdAt);
     const [hour, minute] = timeStr.split(':').map(Number);
     const ticketMinutes = hour * 60 + minute;
 
@@ -1546,46 +1557,42 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
         );
         const portalNameById = {};
         allPortalsForNames.forEach(p => { portalNameById[p.id] = p.name; });
-        const timeBasedPortals = allPortalsForNames.filter(p => p.type === 'time_based');
+        // Pre-parse time-based portal configs once (not per ticket)
+        const timeBasedPortals = allPortalsForNames
+            .filter(p => p.type === 'time_based')
+            .map(p => {
+                try {
+                    const config = typeof p.config === 'string' ? JSON.parse(p.config) : p.config;
+                    return (config && config.time_start && config.time_end) ? { id: p.id, name: p.name, config } : null;
+                } catch (e) {
+                    console.error(` Error parsing config for portal ${p.name}:`, e);
+                    return null;
+                }
+            })
+            .filter(Boolean);
         
-        // Enrich tickets with portal information
-        console.log(`\n🎫 Enriching ${tickets.length} tickets with portal info...`);
-        console.log(`🔍 Found ${timeBasedPortals.length} time-based portals`);
-        
+        // Enrich tickets with portal information (no per-ticket logging — this runs
+        // for thousands of tickets on every dashboard load)
         const enrichedTickets = tickets.map(ticket => {
             // If ticket has explicit portal_id, it's from manual/auto assignment (incl. split/transfer)
             if (ticket.portal_id) {
-                return {
-                    ...ticket,
-                    portal_name: portalNameById[ticket.portal_id] || null
-                };
+                ticket.portal_name = portalNameById[ticket.portal_id] || null;
+                return ticket;
             }
             
             // For time-based tickets, find matching portal
             for (const portal of timeBasedPortals) {
-                try {
-                    const config = typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config;
-                    if (config.time_start && config.time_end) {
-                        const matches = isTicketInTimeRangeForAdmin(ticket, config);
-                        if (matches) {
-                            console.log(`✅ Ticket ${ticket.id} matched to portal "${portal.name}"`);
-                            return {
-                                ...ticket,
-                                portal_id: portal.id,
-                                portal_name: portal.name
-                            };
-                        }
-                    }
-                } catch (e) {
-                    console.error(` Error checking portal ${portal.name}:`, e);
+                if (isTicketInTimeRangeForAdmin(ticket, portal.config)) {
+                    ticket.portal_id = portal.id;
+                    ticket.portal_name = portal.name;
+                    return ticket;
                 }
             }
             
-            console.log(`⚠️ Ticket ${ticket.id} did not match any portal`);
             return ticket;
         });
         
-        console.log(`✅ Enriched ${enrichedTickets.filter(t => t.portal_name).length} tickets with portal names\n`);
+        console.log(`✅ Enriched ${enrichedTickets.filter(t => t.portal_name).length}/${tickets.length} tickets with portal names (${timeBasedPortals.length} time-based portals)`);
         
         res.json({ success: true, tickets: enrichedTickets });
     } catch (error) {

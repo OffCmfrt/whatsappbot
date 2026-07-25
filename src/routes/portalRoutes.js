@@ -25,6 +25,18 @@ function verifyPortalToken(req, res, next) {
     }
 }
 
+// Cache Intl.DateTimeFormat per timezone — each instance allocates native ICU memory
+// outside the V8 heap, so re-creating them on every check bloats RSS
+const timeFormatterCache = new Map();
+function getTimeFormatter(timezone) {
+    let fmt = timeFormatterCache.get(timezone);
+    if (!fmt) {
+        fmt = new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour12: false, hour: '2-digit', minute: '2-digit' });
+        timeFormatterCache.set(timezone, fmt);
+    }
+    return fmt;
+}
+
 // Helper to check if a ticket's created time falls within portal time range
 function isTicketInTimeRange(ticket, config) {
     if (!config || !config.time_start || !config.time_end) return true;
@@ -32,9 +44,8 @@ function isTicketInTimeRange(ticket, config) {
     const createdAt = new Date(ticket.created_at);
     const timezone = config.timezone || 'Asia/Kolkata';
 
-    // Convert to target timezone
-    const options = { timeZone: timezone, hour12: false, hour: '2-digit', minute: '2-digit' };
-    const timeStr = new Intl.DateTimeFormat('en-US', options).format(createdAt);
+    // Convert to target timezone using the cached formatter
+    const timeStr = getTimeFormatter(timezone).format(createdAt);
     const [hour, minute] = timeStr.split(':').map(Number);
     const ticketMinutes = hour * 60 + minute;
 
