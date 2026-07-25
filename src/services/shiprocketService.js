@@ -8,24 +8,53 @@ class ShiprocketService {
         // In-memory cache for order lookups (5 min TTL)
         this.orderCache = new Map();
         this.CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+        // Auth guards: dedupe concurrent logins and back off after failures
+        this.authPromise = null;
+        this.authRetryAfter = 0;
+        this.AUTH_FAIL_COOLDOWN = 2 * 60 * 1000;   // 2 min after a generic failure
+        this.AUTH_BLOCK_COOLDOWN = 30 * 60 * 1000; // 30 min after a 403 account-lock
     }
 
     // Authenticate and get token
     async authenticate() {
-        try {
-            const response = await axios.post(`${this.baseURL}/auth/login`, {
-                email: process.env.SHIPROCKET_EMAIL,
-                password: process.env.SHIPROCKET_PASSWORD
-            });
-
-            this.token = response.data.token;
-            this.tokenExpiry = Date.now() + (24 * 60 * 60 * 1000); // Token valid for 24 hours
-            console.log('✅ Shiprocket authentication successful');
-            return this.token;
-        } catch (error) {
-            console.error('❌ Shiprocket authentication failed:', error.response?.data || error.message);
-            throw error;
+        // Respect cooldown after previous failed attempts (prevents account lockout)
+        if (Date.now() < this.authRetryAfter) {
+            const waitMin = Math.ceil((this.authRetryAfter - Date.now()) / 60000);
+            throw new Error(`Shiprocket auth on cooldown after failed login. Retrying in ~${waitMin} min.`);
         }
+
+        // Deduplicate concurrent login attempts — reuse the in-flight request
+        if (this.authPromise) {
+            return this.authPromise;
+        }
+
+        this.authPromise = (async () => {
+            try {
+                const response = await axios.post(`${this.baseURL}/auth/login`, {
+                    email: process.env.SHIPROCKET_EMAIL,
+                    password: process.env.SHIPROCKET_PASSWORD
+                });
+
+                this.token = response.data.token;
+                this.tokenExpiry = Date.now() + (24 * 60 * 60 * 1000); // Token valid for 24 hours
+                this.authRetryAfter = 0;
+                console.log('✅ Shiprocket authentication successful');
+                return this.token;
+            } catch (error) {
+                const status = error.response?.status;
+                // 403 = account locked due to failed logins; back off hard so we don't extend the lock
+                this.authRetryAfter = Date.now() + (status === 403 ? this.AUTH_BLOCK_COOLDOWN : this.AUTH_FAIL_COOLDOWN);
+                console.error('❌ Shiprocket authentication failed:', error.response?.data || error.message);
+                if (status === 403) {
+                    console.error('⛔ Shiprocket account locked. Pausing login attempts for 30 min. Verify SHIPROCKET_EMAIL/SHIPROCKET_PASSWORD (must be an API user, not the dashboard login).');
+                }
+                throw error;
+            } finally {
+                this.authPromise = null;
+            }
+        })();
+
+        return this.authPromise;
     }
 
     // Ensure we have a valid token

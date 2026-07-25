@@ -7,8 +7,12 @@
  *   SHIPROCKET_PICKUP_LOCATION             — registered pickup location nickname
  *   SHIPROCKET_PICKUP_PINCODE              — OPTIONAL. Auto-resolved from the pickup
  *                                            location via the API; only needed as an override.
+ *   SHIPROCKET_CHANNEL_ID                  — OPTIONAL. Channel to file orders under (e.g. Shopify).
+ *                                            Auto-resolved to the Shopify channel via GET /channels;
+ *                                            only needed as an override.
  *
  * Endpoints used:
+ *   Channels       : GET  /channels
  *   Serviceability : GET  /courier/serviceability/
  *   Create order   : POST /orders/create/adhoc
  *   Assign AWB     : POST /courier/assign/awb
@@ -29,6 +33,7 @@ class ShiprocketAdapter extends BaseCarrier {
         super('shiprocket', 'Shiprocket');
         this.baseURL = shiprocketService.baseURL;
         this._pickupPincode = null; // cached after first lookup
+        this._channelId = null;     // cached after first lookup
     }
 
     get capabilities() {
@@ -78,6 +83,37 @@ class ShiprocketAdapter extends BaseCarrier {
         }
         this._pickupPincode = String(pin);
         return this._pickupPincode;
+    }
+
+    // Resolve the channel to file orders under so they don't land in "Custom".
+    // Uses SHIPROCKET_CHANNEL_ID as an override when explicitly set; otherwise
+    // looks up the Shopify channel once from /channels and caches the result.
+    async resolveChannelId() {
+        if (process.env.SHIPROCKET_CHANNEL_ID) return process.env.SHIPROCKET_CHANNEL_ID;
+        if (this._channelId) return this._channelId;
+
+        try {
+            const headers = await this.authHeaders();
+            const response = await axios.get(`${this.baseURL}/channels`, {
+                headers,
+                timeout: 20000
+            });
+
+            const channels = response.data?.data || [];
+            const shopify = channels.find(c =>
+                (c.base_channel_code || '').toUpperCase() === 'SH' ||
+                /shopify/i.test(c.name || '')
+            );
+            if (shopify?.id) {
+                this._channelId = String(shopify.id);
+                console.log(`📦 Shiprocket: filing orders under Shopify channel (id ${this._channelId})`);
+                return this._channelId;
+            }
+            console.warn('⚠️ Shiprocket: no Shopify channel found; orders will use the default (Custom) channel');
+        } catch (error) {
+            console.warn(`⚠️ Shiprocket: channel lookup failed (${this.describeAxiosError(error)}); orders will use the default (Custom) channel`);
+        }
+        return null;
     }
 
     // Live courier list with rates/ETA/rating for admin to choose from
@@ -149,9 +185,11 @@ class ShiprocketAdapter extends BaseCarrier {
                 }));
 
             const subTotal = orderItems.reduce((sum, i) => sum + (i.selling_price * i.units), 0) || Number(ctx.payment.declaredValue) || 0;
+            const channelId = await this.resolveChannelId();
 
             const orderPayload = {
                 order_id: ctx.orderId,
+                ...(channelId ? { channel_id: channelId } : {}),
                 order_date: new Date().toISOString().slice(0, 16).replace('T', ' '),
                 pickup_location: process.env.SHIPROCKET_PICKUP_LOCATION,
                 billing_customer_name: firstName,
