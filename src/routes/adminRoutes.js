@@ -4509,6 +4509,96 @@ router.get('/shipping/shipments/:id/track', verifyToken, async (req, res) => {
     }
 });
 
+// Full shipped-orders history — shipments joined with orders + shoppers + customers,
+// with search/carrier/status/payment/date filters and aggregate stats.
+// Powers the "Shipped Orders" view in the Shopper Hub (Shiprocket-style panel).
+router.get('/shipping/history', verifyToken, async (req, res) => {
+    try {
+        const { search, carrier, status, payment_mode, date_from, date_to, limit = 25, offset = 0 } = req.query;
+        const safeLimit = Math.min(parseInt(limit) || 25, 1000);
+        const safeOffset = Math.max(0, parseInt(offset) || 0);
+
+        let where = ' WHERE 1=1';
+        const params = [];
+
+        if (search) {
+            const like = `%${search}%`;
+            where += ` AND (s.order_id ILIKE ? OR s.awb ILIKE ? OR s.courier_name ILIKE ? OR ss.name ILIKE ? OR ss.phone ILIKE ? OR c.name ILIKE ? OR o.customer_phone ILIKE ?)`;
+            params.push(like, like, like, like, like, like, like);
+        }
+        if (carrier) { where += ' AND s.carrier = ?'; params.push(carrier); }
+        if (status) {
+            // Grouped filter: 'in_transit' covers shipped + in_transit, 'cancelled' covers cancelled + failed
+            if (status === 'in_transit') where += ` AND s.status IN ('shipped', 'in_transit')`;
+            else if (status === 'cancelled') where += ` AND s.status IN ('cancelled', 'failed')`;
+            else if (status === 'ready') where += ` AND s.status IN ('created', 'awb_assigned')`;
+            else { where += ' AND s.status = ?'; params.push(status); }
+        }
+        if (payment_mode) { where += ' AND s.payment_mode = ?'; params.push(payment_mode); }
+        // Date filters compare against IST calendar days (ops team works in IST)
+        if (date_from && /^\d{4}-\d{2}-\d{2}$/.test(date_from)) {
+            where += ` AND (s.created_at + INTERVAL '5 hours 30 minutes')::date >= ?::date`;
+            params.push(date_from);
+        }
+        if (date_to && /^\d{4}-\d{2}-\d{2}$/.test(date_to)) {
+            where += ` AND (s.created_at + INTERVAL '5 hours 30 minutes')::date <= ?::date`;
+            params.push(date_to);
+        }
+
+        const baseFrom = `
+            FROM shipments s
+            LEFT JOIN orders o ON o.order_id = s.order_id
+            LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
+            LEFT JOIN customers c ON c.phone = o.customer_phone
+        `;
+
+        const [rows, countRows, statsRows, carrierRows] = await Promise.all([
+            dbAdapter.query(`
+                SELECT s.*,
+                       COALESCE(ss.name, c.name) AS customer_name,
+                       COALESCE(ss.phone, o.customer_phone) AS customer_phone,
+                       COALESCE(ss.address, '') AS customer_address,
+                       COALESCE(ss.city, '') AS customer_city,
+                       COALESCE(ss.province, '') AS customer_state,
+                       COALESCE(ss.zip, '') AS customer_pincode,
+                       ss.items_json,
+                       COALESCE(ss.order_total, o.total) AS order_total,
+                       o.product_name, o.status AS order_status, o.expected_delivery
+                ${baseFrom}${where}
+                ORDER BY s.created_at DESC
+                LIMIT ? OFFSET ?
+            `, [...params, safeLimit, safeOffset]),
+            dbAdapter.query(`SELECT COUNT(*)::int AS total ${baseFrom}${where}`, params),
+            dbAdapter.query(`
+                SELECT COUNT(*)::int AS total,
+                       COUNT(*) FILTER (WHERE s.status IN ('created', 'awb_assigned'))::int AS ready_to_ship,
+                       COUNT(*) FILTER (WHERE s.status = 'pickup_scheduled')::int AS pickup_scheduled,
+                       COUNT(*) FILTER (WHERE s.status IN ('shipped', 'in_transit'))::int AS in_transit,
+                       COUNT(*) FILTER (WHERE s.status = 'delivered')::int AS delivered,
+                       COUNT(*) FILTER (WHERE s.status IN ('cancelled', 'failed'))::int AS cancelled,
+                       COUNT(*) FILTER (WHERE s.payment_mode = 'COD')::int AS cod_count,
+                       COALESCE(SUM(s.cod_amount) FILTER (WHERE s.payment_mode = 'COD' AND s.status NOT IN ('cancelled', 'failed')), 0)::float AS cod_value,
+                       COALESCE(SUM(s.freight_charge) FILTER (WHERE s.status NOT IN ('cancelled', 'failed')), 0)::float AS freight_total
+                ${baseFrom}${where}
+            `, params),
+            dbAdapter.query(`SELECT DISTINCT carrier FROM shipments ORDER BY carrier`)
+        ]);
+
+        res.json({
+            success: true,
+            shipments: rows,
+            total: countRows[0]?.total || 0,
+            stats: statsRows[0] || {},
+            carriers: carrierRows.map(r => r.carrier),
+            limit: safeLimit,
+            offset: safeOffset
+        });
+    } catch (error) {
+        console.error('Shipping history error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch shipping history' });
+    }
+});
+
 // ============ AI COPILOT ROUTES ============
 
 // Chat with the admin AI copilot (tool-calling agent, mutating actions gated by confirm)

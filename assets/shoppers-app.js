@@ -49,6 +49,19 @@ let moQuickDate = null;
 let moAllGroups = []; // Store raw groups for client-side collapse/expand
 let moSearchTimeout = null;
 
+// Shipped Orders Filter State
+let soStatus = '';
+let soCarrier = '';
+let soPayment = '';
+let soSearchQuery = '';
+let soStartDate = '';
+let soEndDate = '';
+let soQuickDate = null;
+let soOffset = 0;
+let soTotal = 0;
+const SO_PAGE_SIZE = 25;
+let soSearchTimeout = null;
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     try {
@@ -62,6 +75,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('analyticsView').style.display = 'none';
             document.getElementById('multiOrdersView').style.display = 'none';
             document.getElementById('followUpView').style.display = 'none';
+            const soView = document.getElementById('shippedOrdersView');
+            if (soView) soView.style.display = 'none';
             setupLoginEvents();
             return;
         }
@@ -308,6 +323,85 @@ function setupEventListeners() {
     document.getElementById('moExpandAll')?.addEventListener('click', () => {
         document.querySelectorAll('.multi-orders-list').forEach(el => el.style.display = 'block');
         document.querySelectorAll('.mo-card-toggle-indicator').forEach(el => el.textContent = '▾');
+    });
+
+    // Shipped Orders
+    document.getElementById('shippedOrdersBtn')?.addEventListener('click', showShippedOrdersView);
+    document.getElementById('backToShoppersFromShipped')?.addEventListener('click', hideShippedOrdersView);
+    document.getElementById('refreshShippedBtn')?.addEventListener('click', () => fetchShippedOrders());
+    document.getElementById('soExportBtn')?.addEventListener('click', exportShippedCsv);
+
+    // Shipped Orders - Status Pills
+    document.querySelectorAll('.so-status-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+            document.querySelectorAll('.so-status-pill').forEach(p => p.classList.remove('active'));
+            pill.classList.add('active');
+            soStatus = pill.dataset.soStatus || '';
+            soOffset = 0;
+            fetchShippedOrders();
+        });
+    });
+
+    // Shipped Orders - Carrier / Payment dropdowns
+    document.getElementById('soCarrierFilter')?.addEventListener('change', (e) => {
+        soCarrier = e.target.value;
+        soOffset = 0;
+        fetchShippedOrders();
+    });
+    document.getElementById('soPaymentFilter')?.addEventListener('change', (e) => {
+        soPayment = e.target.value;
+        soOffset = 0;
+        fetchShippedOrders();
+    });
+
+    // Shipped Orders - Search
+    document.getElementById('soSearchInput')?.addEventListener('input', (e) => {
+        clearTimeout(soSearchTimeout);
+        soSearchTimeout = setTimeout(() => {
+            soSearchQuery = e.target.value.trim();
+            soOffset = 0;
+            fetchShippedOrders();
+        }, 400);
+    });
+
+    // Shipped Orders - Date Range
+    document.getElementById('soStartDate')?.addEventListener('change', (e) => {
+        soStartDate = e.target.value;
+        soQuickDate = null;
+        soOffset = 0;
+        document.querySelectorAll('.so-quick-date').forEach(b => b.classList.remove('active'));
+        fetchShippedOrders();
+    });
+    document.getElementById('soEndDate')?.addEventListener('change', (e) => {
+        soEndDate = e.target.value;
+        soQuickDate = null;
+        soOffset = 0;
+        document.querySelectorAll('.so-quick-date').forEach(b => b.classList.remove('active'));
+        fetchShippedOrders();
+    });
+
+    // Shipped Orders - Quick Date Filters
+    document.querySelectorAll('.so-quick-date').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.so-quick-date').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            soQuickDate = btn.dataset.soRange;
+            soOffset = 0;
+            applySoQuickDate(soQuickDate);
+        });
+    });
+
+    // Shipped Orders - Clear Filters + Pagination
+    document.getElementById('soClearFilters')?.addEventListener('click', clearSoFilters);
+    document.getElementById('soPrevBtn')?.addEventListener('click', () => {
+        soOffset = Math.max(0, soOffset - SO_PAGE_SIZE);
+        fetchShippedOrders();
+    });
+    document.getElementById('soNextBtn')?.addEventListener('click', () => {
+        if (soOffset + SO_PAGE_SIZE < soTotal) {
+            soOffset += SO_PAGE_SIZE;
+            fetchShippedOrders();
+        }
     });
     document.querySelectorAll('.inbox-tab').forEach(tab => {
         tab.addEventListener('click', () => {
@@ -4736,3 +4830,345 @@ window.closeShipmentsDrawer = closeShipmentsDrawer;
 window.openBulkShipModal = openBulkShipModal;
 window.closeBulkShipModal = closeBulkShipModal;
 window.startBulkShip = startBulkShip;
+
+// ==========================================
+// SHIPPED ORDERS VIEW - Full shipment history
+// ==========================================
+
+function showShippedOrdersView() {
+    document.getElementById('dashboardView').style.display = 'none';
+    document.getElementById('shippedOrdersView').style.display = 'block';
+
+    if (soQuickDate) {
+        // Re-apply the quick date selection to refresh relative dates
+        document.querySelectorAll('.so-quick-date').forEach(b => b.classList.remove('active'));
+        const activeBtn = document.querySelector(`.so-quick-date[data-so-range="${soQuickDate}"]`);
+        if (activeBtn) activeBtn.classList.add('active');
+        applySoQuickDate(soQuickDate);
+    } else {
+        fetchShippedOrders();
+    }
+}
+
+function hideShippedOrdersView() {
+    document.getElementById('shippedOrdersView').style.display = 'none';
+    document.getElementById('dashboardView').style.display = 'block';
+}
+
+function buildSoParams(limit, offset) {
+    const params = new URLSearchParams();
+    if (soSearchQuery) params.set('search', soSearchQuery);
+    if (soCarrier) params.set('carrier', soCarrier);
+    if (soStatus) params.set('status', soStatus);
+    if (soPayment) params.set('payment_mode', soPayment);
+    if (soStartDate) params.set('date_from', soStartDate);
+    if (soEndDate) params.set('date_to', soEndDate);
+    params.set('limit', limit);
+    params.set('offset', offset);
+    return params;
+}
+
+async function fetchShippedOrders() {
+    const container = document.getElementById('shippedOrdersContainer');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4rem;">
+            <div class="spinner" style="width:40px;height:40px;border:3px solid rgba(255,255,255,0.1);border-top-color:#53bdeb;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:1rem;"></div>
+            <span style="font-family:'Archivo Narrow',sans-serif;letter-spacing:2px;font-weight:500;opacity:0.7;">FETCHING SHIPMENTS...</span>
+        </div>
+    `;
+
+    try {
+        const data = await apiCall('/shipping/history?' + buildSoParams(SO_PAGE_SIZE, soOffset).toString());
+        if (data && data.success) {
+            soTotal = data.total || 0;
+            renderShippedOrders(data);
+        } else {
+            throw new Error(data?.error || 'Failed to fetch');
+        }
+    } catch (err) {
+        console.error('Shipped orders fetch error:', err);
+        container.innerHTML = `
+            <div class="multi-orders-empty">
+                <div class="multi-orders-empty-icon">⚠️</div>
+                <div class="multi-orders-empty-title">Failed to Load</div>
+                <div class="multi-orders-empty-text">${err.message || 'Could not fetch shipment history'}</div>
+            </div>
+        `;
+        const pag = document.getElementById('soPagination');
+        if (pag) pag.style.display = 'none';
+    }
+}
+
+function renderShippedOrders(data) {
+    const container = document.getElementById('shippedOrdersContainer');
+    const shipments = data.shipments || [];
+    const stats = data.stats || {};
+
+    // Stats cards
+    const fmtMoney = v => '₹' + (Number(v) || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    setText('soStatTotal', stats.total || 0);
+    setText('soStatReady', stats.ready_to_ship || 0);
+    setText('soStatPickup', stats.pickup_scheduled || 0);
+    setText('soStatTransit', stats.in_transit || 0);
+    setText('soStatDelivered', stats.delivered || 0);
+    setText('soStatCancelled', stats.cancelled || 0);
+    setText('soStatCodValue', fmtMoney(stats.cod_value));
+    setText('soStatFreight', fmtMoney(stats.freight_total));
+
+    // Status pill counts
+    const setCount = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val ? ` (${val})` : ''; };
+    setCount('soCountAll', stats.total);
+    setCount('soCountReady', stats.ready_to_ship);
+    setCount('soCountPickup', stats.pickup_scheduled);
+    setCount('soCountTransit', stats.in_transit);
+    setCount('soCountDelivered', stats.delivered);
+    setCount('soCountCancelled', stats.cancelled);
+
+    // Carrier dropdown (populate once from server list, preserve selection)
+    const carrierSel = document.getElementById('soCarrierFilter');
+    if (carrierSel && data.carriers && carrierSel.options.length <= 1) {
+        data.carriers.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c;
+            opt.textContent = c.charAt(0).toUpperCase() + c.slice(1);
+            carrierSel.appendChild(opt);
+        });
+        carrierSel.value = soCarrier;
+    }
+
+    // Results bar + active filter tags
+    const resultsBar = document.getElementById('soResultsBar');
+    if (resultsBar) {
+        resultsBar.style.display = 'flex';
+        setText('soShowingCount', shipments.length);
+        setText('soTotalCount', soTotal);
+    }
+    renderSoActiveFilters();
+
+    // Pagination
+    const pag = document.getElementById('soPagination');
+    if (pag) {
+        const totalPages = Math.max(1, Math.ceil(soTotal / SO_PAGE_SIZE));
+        const curPage = Math.floor(soOffset / SO_PAGE_SIZE) + 1;
+        pag.style.display = soTotal > SO_PAGE_SIZE ? 'flex' : 'none';
+        setText('soPageInfo', `Page ${curPage} of ${totalPages}`);
+        document.getElementById('soPrevBtn').disabled = soOffset === 0;
+        document.getElementById('soNextBtn').disabled = soOffset + SO_PAGE_SIZE >= soTotal;
+    }
+
+    if (shipments.length === 0) {
+        container.innerHTML = `
+            <div class="multi-orders-empty">
+                <div class="multi-orders-empty-icon">🚚</div>
+                <div class="multi-orders-empty-title">No Shipments Found</div>
+                <div class="multi-orders-empty-text">${soStatus || soSearchQuery || soCarrier || soPayment || soStartDate || soEndDate ? 'No shipments match your current filters. Try adjusting or clearing them.' : 'No orders have been shipped yet.'}</div>
+            </div>
+        `;
+        return;
+    }
+
+    const minDate = formatDateForInput(new Date());
+    container.innerHTML = shipments.map(sh => {
+        const active = !['cancelled', 'failed'].includes(sh.status);
+        const isShiprocket = sh.carrier === 'shiprocket';
+        const isCod = (sh.payment_mode || '').toUpperCase() === 'COD';
+        const canPickup = active && ['created', 'awb_assigned'].includes(sh.status);
+        const items = sh.items_json ? parseItemsPreview(sh.items_json) : (sh.product_name || '—');
+        const dims = sh.weight_grams ? `${sh.weight_grams}g · ${sh.length_cm}×${sh.breadth_cm}×${sh.height_cm} cm` : '—';
+        const addr = [sh.customer_address, sh.customer_city, sh.customer_state, sh.customer_pincode].filter(Boolean).join(', ');
+        const waPhone = (sh.customer_phone || '').replace(/[^0-9]/g, '');
+
+        return `
+        <div class="so-ship-card">
+            <div class="so-ship-head">
+                <span class="so-order-id">#${escapeHtml(String(sh.order_id || ''))}</span>
+                <span class="shipment-status-pill ${sh.status}">${(sh.status || '').replace(/_/g, ' ')}</span>
+                <span class="so-badge carrier">${escapeHtml(sh.courier_name || sh.carrier || '')}</span>
+                <span class="so-badge ${isCod ? 'cod' : 'prepaid'}">${isCod ? `COD${Number(sh.cod_amount) > 0 ? ` ₹${sh.cod_amount}` : ''}` : 'Prepaid'}</span>
+                ${sh.awb ? `<span class="so-awb" onclick="copyShipAwb('${escapeHtml(sh.awb)}')" title="Click to copy AWB">${escapeHtml(sh.awb)} ⧉</span>` : ''}
+                <span class="so-ship-date">${formatDate(sh.created_at)}${sh.shipped_by ? ` · by ${escapeHtml(sh.shipped_by)}` : ''}</span>
+            </div>
+            <div class="so-ship-body">
+                <div>
+                    <span class="so-info-label">Customer</span>
+                    <div class="so-info-value">${escapeHtml(sh.customer_name || 'Unknown')}<br><span class="sub">${sh.customer_phone ? formatPhone(sh.customer_phone) : '—'}</span></div>
+                </div>
+                <div>
+                    <span class="so-info-label">Destination</span>
+                    <div class="so-info-value">${addr ? escapeHtml(addr) : '—'}</div>
+                </div>
+                <div>
+                    <span class="so-info-label">Items</span>
+                    <div class="so-info-value">${escapeHtml(String(items))}<br><span class="sub">Order value: ${sh.order_total ? '₹' + Number(sh.order_total).toLocaleString('en-IN') : '—'}</span></div>
+                </div>
+                <div>
+                    <span class="so-info-label">Package &amp; Freight</span>
+                    <div class="so-info-value">${dims}<br><span class="sub">Freight: ${sh.freight_charge ? '₹' + sh.freight_charge : '—'}${sh.pickup_date ? ` · Pickup: ${escapeHtml(String(sh.pickup_date))}` : ''}</span></div>
+                </div>
+                ${sh.error_message ? `<div><span class="so-info-label">Error</span><div class="so-info-value" style="color:#ff6b7a;">${escapeHtml(sh.error_message)}</div></div>` : ''}
+            </div>
+            <div class="so-ship-actions">
+                ${active ? `
+                    <button class="so-act-btn track" onclick="shipDoTrack(${sh.id})">📍 Track</button>
+                    ${sh.tracking_url ? `<a class="so-act-btn track" href="${escapeHtml(sh.tracking_url)}" target="_blank">Open Tracking ↗</a>` : ''}
+                    <button class="so-act-btn label" onclick="shipGetLabel(${sh.id})">⬇️ Label</button>
+                    ${isShiprocket ? `
+                        <button class="so-act-btn label" onclick="shipGetLabel(${sh.id}, 'manifest')">Manifest</button>
+                        <button class="so-act-btn label" onclick="shipGetLabel(${sh.id}, 'invoice')">Invoice</button>` : ''}
+                    ${canPickup ? `
+                        <input type="date" class="so-pickup-date" id="so-pickup-${sh.id}" min="${minDate}" value="${minDate}" style="color-scheme: dark;">
+                        <button class="so-act-btn pickup" onclick="shipDoPickup(${sh.id}, 'so-pickup-${sh.id}')">📅 Pickup</button>` : ''}
+                    ${waPhone ? `<a class="so-act-btn wa" href="https://wa.me/${waPhone}" target="_blank">WhatsApp</a>` : ''}
+                    <button class="so-act-btn cancel" onclick="soDoCancel(${sh.id})" style="margin-left:auto;">✕ Cancel</button>
+                ` : `
+                    <span style="font-size:0.72rem;color:rgba(255,255,255,0.35);font-family:'Archivo Narrow',sans-serif;letter-spacing:1px;text-transform:uppercase;">Shipment ${escapeHtml(sh.status || '')}</span>
+                    ${waPhone ? `<a class="so-act-btn wa" href="https://wa.me/${waPhone}" target="_blank" style="margin-left:auto;">WhatsApp</a>` : ''}
+                `}
+            </div>
+            <div id="track-${sh.id}" style="padding: 0 1.25rem;"></div>
+        </div>`;
+    }).join('');
+}
+
+function renderSoActiveFilters() {
+    const wrap = document.getElementById('soActiveFilters');
+    if (!wrap) return;
+    const tags = [];
+    const statusLabels = { ready: 'Ready', pickup_scheduled: 'Pickup Scheduled', in_transit: 'In Transit', delivered: 'Delivered', cancelled: 'Cancelled' };
+    if (soStatus) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('status')">${statusLabels[soStatus] || soStatus} <span class="tag-close">×</span></span>`);
+    if (soCarrier) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('carrier')">${escapeHtml(soCarrier)} <span class="tag-close">×</span></span>`);
+    if (soPayment) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('payment')">${escapeHtml(soPayment)} <span class="tag-close">×</span></span>`);
+    if (soSearchQuery) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('search')">“${escapeHtml(soSearchQuery)}” <span class="tag-close">×</span></span>`);
+    if (soStartDate || soEndDate) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('dates')">${soStartDate || '…'} → ${soEndDate || '…'} <span class="tag-close">×</span></span>`);
+    wrap.innerHTML = tags.join('');
+}
+
+function soRemoveFilter(kind) {
+    if (kind === 'status') {
+        soStatus = '';
+        document.querySelectorAll('.so-status-pill').forEach(p => p.classList.remove('active'));
+        document.querySelector('.so-status-pill[data-so-status=""]')?.classList.add('active');
+    } else if (kind === 'carrier') {
+        soCarrier = '';
+        const el = document.getElementById('soCarrierFilter'); if (el) el.value = '';
+    } else if (kind === 'payment') {
+        soPayment = '';
+        const el = document.getElementById('soPaymentFilter'); if (el) el.value = '';
+    } else if (kind === 'search') {
+        soSearchQuery = '';
+        const el = document.getElementById('soSearchInput'); if (el) el.value = '';
+    } else if (kind === 'dates') {
+        soStartDate = ''; soEndDate = ''; soQuickDate = null;
+        const s = document.getElementById('soStartDate'); if (s) s.value = '';
+        const e = document.getElementById('soEndDate'); if (e) e.value = '';
+        document.querySelectorAll('.so-quick-date').forEach(b => b.classList.remove('active'));
+    }
+    soOffset = 0;
+    fetchShippedOrders();
+}
+
+function applySoQuickDate(range) {
+    // Get current time in IST (UTC + 5:30)
+    const now = new Date();
+    const istNow = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+    let start, end;
+
+    switch (range) {
+        case 'today':
+            start = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()));
+            end = new Date(start);
+            break;
+        case 'yesterday':
+            start = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate() - 1));
+            end = new Date(start);
+            break;
+        case 'last7':
+            start = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate() - 6));
+            end = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()));
+            break;
+        case 'last30':
+            start = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate() - 29));
+            end = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()));
+            break;
+        case 'thisMonth':
+            start = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), 1));
+            end = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()));
+            break;
+        default:
+            return;
+    }
+
+    const fmt = d => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    soStartDate = fmt(start);
+    soEndDate = fmt(end);
+
+    const startEl = document.getElementById('soStartDate');
+    const endEl = document.getElementById('soEndDate');
+    if (startEl) startEl.value = soStartDate;
+    if (endEl) endEl.value = soEndDate;
+
+    fetchShippedOrders();
+}
+
+function clearSoFilters() {
+    soStatus = '';
+    soCarrier = '';
+    soPayment = '';
+    soSearchQuery = '';
+    soStartDate = '';
+    soEndDate = '';
+    soQuickDate = null;
+    soOffset = 0;
+
+    document.querySelectorAll('.so-status-pill').forEach(p => p.classList.remove('active'));
+    document.querySelector('.so-status-pill[data-so-status=""]')?.classList.add('active');
+    document.querySelectorAll('.so-quick-date').forEach(b => b.classList.remove('active'));
+    const ids = { soCarrierFilter: '', soPaymentFilter: '', soSearchInput: '', soStartDate: '', soEndDate: '' };
+    Object.keys(ids).forEach(id => { const el = document.getElementById(id); if (el) el.value = ids[id]; });
+
+    fetchShippedOrders();
+}
+
+async function soDoCancel(shipmentId) {
+    // Reuses the shared cancel flow, then refreshes this view's list + stats
+    await shipDoCancel(shipmentId);
+    fetchShippedOrders();
+}
+
+async function exportShippedCsv() {
+    showShipToast('Preparing CSV export...');
+    try {
+        const data = await apiCall('/shipping/history?' + buildSoParams(1000, 0).toString());
+        if (!data || !data.success) { showShipToast(data?.error || 'Export failed', true); return; }
+        const shipments = data.shipments || [];
+        if (shipments.length === 0) { showShipToast('Nothing to export for current filters', true); return; }
+
+        const cols = ['Order ID', 'Customer', 'Phone', 'Address', 'City', 'State', 'Pincode', 'Carrier', 'Courier', 'AWB', 'Status', 'Payment', 'COD Amount', 'Order Total', 'Weight (g)', 'Freight', 'Pickup Date', 'Tracking URL', 'Shipped By', 'Created At'];
+        const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        const rows = shipments.map(sh => [
+            sh.order_id, sh.customer_name, sh.customer_phone, sh.customer_address, sh.customer_city,
+            sh.customer_state, sh.customer_pincode, sh.carrier, sh.courier_name, sh.awb, sh.status,
+            sh.payment_mode, sh.cod_amount, sh.order_total, sh.weight_grams, sh.freight_charge,
+            sh.pickup_date, sh.tracking_url, sh.shipped_by, sh.created_at
+        ].map(esc).join(','));
+
+        const csv = [cols.map(esc).join(','), ...rows].join('\n');
+        const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `shipped-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+        showShipToast(`✅ Exported ${shipments.length} shipments`);
+    } catch (err) {
+        console.error('Shipped CSV export error:', err);
+        showShipToast('Export failed', true);
+    }
+}
+
+// Expose shipped-orders functions for inline onclick handlers
+window.soDoCancel = soDoCancel;
+window.soRemoveFilter = soRemoveFilter;
