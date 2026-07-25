@@ -225,6 +225,9 @@ async function initializeDatabase() {
     // Initialize Shipments Table (Shopper Hub shipping module)
     await initializeShipmentsTable();
     
+    // Initialize AI Copilot Tables (pending actions, chat history, usage log)
+    await initializeAiTables();
+    
     // Initialize Performance Indexes
     await initializePerformanceIndexes();
     
@@ -552,6 +555,56 @@ async function initializeShipmentsTable() {
     console.log('✅ Shipments table initialized');
   } catch (error) {
     console.error('❌ Failed to initialize shipments table:', error.message);
+  }
+}
+
+async function initializeAiTables() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_pending_actions (
+        id SERIAL PRIMARY KEY,
+        actor VARCHAR(100) NOT NULL,
+        tool_name VARCHAR(100) NOT NULL,
+        tool_args JSONB,
+        summary TEXT,
+        status VARCHAR(20) DEFAULT 'pending',
+        result JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP
+      )
+    `);
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_ai_pending_actions_actor_status ON ai_pending_actions(actor, status)');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_chat_history (
+        id SERIAL PRIMARY KEY,
+        actor VARCHAR(100) NOT NULL,
+        role VARCHAR(20) NOT NULL,
+        content TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_ai_chat_history_actor_id ON ai_chat_history(actor, id DESC)');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_usage_log (
+        id SERIAL PRIMARY KEY,
+        actor VARCHAR(100) NOT NULL,
+        kind VARCHAR(30) DEFAULT 'chat',
+        model VARCHAR(100),
+        prompt_tokens INTEGER DEFAULT 0,
+        completion_tokens INTEGER DEFAULT 0,
+        cost_usd DECIMAL(12, 6) DEFAULT 0,
+        tool_calls TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_ai_usage_log_actor_created ON ai_usage_log(actor, created_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_ai_usage_log_kind_created ON ai_usage_log(kind, created_at DESC)');
+
+    console.log('✅ AI copilot tables initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize AI copilot tables:', error.message);
   }
 }
 

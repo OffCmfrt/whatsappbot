@@ -4502,4 +4502,117 @@ router.get('/shipping/shipments/:id/track', verifyToken, async (req, res) => {
     }
 });
 
+// ============ AI COPILOT ROUTES ============
+
+// Chat with the admin AI copilot (tool-calling agent, mutating actions gated by confirm)
+router.post('/ai/chat', verifyToken, async (req, res) => {
+    try {
+        const { message } = req.body;
+        if (!message || !String(message).trim()) {
+            return res.status(400).json({ success: false, error: 'Message is required' });
+        }
+        const { runAgent } = require('../services/ai/agent');
+        const result = await runAgent({
+            actor: req.admin?.username || 'admin',
+            userMessage: String(message).trim().substring(0, 4000)
+        });
+        res.json({ success: true, reply: result.reply, pendingAction: result.pendingAction, usage: result.usage });
+    } catch (error) {
+        console.error('AI chat error:', error.message);
+        const friendly = error.code === 'AI_RATE_LIMIT'
+            ? error.message
+            : 'AI request failed. Please try again.';
+        res.status(500).json({ success: false, error: friendly });
+    }
+});
+
+// Confirm and execute a pending AI action
+router.post('/ai/confirm/:id', verifyToken, async (req, res) => {
+    try {
+        const { executeConfirmedAction } = require('../services/ai/agent');
+        const result = await executeConfirmedAction(req.params.id, req.admin?.username || 'admin');
+        if (!result.ok) return res.status(400).json({ success: false, error: result.error, summary: result.summary });
+        res.json({ success: true, result: result.result, summary: result.summary });
+    } catch (error) {
+        console.error('AI confirm error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to execute action' });
+    }
+});
+
+// Cancel a pending AI action
+router.post('/ai/cancel/:id', verifyToken, async (req, res) => {
+    try {
+        const aiStore = require('../services/ai/aiStore');
+        const result = await aiStore.cancelPendingAction(req.params.id, req.admin?.username || 'admin');
+        if (!result.ok) return res.status(400).json({ success: false, error: result.error });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI cancel error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to cancel action' });
+    }
+});
+
+// AI reply suggestions for a customer chat (drafts only — never auto-sent)
+router.post('/ai/suggest-reply', verifyToken, async (req, res) => {
+    try {
+        const { phone, ticketId } = req.body;
+        if (!phone) return res.status(400).json({ success: false, error: 'Customer phone is required' });
+        const { suggestReply } = require('../services/ai/suggestReply');
+        const result = await suggestReply({
+            actor: req.admin?.username || 'admin',
+            phone,
+            ticketId: ticketId || null
+        });
+        res.json({ success: true, suggestions: result.suggestions });
+    } catch (error) {
+        console.error('AI suggest-reply error:', error.message);
+        const known = ['AI_NOT_CONFIGURED', 'AI_DISABLED', 'AI_LIMIT', 'NO_HISTORY', 'AI_RATE_LIMIT'];
+        const status = known.includes(error.code) ? 400 : 500;
+        res.status(status).json({ success: false, error: known.includes(error.code) ? error.message : 'Failed to generate suggestions' });
+    }
+});
+
+// AI usage stats for the dashboard widget
+router.get('/ai/usage', verifyToken, async (req, res) => {
+    try {
+        const aiStore = require('../services/ai/aiStore');
+        const { getConfig, isConfigured } = require('../services/ai/aiClient');
+        const days = Math.min(parseInt(req.query.days) || 30, 90);
+        const stats = await aiStore.getUsageStats(days);
+        const cfg = getConfig();
+        res.json({
+            success: true,
+            configured: isConfigured(),
+            provider: cfg.provider,
+            model: cfg.model,
+            ...stats
+        });
+    } catch (error) {
+        console.error('AI usage error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to fetch AI usage' });
+    }
+});
+
+// Clear the copilot chat history for the current admin
+router.post('/ai/clear-history', verifyToken, async (req, res) => {
+    try {
+        const aiStore = require('../services/ai/aiStore');
+        await aiStore.clearChatHistory(req.admin?.username || 'admin');
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Failed to clear history' });
+    }
+});
+
+// Load copilot chat history (for panel restore on reload)
+router.get('/ai/history', verifyToken, async (req, res) => {
+    try {
+        const aiStore = require('../services/ai/aiStore');
+        const history = await aiStore.getChatHistory(req.admin?.username || 'admin');
+        res.json({ success: true, history });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Failed to load history' });
+    }
+});
+
 module.exports = router;

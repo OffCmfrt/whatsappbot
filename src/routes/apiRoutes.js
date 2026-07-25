@@ -134,4 +134,73 @@ router.post('/shoppers/auth', (req, res) => {
     }
 });
 
+// Internal read-only data endpoint for the exchange-return system's AI copilot.
+// Auth: x-internal-token (WHATSAPP_INTERNAL_TOKEN). Resources: stats, tickets, messages, carts, customers.
+router.get('/ai-data', validateInternalToken, async (req, res) => {
+    try {
+        const { resource, query = '', limit } = req.query;
+        const n = Math.min(parseInt(limit) || 20, 50);
+        const q = String(query).trim();
+
+        switch (resource) {
+            case 'stats': {
+                const [customers, tickets, carts, messages] = await Promise.all([
+                    dbAdapter.query('SELECT COUNT(*)::int AS c FROM customers'),
+                    dbAdapter.query(`SELECT COUNT(*)::int AS c FROM support_tickets WHERE status = 'open'`),
+                    dbAdapter.query(`SELECT COUNT(*)::int AS c FROM abandoned_carts WHERE status = 'pending'`),
+                    dbAdapter.query('SELECT COUNT(*)::int AS c FROM messages')
+                ]);
+                return res.json({
+                    totalCustomers: customers[0]?.c || 0,
+                    openTickets: tickets[0]?.c || 0,
+                    pendingAbandonedCarts: carts[0]?.c || 0,
+                    totalMessages: messages[0]?.c || 0
+                });
+            }
+            case 'tickets': {
+                const params = [];
+                let sql = 'SELECT id, ticket_number, customer_phone, customer_name, message, status, created_at FROM support_tickets WHERE 1=1';
+                if (q) { sql += ' AND (customer_phone LIKE ? OR status = ? OR ticket_number ILIKE ?)'; params.push(`%${q.replace(/\D/g, '').slice(-10) || q}`, q, `%${q}%`); }
+                sql += ' ORDER BY created_at DESC LIMIT ?';
+                params.push(n);
+                const rows = await dbAdapter.query(sql, params);
+                return res.json({ count: rows.length, tickets: rows });
+            }
+            case 'messages': {
+                if (!q) return res.status(400).json({ error: 'query (phone) is required for messages' });
+                const rows = await dbAdapter.query(
+                    `SELECT message_type, message_content, status, created_at FROM messages
+                     WHERE customer_phone LIKE ? ORDER BY id DESC LIMIT ?`,
+                    [`%${q.replace(/\D/g, '').slice(-10)}`, n]
+                );
+                return res.json({ count: rows.length, messages: rows.reverse() });
+            }
+            case 'carts': {
+                const params = [];
+                let sql = 'SELECT checkout_id, customer_phone, customer_name, total_amount, currency, status, created_at FROM abandoned_carts WHERE 1=1';
+                if (q) { sql += ' AND (status = ? OR customer_phone LIKE ?)'; params.push(q, `%${q.replace(/\D/g, '').slice(-10) || q}`); }
+                sql += ' ORDER BY created_at DESC LIMIT ?';
+                params.push(n);
+                const rows = await dbAdapter.query(sql, params);
+                return res.json({ count: rows.length, carts: rows });
+            }
+            case 'customers': {
+                if (!q) return res.status(400).json({ error: 'query is required for customers' });
+                const like = `%${q}%`;
+                const rows = await dbAdapter.query(
+                    `SELECT phone, name, email, order_count, created_at FROM customers
+                     WHERE phone ILIKE ? OR name ILIKE ? OR email ILIKE ? ORDER BY updated_at DESC NULLS LAST LIMIT ?`,
+                    [like, like, like, n]
+                );
+                return res.json({ count: rows.length, customers: rows });
+            }
+            default:
+                return res.status(400).json({ error: `Unknown resource '${resource}'. Use: stats, tickets, messages, carts, customers` });
+        }
+    } catch (error) {
+        console.error('❌ AI data endpoint error:', error.message);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 module.exports = router;
