@@ -205,9 +205,9 @@ class ShiprocketAdapter extends BaseCarrier {
                 order_items: orderItems,
                 payment_method: isCod ? 'COD' : 'Prepaid',
                 sub_total: subTotal,
-                length: ctx.package.lengthCm || 20,
-                breadth: ctx.package.breadthCm || 15,
-                height: ctx.package.heightCm || 5,
+                length: ctx.package.lengthCm || 30,
+                breadth: ctx.package.breadthCm || 40,
+                height: ctx.package.heightCm || 2,
                 weight: (ctx.package.weightGrams || 500) / 1000 // kg
             };
 

@@ -122,9 +122,9 @@ class DelhiveryAdapter extends BaseCarrier {
                     products_desc: productsDesc,
                     quantity: String(totalQty),
                     weight: String(ctx.package.weightGrams || 500),
-                    shipment_length: String(ctx.package.lengthCm || 20),
-                    shipment_width: String(ctx.package.breadthCm || 15),
-                    shipment_height: String(ctx.package.heightCm || 5)
+                    shipment_length: String(ctx.package.lengthCm || 30),
+                    shipment_width: String(ctx.package.breadthCm || 40),
+                    shipment_height: String(ctx.package.heightCm || 2)
                 }],
                 pickup_location: {
                     name: process.env.DELHIVERY_PICKUP_LOCATION

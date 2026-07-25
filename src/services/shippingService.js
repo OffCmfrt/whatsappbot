@@ -15,7 +15,7 @@ const { caches } = require('../utils/cache');
 const { getConfiguredCarriers, getAdapter } = require('./carriers');
 
 // Default package when admin doesn't override (apparel-friendly)
-const DEFAULT_PACKAGE = { weightGrams: 500, lengthCm: 20, breadthCm: 15, heightCm: 5 };
+const DEFAULT_PACKAGE = { weightGrams: 500, lengthCm: 30, breadthCm: 40, heightCm: 2 };
 
 function invalidateShoppersCache() {
     if (caches && caches.shoppers) {

@@ -4770,9 +4770,9 @@ async function startBulkShip() {
     const carrier = document.getElementById('bulkShipCarrier').value;
     const packageOverrides = {
         weightGrams: parseInt(document.getElementById('bulkShipWeight').value) || 500,
-        lengthCm: parseFloat(document.getElementById('bulkShipLength').value) || 20,
-        breadthCm: parseFloat(document.getElementById('bulkShipBreadth').value) || 15,
-        heightCm: parseFloat(document.getElementById('bulkShipHeight').value) || 5
+        lengthCm: parseFloat(document.getElementById('bulkShipLength').value) || 30,
+        breadthCm: parseFloat(document.getElementById('bulkShipBreadth').value) || 40,
+        heightCm: parseFloat(document.getElementById('bulkShipHeight').value) || 2
     };
 
     bulkShipRunning = true;
