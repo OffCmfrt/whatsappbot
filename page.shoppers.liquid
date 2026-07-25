@@ -1079,6 +1079,128 @@
         .modal-actions { display: flex; gap: 1rem; margin-top: 2rem; }
         .modal-actions button { flex: 1; height: 44px; }
 
+        /* ==================== SHIPPING MODULE ==================== */
+        .ship-btn { width: 100%; margin-top: 0.75rem; padding: 0.7rem; background: linear-gradient(135deg, #1a1a1a, #2d2d2d); border: 1px solid rgba(37, 211, 102, 0.4); color: #25d366; border-radius: 8px; cursor: pointer; font-family: 'Archivo Narrow', sans-serif; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; font-size: 0.8rem; transition: all 0.2s; }
+        .ship-btn:hover { background: rgba(37, 211, 102, 0.12); border-color: #25d366; transform: translateY(-1px); }
+        .awb-chip { display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.75rem; padding: 0.45rem 0.8rem; background: rgba(37, 211, 102, 0.08); border: 1px solid rgba(37, 211, 102, 0.3); border-radius: 20px; color: #25d366; font-size: 0.75rem; font-family: 'Inter', sans-serif; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: all 0.2s; }
+        .awb-chip:hover { background: rgba(37, 211, 102, 0.18); }
+        .awb-chip.status-cancelled { color: #ff4757; background: rgba(255,71,87,0.08); border-color: rgba(255,71,87,0.3); }
+        .ship-icon-btn { border-color: rgba(37, 211, 102, 0.4) !important; color: #25d366 !important; }
+        .awb-chip-mini { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.3rem 0.6rem; background: rgba(37, 211, 102, 0.08); border: 1px solid rgba(37, 211, 102, 0.3); border-radius: 14px; color: #25d366; font-size: 0.68rem; cursor: pointer; white-space: nowrap; }
+
+        /* Ship Modal */
+        #shipModal, #bulkShipModal, #shipmentsDrawer { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); backdrop-filter: blur(12px); z-index: 2600; justify-content: center; align-items: center; }
+        #shipModal.active, #bulkShipModal.active { display: flex; }
+        #shipmentsDrawer.active { display: flex; justify-content: flex-end; }
+        .ship-modal-content { background: #0a0a0a; border: 1px solid rgba(255,255,255,0.15); border-radius: 14px; width: 94%; max-width: 720px; max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.9); overflow: hidden; }
+        .ship-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1.4rem 1.8rem; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        .ship-modal-header h3 { margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.1rem; text-transform: uppercase; letter-spacing: 2px; }
+        .ship-modal-header .ship-order-label { color: #25d366; }
+        .ship-close { background: none; border: none; color: #888; font-size: 1.6rem; cursor: pointer; line-height: 1; }
+        .ship-close:hover { color: #fff; }
+        .ship-steps { display: flex; padding: 1rem 1.8rem 0; gap: 0.5rem; }
+        .ship-step-tab { flex: 1; text-align: center; padding: 0.6rem 0.4rem; font-size: 0.7rem; font-family: 'Archivo Narrow', sans-serif; letter-spacing: 1.5px; text-transform: uppercase; color: #555; border-bottom: 2px solid rgba(255,255,255,0.08); transition: all 0.25s; }
+        .ship-step-tab.active { color: #fff; border-bottom-color: #25d366; }
+        .ship-step-tab.done { color: #25d366; border-bottom-color: rgba(37,211,102,0.4); }
+        .ship-body { padding: 1.5rem 1.8rem; overflow-y: auto; flex: 1; }
+        .ship-step-panel { display: none; }
+        .ship-step-panel.active { display: block; animation: fadeIn 0.25s ease; }
+        .ship-footer { display: flex; justify-content: space-between; gap: 1rem; padding: 1.2rem 1.8rem; border-top: 1px solid rgba(255,255,255,0.08); }
+        .ship-footer button { min-width: 130px; height: 44px; }
+        .ship-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1rem; }
+        .ship-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 0.8rem; }
+        .ship-section-title { font-size: 0.72rem; font-family: 'Archivo Narrow', sans-serif; color: #25d366; letter-spacing: 2px; text-transform: uppercase; margin: 1.4rem 0 0.8rem; padding-bottom: 0.4rem; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .ship-section-title:first-child { margin-top: 0; }
+        .ship-items-summary { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.9rem 1rem; font-size: 0.85rem; color: #ccc; line-height: 1.7; }
+        .ship-pay-badge { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 600; font-family: 'Inter', sans-serif; }
+        .ship-pay-badge.cod { background: rgba(255,165,2,0.1); border: 1px solid rgba(255,165,2,0.4); color: #ffa502; }
+        .ship-pay-badge.prepaid { background: rgba(37,211,102,0.1); border: 1px solid rgba(37,211,102,0.4); color: #25d366; }
+        .ship-validation-errors { background: rgba(255,71,87,0.08); border: 1px solid rgba(255,71,87,0.35); border-radius: 8px; padding: 0.8rem 1rem; margin-bottom: 1rem; color: #ff6b7a; font-size: 0.82rem; line-height: 1.6; display: none; }
+
+        /* Carrier cards */
+        .ship-carrier-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; }
+        .ship-carrier-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 1.2rem; cursor: pointer; transition: all 0.2s; text-align: center; }
+        .ship-carrier-card:hover { border-color: rgba(37,211,102,0.5); transform: translateY(-2px); }
+        .ship-carrier-card.selected { border-color: #25d366; background: rgba(37,211,102,0.07); box-shadow: 0 0 0 1px #25d366; }
+        .ship-carrier-card .carrier-name { font-family: 'Outfit', sans-serif; font-size: 1.05rem; font-weight: 600; margin-bottom: 0.3rem; }
+        .ship-carrier-card .carrier-sub { font-size: 0.72rem; color: #888; letter-spacing: 0.5px; }
+        .ship-loading { display: flex; align-items: center; gap: 0.7rem; color: #888; font-size: 0.85rem; padding: 1.2rem 0; }
+        .ship-error-box { background: rgba(255,71,87,0.08); border: 1px solid rgba(255,71,87,0.35); border-radius: 8px; padding: 0.9rem 1rem; color: #ff6b7a; font-size: 0.83rem; line-height: 1.5; margin-top: 1rem; word-break: break-word; }
+        .ship-ok-box { background: rgba(37,211,102,0.07); border: 1px solid rgba(37,211,102,0.35); border-radius: 8px; padding: 0.9rem 1rem; color: #25d366; font-size: 0.85rem; margin-top: 1rem; }
+
+        /* Courier rate table */
+        .courier-table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.82rem; }
+        .courier-table th { text-align: left; padding: 0.6rem 0.7rem; color: #888; font-family: 'Archivo Narrow', sans-serif; letter-spacing: 1px; text-transform: uppercase; font-size: 0.68rem; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .courier-table td { padding: 0.65rem 0.7rem; border-bottom: 1px solid rgba(255,255,255,0.05); color: #ddd; }
+        .courier-table tr.courier-row { cursor: pointer; transition: background 0.15s; }
+        .courier-table tr.courier-row:hover { background: rgba(255,255,255,0.04); }
+        .courier-table tr.courier-row.selected { background: rgba(37,211,102,0.08); }
+        .courier-table tr.courier-row.selected td:first-child { color: #25d366; font-weight: 600; }
+        .courier-radio { width: 14px; height: 14px; border: 2px solid #555; border-radius: 50%; display: inline-block; vertical-align: middle; margin-right: 0.5rem; }
+        tr.selected .courier-radio { border-color: #25d366; background: radial-gradient(circle, #25d366 40%, transparent 45%); }
+        .courier-rec-badge { font-size: 0.62rem; background: rgba(37,211,102,0.15); color: #25d366; padding: 0.15rem 0.45rem; border-radius: 10px; margin-left: 0.4rem; letter-spacing: 0.5px; }
+
+        /* Confirm summary + success */
+        .ship-summary-table { width: 100%; font-size: 0.85rem; border-collapse: collapse; }
+        .ship-summary-table td { padding: 0.5rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .ship-summary-table td:first-child { color: #888; width: 40%; }
+        .ship-summary-table td:last-child { color: #fff; text-align: right; }
+        .ship-notify-row { display: flex; align-items: center; gap: 0.7rem; margin-top: 1.4rem; padding: 0.9rem 1rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; font-size: 0.85rem; color: #ccc; }
+        .ship-notify-row input[type='checkbox'] { width: 16px; height: 16px; accent-color: #25d366; }
+        .ship-success-panel { text-align: center; padding: 1.5rem 0; }
+        .ship-success-panel .success-icon { font-size: 3rem; margin-bottom: 0.7rem; }
+        .ship-success-panel h4 { font-family: 'Outfit', sans-serif; font-size: 1.25rem; margin: 0 0 1.2rem; letter-spacing: 1px; }
+        .ship-awb-display { display: inline-flex; align-items: center; gap: 0.8rem; background: rgba(37,211,102,0.08); border: 1px solid rgba(37,211,102,0.4); border-radius: 10px; padding: 0.9rem 1.4rem; font-size: 1.1rem; font-family: 'Inter', sans-serif; font-weight: 600; color: #25d366; letter-spacing: 1px; }
+        .ship-awb-copy { background: none; border: 1px solid rgba(37,211,102,0.4); color: #25d366; border-radius: 6px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.72rem; }
+        .ship-awb-copy:hover { background: rgba(37,211,102,0.15); }
+        .ship-quick-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; justify-content: center; margin-top: 1.5rem; }
+        .ship-quick-actions .btn { min-width: 140px; }
+        .ship-pickup-row { display: flex; gap: 0.7rem; justify-content: center; align-items: center; margin-top: 1rem; }
+        .ship-pickup-row input[type='date'] { padding: 0.6rem; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff; color-scheme: dark; }
+
+        /* Shipments drawer */
+        .shipments-drawer-content { background: #0a0a0a; border-left: 1px solid rgba(255,255,255,0.15); width: 100%; max-width: 520px; height: 100vh; display: flex; flex-direction: column; animation: slideInRight 0.3s ease; }
+        @keyframes slideInRight { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        .shipments-drawer-header { display: flex; justify-content: space-between; align-items: center; padding: 1.4rem 1.6rem; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        .shipments-drawer-header h3 { margin: 0; font-family: 'Outfit', sans-serif; font-size: 1rem; text-transform: uppercase; letter-spacing: 2px; }
+        .shipments-drawer-body { flex: 1; overflow-y: auto; padding: 1.4rem 1.6rem; }
+        .shipment-entry { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 1.1rem 1.2rem; margin-bottom: 1rem; }
+        .shipment-entry-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; }
+        .shipment-entry-head .ship-carrier { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 0.95rem; }
+        .shipment-status-pill { font-size: 0.62rem; padding: 0.25rem 0.65rem; border-radius: 12px; letter-spacing: 1px; text-transform: uppercase; font-family: 'Archivo Narrow', sans-serif; font-weight: 700; }
+        .shipment-status-pill.awb_assigned, .shipment-status-pill.created { background: rgba(30,144,255,0.12); color: #4da6ff; border: 1px solid rgba(30,144,255,0.35); }
+        .shipment-status-pill.pickup_scheduled, .shipment-status-pill.in_transit { background: rgba(255,165,2,0.12); color: #ffa502; border: 1px solid rgba(255,165,2,0.35); }
+        .shipment-status-pill.delivered { background: rgba(37,211,102,0.12); color: #25d366; border: 1px solid rgba(37,211,102,0.35); }
+        .shipment-status-pill.cancelled, .shipment-status-pill.failed { background: rgba(255,71,87,0.12); color: #ff4757; border: 1px solid rgba(255,71,87,0.35); }
+        .shipment-meta { font-size: 0.78rem; color: #999; line-height: 1.7; }
+        .shipment-meta b { color: #ddd; font-weight: 600; }
+        .shipment-entry-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
+        .shipment-entry-actions button, .shipment-entry-actions a { font-size: 0.7rem; padding: 0.4rem 0.7rem; border-radius: 6px; background: transparent; border: 1px solid rgba(255,255,255,0.2); color: #ccc; cursor: pointer; text-decoration: none; font-family: 'Archivo Narrow', sans-serif; letter-spacing: 1px; text-transform: uppercase; }
+        .shipment-entry-actions button:hover, .shipment-entry-actions a:hover { border-color: #fff; color: #fff; }
+        .shipment-entry-actions .danger { border-color: rgba(255,71,87,0.4); color: #ff4757; }
+        .shipment-entry-actions .danger:hover { background: rgba(255,71,87,0.1); border-color: #ff4757; color: #ff4757; }
+        .tracking-timeline { margin-top: 0.9rem; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 0.8rem; }
+        .tracking-event { display: flex; gap: 0.7rem; margin-bottom: 0.7rem; font-size: 0.75rem; }
+        .tracking-event .dot { width: 8px; height: 8px; border-radius: 50%; background: #25d366; margin-top: 0.3rem; flex-shrink: 0; }
+        .tracking-event .evt-activity { color: #ddd; }
+        .tracking-event .evt-meta { color: #777; font-size: 0.68rem; margin-top: 0.15rem; }
+
+        /* Bulk ship */
+        .bulk-ship-content { background: #0a0a0a; border: 1px solid rgba(255,255,255,0.15); border-radius: 14px; width: 94%; max-width: 560px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+        .bulk-ship-progress { max-height: 300px; overflow-y: auto; margin-top: 1rem; }
+        .bulk-ship-line { display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; padding: 0.55rem 0.7rem; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.8rem; }
+        .bulk-ship-line .bs-order { color: #ddd; font-weight: 600; }
+        .bulk-ship-line .bs-result { font-size: 0.72rem; text-align: right; }
+        .bulk-ship-line .bs-result.ok { color: #25d366; }
+        .bulk-ship-line .bs-result.err { color: #ff6b7a; }
+        .bulk-ship-line .bs-result.run { color: #ffa502; }
+
+        /* Ship toast */
+        .ship-toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); background: #111; border: 1px solid rgba(37,211,102,0.5); color: #fff; padding: 0.9rem 1.6rem; border-radius: 10px; z-index: 5000; font-size: 0.85rem; box-shadow: 0 10px 30px rgba(0,0,0,0.7); animation: fadeIn 0.25s ease; max-width: 90vw; }
+        .ship-toast.error { border-color: rgba(255,71,87,0.6); }
+        @keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+        @media (max-width: 640px) { .ship-grid-4 { grid-template-columns: 1fr 1fr; } .ship-grid-2 { grid-template-columns: 1fr; } .ship-footer button { min-width: 100px; } }
+
         /* Live Chat Modal */
         #chatModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.95); backdrop-filter: blur(10px); z-index: 3000; }
         #chatModal.active { display: flex; }
@@ -3271,6 +3393,7 @@
                     <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('confirmed')">Mark Confirmed</button>
                     <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('pending')">Mark Pending</button>
                     <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('cancelled')">Mark Cancelled</button>
+                    <button class="bulk-btn bulk-btn-status" style="border-color: rgba(37,211,102,0.5); color: #25d366;" onclick="openBulkShipModal()">Ship Selected</button>
                     <button class="bulk-btn bulk-btn-delete" onclick="bulkDelete()">Delete Selected</button>
                     <button class="bulk-btn-close" onclick="clearSelection()">&times;</button>
                 </div>
@@ -4233,7 +4356,113 @@
         </div>
     </div>
 
+    <!-- Shipping Modal (3-step wizard) -->
+    <div id="shipModal">
+        <div class="ship-modal-content">
+            <div class="ship-modal-header">
+                <h3>🚚 Ship Order <span class="ship-order-label" id="shipOrderIdLabel"></span></h3>
+                <button class="ship-close" onclick="closeShipModal()">&times;</button>
+            </div>
+            <div class="ship-steps">
+                <div class="ship-step-tab active" id="shipStepTab1">1 &middot; Review &amp; Package</div>
+                <div class="ship-step-tab" id="shipStepTab2">2 &middot; Carrier &amp; Rates</div>
+                <div class="ship-step-tab" id="shipStepTab3">3 &middot; Confirm &amp; Ship</div>
+            </div>
+            <div class="ship-body">
+                <!-- Step 1: Review & Package -->
+                <div class="ship-step-panel active" id="shipStep1">
+                    <div class="ship-validation-errors" id="shipValidationErrors"></div>
+                    <div class="ship-section-title">Consignee</div>
+                    <div class="ship-grid-2">
+                        <div class="form-group"><label>Name</label><input type="text" id="shipName"></div>
+                        <div class="form-group"><label>Phone</label><input type="text" id="shipPhone"></div>
+                    </div>
+                    <div class="form-group"><label>Address</label><textarea id="shipAddress" rows="2"></textarea></div>
+                    <div class="ship-grid-2">
+                        <div class="form-group"><label>City</label><input type="text" id="shipCity"></div>
+                        <div class="form-group"><label>State</label><input type="text" id="shipState"></div>
+                    </div>
+                    <div class="ship-grid-2">
+                        <div class="form-group"><label>Pincode</label><input type="text" id="shipPincode" maxlength="6"></div>
+                        <div class="form-group"><label>Payment</label><div id="shipPaymentBadge"></div></div>
+                    </div>
+                    <div class="ship-section-title">Items</div>
+                    <div class="ship-items-summary" id="shipItemsSummary"></div>
+                    <div class="ship-section-title">Package</div>
+                    <div class="ship-grid-4">
+                        <div class="form-group"><label>Weight (g)</label><input type="number" id="shipWeight" min="1"></div>
+                        <div class="form-group"><label>Length (cm)</label><input type="number" id="shipLength" min="1"></div>
+                        <div class="form-group"><label>Breadth (cm)</label><input type="number" id="shipBreadth" min="1"></div>
+                        <div class="form-group"><label>Height (cm)</label><input type="number" id="shipHeight" min="1"></div>
+                    </div>
+                </div>
+                <!-- Step 2: Carrier & Rates -->
+                <div class="ship-step-panel" id="shipStep2">
+                    <div class="ship-section-title">Choose Carrier</div>
+                    <div class="ship-carrier-cards" id="shipCarrierCards"></div>
+                    <div id="shipServiceabilityResult"></div>
+                </div>
+                <!-- Step 3: Confirm & Ship -->
+                <div class="ship-step-panel" id="shipStep3">
+                    <div id="shipConfirmView">
+                        <div class="ship-section-title">Shipment Summary</div>
+                        <table class="ship-summary-table" id="shipSummaryTable"></table>
+                        <div class="ship-notify-row">
+                            <input type="checkbox" id="shipNotifyCustomer">
+                            <label for="shipNotifyCustomer" style="cursor: pointer;">Notify customer on WhatsApp after AWB is assigned</label>
+                        </div>
+                        <div id="shipSubmitError"></div>
+                    </div>
+                    <div id="shipSuccessPanel" style="display: none;"></div>
+                </div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" id="shipBackBtn" onclick="shipGoBack()">Back</button>
+                <button class="btn btn-primary" id="shipNextBtn" onclick="shipGoNext()">Next</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shipments Drawer (per-order history) -->
+    <div id="shipmentsDrawer" onclick="if(event.target === this) closeShipmentsDrawer()">
+        <div class="shipments-drawer-content">
+            <div class="shipments-drawer-header">
+                <h3>📦 Shipments <span style="color: #25d366;" id="shipmentsDrawerOrderId"></span></h3>
+                <button class="ship-close" onclick="closeShipmentsDrawer()">&times;</button>
+            </div>
+            <div class="shipments-drawer-body" id="shipmentsDrawerBody"></div>
+        </div>
+    </div>
+
+    <!-- Bulk Ship Modal -->
+    <div id="bulkShipModal">
+        <div class="bulk-ship-content">
+            <div class="ship-modal-header">
+                <h3>🚚 Bulk Ship <span class="ship-order-label" id="bulkShipCount"></span></h3>
+                <button class="ship-close" onclick="closeBulkShipModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div class="form-group">
+                    <label>Carrier</label>
+                    <select id="bulkShipCarrier" style="width: 100%; padding: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff;"></select>
+                </div>
+                <div class="ship-grid-4">
+                    <div class="form-group"><label>Weight (g)</label><input type="number" id="bulkShipWeight" value="500" min="1"></div>
+                    <div class="form-group"><label>Length (cm)</label><input type="number" id="bulkShipLength" value="20" min="1"></div>
+                    <div class="form-group"><label>Breadth (cm)</label><input type="number" id="bulkShipBreadth" value="15" min="1"></div>
+                    <div class="form-group"><label>Height (cm)</label><input type="number" id="bulkShipHeight" value="5" min="1"></div>
+                </div>
+                <div style="font-size: 0.75rem; color: #888;">Shiprocket auto-assigns the cheapest courier per order. Only confirmed, un-shipped orders will be processed.</div>
+                <div class="bulk-ship-progress" id="bulkShipProgress"></div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" onclick="closeBulkShipModal()">Close</button>
+                <button class="btn btn-primary" id="bulkShipStartBtn" onclick="startBulkShip()">Start Shipping</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
-    <script src="{{ 'shoppers-app.js' | asset_url }}?v=1712700000"></script>
+    <script src="{{ 'shoppers-app.js' | asset_url }}?v=1712700001"></script>
 </body>
 </html>

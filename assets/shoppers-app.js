@@ -2053,6 +2053,10 @@ function renderCards(shoppers, total, append = false) {
         const isSelected = selectedShoppers.has(s.id);
 
         const productsText = items.map(i => i.title || i.name).join(', ') || 'No products';
+
+        // Shipping state: confirmed + no AWB = shippable; AWB present = show chip
+        const canShip = s.status === 'confirmed' && !s.awb;
+        const awbChipLabel = s.awb ? `${s.courier_name || 'Shipped'} · ${s.awb}` : '';
         
         if (currentViewMode === 'cards') {
             card.innerHTML = `
@@ -2119,6 +2123,9 @@ function renderCards(shoppers, total, append = false) {
                     <button class="status-pill ${s.status === 'edit_details' ? 'active' : ''}" onclick="updateStatus('${s.id}', 'edit_details')">Edits</button>
                     <button class="status-pill ${s.status === 'cancelled' ? 'active' : ''}" onclick="updateStatus('${s.id}', 'cancelled')">Cancel</button>
                 </div>
+
+                ${canShip ? `<button class="ship-btn" onclick="openShipModal('${s.id}')">🚚 Ship Order</button>` : ''}
+                ${s.awb ? `<div class="awb-chip" onclick="openShipmentsDrawer('${s.id}', '${s.order_id}')" title="View shipments">📦 ${escapeHtml(awbChipLabel)}</div>` : ''}
             `;
         } else {
             card.innerHTML = `
@@ -2167,6 +2174,8 @@ function renderCards(shoppers, total, append = false) {
                 <button class="action-icon-btn" onclick="openEditModal('${s.id}', '${encodeURIComponent(s.name || '')}', '${s.phone}', '${s.order_id}', '${encodeURIComponent(s.address || '')}', '${encodeURIComponent(s.items_json || '')}', '${encodeURIComponent(s.customer_message || '')}', '${s.last_response_at || ''}')" title="Edit">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                 </button>
+                ${canShip ? `<button class="action-icon-btn ship-icon-btn" onclick="openShipModal('${s.id}')" title="Ship Order">🚚</button>` : ''}
+                ${s.awb ? `<button class="action-icon-btn ship-icon-btn" onclick="openShipmentsDrawer('${s.id}', '${s.order_id}')" title="${escapeHtml(awbChipLabel)}">📦</button>` : ''}
             </div>
 
             <div class="row-status-pills">
@@ -4079,3 +4088,651 @@ window.pauseCampaign = pauseCampaign;
 window.resumeCampaign = resumeCampaign;
 window.sendCampaignNow = sendCampaignNow;
 window.viewCampaignDetails = viewCampaignDetails;
+
+// ============================================================
+// SHIPPING MODULE — ship confirmed orders via any configured carrier
+// ============================================================
+let shipState = null;          // active ship-modal wizard state
+let shipCarriersCache = null;  // configured carriers (cached per session)
+
+function showShipToast(message, isError = false) {
+    const toast = document.createElement('div');
+    toast.className = `ship-toast ${isError ? 'error' : ''}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 4500);
+}
+
+async function loadShipCarriers(force = false) {
+    if (shipCarriersCache && !force) return shipCarriersCache;
+    const data = await apiCall('/shipping/carriers');
+    shipCarriersCache = (data && data.success) ? data.carriers : [];
+    return shipCarriersCache;
+}
+
+// ---------- Ship Modal (3-step wizard) ----------
+
+async function openShipModal(shopperId) {
+    shipState = {
+        shopperId,
+        step: 1,
+        draft: null,
+        carriers: [],
+        carrier: null,       // selected carrier object {key, name, capabilities}
+        courier: null,       // selected courier {id, name, rate}
+        serviceable: false,
+        shipping: false,
+        shipped: false
+    };
+
+    document.getElementById('shipOrderIdLabel').textContent = '';
+    document.getElementById('shipItemsSummary').innerHTML = '<div class="ship-loading"><div class="spinner"></div><span>Loading order...</span></div>';
+    document.getElementById('shipValidationErrors').style.display = 'none';
+    document.getElementById('shipSuccessPanel').style.display = 'none';
+    document.getElementById('shipConfirmView').style.display = 'block';
+    document.getElementById('shipSubmitError').innerHTML = '';
+    document.getElementById('shipNotifyCustomer').checked = false;
+    setShipStep(1);
+    document.getElementById('shipModal').classList.add('active');
+
+    try {
+        const [draftRes, carriers] = await Promise.all([
+            apiCall(`/shipping/orders/${shopperId}/draft`),
+            loadShipCarriers()
+        ]);
+
+        if (!draftRes || !draftRes.success) {
+            showShipToast(draftRes?.error || 'Failed to load shipment draft', true);
+            closeShipModal();
+            return;
+        }
+
+        // Guard: order already has an active shipment → show history instead
+        const active = (draftRes.shipments || []).find(sh => !['cancelled', 'failed'].includes(sh.status));
+        if (active) {
+            closeShipModal();
+            showShipToast(`Order already shipped (AWB: ${active.awb || 'pending'}). Opening shipment history.`);
+            openShipmentsDrawer(shopperId, draftRes.draft.orderId);
+            return;
+        }
+
+        shipState.draft = draftRes.draft;
+        shipState.carriers = carriers;
+        renderShipStep1();
+    } catch (err) {
+        console.error('[SHIP] Draft load error:', err);
+        showShipToast('Error loading shipment draft', true);
+        closeShipModal();
+    }
+}
+
+function closeShipModal() {
+    document.getElementById('shipModal').classList.remove('active');
+    const wasShipped = shipState && shipState.shipped;
+    shipState = null;
+    if (wasShipped) fetchShoppersData();
+}
+
+function renderShipStep1() {
+    const d = shipState.draft;
+    document.getElementById('shipOrderIdLabel').textContent = `#${d.orderId}`;
+    document.getElementById('shipName').value = d.consignee.name || '';
+    document.getElementById('shipPhone').value = d.consignee.phone || '';
+    document.getElementById('shipAddress').value = d.consignee.address || '';
+    document.getElementById('shipCity').value = d.consignee.city || '';
+    document.getElementById('shipState').value = d.consignee.state || '';
+    document.getElementById('shipPincode').value = d.consignee.pincode || '';
+    document.getElementById('shipWeight').value = d.package.weightGrams;
+    document.getElementById('shipLength').value = d.package.lengthCm;
+    document.getElementById('shipBreadth').value = d.package.breadthCm;
+    document.getElementById('shipHeight').value = d.package.heightCm;
+
+    const isCod = d.payment.mode === 'COD';
+    document.getElementById('shipPaymentBadge').innerHTML =
+        `<span class="ship-pay-badge ${isCod ? 'cod' : 'prepaid'}">${isCod ? `💰 COD · ₹${d.payment.codAmount}` : `✓ Prepaid · ₹${d.payment.declaredValue}`}</span>`;
+
+    const itemsHtml = (d.items || []).map(i =>
+        `• ${escapeHtml(i.name)}${i.size ? ` (${escapeHtml(i.size)})` : ''} ×${i.quantity}`
+    ).join('<br>');
+    document.getElementById('shipItemsSummary').innerHTML = itemsHtml || '<span style="color:#888;">No items parsed — check order details</span>';
+}
+
+// Read (possibly edited) step-1 inputs as overrides for the backend
+function collectShipOverrides() {
+    return {
+        consigneeOverrides: {
+            name: document.getElementById('shipName').value.trim(),
+            phone: document.getElementById('shipPhone').value.trim(),
+            address: document.getElementById('shipAddress').value.trim(),
+            city: document.getElementById('shipCity').value.trim(),
+            state: document.getElementById('shipState').value.trim(),
+            pincode: document.getElementById('shipPincode').value.trim()
+        },
+        packageOverrides: {
+            weightGrams: parseInt(document.getElementById('shipWeight').value) || 0,
+            lengthCm: parseFloat(document.getElementById('shipLength').value) || 0,
+            breadthCm: parseFloat(document.getElementById('shipBreadth').value) || 0,
+            heightCm: parseFloat(document.getElementById('shipHeight').value) || 0
+        }
+    };
+}
+
+function validateShipStep1() {
+    const o = collectShipOverrides();
+    const errors = [];
+    if (!o.consigneeOverrides.name) errors.push('Consignee name is required');
+    if (!/^\d{10}$/.test(o.consigneeOverrides.phone.replace(/\D/g, '').slice(-10))) errors.push('Valid 10-digit phone is required');
+    if (o.consigneeOverrides.address.length < 5) errors.push('Delivery address is required');
+    if (!/^\d{6}$/.test(o.consigneeOverrides.pincode)) errors.push('Valid 6-digit pincode is required');
+    if (!(o.packageOverrides.weightGrams > 0)) errors.push('Weight must be greater than 0');
+
+    const box = document.getElementById('shipValidationErrors');
+    if (errors.length > 0) {
+        box.innerHTML = errors.map(e => `⚠️ ${e}`).join('<br>');
+        box.style.display = 'block';
+        return false;
+    }
+    box.style.display = 'none';
+    return true;
+}
+
+function setShipStep(step) {
+    shipState && (shipState.step = step);
+    for (let i = 1; i <= 3; i++) {
+        document.getElementById(`shipStep${i}`).classList.toggle('active', i === step);
+        const tab = document.getElementById(`shipStepTab${i}`);
+        tab.classList.toggle('active', i === step);
+        tab.classList.toggle('done', i < step);
+    }
+    const backBtn = document.getElementById('shipBackBtn');
+    const nextBtn = document.getElementById('shipNextBtn');
+    backBtn.style.visibility = step === 1 ? 'hidden' : 'visible';
+    nextBtn.disabled = false;
+    nextBtn.textContent = step === 3 ? '🚀 Ship Now' : 'Next';
+    if (shipState && shipState.shipped) {
+        backBtn.style.visibility = 'hidden';
+        nextBtn.textContent = 'Done';
+    }
+}
+
+function shipGoBack() {
+    if (!shipState || shipState.shipping || shipState.step <= 1) return;
+    setShipStep(shipState.step - 1);
+}
+
+function shipGoNext() {
+    if (!shipState || shipState.shipping) return;
+
+    if (shipState.shipped) { closeShipModal(); return; }
+
+    if (shipState.step === 1) {
+        if (!validateShipStep1()) return;
+        renderShipCarrierCards();
+        setShipStep(2);
+    } else if (shipState.step === 2) {
+        if (!shipState.carrier) { showShipToast('Select a carrier first', true); return; }
+        if (!shipState.serviceable) { showShipToast('Selected carrier is not serviceable for this pincode', true); return; }
+        if (shipState.carrier.capabilities.needsCourierSelection && !shipState.courier) {
+            showShipToast('Pick a courier from the rate table', true);
+            return;
+        }
+        renderShipSummary();
+        setShipStep(3);
+    } else if (shipState.step === 3) {
+        submitShip();
+    }
+}
+
+function renderShipCarrierCards() {
+    const wrap = document.getElementById('shipCarrierCards');
+    if (!shipState.carriers || shipState.carriers.length === 0) {
+        wrap.innerHTML = '<div class="ship-error-box" style="grid-column:1/-1;">No carriers configured. Add carrier API credentials in the server environment (e.g. DELHIVERY_API_TOKEN or SHIPROCKET_PICKUP_LOCATION).</div>';
+        return;
+    }
+    wrap.innerHTML = shipState.carriers.map(c => `
+        <div class="ship-carrier-card ${shipState.carrier?.key === c.key ? 'selected' : ''}" id="carrier-card-${c.key}" onclick="selectShipCarrier('${c.key}')">
+            <div class="carrier-name">${escapeHtml(c.name)}</div>
+            <div class="carrier-sub">${c.capabilities.needsCourierSelection ? 'Aggregator · pick courier & rate' : 'Direct API · own network'}</div>
+        </div>
+    `).join('');
+}
+
+async function selectShipCarrier(key) {
+    if (!shipState) return;
+    const carrier = shipState.carriers.find(c => c.key === key);
+    if (!carrier) return;
+
+    shipState.carrier = carrier;
+    shipState.courier = null;
+    shipState.serviceable = false;
+    document.querySelectorAll('.ship-carrier-card').forEach(el => el.classList.remove('selected'));
+    document.getElementById(`carrier-card-${key}`)?.classList.add('selected');
+
+    const resultBox = document.getElementById('shipServiceabilityResult');
+    resultBox.innerHTML = `<div class="ship-loading"><div class="spinner"></div><span>Checking ${escapeHtml(carrier.name)} serviceability & rates...</span></div>`;
+
+    try {
+        const o = collectShipOverrides();
+        const data = await apiCall('/shipping/serviceability', 'POST', {
+            shopperId: shipState.shopperId,
+            carrier: key,
+            packageOverrides: o.packageOverrides,
+            consigneeOverrides: o.consigneeOverrides
+        });
+
+        if (!data || !data.success) {
+            resultBox.innerHTML = `<div class="ship-error-box">❌ ${escapeHtml(data?.error || 'Serviceability check failed')}</div>`;
+            return;
+        }
+        if (data.serviceable === false) {
+            resultBox.innerHTML = `<div class="ship-error-box">❌ Not serviceable: ${escapeHtml(data.reason || 'This pincode is not covered')}</div>`;
+            return;
+        }
+
+        shipState.serviceable = true;
+        const couriers = data.couriers || [];
+
+        if (!carrier.capabilities.needsCourierSelection) {
+            // Direct carrier (Delhivery): single option, auto-selected
+            const c = couriers[0] || { courierId: key, courierName: carrier.name, rate: null };
+            shipState.courier = { id: c.courierId, name: c.courierName, rate: c.rate };
+            const codLine = data.codAvailable !== undefined
+                ? `<br>COD: ${data.codAvailable ? '✓ available' : '✗ unavailable'} · Prepaid: ${data.prepaidAvailable ? '✓ available' : '✗ unavailable'}${data.city ? ` · ${escapeHtml(data.city)}, ${escapeHtml(data.state || '')}` : ''}`
+                : '';
+            resultBox.innerHTML = `<div class="ship-ok-box">✅ Serviceable via <b>${escapeHtml(c.courierName)}</b>${codLine}</div>`;
+            return;
+        }
+
+        // Aggregator (Shiprocket): sortable courier rate table
+        if (couriers.length === 0) {
+            shipState.serviceable = false;
+            resultBox.innerHTML = '<div class="ship-error-box">❌ No couriers available for this route</div>';
+            return;
+        }
+        shipState.courierOptions = couriers;
+        const rows = couriers.map(c => `
+            <tr class="courier-row" id="courier-row-${c.courierId}" onclick="selectShipCourier('${c.courierId}')">
+                <td><span class="courier-radio"></span>${escapeHtml(c.courierName)}${c.recommended ? '<span class="courier-rec-badge">RECOMMENDED</span>' : ''}</td>
+                <td>₹${c.rate ?? '-'}</td>
+                <td>${c.codCharges ? `₹${c.codCharges}` : '—'}</td>
+                <td>${c.etd ? escapeHtml(String(c.etd)) : '—'}</td>
+                <td>${c.rating ? `⭐ ${c.rating}` : '—'}</td>
+            </tr>
+        `).join('');
+        resultBox.innerHTML = `
+            <div class="ship-ok-box">✅ ${couriers.length} couriers available — pick one below (sorted by rate)</div>
+            <table class="courier-table">
+                <thead><tr><th>Courier</th><th>Rate</th><th>COD Fee</th><th>ETA</th><th>Rating</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+
+        // Preselect the recommended courier (or cheapest)
+        const preferred = couriers.find(c => c.recommended) || couriers[0];
+        if (preferred) selectShipCourier(preferred.courierId);
+    } catch (err) {
+        console.error('[SHIP] Serviceability error:', err);
+        resultBox.innerHTML = '<div class="ship-error-box">❌ Serviceability check failed — try again</div>';
+    }
+}
+
+function selectShipCourier(courierId) {
+    if (!shipState || !shipState.courierOptions) return;
+    const c = shipState.courierOptions.find(x => String(x.courierId) === String(courierId));
+    if (!c) return;
+    shipState.courier = { id: c.courierId, name: c.courierName, rate: c.rate };
+    document.querySelectorAll('.courier-row').forEach(el => el.classList.remove('selected'));
+    document.getElementById(`courier-row-${courierId}`)?.classList.add('selected');
+}
+
+function renderShipSummary() {
+    const d = shipState.draft;
+    const o = collectShipOverrides();
+    const isCod = d.payment.mode === 'COD';
+    const rows = [
+        ['Order', `#${d.orderId}`],
+        ['Consignee', `${escapeHtml(o.consigneeOverrides.name)} · ${escapeHtml(o.consigneeOverrides.phone)}`],
+        ['Address', `${escapeHtml(o.consigneeOverrides.address)}, ${escapeHtml(o.consigneeOverrides.city)} — ${escapeHtml(o.consigneeOverrides.pincode)}`],
+        ['Payment', isCod ? `COD · collect ₹${d.payment.codAmount}` : `Prepaid · ₹${d.payment.declaredValue}`],
+        ['Package', `${o.packageOverrides.weightGrams}g · ${o.packageOverrides.lengthCm}×${o.packageOverrides.breadthCm}×${o.packageOverrides.heightCm} cm`],
+        ['Carrier', escapeHtml(shipState.carrier.name)],
+        ['Courier', `${escapeHtml(shipState.courier?.name || shipState.carrier.name)}${shipState.courier?.rate ? ` · ₹${shipState.courier.rate}` : ''}`]
+    ];
+    document.getElementById('shipSummaryTable').innerHTML =
+        rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+    document.getElementById('shipSubmitError').innerHTML = '';
+}
+
+async function submitShip() {
+    if (!shipState || shipState.shipping) return;
+    shipState.shipping = true;
+
+    const nextBtn = document.getElementById('shipNextBtn');
+    nextBtn.disabled = true;
+    nextBtn.textContent = 'Shipping...';
+    document.getElementById('shipSubmitError').innerHTML = '';
+
+    try {
+        const o = collectShipOverrides();
+        const data = await apiCall('/shipping/ship', 'POST', {
+            shopperId: shipState.shopperId,
+            carrier: shipState.carrier.key,
+            courierId: shipState.carrier.capabilities.needsCourierSelection ? shipState.courier.id : undefined,
+            packageOverrides: o.packageOverrides,
+            consigneeOverrides: o.consigneeOverrides,
+            notifyCustomer: document.getElementById('shipNotifyCustomer').checked
+        });
+
+        if (!data || !data.success) {
+            document.getElementById('shipSubmitError').innerHTML =
+                `<div class="ship-error-box">❌ ${escapeHtml(data?.error || 'Shipment creation failed')}</div>`;
+            nextBtn.disabled = false;
+            nextBtn.textContent = '🚀 Ship Now';
+            shipState.shipping = false;
+            return;
+        }
+
+        shipState.shipped = true;
+        shipState.shipping = false;
+        renderShipSuccess(data);
+        setShipStep(3);
+        showShipToast(`✅ Shipped! AWB ${data.awb} via ${data.courierName}`);
+    } catch (err) {
+        console.error('[SHIP] Ship error:', err);
+        document.getElementById('shipSubmitError').innerHTML = '<div class="ship-error-box">❌ Network error while shipping — check shipment history before retrying</div>';
+        nextBtn.disabled = false;
+        nextBtn.textContent = '🚀 Ship Now';
+        shipState.shipping = false;
+    }
+}
+
+function renderShipSuccess(data) {
+    const shipmentId = data.shipment?.id;
+    const minDate = formatDateForInput(new Date());
+    document.getElementById('shipConfirmView').style.display = 'none';
+    const panel = document.getElementById('shipSuccessPanel');
+    panel.style.display = 'block';
+    panel.innerHTML = `
+        <div class="success-icon">📦</div>
+        <h4>Shipment Created</h4>
+        <div class="ship-awb-display">
+            AWB: ${escapeHtml(data.awb)}
+            <button class="ship-awb-copy" onclick="copyShipAwb('${escapeHtml(data.awb)}')">COPY</button>
+        </div>
+        <div style="margin-top: 0.9rem; color: #aaa; font-size: 0.85rem;">
+            ${escapeHtml(data.courierName || '')}${data.freightCharge ? ` · Freight ₹${data.freightCharge}` : ''}
+        </div>
+        <div class="ship-quick-actions">
+            <button class="btn btn-outline" onclick="shipGetLabel(${shipmentId})">⬇️ Download Label</button>
+            ${data.trackingUrl ? `<a class="btn btn-outline" href="${escapeHtml(data.trackingUrl)}" target="_blank" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;">📍 Track</a>` : ''}
+            <button class="btn btn-outline" style="border-color: rgba(255,71,87,0.5); color: #ff4757;" onclick="shipDoCancel(${shipmentId})">✕ Cancel</button>
+        </div>
+        <div class="ship-pickup-row">
+            <input type="date" id="shipSuccessPickupDate" min="${minDate}" value="${minDate}">
+            <button class="btn btn-primary" onclick="shipDoPickup(${shipmentId}, 'shipSuccessPickupDate')">📅 Schedule Pickup</button>
+        </div>`;
+    setShipStep(3);
+}
+
+function copyShipAwb(awb) {
+    navigator.clipboard?.writeText(awb).then(
+        () => showShipToast('AWB copied to clipboard'),
+        () => showShipToast('Copy failed', true)
+    );
+}
+
+// ---------- Post-ship actions (success panel + drawer) ----------
+
+async function shipGetLabel(shipmentId, type = 'label') {
+    showShipToast(`Generating ${type}...`);
+    try {
+        const data = await apiCall(`/shipping/shipments/${shipmentId}/label${type !== 'label' ? `?type=${type}` : ''}`);
+        if (!data || !data.success) { showShipToast(data?.error || `Failed to generate ${type}`, true); return; }
+        const url = data.labelUrl || data.manifestUrl || data.invoiceUrl;
+        if (url) window.open(url, '_blank');
+        else showShipToast(`${type} generated but no URL returned`, true);
+    } catch (err) {
+        showShipToast(`Failed to generate ${type}`, true);
+    }
+}
+
+async function shipDoPickup(shipmentId, dateInputId) {
+    const pickupDate = document.getElementById(dateInputId)?.value;
+    if (!pickupDate) { showShipToast('Pick a pickup date first', true); return; }
+    showShipToast('Scheduling pickup...');
+    try {
+        const data = await apiCall(`/shipping/shipments/${shipmentId}/pickup`, 'POST', { pickupDate });
+        if (!data || !data.success) { showShipToast(data?.error || 'Pickup scheduling failed', true); return; }
+        showShipToast(`✅ Pickup scheduled for ${data.pickupDate || pickupDate}${data.pickupToken ? ` (Token: ${data.pickupToken})` : ''}`);
+        if (currentDrawerOrder) refreshShipmentsDrawer();
+    } catch (err) {
+        showShipToast('Pickup scheduling failed', true);
+    }
+}
+
+async function shipDoCancel(shipmentId) {
+    if (!confirm('Cancel this shipment at the carrier? The order becomes shippable again.')) return;
+    showShipToast('Cancelling shipment...');
+    try {
+        const data = await apiCall(`/shipping/shipments/${shipmentId}/cancel`, 'POST');
+        if (!data || !data.success) { showShipToast(data?.error || 'Cancellation failed', true); return; }
+        showShipToast('✅ Shipment cancelled');
+        if (shipState) { shipState.shipped = true; closeShipModal(); }
+        if (currentDrawerOrder) refreshShipmentsDrawer();
+        fetchShoppersData();
+    } catch (err) {
+        showShipToast('Cancellation failed', true);
+    }
+}
+
+async function shipDoTrack(shipmentId) {
+    const container = document.getElementById(`track-${shipmentId}`);
+    if (!container) return;
+    if (container.innerHTML.trim()) { container.innerHTML = ''; return; } // toggle off
+    container.innerHTML = '<div class="ship-loading"><div class="spinner"></div><span>Fetching live tracking...</span></div>';
+    try {
+        const data = await apiCall(`/shipping/shipments/${shipmentId}/track`);
+        if (!data || !data.success) {
+            container.innerHTML = `<div class="ship-error-box">❌ ${escapeHtml(data?.error || 'Tracking failed')}</div>`;
+            return;
+        }
+        const t = data.tracking;
+        const events = (t.timeline || []).slice(0, 15).map(e => `
+            <div class="tracking-event">
+                <div class="dot"></div>
+                <div>
+                    <div class="evt-activity">${escapeHtml(e.activity || e.status || '')}</div>
+                    <div class="evt-meta">${escapeHtml(e.location || '')}${e.date ? ` · ${escapeHtml(String(e.date))}` : ''}</div>
+                </div>
+            </div>`).join('');
+        container.innerHTML = `
+            <div class="tracking-timeline">
+                <div style="font-size: 0.8rem; color: #25d366; margin-bottom: 0.6rem;">Current: <b>${escapeHtml(t.currentStatus || 'Unknown')}</b>${t.expectedDelivery ? ` · ETA ${escapeHtml(String(t.expectedDelivery))}` : ''}</div>
+                ${events || '<div style="color:#888;font-size:0.78rem;">No scan events yet</div>'}
+            </div>`;
+    } catch (err) {
+        container.innerHTML = '<div class="ship-error-box">❌ Tracking failed</div>';
+    }
+}
+
+// ---------- Shipments Drawer ----------
+
+let currentDrawerOrder = null; // { shopperId, orderId }
+
+async function openShipmentsDrawer(shopperId, orderId) {
+    currentDrawerOrder = { shopperId, orderId };
+    document.getElementById('shipmentsDrawerOrderId').textContent = `#${orderId}`;
+    document.getElementById('shipmentsDrawerBody').innerHTML = '<div class="ship-loading"><div class="spinner"></div><span>Loading shipments...</span></div>';
+    document.getElementById('shipmentsDrawer').classList.add('active');
+    refreshShipmentsDrawer();
+}
+
+function closeShipmentsDrawer() {
+    document.getElementById('shipmentsDrawer').classList.remove('active');
+    currentDrawerOrder = null;
+}
+
+async function refreshShipmentsDrawer() {
+    if (!currentDrawerOrder) return;
+    const body = document.getElementById('shipmentsDrawerBody');
+    try {
+        const data = await apiCall(`/shipping/shipments?order_id=${encodeURIComponent(currentDrawerOrder.orderId)}`);
+        if (!data || !data.success) {
+            body.innerHTML = `<div class="ship-error-box">❌ ${escapeHtml(data?.error || 'Failed to load shipments')}</div>`;
+            return;
+        }
+        const shipments = data.shipments || [];
+        if (shipments.length === 0) {
+            body.innerHTML = `
+                <div style="text-align:center; color:#888; padding: 2.5rem 0;">No shipments for this order yet.</div>
+                <button class="ship-btn" onclick="closeShipmentsDrawer(); openShipModal('${currentDrawerOrder.shopperId}')">🚚 Ship This Order</button>`;
+            return;
+        }
+
+        const minDate = formatDateForInput(new Date());
+        const hasActive = shipments.some(sh => !['cancelled', 'failed'].includes(sh.status));
+        body.innerHTML = shipments.map(sh => {
+            const active = !['cancelled', 'failed'].includes(sh.status);
+            const isShiprocket = sh.carrier === 'shiprocket';
+            return `
+            <div class="shipment-entry">
+                <div class="shipment-entry-head">
+                    <span class="ship-carrier">${escapeHtml(sh.courier_name || sh.carrier)}</span>
+                    <span class="shipment-status-pill ${sh.status}">${sh.status.replace(/_/g, ' ')}</span>
+                </div>
+                <div class="shipment-meta">
+                    ${sh.awb ? `AWB: <b>${escapeHtml(sh.awb)}</b> <button class="ship-awb-copy" onclick="copyShipAwb('${escapeHtml(sh.awb)}')">COPY</button><br>` : ''}
+                    Carrier: <b>${escapeHtml(sh.carrier)}</b> · ${escapeHtml(sh.payment_mode || '')}${Number(sh.cod_amount) > 0 ? ` · COD ₹${sh.cod_amount}` : ''}<br>
+                    ${sh.weight_grams ? `Package: ${sh.weight_grams}g · ${sh.length_cm}×${sh.breadth_cm}×${sh.height_cm} cm<br>` : ''}
+                    ${sh.freight_charge ? `Freight: ₹${sh.freight_charge}<br>` : ''}
+                    ${sh.pickup_date ? `Pickup: ${sh.pickup_date}${sh.pickup_token ? ` (Token ${escapeHtml(sh.pickup_token)})` : ''}<br>` : ''}
+                    ${sh.error_message ? `<span style="color:#ff6b7a;">Error: ${escapeHtml(sh.error_message)}</span><br>` : ''}
+                    Created: ${formatDate(sh.created_at)} · by ${escapeHtml(sh.shipped_by || 'admin')}
+                </div>
+                ${active ? `
+                <div class="shipment-entry-actions">
+                    <button onclick="shipGetLabel(${sh.id})">Label</button>
+                    ${isShiprocket ? `<button onclick="shipGetLabel(${sh.id}, 'manifest')">Manifest</button><button onclick="shipGetLabel(${sh.id}, 'invoice')">Invoice</button>` : ''}
+                    <button onclick="shipDoTrack(${sh.id})">Track</button>
+                    ${sh.tracking_url ? `<a href="${escapeHtml(sh.tracking_url)}" target="_blank">Open Tracking ↗</a>` : ''}
+                    <button class="danger" onclick="shipDoCancel(${sh.id})">Cancel</button>
+                </div>
+                ${['created', 'awb_assigned'].includes(sh.status) ? `
+                <div class="shipment-entry-actions" style="align-items: center;">
+                    <input type="date" id="drawer-pickup-${sh.id}" min="${minDate}" value="${minDate}" style="padding: 0.35rem; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff; color-scheme: dark;">
+                    <button onclick="shipDoPickup(${sh.id}, 'drawer-pickup-${sh.id}')">Schedule Pickup</button>
+                </div>` : ''}
+                <div id="track-${sh.id}"></div>` : ''}
+            </div>`;
+        }).join('') + (!hasActive ? `<button class="ship-btn" onclick="closeShipmentsDrawer(); openShipModal('${currentDrawerOrder.shopperId}')">🚚 Re-ship This Order</button>` : '');
+    } catch (err) {
+        console.error('[SHIP] Drawer error:', err);
+        body.innerHTML = '<div class="ship-error-box">❌ Failed to load shipments</div>';
+    }
+}
+
+// ---------- Bulk Ship ----------
+
+let bulkShipRunning = false;
+
+async function openBulkShipModal() {
+    if (selectedShoppers.size === 0) { showShipToast('Select some orders first', true); return; }
+
+    const eligible = allLoadedShoppers.filter(s =>
+        selectedShoppers.has(s.id) && s.status === 'confirmed' && !s.awb
+    );
+    if (eligible.length === 0) {
+        showShipToast('No eligible orders selected — only confirmed, un-shipped orders can be bulk shipped', true);
+        return;
+    }
+
+    const carriers = await loadShipCarriers();
+    if (carriers.length === 0) { showShipToast('No carriers configured on the server', true); return; }
+
+    document.getElementById('bulkShipCarrier').innerHTML =
+        carriers.map(c => `<option value="${c.key}">${escapeHtml(c.name)}${c.capabilities.needsCourierSelection ? ' (auto-assigns cheapest courier)' : ''}</option>`).join('');
+    document.getElementById('bulkShipCount').textContent = `${eligible.length} orders`;
+    document.getElementById('bulkShipProgress').innerHTML = eligible.map(s => `
+        <div class="bulk-ship-line" id="bs-line-${s.id}">
+            <span class="bs-order">#${s.order_id} · ${escapeHtml(s.name || 'Customer')}</span>
+            <span class="bs-result" id="bs-result-${s.id}">Queued</span>
+        </div>`).join('');
+    const startBtn = document.getElementById('bulkShipStartBtn');
+    startBtn.disabled = false;
+    startBtn.textContent = 'Start Shipping';
+    document.getElementById('bulkShipModal').dataset.ids = JSON.stringify(eligible.map(s => s.id));
+    document.getElementById('bulkShipModal').classList.add('active');
+}
+
+function closeBulkShipModal() {
+    if (bulkShipRunning) { showShipToast('Bulk shipping in progress — wait for it to finish', true); return; }
+    document.getElementById('bulkShipModal').classList.remove('active');
+}
+
+async function startBulkShip() {
+    if (bulkShipRunning) return;
+    const ids = JSON.parse(document.getElementById('bulkShipModal').dataset.ids || '[]');
+    if (ids.length === 0) return;
+
+    const carrier = document.getElementById('bulkShipCarrier').value;
+    const packageOverrides = {
+        weightGrams: parseInt(document.getElementById('bulkShipWeight').value) || 500,
+        lengthCm: parseFloat(document.getElementById('bulkShipLength').value) || 20,
+        breadthCm: parseFloat(document.getElementById('bulkShipBreadth').value) || 15,
+        heightCm: parseFloat(document.getElementById('bulkShipHeight').value) || 5
+    };
+
+    bulkShipRunning = true;
+    const startBtn = document.getElementById('bulkShipStartBtn');
+    startBtn.disabled = true;
+    startBtn.textContent = 'Shipping...';
+
+    let okCount = 0, failCount = 0;
+    for (const id of ids) {
+        const resultEl = document.getElementById(`bs-result-${id}`);
+        if (resultEl) { resultEl.textContent = 'Shipping...'; resultEl.className = 'bs-result run'; }
+        try {
+            // Sequential on purpose: avoids carrier rate limits and DB races
+            const data = await apiCall('/shipping/ship', 'POST', {
+                shopperId: id,
+                carrier,
+                courierId: 'auto',
+                packageOverrides,
+                notifyCustomer: false
+            });
+            if (data && data.success) {
+                okCount++;
+                if (resultEl) { resultEl.textContent = `✅ AWB ${data.awb}`; resultEl.className = 'bs-result ok'; }
+            } else {
+                failCount++;
+                if (resultEl) { resultEl.textContent = `❌ ${data?.error || 'Failed'}`; resultEl.className = 'bs-result err'; }
+            }
+        } catch (err) {
+            failCount++;
+            if (resultEl) { resultEl.textContent = '❌ Network error'; resultEl.className = 'bs-result err'; }
+        }
+    }
+
+    bulkShipRunning = false;
+    startBtn.textContent = 'Done';
+    showShipToast(`Bulk ship finished: ${okCount} shipped${failCount ? `, ${failCount} failed` : ''}`, failCount > 0);
+    clearSelection();
+    fetchShoppersData();
+}
+
+// Expose shipping functions for inline onclick handlers
+window.openShipModal = openShipModal;
+window.closeShipModal = closeShipModal;
+window.shipGoNext = shipGoNext;
+window.shipGoBack = shipGoBack;
+window.selectShipCarrier = selectShipCarrier;
+window.selectShipCourier = selectShipCourier;
+window.copyShipAwb = copyShipAwb;
+window.shipGetLabel = shipGetLabel;
+window.shipDoPickup = shipDoPickup;
+window.shipDoCancel = shipDoCancel;
+window.shipDoTrack = shipDoTrack;
+window.openShipmentsDrawer = openShipmentsDrawer;
+window.closeShipmentsDrawer = closeShipmentsDrawer;
+window.openBulkShipModal = openBulkShipModal;
+window.closeBulkShipModal = closeBulkShipModal;
+window.startBulkShip = startBulkShip;

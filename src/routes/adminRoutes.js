@@ -4365,4 +4365,141 @@ router.put('/support-portals/:id/password', verifyToken, async (req, res) => {
     }
 });
 
+// ============================================================
+// SHIPPING MODULE (Shopper Hub) — carrier-agnostic shipping API
+// ============================================================
+const shippingService = require('../services/shippingService');
+
+// Configured carriers + their capabilities (drives the UI carrier cards)
+router.get('/shipping/carriers', verifyToken, async (req, res) => {
+    try {
+        res.json({ success: true, carriers: shippingService.getConfiguredCarriers() });
+    } catch (error) {
+        console.error('Shipping carriers error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch carriers' });
+    }
+});
+
+// Prefilled shipment draft for admin review/edit before shipping
+router.get('/shipping/orders/:shopperId/draft', verifyToken, async (req, res) => {
+    try {
+        const result = await shippingService.buildShipmentContext(req.params.shopperId);
+        if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+
+        // Include any existing shipments so the UI can show history/blockers
+        const shipments = await shippingService.listShipments({ orderId: result.ctx.orderId, limit: 20 });
+        res.json({ success: true, draft: result.ctx, shipments });
+    } catch (error) {
+        console.error('Shipping draft error:', error);
+        res.status(500).json({ success: false, error: 'Failed to build shipment draft' });
+    }
+});
+
+// Serviceability + rate cards for a carrier
+router.post('/shipping/serviceability', verifyToken, async (req, res) => {
+    try {
+        const { shopperId, carrier, packageOverrides, consigneeOverrides } = req.body;
+        if (!shopperId || !carrier) return res.status(400).json({ success: false, error: 'shopperId and carrier are required' });
+
+        const result = await shippingService.checkServiceability({ shopperId, carrier, packageOverrides, consigneeOverrides });
+        if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+        res.json({ success: true, ...result.data });
+    } catch (error) {
+        console.error('Shipping serviceability error:', error);
+        res.status(500).json({ success: false, error: 'Serviceability check failed' });
+    }
+});
+
+// Create shipment (idempotent — 409 if an active shipment exists)
+router.post('/shipping/ship', verifyToken, async (req, res) => {
+    try {
+        const { shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer } = req.body;
+        if (!shopperId || !carrier) return res.status(400).json({ success: false, error: 'shopperId and carrier are required' });
+
+        const result = await shippingService.ship({
+            shopperId,
+            carrier,
+            courierId,
+            packageOverrides,
+            consigneeOverrides,
+            notifyCustomer: Boolean(notifyCustomer),
+            shippedBy: req.user?.username || 'admin'
+        });
+        if (result.error) {
+            return res.status(result.status || 500).json({ success: false, error: result.error, shipment: result.shipment || null });
+        }
+        res.json({ success: true, ...result.data });
+    } catch (error) {
+        console.error('Shipping ship error:', error);
+        res.status(500).json({ success: false, error: 'Failed to create shipment' });
+    }
+});
+
+// Shipment history (filterable)
+router.get('/shipping/shipments', verifyToken, async (req, res) => {
+    try {
+        const { order_id, status, limit, offset } = req.query;
+        const shipments = await shippingService.listShipments({ orderId: order_id, status, limit, offset });
+        res.json({ success: true, shipments });
+    } catch (error) {
+        console.error('Shipments list error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch shipments' });
+    }
+});
+
+// Schedule pickup for a shipment
+router.post('/shipping/shipments/:id/pickup', verifyToken, async (req, res) => {
+    try {
+        const { pickupDate } = req.body;
+        if (!pickupDate || !/^\d{4}-\d{2}-\d{2}$/.test(pickupDate)) {
+            return res.status(400).json({ success: false, error: 'pickupDate (YYYY-MM-DD) is required' });
+        }
+        const result = await shippingService.schedulePickup(req.params.id, pickupDate);
+        if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+        res.json({ success: true, ...result.data });
+    } catch (error) {
+        console.error('Shipping pickup error:', error);
+        res.status(500).json({ success: false, error: 'Failed to schedule pickup' });
+    }
+});
+
+// Generate/fetch label (?type=manifest|invoice for Shiprocket extras)
+router.get('/shipping/shipments/:id/label', verifyToken, async (req, res) => {
+    try {
+        const { type } = req.query;
+        const result = (type === 'manifest' || type === 'invoice')
+            ? await shippingService.generateDocument(req.params.id, type)
+            : await shippingService.generateLabel(req.params.id);
+        if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+        res.json({ success: true, ...result.data });
+    } catch (error) {
+        console.error('Shipping label error:', error);
+        res.status(500).json({ success: false, error: 'Failed to generate label' });
+    }
+});
+
+// Cancel shipment at the carrier + mark cancelled locally
+router.post('/shipping/shipments/:id/cancel', verifyToken, async (req, res) => {
+    try {
+        const result = await shippingService.cancelShipment(req.params.id);
+        if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+        res.json({ success: true, ...result.data });
+    } catch (error) {
+        console.error('Shipping cancel error:', error);
+        res.status(500).json({ success: false, error: 'Failed to cancel shipment' });
+    }
+});
+
+// Normalized live tracking timeline
+router.get('/shipping/shipments/:id/track', verifyToken, async (req, res) => {
+    try {
+        const result = await shippingService.trackShipment(req.params.id);
+        if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+        res.json({ success: true, tracking: result.data });
+    } catch (error) {
+        console.error('Shipping track error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch tracking' });
+    }
+});
+
 module.exports = router;
