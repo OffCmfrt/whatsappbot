@@ -283,6 +283,7 @@ async function initializeShoppersTable() {
     // Create indexes
     await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_phone ON store_shoppers(phone)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_order_id ON store_shoppers(order_id)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_gokwik_order_id ON store_shoppers(gokwik_order_id)');
     
     console.log('✅ Shoppers table initialized');
   } catch (error) {
