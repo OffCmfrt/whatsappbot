@@ -54,6 +54,7 @@ let soStatus = '';
 let soCarrier = '';
 let soPayment = '';
 let soSearchQuery = '';
+let soLookupTimeout = null; // debounce for the New Shipment order lookup
 let soStartDate = '';
 let soEndDate = '';
 let soQuickDate = null;
@@ -330,6 +331,14 @@ function setupEventListeners() {
     document.getElementById('backToShoppersFromShipped')?.addEventListener('click', hideShippedOrdersView);
     document.getElementById('refreshShippedBtn')?.addEventListener('click', () => fetchShippedOrders());
     document.getElementById('soExportBtn')?.addEventListener('click', exportShippedCsv);
+
+    // Shipped Orders - New Forward Shipment (ship any order by its Order ID)
+    document.getElementById('soNewShipBtn')?.addEventListener('click', openSoNewShipModal);
+    document.getElementById('soLookupInput')?.addEventListener('input', (e) => {
+        clearTimeout(soLookupTimeout);
+        const q = e.target.value.trim();
+        soLookupTimeout = setTimeout(() => runSoLookup(q), 350);
+    });
 
     // Shipped Orders - Status Pills
     document.querySelectorAll('.so-status-pill').forEach(pill => {
@@ -1074,6 +1083,10 @@ async function cancelMultiOrder(id) {
     try {
         const data = await apiCall(`/shoppers/${id}/status`, 'POST', { status: 'cancelled' });
         if (data.success) {
+            // Surface carrier cancellation outcome for shipped orders
+            if (data.shipmentCancellation?.hadShipment) {
+                alert(data.message);
+            }
             fetchMultiOrdersData();
         } else {
             alert('Failed to cancel order');
@@ -2704,6 +2717,10 @@ async function updateStatus(id, status) {
     try {
         const data = await apiCall(`/shoppers/${id}/status`, 'POST', { status });
         if (data.success) {
+            // Surface carrier cancellation outcome for shipped orders
+            if (data.shipmentCancellation?.hadShipment) {
+                alert(data.message);
+            }
             fetchShoppersData();
             fetchInboxCounts()
         } else {
@@ -4264,7 +4281,11 @@ function closeShipModal() {
     document.getElementById('shipModal').classList.remove('active');
     const wasShipped = shipState && shipState.shipped;
     shipState = null;
-    if (wasShipped) fetchShoppersData();
+    if (wasShipped) {
+        fetchShoppersData();
+        // Also refresh the Shipped Orders view if it's open (retry / forward-ship flows)
+        if (document.getElementById('shippedOrdersView')?.style.display === 'block') fetchShippedOrders();
+    }
 }
 
 function renderShipStep1() {
@@ -5025,6 +5046,7 @@ function renderShippedOrders(data) {
                     <button class="so-act-btn cancel" onclick="soDoCancel(${sh.id})" style="margin-left:auto;">✕ Cancel</button>
                 ` : `
                     <span style="font-size:0.72rem;color:rgba(255,255,255,0.35);font-family:'Archivo Narrow',sans-serif;letter-spacing:1px;text-transform:uppercase;">Shipment ${escapeHtml(sh.status || '')}</span>
+                    ${sh.shopper_id ? `<button class="so-act-btn retry" onclick="soRetryShipment('${escapeHtml(String(sh.shopper_id))}')" title="Re-ship this order — pick any carrier in the wizard">🔁 Retry Shipment</button>` : ''}
                     ${waPhone ? `<a class="so-act-btn wa" href="https://wa.me/${waPhone}" target="_blank" style="margin-left:auto;">WhatsApp</a>` : ''}
                 `}
             </div>
@@ -5138,6 +5160,98 @@ async function soDoCancel(shipmentId) {
     fetchShippedOrders();
 }
 
+// Re-ship a failed/cancelled shipment — opens the ship wizard so the admin
+// can pick any configured carrier (the draft rebuilds from the shopper row)
+function soRetryShipment(shopperId) {
+    openShipModal(shopperId);
+}
+
+// ---------- New Forward Shipment (ship any order by its Order ID) ----------
+
+function openSoNewShipModal() {
+    const input = document.getElementById('soLookupInput');
+    if (input) input.value = '';
+    document.getElementById('soLookupResults').innerHTML =
+        '<div style="text-align:center;color:#888;padding:2rem 0;font-size:0.85rem;">Start typing to find an order — by Order ID, name, phone or AWB.</div>';
+    document.getElementById('soNewShipModal').classList.add('active');
+    setTimeout(() => input?.focus(), 50);
+}
+
+function closeSoNewShipModal() {
+    document.getElementById('soNewShipModal').classList.remove('active');
+}
+
+async function runSoLookup(q) {
+    const box = document.getElementById('soLookupResults');
+    if (!box) return;
+    if (!q || q.length < 2) {
+        box.innerHTML = '<div style="text-align:center;color:#888;padding:2rem 0;font-size:0.85rem;">Type at least 2 characters to search.</div>';
+        return;
+    }
+    box.innerHTML = '<div class="ship-loading"><div class="spinner"></div><span>Searching orders...</span></div>';
+    try {
+        const data = await apiCall(`/shipping/orders/lookup?q=${encodeURIComponent(q)}`);
+        if (!data || !data.success) {
+            box.innerHTML = `<div class="ship-error-box">❌ ${escapeHtml(data?.error || 'Lookup failed')}</div>`;
+            return;
+        }
+        renderSoLookupResults(data.orders || []);
+    } catch (err) {
+        console.error('[SHIP] Order lookup error:', err);
+        box.innerHTML = '<div class="ship-error-box">❌ Lookup failed — try again</div>';
+    }
+}
+
+function renderSoLookupResults(orders) {
+    const box = document.getElementById('soLookupResults');
+    if (!box) return;
+    if (orders.length === 0) {
+        box.innerHTML = '<div style="text-align:center;color:#888;padding:2rem 0;font-size:0.85rem;">No orders matched. Check the Order ID and try again.</div>';
+        return;
+    }
+
+    box.innerHTML = orders.map(o => {
+        const isCod = /cod|cash/i.test(o.payment_method || '');
+        const items = o.items_json ? parseItemsPreview(o.items_json) : '—';
+        const addr = [o.city, o.province, o.zip].filter(Boolean).join(', ');
+        const hasActive = !!o.active_shipment_id;
+        const lastFailed = !hasActive && o.last_shipment_status === 'failed';
+        const lastCancelled = !hasActive && o.last_shipment_status === 'cancelled';
+
+        let tag = '';
+        if (hasActive) tag = `<span class="so-lookup-tag shipped">Shipped · ${escapeHtml(o.active_awb || 'AWB pending')}</span>`;
+        else if (lastFailed) tag = '<span class="so-lookup-tag failed">Last attempt failed</span>';
+        else if (lastCancelled) tag = '<span class="so-lookup-tag cancelled">Previously cancelled</span>';
+
+        const action = hasActive
+            ? `<button class="so-act-btn track" onclick="soViewShipmentsFromLookup('${escapeHtml(String(o.shopper_id))}', '${escapeHtml(String(o.order_id))}')">📦 View Shipments</button>`
+            : `<button class="so-act-btn label" onclick="soShipFromLookup('${escapeHtml(String(o.shopper_id))}')">🚚 ${lastFailed || lastCancelled ? 'Re-ship' : 'Ship'} Order</button>`;
+
+        return `
+        <div class="so-lookup-item">
+            <div class="so-lookup-info">
+                <div class="so-lookup-order">#${escapeHtml(String(o.order_id || ''))}${tag}</div>
+                <div class="so-lookup-meta">
+                    ${escapeHtml(o.name || 'Unknown')} · ${o.phone ? escapeHtml(formatPhone(o.phone)) : '—'}${addr ? ` · ${escapeHtml(addr)}` : ''}<br>
+                    ${escapeHtml(String(items))} · ${o.order_total ? '₹' + Number(o.order_total).toLocaleString('en-IN') : '—'} · ${isCod ? 'COD' : 'Prepaid'} · Order status: ${escapeHtml(o.shopper_status || '—')}
+                    ${lastFailed && o.last_shipment_error ? `<br><span style="color:#ff6b7a;">Last error: ${escapeHtml(o.last_shipment_error)}</span>` : ''}
+                </div>
+            </div>
+            <div class="so-lookup-actions">${action}</div>
+        </div>`;
+    }).join('');
+}
+
+function soShipFromLookup(shopperId) {
+    closeSoNewShipModal();
+    openShipModal(shopperId);
+}
+
+function soViewShipmentsFromLookup(shopperId, orderId) {
+    closeSoNewShipModal();
+    openShipmentsDrawer(shopperId, orderId);
+}
+
 async function exportShippedCsv() {
     showShipToast('Preparing CSV export...');
     try {
@@ -5172,3 +5286,8 @@ async function exportShippedCsv() {
 // Expose shipped-orders functions for inline onclick handlers
 window.soDoCancel = soDoCancel;
 window.soRemoveFilter = soRemoveFilter;
+window.soRetryShipment = soRetryShipment;
+window.openSoNewShipModal = openSoNewShipModal;
+window.closeSoNewShipModal = closeSoNewShipModal;
+window.soShipFromLookup = soShipFromLookup;
+window.soViewShipmentsFromLookup = soViewShipmentsFromLookup;

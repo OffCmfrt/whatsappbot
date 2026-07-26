@@ -405,6 +405,20 @@ async function cancelShipment(shipmentId) {
     return { data: { cancelled: true, shipment: { ...shipment, status: 'cancelled' } } };
 }
 
+// Cancel the active shipment (if any) for an order at its carrier.
+// Used when the hub cancels an order outright (Shopper Hub status → cancelled).
+async function cancelActiveShipmentForOrder(orderId) {
+    if (!orderId) return { hadShipment: false };
+    const active = await getActiveShipment(orderId);
+    if (!active) return { hadShipment: false };
+
+    const result = await cancelShipment(active.id);
+    if (result.error) {
+        return { hadShipment: true, cancelled: false, awb: active.awb, carrier: active.carrier, error: result.error };
+    }
+    return { hadShipment: true, cancelled: true, awb: active.awb, carrier: active.carrier };
+}
+
 async function trackShipment(shipmentId) {
     const loaded = await loadShipmentAndAdapter(shipmentId);
     if (loaded.error) return loaded;
@@ -438,5 +452,6 @@ module.exports = {
     generateLabel,
     generateDocument,
     cancelShipment,
+    cancelActiveShipmentForOrder,
     trackShipment
 };

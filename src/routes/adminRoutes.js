@@ -1993,9 +1993,37 @@ router.post('/shoppers/:id/status', verifyToken, async (req, res) => {
 
         await dbAdapter.update('store_shoppers', updateData, { id });
 
+        // If the order was already shipped, cancel the shipment at its carrier too
+        let shipmentCancellation = null;
+        if (status === 'cancelled') {
+            try {
+                const shopperRows = await dbAdapter.select('store_shoppers', { id }, { limit: 1 });
+                const orderId = shopperRows[0]?.order_id;
+                if (orderId) {
+                    const shipping = require('../services/shippingService');
+                    shipmentCancellation = await shipping.cancelActiveShipmentForOrder(orderId);
+                    if (shipmentCancellation.hadShipment && !shipmentCancellation.cancelled) {
+                        console.error(`⚠️ Order ${orderId} cancelled in hub but carrier cancellation failed: ${shipmentCancellation.error}`);
+                    } else if (shipmentCancellation.cancelled) {
+                        console.log(`📦 Cancelled shipment (AWB: ${shipmentCancellation.awb}) at ${shipmentCancellation.carrier} for order ${orderId}`);
+                    }
+                }
+            } catch (shipError) {
+                console.error('⚠️ Carrier cancellation check failed (order status still updated):', shipError.message);
+                shipmentCancellation = { hadShipment: true, cancelled: false, error: shipError.message };
+            }
+        }
+
         // Invalidate cache after shopper status change
         invalidateCache('shoppers');
-        res.json({ success: true, message: `Status updated to ${status}` });
+
+        let message = `Status updated to ${status}`;
+        if (shipmentCancellation?.cancelled) {
+            message += ` — shipment (AWB: ${shipmentCancellation.awb}) cancelled at ${shipmentCancellation.carrier}`;
+        } else if (shipmentCancellation?.hadShipment && !shipmentCancellation.cancelled) {
+            message += ` — but carrier cancellation FAILED: ${shipmentCancellation.error}. Cancel it manually from the shipments drawer.`;
+        }
+        res.json({ success: true, message, shipmentCancellation });
     } catch (error) {
         console.error('Shopper status update error:', error);
         res.status(500).json({ error: 'Failed to update status' });
@@ -4405,6 +4433,53 @@ router.get('/shipping/carriers', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Shipping carriers error:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch carriers' });
+    }
+});
+
+// Order lookup for forward shipments — search by order ID / name / phone / AWB.
+// Returns shippable candidates with their consignee details and shipment state,
+// so the "New Shipment" flow can auto-grab everything from just an order ID.
+router.get('/shipping/orders/lookup', verifyToken, async (req, res) => {
+    try {
+        const q = String(req.query.q || '').trim();
+        if (q.length < 2) return res.json({ success: true, orders: [] });
+
+        const like = `%${q}%`;
+        const rows = await dbAdapter.query(`
+            SELECT s.id AS shopper_id, s.order_id, s.name, s.phone, s.address, s.city, s.province, s.zip,
+                   s.status AS shopper_status, s.payment_method, s.items_json,
+                   COALESCE(s.order_total, o.total) AS order_total,
+                   s.created_at,
+                   act.id AS active_shipment_id, act.status AS active_shipment_status,
+                   act.awb AS active_awb, act.carrier AS active_carrier,
+                   last_sh.status AS last_shipment_status, last_sh.carrier AS last_shipment_carrier,
+                   last_sh.error_message AS last_shipment_error
+            FROM store_shoppers s
+            INNER JOIN (
+                SELECT order_id, MAX(updated_at) AS max_updated
+                FROM store_shoppers
+                GROUP BY order_id
+            ) latest ON latest.order_id = s.order_id AND s.updated_at = latest.max_updated
+            LEFT JOIN orders o ON o.order_id = s.order_id
+            LEFT JOIN LATERAL (
+                SELECT id, status, awb, carrier FROM shipments sp
+                WHERE sp.order_id = s.order_id AND sp.status NOT IN ('cancelled', 'failed')
+                ORDER BY sp.id DESC LIMIT 1
+            ) act ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT status, carrier, error_message FROM shipments sp2
+                WHERE sp2.order_id = s.order_id
+                ORDER BY sp2.id DESC LIMIT 1
+            ) last_sh ON TRUE
+            WHERE (s.order_id ILIKE ? OR s.name ILIKE ? OR s.phone ILIKE ? OR o.awb ILIKE ?)
+            ORDER BY s.updated_at DESC
+            LIMIT 10
+        `, [like, like, like, like]);
+
+        res.json({ success: true, orders: rows });
+    } catch (error) {
+        console.error('Shipping order lookup error:', error);
+        res.status(500).json({ success: false, error: 'Order lookup failed' });
     }
 });
 

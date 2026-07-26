@@ -1091,8 +1091,8 @@
         .awb-chip-mini { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.3rem 0.6rem; background: rgba(37, 211, 102, 0.08); border: 1px solid rgba(37, 211, 102, 0.3); border-radius: 14px; color: #25d366; font-size: 0.68rem; cursor: pointer; white-space: nowrap; }
 
         /* Ship Modal */
-        #shipModal, #bulkShipModal, #shipmentsDrawer { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); backdrop-filter: blur(12px); z-index: 2600; justify-content: center; align-items: center; }
-        #shipModal.active, #bulkShipModal.active { display: flex; }
+        #shipModal, #bulkShipModal, #shipmentsDrawer, #soNewShipModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); backdrop-filter: blur(12px); z-index: 2600; justify-content: center; align-items: center; }
+        #shipModal.active, #bulkShipModal.active, #soNewShipModal.active { display: flex; }
         #shipmentsDrawer.active { display: flex; justify-content: flex-end; }
         .ship-modal-content { background: #0a0a0a; border: 1px solid rgba(255,255,255,0.15); border-radius: 14px; width: 94%; max-width: 720px; max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.9); overflow: hidden; }
         .ship-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1.4rem 1.8rem; border-bottom: 1px solid rgba(255,255,255,0.08); }
@@ -3661,6 +3661,20 @@
         .so-act-btn.cancel:hover { background: #ff4757; color: #fff; border-color: #ff4757; }
         .so-act-btn.wa { border-color: rgba(37,211,102,0.3); color: #25d366; }
         .so-act-btn.wa:hover { background: #25d366; color: #000; border-color: #25d366; }
+        .so-act-btn.retry { border-color: rgba(162,155,254,0.35); color: #a29bfe; }
+        .so-act-btn.retry:hover { background: #a29bfe; color: #000; border-color: #a29bfe; }
+        
+        /* New Forward Shipment lookup results */
+        .so-lookup-item { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 0.9rem 1rem; margin-bottom: 0.7rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+        .so-lookup-item:hover { border-color: rgba(255,255,255,0.25); }
+        .so-lookup-info { min-width: 0; flex: 1; }
+        .so-lookup-order { font-family: 'Archivo Narrow', sans-serif; font-weight: 600; letter-spacing: 1px; color: #53bdeb; font-size: 0.95rem; }
+        .so-lookup-meta { font-size: 0.78rem; color: rgba(255,255,255,0.65); margin-top: 0.25rem; line-height: 1.5; overflow-wrap: anywhere; }
+        .so-lookup-tag { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 20px; font-size: 0.66rem; letter-spacing: 0.5px; text-transform: uppercase; margin-left: 0.4rem; vertical-align: middle; }
+        .so-lookup-tag.shipped { background: rgba(83,189,235,0.15); color: #53bdeb; }
+        .so-lookup-tag.failed { background: rgba(255,71,87,0.15); color: #ff6b7a; }
+        .so-lookup-tag.cancelled { background: rgba(255,165,2,0.15); color: #ffa502; }
+        .so-lookup-actions { display: flex; flex-direction: column; gap: 0.4rem; flex-shrink: 0; }
         .so-pickup-date {
             padding: 0.35rem 0.5rem;
             border-radius: 6px;
@@ -4542,6 +4556,12 @@
                 </div>
             </div>
             <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <button id="soNewShipBtn" class="btn btn-primary" title="Create a forward shipment for any order by its Order ID">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    New Shipment
+                </button>
                 <button id="soExportBtn" class="mo-card-toggle" title="Export current filters as CSV">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -5010,7 +5030,25 @@
         </div>
     </div>
 
+    <!-- New Forward Shipment Modal (ship any order by its Order ID) -->
+    <div id="soNewShipModal" onclick="if(event.target === this) closeSoNewShipModal()">
+        <div class="ship-modal-content" style="max-width: 660px;">
+            <div class="ship-modal-header">
+                <h3>➕ New Forward Shipment</h3>
+                <button class="ship-close" onclick="closeSoNewShipModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div class="form-group">
+                    <label>Find Order</label>
+                    <input type="text" id="soLookupInput" placeholder="Type an Order ID, customer name, phone or AWB..." autocomplete="off">
+                </div>
+                <div style="font-size: 0.75rem; color: #888; margin-bottom: 0.85rem;">Pick an order below — consignee, items and payment details are grabbed automatically. You only choose the carrier.</div>
+                <div id="soLookupResults"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
-    <script src="{{ 'shoppers-app.js' | asset_url }}?v=1712700002"></script>
+    <script src="{{ 'shoppers-app.js' | asset_url }}?v=1712700003"></script>
 </body>
 </html>
