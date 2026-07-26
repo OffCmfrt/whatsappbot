@@ -38,6 +38,10 @@ services:
         sync: false
       - key: SHOPIFY_WEBHOOK_SECRET
         sync: false
+      - key: GOKWIK_APP_ID
+        sync: false
+      - key: GOKWIK_APP_SECRET
+        sync: false
       - key: ADMIN_USERNAME
         sync: false
       - key: ADMIN_PASSWORD

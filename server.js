@@ -108,6 +108,9 @@ app.use('/webhook', whatsappLimiter);
 // Custom middleware to capture raw body for Shopify webhook verification
 app.use('/webhooks/shopify', express.raw({ type: '*/*' }));
 
+// Raw body for GoKwik webhook HMAC verification (parsed after signature check)
+app.use('/webhooks/gokwik', express.raw({ type: '*/*' }));
+
 // Regular JSON parsing for all other routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -145,6 +148,13 @@ app.use('/webhooks/shopify', shopifyWebhookRoutes);
 // Configure in: Shiprocket Dashboard → Solutions → Checkout → Webhooks
 const shiprocketCheckoutWebhookRoutes = require('./src/routes/shiprocketCheckoutWebhookRoutes');
 app.use('/webhooks/shiprocket', shiprocketCheckoutWebhookRoutes);
+
+// GoKwik Webhooks (checkout partner — order/cart/status sync)
+// GoKwik also creates the order in Shopify, so /webhooks/shopify/orders/create
+// remains the fallback; dedup happens on order_id + shopper_confirmations.
+// Register in GoKwik Dashboard: POST /webhooks/gokwik/events
+const gokwikWebhookRoutes = require('./src/routes/gokwikWebhookRoutes');
+app.use('/webhooks/gokwik', gokwikWebhookRoutes);
 
 // Cron Jobs
 const abandonedCartCron = require('./src/services/abandonedCartCron');

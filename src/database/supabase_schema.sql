@@ -199,6 +199,8 @@ CREATE TABLE IF NOT EXISTS store_shoppers (
     response_count INTEGER DEFAULT 0,
     confirmed_by VARCHAR(50),
     conversation_lock_until TIMESTAMP,
+    gokwik_order_id TEXT,
+    rto_risk VARCHAR(20),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(phone, order_id)
@@ -206,6 +208,7 @@ CREATE TABLE IF NOT EXISTS store_shoppers (
 
 CREATE INDEX IF NOT EXISTS idx_store_shoppers_phone ON store_shoppers(phone);
 CREATE INDEX IF NOT EXISTS idx_store_shoppers_order_id ON store_shoppers(order_id);
+CREATE INDEX IF NOT EXISTS idx_store_shoppers_gokwik_order_id ON store_shoppers(gokwik_order_id);
 
 -- Shopper Confirmations table (for deduplication)
 CREATE TABLE IF NOT EXISTS shopper_confirmations (

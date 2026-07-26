@@ -271,7 +271,9 @@ async function initializeShoppersTable() {
       { name: 'response_count', type: 'INTEGER DEFAULT 0' },
       { name: 'delivery_type', type: 'VARCHAR(20)' },
       { name: 'confirmed_by', type: 'VARCHAR(50)' },
-      { name: 'conversation_lock_until', type: 'TIMESTAMP' }
+      { name: 'conversation_lock_until', type: 'TIMESTAMP' },
+      { name: 'gokwik_order_id', type: 'TEXT' },
+      { name: 'rto_risk', type: 'VARCHAR(20)' }
     ];
 
     for (const col of columns) {

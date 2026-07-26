@@ -255,9 +255,9 @@ class ShopifyService {
             // Try to fetch by order ID (numeric) or order number (like 12345)
             let apiUrl;
             if (typeof orderId === 'string' && orderId.startsWith('#')) {
-                // Order name (e.g., #12345) - need to search
+                // Order name (e.g., #12345) - need to search (status=any so closed/archived orders are found too)
                 const orderNumber = orderId.replace('#', '');
-                apiUrl = `https://${cleanShopUrl}.myshopify.com/admin/api/2024-01/orders.json?name=${orderNumber}`;
+                apiUrl = `https://${cleanShopUrl}.myshopify.com/admin/api/2024-01/orders.json?name=${orderNumber}&status=any`;
             } else {
                 // Direct order ID
                 apiUrl = `https://${cleanShopUrl}.myshopify.com/admin/api/2024-01/orders/${orderId}.json`;
@@ -284,6 +284,393 @@ class ShopifyService {
             }
             console.error(`❌ Error fetching order ${orderId} from Shopify:`, error.message);
             return null;
+        }
+    }
+
+    // Fetch the full active product catalog (variants, price, stock) for the admin product picker.
+    // Paginated via Link headers and cached in-memory for 10 minutes.
+    async getProductCatalog(forceRefresh = false) {
+        const CATALOG_TTL = 10 * 60 * 1000;
+        if (!forceRefresh && this._catalogCache && (Date.now() - this._catalogCacheAt) < CATALOG_TTL) {
+            return this._catalogCache;
+        }
+
+        const shopUrl = process.env.SHOPIFY_SHOP_URL || process.env.SHOPIFY_STORE;
+        const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+
+        if (!shopUrl || !accessToken) {
+            console.error('❌ Shopify credentials not configured');
+            return this._catalogCache || [];
+        }
+
+        const cleanShopUrl = shopUrl.replace('.myshopify.com', '');
+        const headers = {
+            'X-Shopify-Access-Token': accessToken,
+            'Content-Type': 'application/json'
+        };
+
+        try {
+            const rawProducts = [];
+            let apiUrl = `https://${cleanShopUrl}.myshopify.com/admin/api/2024-01/products.json?limit=250&status=active&fields=id,title,handle,image,variants`;
+
+            // Follow Shopify cursor pagination (rel="next" Link header), hard cap for safety
+            while (apiUrl && rawProducts.length < 2000) {
+                const response = await axios.get(apiUrl, { headers, timeout: 20000 });
+                rawProducts.push(...(response.data?.products || []));
+                const linkHeader = response.headers?.link || '';
+                const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+                apiUrl = nextMatch ? nextMatch[1] : null;
+            }
+
+            const catalog = rawProducts.map(p => ({
+                id: p.id,
+                title: p.title,
+                image: p.image?.src || null,
+                variants: (p.variants || []).map(v => ({
+                    id: v.id,
+                    title: v.title === 'Default Title' ? '' : (v.title || ''),
+                    price: parseFloat(v.price) || 0,
+                    compare_at_price: v.compare_at_price ? parseFloat(v.compare_at_price) : null,
+                    sku: v.sku || '',
+                    inventory: (typeof v.inventory_quantity === 'number') ? v.inventory_quantity : null,
+                    available: v.inventory_policy === 'continue' || (v.inventory_quantity || 0) > 0
+                }))
+            }));
+
+            this._catalogCache = catalog;
+            this._catalogCacheAt = Date.now();
+            console.log(`✅ Shopify product catalog loaded: ${catalog.length} products`);
+            return catalog;
+        } catch (error) {
+            console.error('❌ Error fetching Shopify product catalog:', error.message);
+            // Serve stale cache rather than failing the picker outright
+            return this._catalogCache || [];
+        }
+    }
+
+    // ==========================================
+    // ADMIN EDIT → SHOPIFY SYNC
+    // Pushes Shoppers Hub order edits (items, payment method, shipping address)
+    // back to the Shopify order, so Shopify — and GoKwik, which operates on the
+    // Shopify order — always match what the admin sees in the hub.
+    // ==========================================
+
+    _restConfig() {
+        const shopUrl = process.env.SHOPIFY_SHOP_URL || process.env.SHOPIFY_STORE;
+        const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+        if (!shopUrl || !accessToken) return null;
+        return {
+            base: `https://${shopUrl.replace('.myshopify.com', '')}.myshopify.com/admin/api/2024-01`,
+            headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' }
+        };
+    }
+
+    // store_shoppers.order_id is usually the order NAME ("#1234" or "1234");
+    // only long numeric strings are real Shopify order IDs.
+    _toLookupId(orderId) {
+        const str = String(orderId || '').trim();
+        if (/^\d{11,}$/.test(str)) return str;
+        return '#' + str.replace(/^#/, '');
+    }
+
+    async graphql(query, variables = {}) {
+        const cfg = this._restConfig();
+        if (!cfg) throw new Error('Shopify credentials not configured');
+        const response = await axios.post(`${cfg.base}/graphql.json`, { query, variables }, { headers: cfg.headers, timeout: 20000 });
+        if (response.data?.errors?.length) {
+            throw new Error(response.data.errors.map(e => e.message).join('; '));
+        }
+        return response.data?.data;
+    }
+
+    /**
+     * Sync admin order edits (line items and/or payment method) to Shopify.
+     * Best-effort: never throws — returns { success, actions, warnings }.
+     */
+    async syncOrderEdits(orderId, { items = null, paymentMethod = null } = {}) {
+        const result = { success: false, actions: [], warnings: [] };
+        const cfg = this._restConfig();
+        if (!cfg) {
+            result.warnings.push('Shopify credentials not configured');
+            return result;
+        }
+
+        try {
+            const order = await this.getOrderById(this._toLookupId(orderId));
+            if (!order) {
+                result.warnings.push(`Order ${orderId} not found in Shopify`);
+                return result;
+            }
+
+            // --- Line items (Shopify Order Editing API) ---
+            if (Array.isArray(items) && items.length > 0) {
+                if (order.cancelled_at) {
+                    result.warnings.push('Order is cancelled in Shopify — line items not synced');
+                } else if (order.fulfillment_status === 'fulfilled') {
+                    result.warnings.push('Order already fulfilled in Shopify — line items not synced');
+                } else {
+                    try {
+                        const itemActions = await this._syncLineItems(order, items, result.warnings);
+                        result.actions.push(...itemActions);
+                    } catch (err) {
+                        result.warnings.push(`Line item sync failed: ${err.message}`);
+                    }
+                }
+            }
+
+            // --- Payment method (COD ⇄ Prepaid) ---
+            if (paymentMethod === 'Prepaid' || paymentMethod === 'COD') {
+                await this._syncPaymentMethod(cfg, order, paymentMethod, result);
+            }
+
+            result.success = result.actions.length > 0 || result.warnings.length === 0;
+            const summary = result.actions.length ? result.actions.join(' | ') : 'no changes needed';
+            console.log(`🔄 Shopify sync for ${orderId}: ${summary}${result.warnings.length ? ` | ⚠️ ${result.warnings.join(' | ')}` : ''}`);
+            return result;
+        } catch (error) {
+            console.error(`❌ Shopify order sync error for ${orderId}:`, error.message);
+            result.warnings.push(error.message);
+            return result;
+        }
+    }
+
+    // Diff the hub's edited items against the Shopify order and apply via the
+    // GraphQL Order Editing API (begin → setQuantity/addVariant/addCustomItem → commit).
+    async _syncLineItems(order, desiredItems, warnings) {
+        const actions = [];
+        const norm = s => (s || '').toString().trim().toLowerCase();
+
+        const begin = await this.graphql(`
+            mutation orderEditBegin($id: ID!) {
+                orderEditBegin(id: $id) {
+                    calculatedOrder {
+                        id
+                        lineItems(first: 100) {
+                            edges { node { id quantity title variant { legacyResourceId } } }
+                        }
+                    }
+                    userErrors { field message }
+                }
+            }`, { id: order.admin_graphql_api_id });
+
+        const beginErrors = begin?.orderEditBegin?.userErrors || [];
+        if (beginErrors.length) throw new Error(beginErrors.map(e => e.message).join('; '));
+        const calc = begin?.orderEditBegin?.calculatedOrder;
+        if (!calc) throw new Error('Could not start Shopify order edit session');
+
+        const existingLines = (calc.lineItems?.edges || []).map(e => e.node);
+        const matchedLineIds = new Set();
+        let changed = false;
+
+        // Original REST line items — used to detect hub price changes on existing lines
+        const restLineByVariant = new Map();
+        const restLineByTitle = new Map();
+        (order.line_items || []).forEach(li => {
+            if (li.variant_id) restLineByVariant.set(String(li.variant_id), li);
+            restLineByTitle.set(norm(li.title || li.name), li);
+        });
+
+        for (const item of desiredItems) {
+            const qty = Math.max(1, parseInt(item.quantity) || 1);
+            const hubPrice = parseFloat(item.price) || 0;
+
+            // Match existing order line: by variant first, then by title
+            let line = item.variant_id
+                ? existingLines.find(l => !matchedLineIds.has(l.id) && String(l.variant?.legacyResourceId) === String(item.variant_id))
+                : null;
+            if (!line) line = existingLines.find(l => !matchedLineIds.has(l.id) && norm(l.title) === norm(item.title));
+
+            if (line) {
+                matchedLineIds.add(line.id);
+                const restLine = (item.variant_id && restLineByVariant.get(String(item.variant_id))) || restLineByTitle.get(norm(line.title));
+                const currentPrice = restLine ? parseFloat(restLine.price) : null;
+                if (currentPrice !== null && Math.abs(currentPrice - hubPrice) > 0.01) {
+                    warnings.push(`"${item.title}": Shopify keeps the original unit price ₹${currentPrice} (hub price ₹${hubPrice}) — existing line prices can't be edited on Shopify orders`);
+                }
+                if (line.quantity !== qty) {
+                    await this._orderEditSetQuantity(calc.id, line.id, qty);
+                    actions.push(`"${item.title}" qty ${line.quantity} → ${qty}`);
+                    changed = true;
+                }
+            } else if (item.variant_id) {
+                await this._orderEditAddVariant(calc.id, item, qty, hubPrice, warnings, actions);
+                changed = true;
+            } else {
+                // Free-typed (non-catalog) item — added at the hub price
+                await this._orderEditAddCustomItem(calc.id, item.title, hubPrice, qty, order.currency || 'INR');
+                actions.push(`Added custom item "${item.title}" ×${qty}`);
+                changed = true;
+            }
+        }
+
+        // Lines the admin removed in the hub → zero them out (restocks inventory)
+        for (const line of existingLines) {
+            if (!matchedLineIds.has(line.id) && line.quantity > 0) {
+                await this._orderEditSetQuantity(calc.id, line.id, 0);
+                actions.push(`Removed "${line.title}"`);
+                changed = true;
+            }
+        }
+
+        // Nothing changed — abandon the edit session (Shopify discards uncommitted edits)
+        if (!changed) return actions;
+
+        const commit = await this.graphql(`
+            mutation orderEditCommit($id: ID!, $staffNote: String) {
+                orderEditCommit(id: $id, notifyCustomer: false, staffNote: $staffNote) {
+                    order { id }
+                    userErrors { field message }
+                }
+            }`, { id: calc.id, staffNote: 'Edited from Shoppers Hub' });
+        const commitErrors = commit?.orderEditCommit?.userErrors || [];
+        if (commitErrors.length) throw new Error(`Commit failed: ${commitErrors.map(e => e.message).join('; ')}`);
+        return actions;
+    }
+
+    async _orderEditSetQuantity(calcOrderId, lineItemId, quantity) {
+        const data = await this.graphql(`
+            mutation orderEditSetQuantity($id: ID!, $lineItemId: ID!, $quantity: Int!) {
+                orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity, restock: true) {
+                    userErrors { field message }
+                }
+            }`, { id: calcOrderId, lineItemId, quantity });
+        const errs = data?.orderEditSetQuantity?.userErrors || [];
+        if (errs.length) throw new Error(errs.map(e => e.message).join('; '));
+    }
+
+    async _orderEditAddVariant(calcOrderId, item, quantity, hubPrice, warnings, actions) {
+        const data = await this.graphql(`
+            mutation orderEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!) {
+                orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity, allowDuplicates: true) {
+                    calculatedLineItem { id originalUnitPriceSet { shopMoney { amount } } }
+                    userErrors { field message }
+                }
+            }`, { id: calcOrderId, variantId: `gid://shopify/ProductVariant/${item.variant_id}`, quantity });
+        const payload = data?.orderEditAddVariant;
+        const errs = payload?.userErrors || [];
+        if (errs.length) throw new Error(`Add "${item.title}" failed: ${errs.map(e => e.message).join('; ')}`);
+        actions.push(`Added "${item.title}" ×${quantity}`);
+
+        // Honor a hub price below catalog via a line discount; Shopify can't price above catalog
+        const catalogPrice = parseFloat(payload?.calculatedLineItem?.originalUnitPriceSet?.shopMoney?.amount);
+        if (!isNaN(catalogPrice) && hubPrice > 0 && catalogPrice > 0 && Math.abs(catalogPrice - hubPrice) > 0.01) {
+            if (hubPrice < catalogPrice) {
+                const percent = Math.round(((catalogPrice - hubPrice) / catalogPrice) * 10000) / 100;
+                const disc = await this.graphql(`
+                    mutation orderEditAddLineItemDiscount($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
+                        orderEditAddLineItemDiscount(id: $id, lineItemId: $lineItemId, discount: $discount) {
+                            userErrors { field message }
+                        }
+                    }`, {
+                    id: calcOrderId,
+                    lineItemId: payload.calculatedLineItem.id,
+                    discount: { percentValue: percent, description: 'Shoppers Hub price adjustment' }
+                });
+                const derrs = disc?.orderEditAddLineItemDiscount?.userErrors || [];
+                if (derrs.length) warnings.push(`"${item.title}": discount to hub price ₹${hubPrice} failed — ${derrs.map(e => e.message).join('; ')}`);
+                else actions.push(`"${item.title}" discounted to ₹${hubPrice}`);
+            } else {
+                warnings.push(`"${item.title}": hub price ₹${hubPrice} is above the catalog price ₹${catalogPrice} — Shopify keeps ₹${catalogPrice}`);
+            }
+        }
+    }
+
+    async _orderEditAddCustomItem(calcOrderId, title, price, quantity, currency) {
+        const data = await this.graphql(`
+            mutation orderEditAddCustomItem($id: ID!, $title: String!, $price: MoneyInput!, $quantity: Int!) {
+                orderEditAddCustomItem(id: $id, title: $title, price: $price, quantity: $quantity) {
+                    userErrors { field message }
+                }
+            }`, { id: calcOrderId, title, price: { amount: String(price), currencyCode: currency }, quantity });
+        const errs = data?.orderEditAddCustomItem?.userErrors || [];
+        if (errs.length) throw new Error(`Add custom "${title}" failed: ${errs.map(e => e.message).join('; ')}`);
+    }
+
+    // COD → Prepaid: mark the Shopify order as paid; either way, tag the order
+    // so the conversion is visible in Shopify (and to GoKwik reporting).
+    async _syncPaymentMethod(cfg, order, paymentMethod, result) {
+        const gateways = ((order.payment_gateway_names || []).join(',') + ',' + (order.gateway || '')).toLowerCase();
+        const isCodInShopify = gateways.includes('cash on delivery') || gateways.includes('cod');
+        const isPendingPayment = ['pending', 'authorized', 'partially_paid'].includes(order.financial_status);
+
+        if (paymentMethod === 'Prepaid' && isPendingPayment) {
+            try {
+                await axios.post(`${cfg.base}/orders/${order.id}/transactions.json`,
+                    { transaction: { kind: 'capture' } },
+                    { headers: cfg.headers, timeout: 15000 });
+                result.actions.push('Marked as paid in Shopify (COD → Prepaid)');
+            } catch (captureErr) {
+                // No authorization to capture (typical for COD/manual) — record an external sale
+                try {
+                    await axios.post(`${cfg.base}/orders/${order.id}/transactions.json`,
+                        { transaction: { kind: 'sale', source: 'external', gateway: 'manual', amount: order.total_price } },
+                        { headers: cfg.headers, timeout: 15000 });
+                    result.actions.push('Marked as paid in Shopify (COD → Prepaid)');
+                } catch (saleErr) {
+                    const detail = saleErr.response?.data?.errors ? JSON.stringify(saleErr.response.data.errors) : saleErr.message;
+                    result.warnings.push(`Could not mark order paid in Shopify: ${detail}`);
+                }
+            }
+        } else if (paymentMethod === 'COD' && order.financial_status === 'paid' && !isCodInShopify) {
+            result.warnings.push('Order is already PAID in Shopify — cannot convert back to COD there (hub updated only)');
+        }
+
+        try {
+            const tags = (order.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+            const tag = paymentMethod === 'Prepaid' ? 'converted-to-prepaid' : 'converted-to-cod';
+            if (!tags.includes(tag)) {
+                tags.push(tag);
+                await axios.put(`${cfg.base}/orders/${order.id}.json`,
+                    { order: { id: order.id, tags: tags.join(', ') } },
+                    { headers: cfg.headers, timeout: 15000 });
+                result.actions.push(`Tagged order "${tag}"`);
+            }
+        } catch (tagErr) {
+            result.warnings.push(`Could not tag order in Shopify: ${tagErr.message}`);
+        }
+    }
+
+    /**
+     * Mirror consignee edits made in the Ship modal to the Shopify order's
+     * shipping address. Best-effort: never throws.
+     */
+    async updateShippingAddress(orderId, addr = {}) {
+        const result = { success: false, warnings: [] };
+        const cfg = this._restConfig();
+        if (!cfg) {
+            result.warnings.push('Shopify credentials not configured');
+            return result;
+        }
+
+        try {
+            const order = await this.getOrderById(this._toLookupId(orderId));
+            if (!order) {
+                result.warnings.push(`Order ${orderId} not found in Shopify`);
+                return result;
+            }
+
+            const shipping = { ...(order.shipping_address || {}) };
+            if (addr.name) {
+                const parts = addr.name.trim().split(/\s+/);
+                shipping.first_name = parts.shift();
+                shipping.last_name = parts.join(' ') || shipping.last_name || '';
+                shipping.name = addr.name.trim();
+            }
+            if (addr.phone) shipping.phone = addr.phone;
+            if (addr.address1) shipping.address1 = addr.address1;
+            if (addr.city) shipping.city = addr.city;
+            if (addr.state) shipping.province = addr.state;
+            if (addr.pincode) shipping.zip = addr.pincode;
+
+            await axios.put(`${cfg.base}/orders/${order.id}.json`,
+                { order: { id: order.id, shipping_address: shipping } },
+                { headers: cfg.headers, timeout: 15000 });
+            result.success = true;
+            return result;
+        } catch (error) {
+            const detail = error.response?.data?.errors ? JSON.stringify(error.response.data.errors) : error.message;
+            result.warnings.push(detail);
+            return result;
         }
     }
 

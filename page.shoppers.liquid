@@ -809,6 +809,10 @@
         .source-info { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
         .badge-shopify { background: #fff; color: #000; border: 1px solid #fff; }
         .badge-delivery { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.4); }
+                /* GoKwik RTO risk chip */
+                .rto-chip { display: inline-flex; align-items: center; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; font-family: 'Archivo Narrow', sans-serif; }
+                .rto-high { background: rgba(255,71,87,0.15); color: #ff4757; border: 1px solid rgba(255,71,87,0.5); }
+                .rto-medium { background: rgba(255,165,2,0.15); color: #ffa502; border: 1px solid rgba(255,165,2,0.5); }
         .amount-info { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 0.15rem; }
         .customer-basics {
             margin-top: 0;
@@ -1069,14 +1073,60 @@
         
         /* Product Editor */
         #productEditor { border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; margin-top: 1rem; }
-        .product-item-row { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; }
-        .product-item-row input[type="text"] { flex: 2; font-size: 0.85rem; padding: 0.5rem; }
-        .product-item-row input[type="text"].item-size { flex: 0 0 80px; font-size: 0.85rem; padding: 0.5rem; text-align: center; }
-        .product-item-row input[type="number"] { width: 60px; font-size: 0.85rem; padding: 0.5rem; }
+        #editModal .modal-content { max-width: 700px; }
         .btn-remove-item { background: none; border: 1px solid rgba(255,0,0,0.3); color: #ff4757; border-radius: 4px; padding: 0.4rem; cursor: pointer; }
         .btn-remove-item:hover { background: rgba(255,0,0,0.1); }
         .btn-add-item { width: 100%; background: transparent; border: 1px dashed rgba(255,255,255,0.2); color: #aaa; padding: 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; margin-top: 0.5rem; }
         .btn-add-item:hover { border-color: #fff; color: #fff; }
+
+        /* ===== Shared Order Editor (inventory picker + pricing + payment) ===== */
+        .oe-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; }
+        .oe-label { font-size: 0.8rem; font-family: 'Archivo Narrow', sans-serif; color: #fff; text-transform: uppercase; letter-spacing: 1px; }
+        .oe-sync-btn { background: none; border: 1px solid rgba(255,255,255,0.2); color: #aaa; border-radius: 6px; padding: 0.3rem 0.7rem; font-size: 0.68rem; cursor: pointer; letter-spacing: 1px; text-transform: uppercase; transition: all 0.2s; }
+        .oe-sync-btn:hover { border-color: #25d366; color: #25d366; }
+        .oe-catalog-status { font-size: 0.68rem; color: #666; margin-bottom: 0.5rem; }
+        .oe-row { border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem; margin-bottom: 0.6rem; background: rgba(255,255,255,0.02); }
+        .oe-row-main { display: flex; gap: 0.5rem; align-items: center; }
+        .oe-thumb { width: 38px; height: 38px; border-radius: 6px; object-fit: cover; background: #1a1a1a; flex: 0 0 38px; border: 1px solid rgba(255,255,255,0.08); }
+        .oe-thumb-placeholder { display: flex; align-items: center; justify-content: center; color: #444; font-size: 1rem; }
+        .oe-picker { position: relative; flex: 2; min-width: 0; }
+        .oe-picker input { width: 100%; font-size: 0.85rem; padding: 0.5rem; }
+        .oe-dropdown { position: absolute; top: calc(100% + 4px); left: 0; right: -80px; max-height: 300px; overflow-y: auto; background: #111; border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; z-index: 60; display: none; box-shadow: 0 12px 30px rgba(0,0,0,0.8); }
+        .oe-dropdown.open { display: block; }
+        .oe-opt { display: flex; gap: 0.6rem; padding: 0.5rem 0.6rem; cursor: pointer; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .oe-opt:hover, .oe-opt.hl { background: rgba(37,211,102,0.08); }
+        .oe-opt img { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; background: #222; }
+        .oe-opt-info { flex: 1; min-width: 0; }
+        .oe-opt-title { font-size: 0.8rem; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .oe-opt-sub { font-size: 0.68rem; color: #888; margin-top: 2px; }
+        .oe-dropdown-empty { padding: 0.8rem; font-size: 0.75rem; color: #888; text-align: center; }
+        .oe-stock-badge { font-size: 0.6rem; padding: 0.15rem 0.45rem; border-radius: 10px; white-space: nowrap; letter-spacing: 0.5px; text-transform: uppercase; }
+        .oe-stock-in { color: #25d366; background: rgba(37,211,102,0.1); border: 1px solid rgba(37,211,102,0.3); }
+        .oe-stock-low { color: #f5a623; background: rgba(245,166,35,0.1); border: 1px solid rgba(245,166,35,0.3); }
+        .oe-stock-out { color: #ff4757; background: rgba(255,71,87,0.1); border: 1px solid rgba(255,71,87,0.3); }
+        .oe-custom-badge { color: #888; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); }
+        .oe-variant { flex: 0 0 100px; width: 100px; font-size: 0.78rem; padding: 0.5rem 0.3rem; background: #0a0a0a; color: #fff; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; }
+        .oe-qty { width: 54px; font-size: 0.85rem; padding: 0.5rem 0.3rem; text-align: center; }
+        .oe-price-wrap { display: flex; align-items: center; gap: 2px; color: #888; font-size: 0.8rem; }
+        .oe-price { width: 80px; font-size: 0.85rem; padding: 0.5rem 0.4rem; text-align: right; }
+        .oe-line-total { flex: 0 0 78px; text-align: right; font-size: 0.8rem; color: #fff; font-weight: 700; font-family: 'Inter', sans-serif; }
+        .oe-row-meta { display: flex; gap: 0.5rem; margin-top: 0.45rem; align-items: center; font-size: 0.66rem; color: #777; flex-wrap: wrap; }
+        .oe-compare-price { text-decoration: line-through; color: #666; }
+        .oe-summary { border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 0.8rem 1rem; margin-top: 1rem; background: rgba(255,255,255,0.02); }
+        .oe-summary-row { display: flex; justify-content: space-between; align-items: center; padding: 0.25rem 0; font-size: 0.82rem; color: #ccc; }
+        .oe-summary-row.oe-total-row { border-top: 1px dashed rgba(255,255,255,0.15); margin-top: 0.4rem; padding-top: 0.6rem; font-weight: 700; color: #fff; }
+        .oe-total-input { width: 130px; text-align: right; font-weight: 700; font-size: 0.9rem; padding: 0.45rem 0.5rem; }
+        .oe-summary-hint { font-size: 0.68rem; color: #f5a623; margin-top: 0.35rem; }
+        .oe-payment { margin-top: 1rem; }
+        .oe-pay-row { margin-top: 0.45rem; display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+        .oe-pay-toggle { display: inline-flex; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; overflow: hidden; }
+        .oe-pay-btn { padding: 0.5rem 1.2rem; background: transparent; border: none; color: #777; cursor: pointer; font-family: 'Archivo Narrow', sans-serif; letter-spacing: 1.5px; font-size: 0.78rem; text-transform: uppercase; transition: all 0.15s; }
+        .oe-pay-btn + .oe-pay-btn { border-left: 1px solid rgba(255,255,255,0.15); }
+        .oe-pay-btn.active.cod { background: rgba(245,166,35,0.15); color: #f5a623; }
+        .oe-pay-btn.active.prepaid { background: rgba(37,211,102,0.15); color: #25d366; }
+        .oe-pay-note { font-size: 0.7rem; color: #25d366; }
+        .oe-pay-note.warn { color: #f5a623; }
+        .ship-edit-hint { font-size: 0.62rem; color: #888; letter-spacing: 0.5px; text-transform: none; font-weight: 400; margin-left: 0.5rem; }
 
         .modal-actions { display: flex; gap: 1rem; margin-top: 2rem; }
         .modal-actions button { flex: 1; height: 44px; }
@@ -3954,9 +4004,7 @@
                     <textarea id="editAddress" placeholder="Street, City, Zip"></textarea>
                 </div>
                 <div id="productEditor">
-                    <label style="font-size: 0.8rem; font-family: 'Archivo Narrow', sans-serif; color: #fff; display: block; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 1px;">Product Checklist</label>
-                    <div id="productEditorItems"></div>
-                    <button type="button" class="btn-add-item" id="addProductRowBtn">+ ADD PRODUCT</button>
+                    <div id="editOrderEditor"></div>
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-outline" id="cancelEdit">Cancel</button>
@@ -4954,8 +5002,8 @@
                         <div class="form-group"><label>Pincode</label><input type="text" id="shipPincode" maxlength="6"></div>
                         <div class="form-group"><label>Payment</label><div id="shipPaymentBadge"></div></div>
                     </div>
-                    <div class="ship-section-title">Items</div>
-                    <div class="ship-items-summary" id="shipItemsSummary"></div>
+                    <div class="ship-section-title">Order Items, Pricing &amp; Payment <span class="ship-edit-hint">edits are saved to the order when you continue</span></div>
+                    <div id="shipOrderEditor"></div>
                     <div class="ship-section-title">Package</div>
                     <div class="ship-grid-4">
                         <div class="form-group"><label>Weight (g)</label><input type="number" id="shipWeight" min="1"></div>

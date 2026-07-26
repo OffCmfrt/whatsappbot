@@ -1900,7 +1900,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
                    s.payment_method, s.order_total, s.delivery_type, s.source,
                    CASE WHEN s.status = 'confirmed' AND ${shippedExpr} THEN 'shipped' ELSE s.status END as status,
                    s.customer_message, s.last_response_at, s.created_at, s.updated_at,
-                   s.confirmed_by, s.items_json,
+                   s.confirmed_by, s.items_json, s.rto_risk,
                    o.awb,
                    o.courier_name,
                    COALESCE(s.order_total, o.total) as order_total,
@@ -1947,7 +1947,14 @@ router.get('/shoppers', verifyToken, async (req, res) => {
 router.put('/shoppers/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, phone, order_id, address, items_json, order_total, delivery_type } = req.body;
+        const { name, phone, order_id, address, items_json, order_total, delivery_type, payment_method } = req.body;
+
+        // Load the current row first so we can diff for the Shopify sync below
+        const existingRows = await dbAdapter.select('store_shoppers', { id }, { limit: 1 });
+        const existing = existingRows[0];
+        if (!existing) {
+            return res.status(404).json({ error: 'Shopper not found' });
+        }
 
         const updateData = {
             updated_at: new Date().toISOString()
@@ -1957,17 +1964,86 @@ router.put('/shoppers/:id', verifyToken, async (req, res) => {
         if (order_id !== undefined) updateData.order_id = order_id;
         if (address !== undefined) updateData.address = address;
         if (items_json !== undefined) updateData.items_json = items_json;
-        if (order_total !== undefined) updateData.order_total = order_total;
+        if (order_total !== undefined) {
+            const totalNum = parseFloat(order_total);
+            if (isNaN(totalNum) || totalNum < 0) {
+                return res.status(400).json({ error: 'Invalid order total' });
+            }
+            updateData.order_total = totalNum;
+        }
         if (delivery_type !== undefined) updateData.delivery_type = delivery_type;
+        if (payment_method !== undefined) {
+            // Admin can flip COD orders to Prepaid (or back) from the edit modal
+            if (!['COD', 'Prepaid'].includes(payment_method)) {
+                return res.status(400).json({ error: 'Invalid payment method (COD or Prepaid)' });
+            }
+            updateData.payment_method = payment_method;
+        }
 
         await dbAdapter.update('store_shoppers', updateData, { id });
         
         // Invalidate cache after shopper update
         invalidateCache('shoppers');
-        res.json({ success: true, message: 'Shopper updated successfully' });
+
+        // Push the edits to Shopify so Shopify + GoKwik stay in sync with the hub
+        let shopifySync = null;
+        let gokwikSync = null;
+        const itemsChanged = items_json !== undefined && items_json !== existing.items_json;
+        const paymentChanged = payment_method !== undefined && payment_method !== existing.payment_method;
+        const totalChanged = updateData.order_total !== undefined && parseFloat(existing.order_total) !== updateData.order_total;
+        const targetOrderId = updateData.order_id || existing.order_id;
+        if ((itemsChanged || paymentChanged) && targetOrderId) {
+            try {
+                const shopifyService = require('../services/shopifyService');
+                let parsedItems = null;
+                if (itemsChanged) {
+                    try { parsedItems = JSON.parse(items_json); } catch (_) { parsedItems = null; }
+                }
+                shopifySync = await shopifyService.syncOrderEdits(targetOrderId, {
+                    items: parsedItems,
+                    paymentMethod: paymentChanged ? payment_method : null
+                });
+            } catch (syncError) {
+                console.error('⚠️ Shopify order sync error (hub still updated):', syncError.message);
+                shopifySync = { success: false, actions: [], warnings: [syncError.message] };
+            }
+        }
+
+        // Mirror the same edits to GoKwik (no-op until GOKWIK_ORDER_UPDATE_PATH is configured)
+        if ((itemsChanged || paymentChanged || totalChanged) && targetOrderId) {
+            try {
+                const gokwikService = require('../services/gokwikService');
+                let parsedItems = null;
+                if (itemsChanged) {
+                    try { parsedItems = JSON.parse(items_json); } catch (_) { parsedItems = null; }
+                }
+                gokwikSync = await gokwikService.notifyOrderUpdate(targetOrderId, {
+                    ...(parsedItems ? { items: parsedItems } : {}),
+                    ...(totalChanged ? { orderTotal: updateData.order_total } : {}),
+                    ...(paymentChanged ? { paymentMethod: payment_method } : {})
+                });
+            } catch (gkError) {
+                console.error('⚠️ GoKwik order sync error (hub still updated):', gkError.message);
+                gokwikSync = { success: false, skipped: false, reason: gkError.message };
+            }
+        }
+
+        res.json({ success: true, message: 'Shopper updated successfully', shopify_sync: shopifySync, gokwik_sync: gokwikSync });
     } catch (error) {
         console.error('Shopper update error:', error);
         res.status(500).json({ error: 'Failed to update shopper' });
+    }
+});
+
+// Shopify product catalog for the edit-order product picker (cached 10 min in service)
+router.get('/shopify/products', verifyToken, async (req, res) => {
+    try {
+        const shopifyService = require('../services/shopifyService');
+        const catalog = await shopifyService.getProductCatalog(req.query.refresh === '1');
+        res.json({ success: true, products: catalog });
+    } catch (error) {
+        console.error('Shopify catalog fetch error:', error);
+        res.status(500).json({ error: 'Failed to fetch product catalog' });
     }
 });
 
@@ -4531,6 +4607,36 @@ router.post('/shipping/ship', verifyToken, async (req, res) => {
         if (result.error) {
             return res.status(result.status || 500).json({ success: false, error: result.error, shipment: result.shipment || null });
         }
+
+        // Best-effort: mirror consignee edits to the Shopify order's shipping
+        // address + notify GoKwik, so both match what actually shipped (non-blocking)
+        if (consigneeOverrides && (consigneeOverrides.address || consigneeOverrides.city || consigneeOverrides.pincode || consigneeOverrides.name || consigneeOverrides.phone)) {
+            try {
+                const shopperRows = await dbAdapter.select('store_shoppers', { id: shopperId }, { limit: 1 });
+                const orderId = shopperRows[0]?.order_id;
+                if (orderId) {
+                    const shopifyService = require('../services/shopifyService');
+                    shopifyService.updateShippingAddress(orderId, {
+                        name: consigneeOverrides.name,
+                        phone: consigneeOverrides.phone,
+                        address1: consigneeOverrides.address,
+                        city: consigneeOverrides.city,
+                        state: consigneeOverrides.state,
+                        pincode: consigneeOverrides.pincode
+                    }).then(sync => {
+                        if (sync.success) console.log(`🔄 Shopify shipping address synced for order ${orderId}`);
+                        else console.warn(`⚠️ Shopify address sync skipped for ${orderId}: ${sync.warnings.join('; ')}`);
+                    }).catch(e => console.error('⚠️ Shopify address sync error:', e.message));
+
+                    const gokwikService = require('../services/gokwikService');
+                    gokwikService.notifyOrderUpdate(orderId, { shippingAddress: consigneeOverrides })
+                        .catch(e => console.error('⚠️ GoKwik address sync error:', e.message));
+                }
+            } catch (syncSetupError) {
+                console.error('⚠️ Shopify/GoKwik address sync setup error:', syncSetupError.message);
+            }
+        }
+
         res.json({ success: true, ...result.data });
     } catch (error) {
         console.error('Shipping ship error:', error);

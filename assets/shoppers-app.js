@@ -493,7 +493,9 @@ function setupModalEvents() {
             const phone = document.getElementById('editPhone').value;
             const order_id = document.getElementById('editOrderId').value;
             const address = document.getElementById('editAddress').value;
-            const products = getProductsFromEditor();
+            const editorState = getOrderEditorState();
+
+            if (editorState.paymentChanged && !confirm(`Change payment method to ${editorState.paymentMethod.toUpperCase()} for this order?`)) return;
 
             try {
                 const data = await apiCall(`/shoppers/${id}`, 'PUT', { 
@@ -501,24 +503,29 @@ function setupModalEvents() {
                     phone, 
                     order_id, 
                     address, 
-                    items_json: JSON.stringify(products) 
+                    items_json: JSON.stringify(editorState.items),
+                    order_total: editorState.orderTotal,
+                    payment_method: editorState.paymentMethod
                 });
                 if (data.success) {
                     hideModal();
                     fetchShoppersData();
+                    // Surface Shopify/GoKwik sync outcome (edits are pushed to both)
+                    const sync = data.shopify_sync;
+                    const gkSync = data.gokwik_sync;
+                    const notes = [];
+                    if (sync && sync.warnings && sync.warnings.length) notes.push(...sync.warnings);
+                    if (gkSync && !gkSync.success && !gkSync.skipped) notes.push(`GoKwik sync failed: ${gkSync.reason}`);
+                    if (notes.length) {
+                        alert(`Saved to hub. Sync notes:\n• ${notes.join('\n• ')}`);
+                    }
                 } else {
-                    alert('Update failed');
+                    alert(data.error || 'Update failed');
                 }
             } catch (err) {
                 alert('Error updating details');
             }
         });
-    }
-
-    // Add Product Row Button
-    const addRowBtn = document.getElementById('addProductRowBtn');
-    if (addRowBtn) {
-        addRowBtn.onclick = () => addProductRow();
     }
 }
 
@@ -1013,7 +1020,7 @@ function renderMultiOrders(groups, totalCustomers, totalOrders, totalValue, avgV
                     <div class="multi-order-actions">
                         <button class="btn btn-success" onclick="confirmMultiOrder('${order.id}')">Confirm</button>
                         <button class="btn btn-danger" onclick="cancelMultiOrder('${order.id}')">Cancel</button>
-                        <button class="btn btn-warning" onclick="editMultiOrder('${order.id}', '${encodeURIComponent(order.name || '')}', '${order.phone}', '${order.order_id}', '${encodeURIComponent(order.address || '')}', '${encodeURIComponent(order.items_json || '')}')">Edit</button>
+                        <button class="btn btn-warning" onclick="editMultiOrder('${order.id}', '${encodeURIComponent(order.name || '')}', '${order.phone}', '${order.order_id}', '${encodeURIComponent(order.address || '')}', '${encodeURIComponent(order.items_json || '')}', '${encodeURIComponent(order.payment_method || '')}', '${order.order_total || 0}')">Edit</button>
                     </div>
                 </div>
             `;
@@ -1096,7 +1103,7 @@ async function cancelMultiOrder(id) {
     }
 }
 
-function editMultiOrder(id, nameEnc, phone, orderId, addressEnc, itemsEnc) {
+function editMultiOrder(id, nameEnc, phone, orderId, addressEnc, itemsEnc, paymentEnc, orderTotal) {
     document.getElementById('editShopperId').value = id;
     document.getElementById('editName').value = nameEnc ? decodeURIComponent(nameEnc) : '';
     document.getElementById('editPhone').value = phone || '';
@@ -1107,11 +1114,13 @@ function editMultiOrder(id, nameEnc, phone, orderId, addressEnc, itemsEnc) {
     const msgBox = document.getElementById('editCustomerMessage');
     if (msgBox) msgBox.style.display = 'none';
 
-    // Render product editor
+    // Render product editor (inventory picker + pricing + payment)
     const itemsJson = itemsEnc ? decodeURIComponent(itemsEnc) : '[]';
-    if (typeof renderProductEditor === 'function') {
-        renderProductEditor(itemsJson);
-    }
+    mountOrderEditor('editOrderEditor', {
+        items: itemsJson,
+        orderTotal: parseFloat(orderTotal) || 0,
+        paymentMethod: paymentEnc ? decodeURIComponent(paymentEnc) : ''
+    });
 
     const editModal = document.getElementById('editModal');
     if (editModal) {
@@ -2164,6 +2173,12 @@ function renderCards(shoppers, total, append = false) {
         // Shipping state: confirmed + no AWB = shippable; AWB present = show chip
         const canShip = s.status === 'confirmed' && !s.awb;
         const awbChipLabel = s.awb ? `${s.courier_name || 'Shipped'} · ${s.awb}` : '';
+
+        // GoKwik RTO risk chip (only when a risk score has been received)
+        const rtoRisk = (s.rto_risk || '').toLowerCase();
+        const rtoChipHtml = (rtoRisk === 'high' || rtoRisk === 'medium')
+            ? `<span class="rto-chip rto-${rtoRisk}" title="GoKwik RTO risk: ${rtoRisk.toUpperCase()}">${rtoRisk === 'high' ? 'HIGH RTO' : 'MED RTO'}</span>`
+            : '';
         
         if (currentViewMode === 'cards') {
             card.innerHTML = `
@@ -2175,6 +2190,7 @@ function renderCards(shoppers, total, append = false) {
                         <span class="badge badge-shopify">Shopify</span>
                         <span class="badge badge-status ${statusBadgeClass}">${statusLabel}</span>
                         <span class="badge badge-delivery">${s.delivery_type || 'Standard'}</span>
+                        ${rtoChipHtml}
                     </div>
                     <div class="amount-info">
                         <div class="price-big">₹${s.order_total || '0.00'}</div>
@@ -2185,7 +2201,7 @@ function renderCards(shoppers, total, append = false) {
                 <div class="customer-basics">
                     <h2 class="customer-name-big">
                         ${s.name || 'Customer'}
-                        <button class="btn-text-edit" onclick="openEditModal('${s.id}', '${encodeURIComponent(s.name || '')}', '${s.phone}', '${s.order_id}', '${encodeURIComponent(s.address || '')}', '${encodeURIComponent(s.items_json || '')}', '${encodeURIComponent(s.customer_message || '')}', '${s.last_response_at || ''}')">EDIT</button>
+                        <button class="btn-text-edit" onclick="openEditModal('${s.id}', '${encodeURIComponent(s.name || '')}', '${s.phone}', '${s.order_id}', '${encodeURIComponent(s.address || '')}', '${encodeURIComponent(s.items_json || '')}', '${encodeURIComponent(s.customer_message || '')}', '${s.last_response_at || ''}', '${encodeURIComponent(s.payment_method || '')}', '${s.order_total || 0}')">EDIT</button>
                     </h2>
                     <div class="customer-email">${s.email || 'no-email@provided.com'}</div>
                     <div class="customer-meta-row">
@@ -2240,6 +2256,7 @@ function renderCards(shoppers, total, append = false) {
 
             <div class="row-status">
                 <span class="badge badge-status ${statusBadgeClass}">${statusLabel}</span>
+                ${rtoChipHtml}
             </div>
 
             <div class="row-order-info">
@@ -2278,7 +2295,7 @@ function renderCards(shoppers, total, append = false) {
                 <a href="https://wa.me/${formatPhone(s.phone)}" target="_blank" class="action-icon-btn" title="WhatsApp">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.335-1.662c1.72.937 3.659 1.432 5.631 1.433h.005c6.554 0 11.89-5.335 11.893-11.892a11.826 11.826 0 00-3.481-8.413z"/></svg>
                 </a>
-                <button class="action-icon-btn" onclick="openEditModal('${s.id}', '${encodeURIComponent(s.name || '')}', '${s.phone}', '${s.order_id}', '${encodeURIComponent(s.address || '')}', '${encodeURIComponent(s.items_json || '')}', '${encodeURIComponent(s.customer_message || '')}', '${s.last_response_at || ''}')" title="Edit">
+                <button class="action-icon-btn" onclick="openEditModal('${s.id}', '${encodeURIComponent(s.name || '')}', '${s.phone}', '${s.order_id}', '${encodeURIComponent(s.address || '')}', '${encodeURIComponent(s.items_json || '')}', '${encodeURIComponent(s.customer_message || '')}', '${s.last_response_at || ''}', '${encodeURIComponent(s.payment_method || '')}', '${s.order_total || 0}')" title="Edit">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                 </button>
                 ${canShip ? `<button class="action-icon-btn ship-icon-btn" onclick="openShipModal('${s.id}')" title="Ship Order">🚚</button>` : ''}
@@ -2310,7 +2327,7 @@ function renderCards(shoppers, total, append = false) {
     }
 }
 
-function openEditModal(id, nameEnc, phone, orderId, addressEnc, itemsEnc, messageEnc, msgTime) {
+function openEditModal(id, nameEnc, phone, orderId, addressEnc, itemsEnc, messageEnc, msgTime, paymentEnc, orderTotal) {
     document.getElementById('editShopperId').value = id;
     document.getElementById('editName').value = nameEnc ? decodeURIComponent(nameEnc) : '';
     document.getElementById('editPhone').value = phone;
@@ -2330,9 +2347,13 @@ function openEditModal(id, nameEnc, phone, orderId, addressEnc, itemsEnc, messag
         msgBox.style.display = 'none';
     }
     
-    // Structured Editor
+    // Structured Editor (products from inventory + pricing + payment)
     const itemsJson = itemsEnc ? decodeURIComponent(itemsEnc) : '[]';
-    renderProductEditor(itemsJson);
+    mountOrderEditor('editOrderEditor', {
+        items: itemsJson,
+        orderTotal: parseFloat(orderTotal) || 0,
+        paymentMethod: paymentEnc ? decodeURIComponent(paymentEnc) : ''
+    });
 
     document.getElementById('editModal').classList.add('active');
 }
@@ -2660,55 +2681,396 @@ async function sendChatMessage() {
     }
 }
 
-function renderProductEditor(itemsJson) {
-    const container = document.getElementById('productEditorItems');
-    container.innerHTML = '';
-    let items = [];
-    try { items = JSON.parse(itemsJson); } catch(e) {}
+// ==========================================
+// SHARED ORDER EDITOR
+// Inventory-backed product picker + pricing + COD/Prepaid toggle.
+// Mounted inside the Edit modal AND the Ship modal (step 1).
+// ==========================================
 
-    if (items.length === 0) {
-        addProductRow();
+let oeCatalog = null;          // cached Shopify product catalog
+let oeCatalogPromise = null;   // in-flight load guard
+let oeState = null;            // active editor instance state
+
+async function loadProductCatalog(force = false) {
+    if (oeCatalog && !force) return oeCatalog;
+    if (oeCatalogPromise) return oeCatalogPromise;
+    oeCatalogPromise = apiCall(`/shopify/products${force ? '?refresh=1' : ''}`)
+        .then(data => {
+            oeCatalog = (data && data.success) ? (data.products || []) : (oeCatalog || []);
+            return oeCatalog;
+        })
+        .catch(() => (oeCatalog = oeCatalog || []))
+        .finally(() => { oeCatalogPromise = null; });
+    return oeCatalogPromise;
+}
+
+function oeCatalogStatusText() {
+    if (!oeCatalog) return 'Loading inventory…';
+    if (oeCatalog.length === 0) return '⚠️ Inventory unavailable — you can still type product names manually';
+    const variants = oeCatalog.reduce((n, p) => n + (p.variants || []).length, 0);
+    return `${oeCatalog.length} products · ${variants} variants in inventory`;
+}
+
+function mountOrderEditor(containerId, { items = [], orderTotal = 0, paymentMethod = '' } = {}) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    // Only one editor is active at a time — clear the other mount point to avoid duplicate IDs
+    ['editOrderEditor', 'shipOrderEditor'].forEach(id => {
+        if (id !== containerId) { const el = document.getElementById(id); if (el) el.innerHTML = ''; }
+    });
+
+    const pm = (paymentMethod || '').toLowerCase();
+    const original = (pm.includes('cod') || pm.includes('cash')) ? 'COD' : 'Prepaid';
+    oeState = { containerId, rowSeq: 0, originalPayment: original, payment: original, totalDirty: false };
+
+    container.innerHTML = `
+        <div class="oe-toolbar">
+            <span class="oe-label">Order Items</span>
+            <button type="button" class="oe-sync-btn" onclick="oeRefreshCatalog()">⟳ Refresh Inventory</button>
+        </div>
+        <div class="oe-catalog-status" id="oeCatalogStatus">${oeCatalogStatusText()}</div>
+        <div id="oeRows"></div>
+        <button type="button" class="btn-add-item" onclick="oeAddRow()">+ ADD PRODUCT FROM INVENTORY</button>
+        <div class="oe-summary">
+            <div class="oe-summary-row"><span>Items Subtotal</span><span id="oeSubtotal">₹0.00</span></div>
+            <div class="oe-summary-row oe-total-row">
+                <span>Order Total (₹)</span>
+                <input type="number" step="0.01" min="0" class="oe-total-input" id="oeTotalInput" value="${Number(orderTotal) || 0}">
+            </div>
+            <div class="oe-summary-hint" id="oeTotalHint" style="display:none;"></div>
+        </div>
+        <div class="oe-payment">
+            <span class="oe-label">Payment Method</span>
+            <div class="oe-pay-row">
+                <div class="oe-pay-toggle">
+                    <button type="button" class="oe-pay-btn cod" id="oePayCod" onclick="oeSetPayment('COD')">💰 COD</button>
+                    <button type="button" class="oe-pay-btn prepaid" id="oePayPrepaid" onclick="oeSetPayment('Prepaid')">✓ Prepaid</button>
+                </div>
+                <span class="oe-pay-note" id="oePayNote"></span>
+            </div>
+        </div>
+    `;
+
+    // A manually saved total that differs from the items subtotal is treated as an override
+    const totalInput = document.getElementById('oeTotalInput');
+    totalInput.addEventListener('input', () => { oeState.totalDirty = true; oeRecalc(); });
+
+    let parsed = [];
+    try { parsed = Array.isArray(items) ? items : JSON.parse(items || '[]'); } catch (e) {}
+    if (!Array.isArray(parsed)) parsed = [];
+    if (parsed.length === 0) {
+        oeAddRow();
     } else {
-        items.forEach(item => {
-            // Check for size in multiple properties, including variant_title fallback
-            let size = item.size || item.variant_size || item.product_size || '';
-            // Fallback: extract size from variant_title
-            if (!size && item.variant_title) {
-                const sizeMatch = item.variant_title.match(/Size:\s*(\w+)/i) || item.variant_title.match(/\b(S|M|L|XL|XXS|XS|XXL|XXXL|Free Size|One Size)\b/i);
-                if (sizeMatch) size = sizeMatch[1].toUpperCase();
-            }
-            addProductRow(item.title || item.name, item.quantity, size);
-        });
+        parsed.forEach(item => oeAddRow(item));
+    }
+
+    // If the stored total doesn't match the items subtotal, respect it as an admin override
+    const subtotal = oeComputeSubtotal();
+    if (Math.abs((Number(orderTotal) || 0) - subtotal) > 0.01 && (Number(orderTotal) || 0) > 0) {
+        oeState.totalDirty = true;
+    }
+    oeSetPayment(original, true);
+    oeRecalc();
+
+    // Link rows to inventory once the catalog is ready (variant selects, stock badges)
+    loadProductCatalog().then(() => {
+        const status = document.getElementById('oeCatalogStatus');
+        if (status) status.textContent = oeCatalogStatusText();
+        document.querySelectorAll('#oeRows .oe-row').forEach(row => oeTryLinkCatalog(row));
+    });
+}
+
+async function oeRefreshCatalog() {
+    const status = document.getElementById('oeCatalogStatus');
+    if (status) status.textContent = 'Refreshing inventory…';
+    await loadProductCatalog(true);
+    if (status) status.textContent = oeCatalogStatusText();
+    document.querySelectorAll('#oeRows .oe-row').forEach(row => oeTryLinkCatalog(row));
+}
+
+function oeThumbHtml(src) {
+    return src
+        ? `<img class="oe-thumb" src="${escapeHtml(src)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=&quot;oe-thumb oe-thumb-placeholder&quot;>👕</div>'">`
+        : '<div class="oe-thumb oe-thumb-placeholder">👕</div>';
+}
+
+function oeAddRow(item = {}) {
+    const rowsWrap = document.getElementById('oeRows');
+    if (!rowsWrap || !oeState) return;
+
+    // Normalize the many historical items_json shapes (Shopify line_items, manual edits…)
+    let size = item.size || item.variant_size || item.product_size || '';
+    if (!size && item.variant_title) {
+        const m = item.variant_title.match(/Size:\s*(\w+)/i) || item.variant_title.match(/\b(S|M|L|XL|XXS|XS|XXL|XXXL|Free Size|One Size)\b/i);
+        if (m) size = m[1].toUpperCase();
+    }
+
+    const rowId = 'oeRow' + (++oeState.rowSeq);
+    const row = document.createElement('div');
+    row.className = 'oe-row';
+    row.id = rowId;
+    row.dataset.productId = item.product_id || '';
+    row.dataset.variantId = item.variant_id || '';
+    row.innerHTML = `
+        <div class="oe-row-main">
+            <span class="oe-thumb-slot">${oeThumbHtml(item.image || '')}</span>
+            <div class="oe-picker">
+                <input type="text" class="oe-title" placeholder="Search inventory or type product name…" value="${escapeHtml(item.title || item.name || '')}" autocomplete="off">
+                <div class="oe-dropdown"></div>
+            </div>
+            <span class="oe-variant-slot"><input type="text" class="oe-variant oe-size-input" placeholder="Size" value="${escapeHtml(size)}"></span>
+            <input type="number" class="oe-qty" min="1" value="${parseInt(item.quantity) || 1}" title="Quantity">
+            <div class="oe-price-wrap">₹<input type="number" class="oe-price" min="0" step="0.01" value="${Number(item.price) || 0}" title="Unit price — editable"></div>
+            <div class="oe-line-total">₹0.00</div>
+            <button type="button" class="btn-remove-item" title="Remove item" onclick="oeRemoveRow('${rowId}')">✕</button>
+        </div>
+        <div class="oe-row-meta"></div>
+    `;
+    rowsWrap.appendChild(row);
+
+    const titleInput = row.querySelector('.oe-title');
+    titleInput.addEventListener('input', () => {
+        // Manual typing unlinks the row from the catalog until re-selected
+        row.dataset.productId = '';
+        row.dataset.variantId = '';
+        oeRenderDropdown(row, titleInput.value.trim());
+        oeSetRowMeta(row);
+    });
+    titleInput.addEventListener('focus', () => oeRenderDropdown(row, titleInput.value.trim()));
+    titleInput.addEventListener('blur', () => setTimeout(() => row.querySelector('.oe-dropdown')?.classList.remove('open'), 180));
+    row.querySelector('.oe-qty').addEventListener('input', oeRecalc);
+    row.querySelector('.oe-price').addEventListener('input', oeRecalc);
+
+    oeSetRowMeta(row);
+    if (oeCatalog && (item.title || item.name)) oeTryLinkCatalog(row);
+    oeRecalc();
+    return row;
+}
+
+function oeRemoveRow(rowId) {
+    document.getElementById(rowId)?.remove();
+    oeRecalc();
+}
+
+function oeStockBadge(variant) {
+    if (!variant || variant.inventory === null || variant.inventory === undefined) return '';
+    if (variant.inventory <= 0) return '<span class="oe-stock-badge oe-stock-out">Out of stock</span>';
+    if (variant.inventory <= 5) return `<span class="oe-stock-badge oe-stock-low">Low · ${variant.inventory} left</span>`;
+    return `<span class="oe-stock-badge oe-stock-in">In stock · ${variant.inventory}</span>`;
+}
+
+function oeProductStock(p) {
+    const total = (p.variants || []).reduce((n, v) => n + Math.max(0, v.inventory || 0), 0);
+    return total;
+}
+
+function oeRenderDropdown(row, query) {
+    const dd = row.querySelector('.oe-dropdown');
+    if (!dd) return;
+    if (!oeCatalog) { dd.innerHTML = '<div class="oe-dropdown-empty">Loading inventory…</div>'; dd.classList.add('open'); return; }
+    if (oeCatalog.length === 0) { dd.classList.remove('open'); return; }
+
+    const q = (query || '').toLowerCase();
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const matches = oeCatalog
+        .filter(p => tokens.length === 0 || tokens.every(t => p.title.toLowerCase().includes(t)))
+        .slice(0, 30);
+
+    if (matches.length === 0) {
+        dd.innerHTML = '<div class="oe-dropdown-empty">No inventory match — the typed name will be saved as a custom item</div>';
+        dd.classList.add('open');
+        return;
+    }
+
+    dd.innerHTML = matches.map(p => {
+        const prices = (p.variants || []).map(v => v.price);
+        const minP = Math.min(...prices), maxP = Math.max(...prices);
+        const priceLabel = prices.length ? (minP === maxP ? `₹${minP}` : `₹${minP}–₹${maxP}`) : '';
+        const stock = oeProductStock(p);
+        const stockLabel = stock > 0 ? `${stock} in stock` : 'out of stock';
+        return `
+            <div class="oe-opt" onmousedown="event.preventDefault(); oeSelectProduct('${row.id}', '${p.id}')">
+                ${p.image ? `<img src="${escapeHtml(p.image)}" alt="" loading="lazy">` : '<div class="oe-thumb oe-thumb-placeholder">👕</div>'}
+                <div class="oe-opt-info">
+                    <div class="oe-opt-title">${escapeHtml(p.title)}</div>
+                    <div class="oe-opt-sub">${priceLabel} · ${(p.variants || []).length} variant${(p.variants || []).length === 1 ? '' : 's'} · ${stockLabel}</div>
+                </div>
+            </div>`;
+    }).join('');
+    dd.classList.add('open');
+}
+
+function oeSelectProduct(rowId, productId) {
+    const row = document.getElementById(rowId);
+    const p = (oeCatalog || []).find(x => String(x.id) === String(productId));
+    if (!row || !p) return;
+
+    row.dataset.productId = String(p.id);
+    row.querySelector('.oe-title').value = p.title;
+    row.querySelector('.oe-thumb-slot').innerHTML = oeThumbHtml(p.image);
+    row.querySelector('.oe-dropdown').classList.remove('open');
+    oeBuildVariantSelect(row, p, null);
+    oeRecalc();
+}
+
+// Swap the free-text size input for a live variant <select> with price + stock per option
+function oeBuildVariantSelect(row, product, preferredSize) {
+    const slot = row.querySelector('.oe-variant-slot');
+    const variants = product.variants || [];
+    const sel = document.createElement('select');
+    sel.className = 'oe-variant';
+    sel.innerHTML = variants.map(v => {
+        const label = `${v.title || 'One Size'} · ₹${v.price}${v.inventory !== null && v.inventory !== undefined ? (v.inventory > 0 ? ` · ${v.inventory} left` : ' · OUT' ) : ''}`;
+        return `<option value="${v.id}" data-size="${escapeHtml(v.title || '')}">${escapeHtml(label)}</option>`;
+    }).join('');
+    slot.innerHTML = '';
+    slot.appendChild(sel);
+
+    // Preselect: match previous size, else first in-stock variant
+    let target = null;
+    if (preferredSize) {
+        target = variants.find(v => (v.title || '').toLowerCase() === preferredSize.toLowerCase())
+              || variants.find(v => (v.title || '').toLowerCase().includes(preferredSize.toLowerCase()));
+    }
+    if (!target) target = variants.find(v => v.available) || variants[0];
+    if (target) sel.value = String(target.id);
+
+    const applyVariant = (setPrice) => {
+        const v = variants.find(x => String(x.id) === sel.value);
+        if (!v) return;
+        row.dataset.variantId = String(v.id);
+        if (setPrice) row.querySelector('.oe-price').value = v.price;
+        oeSetRowMeta(row, product, v);
+        oeRecalc();
+    };
+    sel.addEventListener('change', () => applyVariant(true));
+    applyVariant(!(Number(row.querySelector('.oe-price').value) > 0) || preferredSize === null);
+}
+
+function oeSetRowMeta(row, product, variant) {
+    const meta = row.querySelector('.oe-row-meta');
+    if (!meta) return;
+    if (!product || !variant) {
+        meta.innerHTML = row.dataset.productId ? '' : '<span class="oe-stock-badge oe-custom-badge">Custom item · not linked to inventory</span>';
+        return;
+    }
+    const parts = [oeStockBadge(variant)];
+    if (variant.sku) parts.push(`SKU: ${escapeHtml(variant.sku)}`);
+    if (variant.compare_at_price && variant.compare_at_price > variant.price) {
+        parts.push(`MRP <span class="oe-compare-price">₹${variant.compare_at_price}</span> → ₹${variant.price}`);
+    }
+    meta.innerHTML = parts.filter(Boolean).join('<span style="color:#333;">·</span>');
+}
+
+// Best-effort: link an existing items_json row to the live catalog by title
+function oeTryLinkCatalog(row) {
+    if (!oeCatalog || oeCatalog.length === 0 || row.dataset.productId) return;
+    const title = row.querySelector('.oe-title')?.value.trim().toLowerCase();
+    if (!title) return;
+    const p = oeCatalog.find(x => x.title.toLowerCase() === title)
+          || oeCatalog.find(x => x.title.toLowerCase().includes(title) || title.includes(x.title.toLowerCase()));
+    if (!p) { oeSetRowMeta(row); return; }
+
+    row.dataset.productId = String(p.id);
+    row.querySelector('.oe-title').value = p.title;
+    row.querySelector('.oe-thumb-slot').innerHTML = oeThumbHtml(p.image);
+    const currentSize = row.querySelector('.oe-size-input')?.value.trim() || null;
+    oeBuildVariantSelect(row, p, currentSize);
+}
+
+function oeComputeSubtotal() {
+    let subtotal = 0;
+    document.querySelectorAll('#oeRows .oe-row').forEach(row => {
+        const qty = parseInt(row.querySelector('.oe-qty').value) || 0;
+        const price = parseFloat(row.querySelector('.oe-price').value) || 0;
+        const line = qty * price;
+        subtotal += line;
+        const lt = row.querySelector('.oe-line-total');
+        if (lt) lt.textContent = `₹${line.toFixed(2)}`;
+    });
+    return subtotal;
+}
+
+function oeRecalc() {
+    if (!oeState) return;
+    const subtotal = oeComputeSubtotal();
+    const subEl = document.getElementById('oeSubtotal');
+    if (subEl) subEl.textContent = `₹${subtotal.toFixed(2)}`;
+
+    const totalInput = document.getElementById('oeTotalInput');
+    const hint = document.getElementById('oeTotalHint');
+    if (!totalInput) return;
+    if (!oeState.totalDirty) {
+        totalInput.value = subtotal.toFixed(2);
+        if (hint) hint.style.display = 'none';
+    } else if (hint) {
+        const total = parseFloat(totalInput.value) || 0;
+        const diff = total - subtotal;
+        if (Math.abs(diff) > 0.01) {
+            hint.innerHTML = `⚡ Total manually set — ${diff > 0 ? '+' : '−'}₹${Math.abs(diff).toFixed(2)} vs items subtotal. <a href="#" style="color:#25d366;" onclick="event.preventDefault(); oeState.totalDirty = false; oeRecalc();">Reset to subtotal</a>`;
+            hint.style.display = 'block';
+        } else {
+            oeState.totalDirty = false;
+            hint.style.display = 'none';
+        }
     }
 }
 
-function addProductRow(title = '', qty = 1, size = '') {
-    const container = document.getElementById('productEditorItems');
-    const row = document.createElement('div');
-    row.className = 'product-item-row';
-    row.innerHTML = `
-        <input type="text" placeholder="Product Name" value="${escapeHtml(title)}" class="item-title">
-        <input type="text" placeholder="Size" value="${escapeHtml(size)}" class="item-size" style="width: 80px;">
-        <input type="number" placeholder="Qty" value="${qty}" class="item-qty">
-        <button type="button" class="btn-remove-item" onclick="this.parentElement.remove()">✕</button>
-    `;
-    container.appendChild(row);
+function oeSetPayment(mode, silent = false) {
+    if (!oeState) return;
+    oeState.payment = mode;
+    document.getElementById('oePayCod')?.classList.toggle('active', mode === 'COD');
+    document.getElementById('oePayPrepaid')?.classList.toggle('active', mode === 'Prepaid');
+    const note = document.getElementById('oePayNote');
+    if (!note) return;
+    if (mode === oeState.originalPayment) {
+        note.className = 'oe-pay-note';
+        note.style.color = '#888';
+        note.textContent = `Current method: ${oeState.originalPayment}`;
+    } else if (mode === 'Prepaid') {
+        note.className = 'oe-pay-note';
+        note.style.color = '';
+        note.textContent = '✓ Will convert COD → Prepaid on save (no cash collection)';
+    } else {
+        note.className = 'oe-pay-note warn';
+        note.style.color = '';
+        note.textContent = '⚠️ Will convert Prepaid → COD on save — courier collects the order total';
+    }
+    if (!silent) oeRecalc();
 }
 
-function getProductsFromEditor() {
-    const rows = document.querySelectorAll('.product-item-row');
-    const products = [];
-    rows.forEach(row => {
-        const title = row.querySelector('.item-title').value.trim();
-        const size = row.querySelector('.item-size')?.value.trim() || '';
-        const qty = parseInt(row.querySelector('.item-qty').value) || 1;
-        if (title) {
-            const product = { title, quantity: qty };
-            if (size) product.size = size;
-            products.push(product);
+// Snapshot of the editor — what gets persisted to store_shoppers
+function getOrderEditorState() {
+    const items = [];
+    document.querySelectorAll('#oeRows .oe-row').forEach(row => {
+        const title = row.querySelector('.oe-title').value.trim();
+        if (!title) return;
+        const item = {
+            title,
+            quantity: parseInt(row.querySelector('.oe-qty').value) || 1,
+            price: parseFloat(row.querySelector('.oe-price').value) || 0
+        };
+        const sel = row.querySelector('select.oe-variant');
+        if (sel) {
+            const opt = sel.options[sel.selectedIndex];
+            if (opt?.dataset?.size) item.size = opt.dataset.size;
+        } else {
+            const sizeText = row.querySelector('.oe-size-input')?.value.trim();
+            if (sizeText) item.size = sizeText;
         }
+        if (row.dataset.productId) item.product_id = row.dataset.productId;
+        if (row.dataset.variantId) item.variant_id = row.dataset.variantId;
+        items.push(item);
     });
-    return products;
+
+    const orderTotal = parseFloat(document.getElementById('oeTotalInput')?.value) || 0;
+    return {
+        items,
+        orderTotal,
+        paymentMethod: oeState ? oeState.payment : 'COD',
+        paymentChanged: oeState ? oeState.payment !== oeState.originalPayment : false
+    };
 }
 
 async function updateStatus(id, status) {
@@ -4237,7 +4599,8 @@ async function openShipModal(shopperId) {
     };
 
     document.getElementById('shipOrderIdLabel').textContent = '';
-    document.getElementById('shipItemsSummary').innerHTML = '<div class="ship-loading"><div class="spinner"></div><span>Loading order...</span></div>';
+    const shipEditorMount = document.getElementById('shipOrderEditor');
+    if (shipEditorMount) shipEditorMount.innerHTML = '<div class="ship-loading"><div class="spinner"></div><span>Loading order...</span></div>';
     document.getElementById('shipValidationErrors').style.display = 'none';
     document.getElementById('shipSuccessPanel').style.display = 'none';
     document.getElementById('shipConfirmView').style.display = 'block';
@@ -4302,14 +4665,68 @@ function renderShipStep1() {
     document.getElementById('shipBreadth').value = d.package.breadthCm;
     document.getElementById('shipHeight').value = d.package.heightCm;
 
+    renderShipPaymentBadge();
+
+    // Full order editor: swap products from inventory, adjust prices, or flip COD → Prepaid pre-ship
+    mountOrderEditor('shipOrderEditor', {
+        items: (d.items || []).map(i => ({ title: i.name, quantity: i.quantity, price: i.price, size: i.size, sku: i.sku })),
+        orderTotal: d.payment.declaredValue || 0,
+        paymentMethod: d.meta?.paymentMethodRaw || d.payment.mode
+    });
+}
+
+function renderShipPaymentBadge() {
+    const d = shipState?.draft;
+    if (!d) return;
     const isCod = d.payment.mode === 'COD';
     document.getElementById('shipPaymentBadge').innerHTML =
         `<span class="ship-pay-badge ${isCod ? 'cod' : 'prepaid'}">${isCod ? `💰 COD · ₹${d.payment.codAmount}` : `✓ Prepaid · ₹${d.payment.declaredValue}`}</span>`;
+}
 
-    const itemsHtml = (d.items || []).map(i =>
-        `• ${escapeHtml(i.name)}${i.size ? ` (${escapeHtml(i.size)})` : ''} ×${i.quantity}`
-    ).join('<br>');
-    document.getElementById('shipItemsSummary').innerHTML = itemsHtml || '<span style="color:#888;">No items parsed — check order details</span>';
+// Persist step-1 order edits (items / total / payment) onto the shopper row.
+// Serviceability + ship rebuild their context from the DB, so the carrier
+// automatically gets the corrected COD amount, declared value and items.
+async function persistShipOrderEdits() {
+    const st = getOrderEditorState();
+
+    if (st.paymentChanged && !confirm(`Change payment method to ${st.paymentMethod.toUpperCase()} before shipping?`)) return false;
+
+    try {
+        const data = await apiCall(`/shoppers/${shipState.shopperId}`, 'PUT', {
+            items_json: JSON.stringify(st.items),
+            order_total: st.orderTotal,
+            payment_method: st.paymentMethod
+        });
+        if (!data || !data.success) {
+            showShipToast(data?.error || 'Failed to save order edits', true);
+            return false;
+        }
+
+        // Shopify/GoKwik sync feedback (edits are mirrored to both platforms)
+        const sync = data.shopify_sync;
+        const gkSync = data.gokwik_sync;
+        if (sync && sync.warnings && sync.warnings.length) {
+            showShipToast(`Saved — Shopify sync: ${sync.warnings[0]}`, true);
+        } else if (gkSync && !gkSync.success && !gkSync.skipped) {
+            showShipToast(`Saved — GoKwik sync failed: ${gkSync.reason}`, true);
+        } else if (sync && sync.actions && sync.actions.length) {
+            showShipToast(gkSync && gkSync.success ? 'Order edits synced to Shopify + GoKwik' : 'Order edits synced to Shopify');
+        }
+
+        // Mirror the persisted values into the local draft so badge + summary stay truthful
+        const d = shipState.draft;
+        d.items = st.items.map(i => ({ name: i.title, quantity: i.quantity, price: i.price, size: i.size || null, sku: i.sku || null }));
+        d.payment.mode = st.paymentMethod;
+        d.payment.declaredValue = st.orderTotal;
+        d.payment.codAmount = st.paymentMethod === 'COD' ? st.orderTotal : 0;
+        if (d.meta) d.meta.paymentMethodRaw = st.paymentMethod;
+        renderShipPaymentBadge();
+        return true;
+    } catch (err) {
+        console.error('[SHIP] Order edit save error:', err);
+        showShipToast('Error saving order edits', true);
+        return false;
+    }
 }
 
 // Read (possibly edited) step-1 inputs as overrides for the backend
@@ -4340,6 +4757,11 @@ function validateShipStep1() {
     if (o.consigneeOverrides.address.length < 5) errors.push('Delivery address is required');
     if (!/^\d{6}$/.test(o.consigneeOverrides.pincode)) errors.push('Valid 6-digit pincode is required');
     if (!(o.packageOverrides.weightGrams > 0)) errors.push('Weight must be greater than 0');
+
+    // Order editor checks (items / pricing / payment)
+    const st = getOrderEditorState();
+    if (st.items.length === 0) errors.push('At least one order item is required');
+    if (st.paymentMethod === 'COD' && !(st.orderTotal > 0)) errors.push('Order total must be greater than 0 for COD shipments');
 
     const box = document.getElementById('shipValidationErrors');
     if (errors.length > 0) {
@@ -4375,13 +4797,23 @@ function shipGoBack() {
     setShipStep(shipState.step - 1);
 }
 
-function shipGoNext() {
+async function shipGoNext() {
     if (!shipState || shipState.shipping) return;
 
     if (shipState.shipped) { closeShipModal(); return; }
 
     if (shipState.step === 1) {
         if (!validateShipStep1()) return;
+
+        // Save order edits (items / price / payment) so rates & ship use them
+        const nextBtn = document.getElementById('shipNextBtn');
+        nextBtn.disabled = true;
+        nextBtn.textContent = 'Saving…';
+        const saved = await persistShipOrderEdits();
+        nextBtn.disabled = false;
+        nextBtn.textContent = 'Next';
+        if (!saved) return;
+
         renderShipCarrierCards();
         setShipStep(2);
     } else if (shipState.step === 2) {
