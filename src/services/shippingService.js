@@ -383,7 +383,11 @@ async function cancelShipment(shipmentId) {
     }
 
     const result = await adapter.cancelShipment(shipment);
-    if (!result.success) return { error: result.error, status: 502, raw: result.raw };
+    if (!result.success) {
+        console.error(`❌ Carrier cancellation failed for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'}):`, result.error);
+        return { error: result.error, status: 502, raw: result.raw };
+    }
+    console.log(`📦 Carrier cancellation OK for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'})`, JSON.stringify(result.raw || {}).substring(0, 300));
 
     await dbAdapter.update('shipments', {
         status: 'cancelled',
@@ -402,7 +406,7 @@ async function cancelShipment(shipmentId) {
     }
     invalidateShoppersCache();
 
-    return { data: { cancelled: true, shipment: { ...shipment, status: 'cancelled' } } };
+    return { data: { cancelled: true, warning: result.data?.warning || null, shipment: { ...shipment, status: 'cancelled' } } };
 }
 
 // Cancel the active shipment (if any) for an order at its carrier.

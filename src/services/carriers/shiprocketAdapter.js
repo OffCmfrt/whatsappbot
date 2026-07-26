@@ -340,16 +340,64 @@ class ShiprocketAdapter extends BaseCarrier {
     }
 
     async cancelShipment(shipment) {
+        // Two-step: once an AWB is assigned, cancelling the Shiprocket order alone does NOT
+        // cancel the shipment with the courier — the AWB must be cancelled explicitly first.
+        let headers;
         try {
-            const headers = await this.authHeaders();
-            const response = await axios.post(`${this.baseURL}/orders/cancel`, {
-                ids: [Number(shipment.carrier_order_id)]
-            }, { headers, timeout: 30000 });
-
-            return this.ok({ cancelled: true }, response.data);
+            headers = await this.authHeaders();
         } catch (error) {
-            return this.fail(`Shiprocket cancellation failed: ${this.describeAxiosError(error)}`, error.response?.data);
+            return this.fail(`Shiprocket cancellation failed: could not authenticate (${error.message})`);
         }
+
+        let awbCancel = null;
+        let orderCancel = null;
+
+        if (shipment.awb) {
+            try {
+                const response = await axios.post(`${this.baseURL}/orders/cancel/shipment/awbs`, {
+                    awbs: [String(shipment.awb)]
+                }, { headers, timeout: 30000 });
+                awbCancel = { success: true, raw: response.data };
+            } catch (error) {
+                awbCancel = { success: false, error: this.describeAxiosError(error), raw: error.response?.data };
+                console.warn(`⚠️ Shiprocket AWB cancel failed for ${shipment.awb}: ${awbCancel.error}`);
+            }
+        }
+
+        const carrierOrderId = Number(shipment.carrier_order_id);
+        if (carrierOrderId) {
+            try {
+                const response = await axios.post(`${this.baseURL}/orders/cancel`, {
+                    ids: [carrierOrderId]
+                }, { headers, timeout: 30000 });
+                orderCancel = { success: true, raw: response.data };
+            } catch (error) {
+                orderCancel = { success: false, error: this.describeAxiosError(error), raw: error.response?.data };
+                console.warn(`⚠️ Shiprocket order cancel failed for SR order ${carrierOrderId}: ${orderCancel.error}`);
+            }
+        }
+
+        if (!awbCancel && !orderCancel) {
+            return this.fail('Shiprocket cancellation failed: shipment has no AWB or Shiprocket order ID on record');
+        }
+
+        // Succeed if at least one leg went through (e.g. AWB already cancelled but order still open, or vice versa)
+        if ((awbCancel && awbCancel.success) || (orderCancel && orderCancel.success)) {
+            return this.ok({
+                cancelled: true,
+                awbCancelled: awbCancel ? awbCancel.success : null,
+                orderCancelled: orderCancel ? orderCancel.success : null,
+                warning: [
+                    awbCancel && !awbCancel.success ? `AWB cancel: ${awbCancel.error}` : null,
+                    orderCancel && !orderCancel.success ? `Order cancel: ${orderCancel.error}` : null
+                ].filter(Boolean).join(' | ') || null
+            }, { awbCancel: awbCancel?.raw, orderCancel: orderCancel?.raw });
+        }
+
+        return this.fail(
+            `Shiprocket cancellation failed: ${[awbCancel?.error, orderCancel?.error].filter(Boolean).join(' | ')}`,
+            { awbCancel: awbCancel?.raw, orderCancel: orderCancel?.raw }
+        );
     }
 
     async track(awb) {

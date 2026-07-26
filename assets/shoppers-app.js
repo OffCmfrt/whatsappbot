@@ -4630,7 +4630,7 @@ async function shipDoCancel(shipmentId) {
     try {
         const data = await apiCall(`/shipping/shipments/${shipmentId}/cancel`, 'POST');
         if (!data || !data.success) { showShipToast(data?.error || 'Cancellation failed', true); return; }
-        showShipToast('✅ Shipment cancelled');
+        showShipToast(data.warning ? `⚠️ Cancelled with warning: ${data.warning}` : '✅ Shipment cancelled');
         if (shipState) { shipState.shipped = true; closeShipModal(); }
         if (currentDrawerOrder) refreshShipmentsDrawer();
         fetchShoppersData();
