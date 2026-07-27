@@ -4760,6 +4760,22 @@ router.get('/shipping/shipments/:id/track', verifyToken, async (req, res) => {
     }
 });
 
+// On-demand carrier status sync — polls carriers for active shipments and
+// advances statuses (pickup_scheduled → in_transit → delivered / rto).
+// Fired in the background when the Shipped Orders view opens/refreshes;
+// the 30-min cron (shipmentSyncCron) covers everything in between.
+router.post('/shipping/sync-statuses', verifyToken, async (req, res) => {
+    try {
+        const shipmentSyncService = require('../services/shipmentSyncService');
+        const limit = Math.min(parseInt(req.body?.limit) || 60, 200);
+        const result = await shipmentSyncService.syncActiveShipments({ limit });
+        res.json({ success: true, ...result });
+    } catch (error) {
+        console.error('Shipping status sync error:', error);
+        res.status(500).json({ success: false, error: 'Failed to sync shipment statuses' });
+    }
+});
+
 // Full shipped-orders history — shipments joined with orders + shoppers + customers,
 // with search/carrier/status/payment/date filters and aggregate stats.
 // Powers the "Shipped Orders" view in the Shopper Hub (Shiprocket-style panel).
@@ -4779,9 +4795,9 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
         }
         if (carrier) { where += ' AND s.carrier = ?'; params.push(carrier); }
         if (status) {
-            // Grouped filter: 'in_transit' covers shipped + in_transit, 'cancelled' covers cancelled + failed
+            // Grouped filter: 'in_transit' covers shipped + in_transit, 'cancelled' covers cancelled + failed + rto
             if (status === 'in_transit') where += ` AND s.status IN ('shipped', 'in_transit')`;
-            else if (status === 'cancelled') where += ` AND s.status IN ('cancelled', 'failed')`;
+            else if (status === 'cancelled') where += ` AND s.status IN ('cancelled', 'failed', 'rto')`;
             else if (status === 'ready') where += ` AND s.status IN ('created', 'awb_assigned')`;
             else { where += ' AND s.status = ?'; params.push(status); }
         }
@@ -4826,7 +4842,7 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
                        COUNT(*) FILTER (WHERE s.status = 'pickup_scheduled')::int AS pickup_scheduled,
                        COUNT(*) FILTER (WHERE s.status IN ('shipped', 'in_transit'))::int AS in_transit,
                        COUNT(*) FILTER (WHERE s.status = 'delivered')::int AS delivered,
-                       COUNT(*) FILTER (WHERE s.status IN ('cancelled', 'failed'))::int AS cancelled,
+                       COUNT(*) FILTER (WHERE s.status IN ('cancelled', 'failed', 'rto'))::int AS cancelled,
                        COUNT(*) FILTER (WHERE s.payment_mode = 'COD')::int AS cod_count,
                        COALESCE(SUM(s.cod_amount) FILTER (WHERE s.payment_mode = 'COD' AND s.status NOT IN ('cancelled', 'failed')), 0)::float AS cod_value,
                        COALESCE(SUM(s.freight_charge) FILTER (WHERE s.status NOT IN ('cancelled', 'failed')), 0)::float AS freight_total

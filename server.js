@@ -159,6 +159,7 @@ app.use('/webhooks/gokwik', gokwikWebhookRoutes);
 // Cron Jobs
 const abandonedCartCron = require('./src/services/abandonedCartCron');
 const reengagementCron = require('./src/services/reengagementCron');
+const shipmentSyncCron = require('./src/services/shipmentSyncCron');
 
 // WhatsApp webhook verification (Meta Cloud API)
 app.get('/webhook', (req, res) => {
@@ -432,6 +433,7 @@ async function startServer() {
         // Start Cron Jobs
         abandonedCartCron.init();
         reengagementCron.init();
+        shipmentSyncCron.init();
 
         // NEW: Periodic task queue cleanup - clear if queue is stuck
         setInterval(() => {

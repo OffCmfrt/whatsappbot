@@ -333,7 +333,7 @@ function setupEventListeners() {
     // Shipped Orders
     document.getElementById('shippedOrdersBtn')?.addEventListener('click', showShippedOrdersView);
     document.getElementById('backToShoppersFromShipped')?.addEventListener('click', hideShippedOrdersView);
-    document.getElementById('refreshShippedBtn')?.addEventListener('click', () => fetchShippedOrders());
+    document.getElementById('refreshShippedBtn')?.addEventListener('click', () => { fetchShippedOrders(); syncShipmentStatuses(true); });
     document.getElementById('soExportBtn')?.addEventListener('click', exportShippedCsv);
 
     // Shipped Orders - New Forward Shipment (ship any order by its Order ID)
@@ -5369,6 +5369,32 @@ function showShippedOrdersView() {
     } else {
         fetchShippedOrders();
     }
+
+    // Kick off a background carrier sync so statuses (pickup scheduled →
+    // in transit → delivered) advance automatically; re-render if anything moved
+    syncShipmentStatuses();
+}
+
+// Ask the server to poll carriers for active shipments and auto-advance their
+// statuses. Runs silently in the background; refreshes the list on changes.
+let soSyncInFlight = false;
+async function syncShipmentStatuses(announce = false) {
+    if (soSyncInFlight) return;
+    soSyncInFlight = true;
+    try {
+        const data = await apiCall('/shipping/sync-statuses', 'POST', {});
+        if (data && data.success && data.updated > 0) {
+            showShipToast(`\ud83d\udd04 ${data.updated} shipment status${data.updated > 1 ? 'es' : ''} auto-updated from courier`);
+            // Only re-render if the user is still on the Shipped Orders view
+            if (document.getElementById('shippedOrdersView')?.style.display !== 'none') fetchShippedOrders();
+        } else if (announce && data && data.success) {
+            showShipToast('\u2713 Shipment statuses are up to date');
+        }
+    } catch (err) {
+        console.warn('Shipment status sync failed (non-blocking):', err);
+    } finally {
+        soSyncInFlight = false;
+    }
 }
 
 function hideShippedOrdersView() {
@@ -5559,7 +5585,7 @@ function renderSoActiveFilters() {
     const wrap = document.getElementById('soActiveFilters');
     if (!wrap) return;
     const tags = [];
-    const statusLabels = { ready: 'Ready', pickup_scheduled: 'Pickup Scheduled', in_transit: 'In Transit', delivered: 'Delivered', cancelled: 'Cancelled' };
+    const statusLabels = { ready: 'Ready', pickup_scheduled: 'Pickup Scheduled', in_transit: 'In Transit', delivered: 'Delivered', cancelled: 'Cancelled', rto: 'RTO' };
     if (soStatus) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('status')">${statusLabels[soStatus] || soStatus} <span class="tag-close">×</span></span>`);
     if (soCarrier) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('carrier')">${escapeHtml(soCarrier)} <span class="tag-close">×</span></span>`);
     if (soPayment) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('payment')">${escapeHtml(soPayment)} <span class="tag-close">×</span></span>`);

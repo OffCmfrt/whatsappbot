@@ -433,12 +433,12 @@ async function trackShipment(shipmentId) {
     const result = await adapter.track(shipment.awb);
     if (!result.success) return { error: result.error, status: 502, raw: result.raw };
 
-    // Opportunistic status sync from live tracking
-    const liveStatus = (result.data.currentStatus || '').toLowerCase();
-    let newStatus = null;
-    if (liveStatus.includes('deliver')) newStatus = 'delivered';
-    else if (liveStatus.includes('transit') || liveStatus.includes('dispatch') || liveStatus.includes('picked')) newStatus = 'in_transit';
-    if (newStatus && newStatus !== shipment.status) {
+    // Opportunistic status sync from live tracking (same smart mapping +
+    // forward-only transitions as the automatic background sync)
+    const { mapCarrierStatus, resolveTransition } = require('./shipmentSyncService');
+    const mapped = mapCarrierStatus(result.data.currentStatus);
+    const newStatus = resolveTransition(shipment.status, mapped);
+    if (newStatus) {
         await dbAdapter.update('shipments', { status: newStatus, updated_at: new Date().toISOString() }, { id: shipment.id });
     }
 
