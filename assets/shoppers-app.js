@@ -32,6 +32,10 @@ let currentDeliveryType = '';
 let currentSortBy = 'newest';
 let currentViewMode = localStorage.getItem('shopperViewMode') || 'rows';
 
+// Full shopper rows by id — lets the edit modal read city/province/zip
+// without threading more params through every onclick handler
+const shopperEditCache = {};
+
 // Bulk Selection State
 let selectedShoppers = new Set();
 let isBulkMode = false;
@@ -493,6 +497,9 @@ function setupModalEvents() {
             const phone = document.getElementById('editPhone').value;
             const order_id = document.getElementById('editOrderId').value;
             const address = document.getElementById('editAddress').value;
+            const city = document.getElementById('editCity')?.value.trim() || '';
+            const province = document.getElementById('editState')?.value.trim() || '';
+            const zip = document.getElementById('editZip')?.value.trim() || '';
             const editorState = getOrderEditorState();
 
             if (editorState.paymentChanged && !confirm(`Change payment method to ${editorState.paymentMethod.toUpperCase()} for this order?`)) return;
@@ -503,6 +510,9 @@ function setupModalEvents() {
                     phone, 
                     order_id, 
                     address, 
+                    city,
+                    province,
+                    zip,
                     items_json: JSON.stringify(editorState.items),
                     order_total: editorState.orderTotal,
                     payment_method: editorState.paymentMethod
@@ -1003,6 +1013,7 @@ function renderMultiOrders(groups, totalCustomers, totalOrders, totalValue, avgV
         const initials = (group.name || 'U').split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
         const groupTotal = group.orders.reduce((sum, o) => sum + (Number(o.order_total) || 0), 0);
         const ordersHtml = group.orders.map(order => {
+            shopperEditCache[String(order.id)] = order;
             const statusClass = order.status || 'pending';
             const amount = order.order_total ? `Rs.${Number(order.order_total).toFixed(2)}` : 'N/A';
             const dateStr = order.created_at ? formatDate(order.created_at) : 'N/A';
@@ -1109,6 +1120,7 @@ function editMultiOrder(id, nameEnc, phone, orderId, addressEnc, itemsEnc, payme
     document.getElementById('editPhone').value = phone || '';
     document.getElementById('editOrderId').value = orderId || '';
     document.getElementById('editAddress').value = addressEnc ? decodeURIComponent(addressEnc) : '';
+    fillEditAddressFields(id);
 
     // Hide customer message box for multi-order edit
     const msgBox = document.getElementById('editCustomerMessage');
@@ -2127,6 +2139,7 @@ function renderCards(shoppers, total, append = false) {
         grid.innerHTML = '';
     }
     shoppers.forEach((s, i) => {
+        shopperEditCache[String(s.id)] = s;
         const card = document.createElement('div');
         card.className = `shopper-card status-${s.status} ${s.customer_message ? 'has-message' : ''} ${selectedShoppers.has(s.id) ? 'selected' : ''}`;
         card.id = `card-${s.id}`;
@@ -2333,6 +2346,7 @@ function openEditModal(id, nameEnc, phone, orderId, addressEnc, itemsEnc, messag
     document.getElementById('editPhone').value = phone;
     document.getElementById('editOrderId').value = orderId;
     document.getElementById('editAddress').value = addressEnc ? decodeURIComponent(addressEnc) : '';
+    fillEditAddressFields(id);
     
     // Show customer message if exists
     const msgBox = document.getElementById('editCustomerMessage');
@@ -2356,6 +2370,43 @@ function openEditModal(id, nameEnc, phone, orderId, addressEnc, itemsEnc, messag
     });
 
     document.getElementById('editModal').classList.add('active');
+}
+
+// Populate the structured address inputs from the cached shopper row
+function fillEditAddressFields(id) {
+    const cached = shopperEditCache[String(id)] || {};
+    const cityEl = document.getElementById('editCity');
+    const stateEl = document.getElementById('editState');
+    const zipEl = document.getElementById('editZip');
+    if (cityEl) cityEl.value = cached.city || '';
+    if (stateEl) stateEl.value = cached.province || '';
+    if (zipEl) zipEl.value = cached.zip || '';
+    const status = document.getElementById('editAddrSyncStatus');
+    if (status) { status.textContent = ''; status.style.color = ''; }
+}
+
+// Pull the live shipping address from the Shopify order into the edit form
+async function pullShopifyAddress() {
+    const id = document.getElementById('editShopperId').value;
+    const status = document.getElementById('editAddrSyncStatus');
+    if (!id) return;
+    if (status) { status.textContent = 'Fetching address from Shopify…'; status.style.color = '#888'; }
+    try {
+        const data = await apiCall(`/shoppers/${id}/shopify-address`);
+        if (data && data.success && data.address) {
+            const a = data.address;
+            const street = [a.address1, a.address2].filter(Boolean).join(', ');
+            if (street) document.getElementById('editAddress').value = street;
+            document.getElementById('editCity').value = a.city || '';
+            document.getElementById('editState').value = a.province || '';
+            document.getElementById('editZip').value = a.zip || '';
+            if (status) { status.textContent = '✓ Loaded from Shopify — click Save Details to apply'; status.style.color = '#25d366'; }
+        } else {
+            if (status) { status.textContent = (data && data.error) || 'No shipping address found on the Shopify order'; status.style.color = '#f5a623'; }
+        }
+    } catch (err) {
+        if (status) { status.textContent = 'Failed to fetch address from Shopify'; status.style.color = '#ff4757'; }
+    }
 }
 
 async function openChat(phone, nameEnc, orderId, status) {
@@ -2843,7 +2894,7 @@ function oeAddRow(item = {}) {
     row.querySelector('.oe-price').addEventListener('input', oeRecalc);
 
     oeSetRowMeta(row);
-    if (oeCatalog && (item.title || item.name)) oeTryLinkCatalog(row);
+    if (oeCatalog && (item.title || item.name || item.product_id)) oeTryLinkCatalog(row);
     oeRecalc();
     return row;
 }
@@ -2927,9 +2978,12 @@ function oeBuildVariantSelect(row, product, preferredSize) {
     slot.innerHTML = '';
     slot.appendChild(sel);
 
-    // Preselect: match previous size, else first in-stock variant
+    // Preselect: saved variant id, else match previous size, else first in-stock variant
     let target = null;
-    if (preferredSize) {
+    if (row.dataset.variantId) {
+        target = variants.find(v => String(v.id) === String(row.dataset.variantId));
+    }
+    if (!target && preferredSize) {
         target = variants.find(v => (v.title || '').toLowerCase() === preferredSize.toLowerCase())
               || variants.find(v => (v.title || '').toLowerCase().includes(preferredSize.toLowerCase()));
     }
@@ -2963,13 +3017,26 @@ function oeSetRowMeta(row, product, variant) {
     meta.innerHTML = parts.filter(Boolean).join('<span style="color:#333;">·</span>');
 }
 
-// Best-effort: link an existing items_json row to the live catalog by title
+// Best-effort: link an existing items_json row to the live catalog — by saved
+// product_id first, then by normalized title (spacing/punctuation tolerant) —
+// so the size/variant dropdown appears for previously saved items
 function oeTryLinkCatalog(row) {
-    if (!oeCatalog || oeCatalog.length === 0 || row.dataset.productId) return;
-    const title = row.querySelector('.oe-title')?.value.trim().toLowerCase();
-    if (!title) return;
-    const p = oeCatalog.find(x => x.title.toLowerCase() === title)
-          || oeCatalog.find(x => x.title.toLowerCase().includes(title) || title.includes(x.title.toLowerCase()));
+    if (!oeCatalog || oeCatalog.length === 0) return;
+    if (row.querySelector('select.oe-variant')) return; // already linked
+
+    let p = null;
+    if (row.dataset.productId) {
+        p = oeCatalog.find(x => String(x.id) === String(row.dataset.productId));
+    }
+    if (!p) {
+        const title = row.querySelector('.oe-title')?.value.trim();
+        if (!title) return;
+        const norm = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const nt = norm(title);
+        if (!nt) return;
+        p = oeCatalog.find(x => norm(x.title) === nt)
+          || oeCatalog.find(x => norm(x.title).includes(nt) || nt.includes(norm(x.title)));
+    }
     if (!p) { oeSetRowMeta(row); return; }
 
     row.dataset.productId = String(p.id);
@@ -4010,6 +4077,7 @@ function escapeHtml(text) {
 
 // Make functions available globally for onclick handlers
 window.openEditModal = openEditModal;
+window.pullShopifyAddress = pullShopifyAddress;
 window.openChat = openChat;
 window.updateStatus = updateStatus;
 window.toggleCardSelection = toggleCardSelection;

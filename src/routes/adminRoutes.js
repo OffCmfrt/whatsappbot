@@ -1947,7 +1947,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
 router.put('/shoppers/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, phone, order_id, address, items_json, order_total, delivery_type, payment_method } = req.body;
+        const { name, phone, order_id, address, city, province, zip, items_json, order_total, delivery_type, payment_method } = req.body;
 
         // Load the current row first so we can diff for the Shopify sync below
         const existingRows = await dbAdapter.select('store_shoppers', { id }, { limit: 1 });
@@ -1963,6 +1963,9 @@ router.put('/shoppers/:id', verifyToken, async (req, res) => {
         if (phone !== undefined) updateData.phone = phone;
         if (order_id !== undefined) updateData.order_id = order_id;
         if (address !== undefined) updateData.address = address;
+        if (city !== undefined) updateData.city = city;
+        if (province !== undefined) updateData.province = province;
+        if (zip !== undefined) updateData.zip = zip;
         if (items_json !== undefined) updateData.items_json = items_json;
         if (order_total !== undefined) {
             const totalNum = parseFloat(order_total);
@@ -1991,6 +1994,9 @@ router.put('/shoppers/:id', verifyToken, async (req, res) => {
         const itemsChanged = items_json !== undefined && items_json !== existing.items_json;
         const paymentChanged = payment_method !== undefined && payment_method !== existing.payment_method;
         const totalChanged = updateData.order_total !== undefined && parseFloat(existing.order_total) !== updateData.order_total;
+        const addressChanged = ['address', 'city', 'province', 'zip'].some(
+            f => updateData[f] !== undefined && String(existing[f] || '') !== String(updateData[f])
+        ) || (name !== undefined && name !== existing.name) || (phone !== undefined && phone !== existing.phone);
         const targetOrderId = updateData.order_id || existing.order_id;
         if ((itemsChanged || paymentChanged) && targetOrderId) {
             try {
@@ -2009,8 +2015,30 @@ router.put('/shoppers/:id', verifyToken, async (req, res) => {
             }
         }
 
+        // Mirror shipping-address edits to the Shopify order (best-effort)
+        if (addressChanged && targetOrderId) {
+            try {
+                const shopifyService = require('../services/shopifyService');
+                const addrSync = await shopifyService.updateShippingAddress(targetOrderId, {
+                    name: name !== undefined ? name : undefined,
+                    phone: phone !== undefined ? phone : undefined,
+                    address1: address !== undefined ? address : undefined,
+                    city: city !== undefined ? city : undefined,
+                    state: province !== undefined ? province : undefined,
+                    pincode: zip !== undefined ? zip : undefined
+                });
+                if (!shopifySync) shopifySync = { success: addrSync.success, actions: [], warnings: [] };
+                if (addrSync.success) shopifySync.actions.push('Shipping address updated in Shopify');
+                else shopifySync.warnings.push(...addrSync.warnings.map(w => `Address sync: ${w}`));
+            } catch (addrError) {
+                console.error('⚠️ Shopify address sync error (hub still updated):', addrError.message);
+                if (!shopifySync) shopifySync = { success: false, actions: [], warnings: [] };
+                shopifySync.warnings.push(`Address sync: ${addrError.message}`);
+            }
+        }
+
         // Mirror the same edits to GoKwik (no-op until GOKWIK_ORDER_UPDATE_PATH is configured)
-        if ((itemsChanged || paymentChanged || totalChanged) && targetOrderId) {
+        if ((itemsChanged || paymentChanged || totalChanged || addressChanged) && targetOrderId) {
             try {
                 const gokwikService = require('../services/gokwikService');
                 let parsedItems = null;
@@ -2020,7 +2048,8 @@ router.put('/shoppers/:id', verifyToken, async (req, res) => {
                 gokwikSync = await gokwikService.notifyOrderUpdate(targetOrderId, {
                     ...(parsedItems ? { items: parsedItems } : {}),
                     ...(totalChanged ? { orderTotal: updateData.order_total } : {}),
-                    ...(paymentChanged ? { paymentMethod: payment_method } : {})
+                    ...(paymentChanged ? { paymentMethod: payment_method } : {}),
+                    ...(addressChanged ? { shippingAddress: { name, phone, address, city, state: province, pincode: zip } } : {})
                 });
             } catch (gkError) {
                 console.error('⚠️ GoKwik order sync error (hub still updated):', gkError.message);
@@ -2032,6 +2061,26 @@ router.put('/shoppers/:id', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Shopper update error:', error);
         res.status(500).json({ error: 'Failed to update shopper' });
+    }
+});
+
+// Live shipping address from the Shopify order — used by the edit modal's
+// "Pull from Shopify" button so hub address fields can be re-synced
+router.get('/shoppers/:id/shopify-address', verifyToken, async (req, res) => {
+    try {
+        const rows = await dbAdapter.select('store_shoppers', { id: req.params.id }, { limit: 1 });
+        const shopper = rows[0];
+        if (!shopper) return res.status(404).json({ success: false, error: 'Shopper not found' });
+        if (!shopper.order_id) return res.status(400).json({ success: false, error: 'Shopper has no order ID' });
+
+        const shopifyService = require('../services/shopifyService');
+        const address = await shopifyService.getShippingAddress(shopper.order_id);
+        if (!address) return res.status(404).json({ success: false, error: 'No shipping address found on the Shopify order' });
+
+        res.json({ success: true, address });
+    } catch (error) {
+        console.error('Shopify address fetch error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch address from Shopify' });
     }
 });
 

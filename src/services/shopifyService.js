@@ -478,7 +478,21 @@ class ShopifyService {
             let line = item.variant_id
                 ? existingLines.find(l => !matchedLineIds.has(l.id) && String(l.variant?.legacyResourceId) === String(item.variant_id))
                 : null;
-            if (!line) line = existingLines.find(l => !matchedLineIds.has(l.id) && norm(l.title) === norm(item.title));
+            let swapped = false;
+            if (!line) {
+                const titleLine = existingLines.find(l => !matchedLineIds.has(l.id) && norm(l.title) === norm(item.title));
+                if (titleLine && item.variant_id && titleLine.variant?.legacyResourceId
+                    && String(titleLine.variant.legacyResourceId) !== String(item.variant_id)) {
+                    // Size/variant swap on the same product — remove the old
+                    // variant line so the new one gets added below
+                    matchedLineIds.add(titleLine.id);
+                    if (titleLine.quantity > 0) await this._orderEditSetQuantity(calc.id, titleLine.id, 0);
+                    swapped = true;
+                    changed = true;
+                } else {
+                    line = titleLine;
+                }
+            }
 
             if (line) {
                 matchedLineIds.add(line.id);
@@ -494,6 +508,7 @@ class ShopifyService {
                 }
             } else if (item.variant_id) {
                 await this._orderEditAddVariant(calc.id, item, qty, hubPrice, warnings, actions);
+                if (swapped) actions.push(`"${item.title}": size/variant swapped on Shopify order`);
                 changed = true;
             } else {
                 // Free-typed (non-catalog) item — added at the hub price
@@ -628,6 +643,26 @@ class ShopifyService {
         } catch (tagErr) {
             result.warnings.push(`Could not tag order in Shopify: ${tagErr.message}`);
         }
+    }
+
+    /**
+     * Fetch the current shipping address of a Shopify order (normalized).
+     * Returns null when the order or its shipping address is missing.
+     */
+    async getShippingAddress(orderId) {
+        const order = await this.getOrderById(this._toLookupId(orderId));
+        const a = order?.shipping_address || order?.customer?.default_address;
+        if (!a) return null;
+        return {
+            name: a.name || `${a.first_name || ''} ${a.last_name || ''}`.trim(),
+            phone: a.phone || '',
+            address1: a.address1 || '',
+            address2: a.address2 || '',
+            city: a.city || '',
+            province: a.province || '',
+            zip: a.zip || '',
+            country: a.country || ''
+        };
     }
 
     /**
