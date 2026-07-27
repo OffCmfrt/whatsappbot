@@ -14,7 +14,8 @@
  * Endpoints used:
  *   Channels       : GET  /channels
  *   Serviceability : GET  /courier/serviceability/
- *   Create order   : POST /orders/create/adhoc
+ *   Create order   : POST /orders/create (channel-specific, files under Shopify)
+ *                    POST /orders/create/adhoc (fallback — Custom channel only)
  *   Assign AWB     : POST /courier/assign/awb
  *   Label          : POST /courier/generate/label
  *   Pickup         : POST /courier/generate/pickup
@@ -100,16 +101,21 @@ class ShiprocketAdapter extends BaseCarrier {
             });
 
             const channels = response.data?.data || [];
+            const isCustom = c => (c.base_channel_code || '').toUpperCase() === 'CS' || /custom/i.test(c.name || '');
+            // Prefer an explicit Shopify match; otherwise fall back to the first
+            // non-custom channel (Shopify channels are often named after the store)
             const shopify = channels.find(c =>
                 (c.base_channel_code || '').toUpperCase() === 'SH' ||
-                /shopify/i.test(c.name || '')
-            );
+                /shopify/i.test(c.name || '') ||
+                /shopify/i.test(c.base_channel_code || '')
+            ) || channels.find(c => !isCustom(c));
             if (shopify?.id) {
                 this._channelId = String(shopify.id);
-                console.log(`📦 Shiprocket: filing orders under Shopify channel (id ${this._channelId})`);
+                console.log(`📦 Shiprocket: filing orders under channel "${shopify.name}" (id ${this._channelId})`);
                 return this._channelId;
             }
-            console.warn('⚠️ Shiprocket: no Shopify channel found; orders will use the default (Custom) channel');
+            const names = channels.map(c => `${c.name} (${c.id})`).join(', ') || 'none';
+            console.warn(`⚠️ Shiprocket: no Shopify channel found (available: ${names}); orders will use the default (Custom) channel`);
         } catch (error) {
             console.warn(`⚠️ Shiprocket: channel lookup failed (${this.describeAxiosError(error)}); orders will use the default (Custom) channel`);
         }
@@ -211,10 +217,29 @@ class ShiprocketAdapter extends BaseCarrier {
                 weight: (ctx.package.weightGrams || 500) / 1000 // kg
             };
 
-            const createRes = await axios.post(`${this.baseURL}/orders/create/adhoc`, orderPayload, {
-                headers,
-                timeout: 30000
-            });
+            // The adhoc endpoint ALWAYS files orders under the "Custom" channel, even
+            // when channel_id is passed. To file under Shopify we must use the
+            // channel-specific endpoint (/orders/create) with the resolved channel_id.
+            let createRes;
+            if (channelId) {
+                try {
+                    createRes = await axios.post(`${this.baseURL}/orders/create`, orderPayload, {
+                        headers,
+                        timeout: 30000
+                    });
+                } catch (channelError) {
+                    console.warn(`⚠️ Shiprocket: channel-specific order create failed (${this.describeAxiosError(channelError)}); retrying via adhoc (Custom channel)`);
+                    createRes = await axios.post(`${this.baseURL}/orders/create/adhoc`, orderPayload, {
+                        headers,
+                        timeout: 30000
+                    });
+                }
+            } else {
+                createRes = await axios.post(`${this.baseURL}/orders/create/adhoc`, orderPayload, {
+                    headers,
+                    timeout: 30000
+                });
+            }
 
             const shipmentId = createRes.data?.shipment_id;
             const srOrderId = createRes.data?.order_id;
