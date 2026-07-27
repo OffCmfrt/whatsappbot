@@ -47,6 +47,7 @@ function mapCarrierStatus(rawStatus) {
     // Order matters: RTO/return and cancellation before the generic checks,
     // and "out for delivery" before "delivered" (both contain 'deliver')
     if (s.includes('rto') || s.includes('return')) return 'rto';
+    if (s.includes('cancellation requested')) return null; // not cancelled yet
     if (s.includes('cancel')) return 'cancelled';
     if (s.includes('undeliver') || s.includes('not deliver') || s.includes('failed deliver')) return 'in_transit'; // NDR — still with courier
     if (s.includes('out for delivery')) return 'in_transit';
@@ -109,9 +110,27 @@ async function syncShipment(shipment) {
     if (!adapter || !shipment.awb) return false;
 
     const result = await adapter.track(shipment.awb);
-    if (!result.success) return false;
+    let carrierStatus = result.success ? result.data.currentStatus : null;
+    let expectedDelivery = result.success ? result.data.expectedDelivery : null;
+    let mapped = mapCarrierStatus(carrierStatus);
 
-    const mapped = mapCarrierStatus(result.data.currentStatus);
+    // Shiprocket fallback: fresh AWBs often have zero scans, so AWB tracking
+    // says nothing while the order-level status already shows "PICKUP
+    // SCHEDULED" / "PICKED UP". Use that so Ready to Ship drains properly.
+    if (!mapped && shipment.carrier === 'shiprocket') {
+        try {
+            const shiprocketService = require('./shiprocketService');
+            const srOrder = await shiprocketService.getOrderStatus(shipment.carrier_order_id || shipment.order_id);
+            if (srOrder && srOrder.status) {
+                carrierStatus = String(srOrder.status);
+                mapped = mapCarrierStatus(carrierStatus);
+                if (!expectedDelivery) expectedDelivery = srOrder.expectedDelivery || null;
+            }
+        } catch (error) {
+            console.warn(`⚠️ Shiprocket order-status fallback failed for ${shipment.order_id}:`, error.message);
+        }
+    }
+
     const newStatus = resolveTransition(shipment.status, mapped);
 
     // Always bump updated_at so unchanged shipments rotate to the back of the queue
@@ -125,8 +144,8 @@ async function syncShipment(shipment) {
         updated_at: new Date().toISOString()
     }, { id: shipment.id });
 
-    await syncOrderRowStatus(shipment, newStatus, result.data.expectedDelivery);
-    console.log(`📦 Shipment #${shipment.id} (${shipment.order_id}, AWB ${shipment.awb}): ${shipment.status} → ${newStatus} [carrier: "${result.data.currentStatus}"]`);
+    await syncOrderRowStatus(shipment, newStatus, expectedDelivery);
+    console.log(`📦 Shipment #${shipment.id} (${shipment.order_id}, AWB ${shipment.awb}): ${shipment.status} → ${newStatus} [carrier: "${carrierStatus}"]`);
     return true;
 }
 

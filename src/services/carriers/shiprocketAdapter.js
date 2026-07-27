@@ -440,8 +440,12 @@ class ShiprocketAdapter extends BaseCarrier {
                 status: a['sr-status-label'] || a.sr_status_label || ''
             }));
 
+            // Fresh shipments often have zero scans — fall back to Shiprocket's
+            // numeric shipment_status code so the status sync still works pre-pickup
+            const codeStatus = SR_SHIPMENT_STATUS_CODES[Number(td.shipment_status)] || null;
+
             return this.ok({
-                currentStatus: td.shipment_track?.[0]?.current_status || timeline[0]?.status || 'Unknown',
+                currentStatus: td.shipment_track?.[0]?.current_status || timeline[0]?.status || codeStatus || 'Unknown',
                 expectedDelivery: td.etd || null,
                 timeline
             }, trackingData);
@@ -450,5 +454,19 @@ class ShiprocketAdapter extends BaseCarrier {
         }
     }
 }
+
+// Shiprocket numeric shipment_status → human label (used when a shipment has
+// no scan activity yet, e.g. right after AWB assignment / pickup scheduling)
+const SR_SHIPMENT_STATUS_CODES = {
+    1: 'AWB Assigned', 2: 'Label Generated', 3: 'Pickup Scheduled', 4: 'Pickup Queued',
+    5: 'Manifest Generated', 6: 'Shipped', 7: 'Delivered', 8: 'Cancelled',
+    9: 'RTO Initiated', 10: 'RTO Delivered', 12: 'Lost',
+    13: 'Pickup Error', 14: 'RTO Acknowledged', 15: 'Pickup Rescheduled',
+    16: 'Cancellation Requested', 17: 'Out For Delivery', 18: 'In Transit',
+    19: 'Out For Pickup', 20: 'Pickup Exception', 21: 'Undelivered', 22: 'Delayed',
+    23: 'Partial Delivered', 38: 'Reached Destination Hub', 39: 'Misrouted',
+    40: 'RTO NDR', 41: 'RTO Out For Delivery', 42: 'Picked Up',
+    45: 'Cancelled Before Dispatched', 46: 'RTO In Transit'
+};
 
 module.exports = new ShiprocketAdapter();

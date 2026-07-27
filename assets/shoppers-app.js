@@ -334,6 +334,7 @@ function setupEventListeners() {
     document.getElementById('shippedOrdersBtn')?.addEventListener('click', showShippedOrdersView);
     document.getElementById('backToShoppersFromShipped')?.addEventListener('click', hideShippedOrdersView);
     document.getElementById('refreshShippedBtn')?.addEventListener('click', () => { fetchShippedOrders(); syncShipmentStatuses(true); });
+    document.getElementById('soSyncBtn')?.addEventListener('click', () => syncShipmentStatuses(true));
     document.getElementById('soExportBtn')?.addEventListener('click', exportShippedCsv);
 
     // Shipped Orders - New Forward Shipment (ship any order by its Order ID)
@@ -5377,10 +5378,18 @@ function showShippedOrdersView() {
 
 // Ask the server to poll carriers for active shipments and auto-advance their
 // statuses. Runs silently in the background; refreshes the list on changes.
+// Pass announce=true (manual Sync Status button / refresh) for visible feedback.
 let soSyncInFlight = false;
 async function syncShipmentStatuses(announce = false) {
     if (soSyncInFlight) return;
     soSyncInFlight = true;
+    const syncBtn = document.getElementById('soSyncBtn');
+    const syncLabel = document.getElementById('soSyncBtnLabel');
+    if (announce && syncBtn) {
+        syncBtn.disabled = true;
+        syncBtn.style.opacity = '0.6';
+        if (syncLabel) syncLabel.textContent = 'Syncing\u2026';
+    }
     try {
         const data = await apiCall('/shipping/sync-statuses', 'POST', {});
         if (data && data.success && data.updated > 0) {
@@ -5388,12 +5397,20 @@ async function syncShipmentStatuses(announce = false) {
             // Only re-render if the user is still on the Shipped Orders view
             if (document.getElementById('shippedOrdersView')?.style.display !== 'none') fetchShippedOrders();
         } else if (announce && data && data.success) {
-            showShipToast('\u2713 Shipment statuses are up to date');
+            showShipToast(data.skipped ? '\u23f3 A sync is already running, try again shortly' : `\u2713 ${data.checked || 0} shipment${data.checked === 1 ? '' : 's'} checked \u2014 statuses are up to date`);
+        } else if (announce) {
+            showShipToast(data?.error || 'Sync failed', true);
         }
     } catch (err) {
         console.warn('Shipment status sync failed (non-blocking):', err);
+        if (announce) showShipToast('Sync failed \u2014 could not reach the server', true);
     } finally {
         soSyncInFlight = false;
+        if (syncBtn) {
+            syncBtn.disabled = false;
+            syncBtn.style.opacity = '';
+            if (syncLabel) syncLabel.textContent = 'Sync Status';
+        }
     }
 }
 
