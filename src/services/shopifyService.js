@@ -408,12 +408,20 @@ class ShopifyService {
                     result.warnings.push('Order is cancelled in Shopify — line items not synced');
                 } else if (order.fulfillment_status === 'fulfilled') {
                     result.warnings.push('Order already fulfilled in Shopify — line items not synced');
+                } else if (!this._supportsLineItemEditing(order)) {
+                    // Orders created by a third-party checkout (e.g. GoKwik) are locked
+                    // by Shopify's Order Editing API — orderEditBegin returns
+                    // "The order cannot be edited" regardless of scope/token. Skip cleanly.
+                    result.warnings.push('Line items can\'t be synced to Shopify for this order (created via third-party checkout like GoKwik) — edit line items in GoKwik instead');
                 } else {
                     try {
                         const itemActions = await this._syncLineItems(order, items, result.warnings);
                         result.actions.push(...itemActions);
                     } catch (err) {
-                        result.warnings.push(`Line item sync failed: ${err.message}`);
+                        const msg = /cannot be edited/i.test(err.message)
+                            ? 'Shopify does not allow editing this order\'s line items (third-party checkout / non-editable order) — edit in GoKwik instead'
+                            : err.message;
+                        result.warnings.push(`Line item sync failed: ${msg}`);
                     }
                 }
             }
@@ -432,6 +440,26 @@ class ShopifyService {
             result.warnings.push(error.message);
             return result;
         }
+    }
+
+    // Shopify's Order Editing API (orderEditBegin) only works on orders whose
+    // sales channel supports editing (online store, draft orders, POS, mobile).
+    // Orders created by third-party one-page checkouts like GoKwik are attributed
+    // to that app as the source and Shopify blocks editing them, returning
+    // "The order cannot be edited". Detect those up front so we skip cleanly.
+    _supportsLineItemEditing(order) {
+        if (!order) return false;
+        const tags = (order.tags || '').toLowerCase();
+        if (tags.includes('gokwik')) return false;
+        const source = String(order.source_name || '').trim();
+        // Known editable, first-party sources.
+        const editableSources = new Set(['web', 'pos', 'shopify_draft_order', 'iphone', 'android', 'shopify']);
+        if (editableSources.has(source.toLowerCase())) return true;
+        // A purely numeric source_name is a third-party app/channel id (e.g. GoKwik)
+        // whose orders are not editable via the Order Editing API.
+        if (/^\d+$/.test(source)) return false;
+        // Unknown source: allow the attempt (the try/catch will surface any error).
+        return true;
     }
 
     // Diff the hub's edited items against the Shopify order and apply via the
