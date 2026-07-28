@@ -1468,7 +1468,7 @@
         /* Stats Row */
         .analytics-stats-row {
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(6, 1fr);
             gap: 1rem;
             margin-bottom: 2rem;
         }
@@ -1498,6 +1498,7 @@
         }
         .analytics-stat-card.total .stat-icon { color: #fff; }
         .analytics-stat-card.confirmed .stat-icon { background: rgba(46, 213, 115, 0.15); color: #2ed573; }
+        .analytics-stat-card.shipped .stat-icon { background: rgba(30, 144, 255, 0.15); color: #1e90ff; }
         .analytics-stat-card.pending .stat-icon { background: rgba(255, 165, 2, 0.15); color: #ffa502; }
         .analytics-stat-card.cancelled .stat-icon { background: rgba(255, 71, 87, 0.15); color: #ff4757; }
         .analytics-stat-card.edits .stat-icon { background: rgba(83, 189, 235, 0.15); color: #53bdeb; }
@@ -1525,6 +1526,7 @@
             margin-top: 0.25rem;
         }
         .analytics-stat-card.confirmed .stat-percent { color: #2ed573; }
+        .analytics-stat-card.shipped .stat-percent { color: #1e90ff; }
         .analytics-stat-card.pending .stat-percent { color: #ffa502; }
         .analytics-stat-card.cancelled .stat-percent { color: #ff4757; }
         .analytics-stat-card.edits .stat-percent { color: #53bdeb; }
@@ -1585,6 +1587,7 @@
             transition: stroke-dashoffset 1.5s cubic-bezier(0.16, 1, 0.3, 1);
         }
         .circular-chart-progress.confirmed { stroke: #2ed573; }
+        .circular-chart-progress.shipped { stroke: #1e90ff; }
         .circular-chart-progress.pending { stroke: #ffa502; }
         .circular-chart-progress.cancelled { stroke: #ff4757; }
         .circular-chart-progress.edits { stroke: #53bdeb; }
@@ -1736,6 +1739,7 @@
             font-weight: 600;
         }
         .analytics-table .status-count.confirmed { color: #2ed573; }
+        .analytics-table .status-count.shipped { color: #1e90ff; }
         .analytics-table .status-count.pending { color: #ffa502; }
         .analytics-table .status-count.cancelled { color: #ff4757; }
         .analytics-table .status-count.edits { color: #53bdeb; }
@@ -1794,6 +1798,13 @@
             background: rgba(46, 213, 115, 0.15) !important;
             border-color: rgba(46, 213, 115, 0.4) !important;
             color: #2ed573 !important;
+        }
+        
+        /* Shipped download button - blue */
+        .btn-download-shipped:hover {
+            background: rgba(30, 144, 255, 0.15) !important;
+            border-color: rgba(30, 144, 255, 0.4) !important;
+            color: #1e90ff !important;
         }
         
         /* Cancelled download button - red */
@@ -4164,6 +4175,18 @@
                         <span class="stat-percent" id="analyticsConfirmedPct">0%</span>
                     </div>
                 </div>
+                <div class="analytics-stat-card shipped">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsShipped">0</span>
+                        <span class="stat-label">Shipped</span>
+                        <span class="stat-percent" id="analyticsShippedPct">0%</span>
+                    </div>
+                </div>
                 <div class="analytics-stat-card pending">
                     <div class="stat-icon">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -4218,6 +4241,14 @@
                             </svg>
                             <div class="circular-chart-value" id="chartConfirmedValue">0%</div>
                             <div class="circular-chart-label">Confirmed</div>
+                        </div>
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress shipped" id="circleShipped" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartShippedValue">0%</div>
+                            <div class="circular-chart-label">Shipped</div>
                         </div>
                         <div class="circular-chart-wrapper">
                             <svg class="circular-chart" viewBox="0 0 100 100">
@@ -4278,6 +4309,7 @@
                                 <th>Date</th>
                                 <th>Total Orders</th>
                                 <th>Confirmed</th>
+                                <th>Shipped</th>
                                 <th>Pending</th>
                                 <th>Cancelled</th>
                                 <th>Edit Requests</th>

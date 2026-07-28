@@ -3285,9 +3285,11 @@ function processAnalyticsData(data, startDate, endDate) {
     const dailyRaw = data.daily || [];
     
     // Build stats from server-side aggregated counts
+    // 'shipped' is tracked separately so shipped orders aren't mixed into 'confirmed'
     const stats = {
         total: overview.total_orders || 0,
         confirmed: overview.confirmed_count || 0,
+        shipped: overview.shipped_count || 0,
         pending: overview.pending_count || 0,
         cancelled: overview.cancelled_count || 0,
         edit_details: overview.edit_requests_count || 0,
@@ -3303,6 +3305,7 @@ function processAnalyticsData(data, startDate, endDate) {
             date: dateKey,
             total: 0,
             confirmed: 0,
+            shipped: 0,
             pending: 0,
             cancelled: 0,
             edit_details: 0,
@@ -3317,6 +3320,7 @@ function processAnalyticsData(data, startDate, endDate) {
                 date: day.date,
                 total: day.total || 0,
                 confirmed: day.confirmed || 0,
+                shipped: day.shipped || 0,
                 pending: day.pending || 0,
                 cancelled: day.cancelled || 0,
                 edit_details: day.edit_details || 0,
@@ -3331,6 +3335,7 @@ function processAnalyticsData(data, startDate, endDate) {
     // Calculate percentages from aggregated totals
     stats.percentages = {
         confirmed: stats.total > 0 ? Math.round((stats.confirmed / stats.total) * 100) : 0,
+        shipped: stats.total > 0 ? Math.round((stats.shipped / stats.total) * 100) : 0,
         pending: stats.total > 0 ? Math.round((stats.pending / stats.total) * 100) : 0,
         cancelled: stats.total > 0 ? Math.round((stats.cancelled / stats.total) * 100) : 0,
         edit_details: stats.total > 0 ? Math.round((stats.edit_details / stats.total) * 100) : 0
@@ -3355,12 +3360,14 @@ function renderStatCards() {
     // Animate counters
     animateCounter('analyticsTotalOrders', data.total);
     animateCounter('analyticsConfirmed', data.confirmed);
+    animateCounter('analyticsShipped', data.shipped);
     animateCounter('analyticsPending', data.pending);
     animateCounter('analyticsCancelled', data.cancelled);
     animateCounter('analyticsEdits', data.edit_details);
     
     // Update percentages
     document.getElementById('analyticsConfirmedPct').textContent = data.percentages.confirmed + '%';
+    document.getElementById('analyticsShippedPct').textContent = data.percentages.shipped + '%';
     document.getElementById('analyticsPendingPct').textContent = data.percentages.pending + '%';
     document.getElementById('analyticsCancelledPct').textContent = data.percentages.cancelled + '%';
     document.getElementById('analyticsEditsPct').textContent = data.percentages.edit_details + '%';
@@ -3393,6 +3400,7 @@ function renderCircularCharts() {
     
     // Update each circle
     updateCircle('circleConfirmed', 'chartConfirmedValue', data.percentages.confirmed, circumference);
+    updateCircle('circleShipped', 'chartShippedValue', data.percentages.shipped, circumference);
     updateCircle('circlePending', 'chartPendingValue', data.percentages.pending, circumference);
     updateCircle('circleCancelled', 'chartCancelledValue', data.percentages.cancelled, circumference);
     updateCircle('circleEdits', 'chartEditsValue', data.percentages.edit_details, circumference);
@@ -3516,6 +3524,7 @@ function renderAnalyticsTable() {
         
         // Calculate percentages relative to total orders for that day
         const confirmedPct = day.total > 0 ? Math.round((day.confirmed / day.total) * 100) : 0;
+        const shippedPct = day.total > 0 ? Math.round((day.shipped / day.total) * 100) : 0;
         const pendingPct = day.total > 0 ? Math.round((day.pending / day.total) * 100) : 0;
         const cancelledPct = day.total > 0 ? Math.round((day.cancelled / day.total) * 100) : 0;
         const editsPct = day.total > 0 ? Math.round((day.edit_details / day.total) * 100) : 0;
@@ -3525,6 +3534,7 @@ function renderAnalyticsTable() {
                 <td>${dateLabel}</td>
                 <td>${day.total}</td>
                 <td class="status-count confirmed">${day.confirmed} <span class="status-pct">(${confirmedPct}%)</span></td>
+                <td class="status-count shipped">${day.shipped} <span class="status-pct">(${shippedPct}%)</span></td>
                 <td class="status-count pending">${day.pending} <span class="status-pct">(${pendingPct}%)</span></td>
                 <td class="status-count cancelled">${day.cancelled} <span class="status-pct">(${cancelledPct}%)</span></td>
                 <td class="status-count edits">${day.edit_details} <span class="status-pct">(${editsPct}%)</span></td>
@@ -3545,6 +3555,14 @@ function renderAnalyticsTable() {
                                 <line x1="12" y1="15" x2="12" y2="3"/>
                             </svg>
                             <span>C</span>
+                        </button>
+                        <button class="btn-download-day btn-download-shipped" onclick="downloadDayReport('${day.date}', 'shipped')" title="Download shipped orders">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            <span>S</span>
                         </button>
                         <button class="btn-download-day btn-download-cancelled" onclick="downloadDayReport('${day.date}', 'cancelled')" title="Download cancelled orders">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3573,7 +3591,7 @@ function renderAnalyticsTable() {
         const remainingDays = allData.length - analyticsTableDaysToShow;
         html += `
             <tr class="show-more-row">
-                <td colspan="8" style="text-align: center; padding: 1rem;">
+                <td colspan="9" style="text-align: center; padding: 1rem;">
                     <button class="btn-show-more" onclick="showMoreAnalyticsDays()">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
                             <polyline points="6 9 12 15 18 9"/>
@@ -3625,7 +3643,7 @@ async function downloadDayReport(date, statusFilter) {
             ? statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1).replace('_', ' ') 
             : 'Orders';
         let csv = `${statusLabel} Report - ${dateLabel}\n`;
-        csv += `Total Orders: ${dayData.total} | Confirmed: ${dayData.confirmed} | Pending: ${dayData.pending} | Cancelled: ${dayData.cancelled} | Edits: ${dayData.edit_details}\n\n`;
+        csv += `Total Orders: ${dayData.total} | Confirmed: ${dayData.confirmed} | Shipped: ${dayData.shipped} | Pending: ${dayData.pending} | Cancelled: ${dayData.cancelled} | Edits: ${dayData.edit_details}\n\n`;
         
         // CSV Headers
         csv += 'Order ID,Customer Name,Phone,Email,Status,Total Amount,Delivery Type,Address,Products,Customer Message,Created At\n';
@@ -3685,20 +3703,21 @@ function exportAnalyticsToExcel() {
     const endDate = document.getElementById('analyticsEndDate').value;
     
     // Create CSV content
-    let csv = 'Date,Total Orders,Confirmed,Pending,Cancelled,Edit Requests,Response Rate\n';
+    let csv = 'Date,Total Orders,Confirmed,Shipped,Pending,Cancelled,Edit Requests,Response Rate\n';
     
     data.dailyArray.forEach(day => {
         const responseRate = day.total > 0 ? Math.round((day.responded / day.total) * 100) : 0;
-        csv += `${day.date},${day.total},${day.confirmed},${day.pending},${day.cancelled},${day.edit_details},${responseRate}%\n`;
+        csv += `${day.date},${day.total},${day.confirmed},${day.shipped},${day.pending},${day.cancelled},${day.edit_details},${responseRate}%\n`;
     });
     
     // Add summary row
-    csv += `\nSUMMARY,,,,,,\n`;
-    csv += `Total Orders,${data.total},,,,,\n`;
-    csv += `Confirmed,${data.confirmed},${data.percentages.confirmed}%,,,,\n`;
-    csv += `Pending,${data.pending},${data.percentages.pending}%,,,,\n`;
-    csv += `Cancelled,${data.cancelled},${data.percentages.cancelled}%,,,,\n`;
-    csv += `Edit Requests,${data.edit_details},${data.percentages.edit_details}%,,,,\n`;
+    csv += `\nSUMMARY,,,,,,,\n`;
+    csv += `Total Orders,${data.total},,,,,,\n`;
+    csv += `Confirmed,${data.confirmed},${data.percentages.confirmed}%,,,,,\n`;
+    csv += `Shipped,${data.shipped},${data.percentages.shipped}%,,,,,\n`;
+    csv += `Pending,${data.pending},${data.percentages.pending}%,,,,,\n`;
+    csv += `Cancelled,${data.cancelled},${data.percentages.cancelled}%,,,,,\n`;
+    csv += `Edit Requests,${data.edit_details},${data.percentages.edit_details}%,,,,,\n`;
     
     // Download file
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

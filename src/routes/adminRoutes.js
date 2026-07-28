@@ -3157,26 +3157,33 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
             // Convert IST dates from frontend to UTC for database query
             const utcStartDate = fromISTtoUTC(startDate + ' 00:00:00') || (startDate + ' 00:00:00');
             const utcEndDate = fromISTtoUTC(endDate + ' 23:59:59') || (endDate + ' 23:59:59');
-            dateFilter = "WHERE created_at >= ? AND created_at <= ?";
+            dateFilter = "WHERE s.created_at >= ? AND s.created_at <= ?";
             dateParams.push(utcStartDate, utcEndDate);
         } else if (!noLimit || noLimit !== 'true') {
             // Default: last 30 days if no date range and noLimit not set
-            dateFilter = "WHERE created_at >= NOW() - INTERVAL '30 days'";
+            dateFilter = "WHERE s.created_at >= NOW() - INTERVAL '30 days'";
         }
         // If noLimit=true and no dates, dateFilter stays empty (ALL historical data)
+        
+        // Same derived 'shipped' semantics as the /shoppers list endpoint:
+        // a confirmed shopper whose orders row carries an AWB / shipped status.
+        // 'confirmed' therefore only counts confirmed-but-not-yet-shipped shoppers.
+        const shippedExpr = `(o.awb IS NOT NULL OR o.status = 'shipped')`;
         
         // Get overall stats - lightweight aggregation
         const stats = await dbAdapter.query(`
             SELECT 
                 COUNT(*) as total_orders,
-                COUNT(DISTINCT phone) as total_shoppers,
-                SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed_count,
-                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
-                SUM(CASE WHEN status = 'edit_details' THEN 1 ELSE 0 END) as edit_requests_count,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count,
-                SUM(CASE WHEN customer_message IS NOT NULL THEN 1 ELSE 0 END) as responded_count,
-                AVG(CASE WHEN response_count > 0 THEN response_count END) as avg_response_count
-            FROM store_shoppers
+                COUNT(DISTINCT s.phone) as total_shoppers,
+                SUM(CASE WHEN s.status = 'confirmed' AND NOT COALESCE(${shippedExpr}, false) THEN 1 ELSE 0 END) as confirmed_count,
+                SUM(CASE WHEN s.status = 'confirmed' AND ${shippedExpr} THEN 1 ELSE 0 END) as shipped_count,
+                SUM(CASE WHEN s.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
+                SUM(CASE WHEN s.status = 'edit_details' THEN 1 ELSE 0 END) as edit_requests_count,
+                SUM(CASE WHEN s.status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+                SUM(CASE WHEN s.customer_message IS NOT NULL THEN 1 ELSE 0 END) as responded_count,
+                AVG(CASE WHEN s.response_count > 0 THEN s.response_count END) as avg_response_count
+            FROM store_shoppers s
+            LEFT JOIN orders o ON o.order_id = s.order_id
             ${dateFilter}
         `, dateParams);
         
@@ -3184,16 +3191,18 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
         // created_at is TIMESTAMP (no tz) storing UTC — convert UTC→IST correctly
         const dailyStats = await dbAdapter.query(`
             SELECT 
-                TO_CHAR(DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') as date,
+                TO_CHAR(DATE(s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') as date,
                 COUNT(*) as total,
-                SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
-                SUM(CASE WHEN status = 'edit_details' THEN 1 ELSE 0 END) as edit_details,
-                SUM(CASE WHEN status != 'pending' THEN 1 ELSE 0 END) as responded
-            FROM store_shoppers
+                SUM(CASE WHEN s.status = 'confirmed' AND NOT COALESCE(${shippedExpr}, false) THEN 1 ELSE 0 END) as confirmed,
+                SUM(CASE WHEN s.status = 'confirmed' AND ${shippedExpr} THEN 1 ELSE 0 END) as shipped,
+                SUM(CASE WHEN s.status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN s.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
+                SUM(CASE WHEN s.status = 'edit_details' THEN 1 ELSE 0 END) as edit_details,
+                SUM(CASE WHEN s.status != 'pending' THEN 1 ELSE 0 END) as responded
+            FROM store_shoppers s
+            LEFT JOIN orders o ON o.order_id = s.order_id
             ${dateFilter}
-            GROUP BY DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
+            GROUP BY DATE(s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
             ORDER BY date DESC
         `, dateParams);
         
