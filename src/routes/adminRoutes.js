@@ -1807,7 +1807,9 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         offset = Math.max(0, parseInt(offset));
         
         // CACHE for list queries without search
-        const cacheKey = `shoppers_list:${limit}:${offset}:${status || 'all'}:${search || 'none'}:${startDate || 'none'}:${endDate || 'none'}`;
+        // NOTE: cache key MUST include every filter param, otherwise a filtered
+        // request collides with an earlier unfiltered response (filter appears broken)
+        const cacheKey = `shoppers_list:${limit}:${offset}:${status || 'all'}:${search || 'none'}:${startDate || 'none'}:${endDate || 'none'}:${orderIdFrom || 'none'}:${orderIdTo || 'none'}:${paymentMethod || 'none'}:${deliveryType || 'none'}:${sortBy || 'newest'}`;
         if (!search) { // Only cache if no search term (search results are unique)
             const cached = getCached(cacheKey);
             if (cached) {
