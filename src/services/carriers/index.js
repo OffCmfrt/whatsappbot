@@ -9,10 +9,12 @@
 
 const delhiveryAdapter = require('./delhiveryAdapter');
 const shiprocketAdapter = require('./shiprocketAdapter');
+const ekartAdapter = require('./ekartAdapter');
 
 const ADAPTERS = {
     [delhiveryAdapter.key]: delhiveryAdapter,
-    [shiprocketAdapter.key]: shiprocketAdapter
+    [shiprocketAdapter.key]: shiprocketAdapter,
+    [ekartAdapter.key]: ekartAdapter
 };
 
 // Only carriers whose env credentials are present (drives the UI carrier list)
