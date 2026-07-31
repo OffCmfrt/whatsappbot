@@ -15,7 +15,15 @@ const https = require('https');
 // Render/Node can resolve googleapis.com to IPv6 first and hang on a dead
 // route until the request timeout (curl does happy-eyeballs, Node doesn't).
 // Force IPv4 and reuse sockets so requests connect fast and reliably.
-const httpsAgent = new https.Agent({ keepAlive: true, family: 4, maxSockets: 10 });
+// timeout reaps sockets idle >30s: Render's NAT silently drops idle keep-alive
+// connections, and reusing a half-dead socket hangs until the request timeout.
+const httpsAgent = new https.Agent({ keepAlive: true, family: 4, maxSockets: 10, timeout: 30000 });
+
+// One-shot agent for retries after a timeout — the pooled agent may keep
+// handing out stale sockets, so retry attempts connect fresh instead.
+function freshAgent() {
+    return new https.Agent({ keepAlive: false, family: 4 });
+}
 
 const PROVIDER_DEFAULTS = {
     groq: {
@@ -153,15 +161,20 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
     let lastError = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // After a timeout, bypass the keep-alive pool — the hang is usually a
+        // stale pooled socket, not the provider being slow.
+        const timedOutLastAttempt = lastError?.code === 'ECONNABORTED';
         try {
             const response = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
                 headers: {
                     'Authorization': `Bearer ${cfg.apiKey}`,
                     'Content-Type': 'application/json'
                 },
-                httpsAgent,
-                // Thinking models (Gemini) can exceed 30s on tool-heavy turns
-                timeout: 60000
+                httpsAgent: timedOutLastAttempt ? freshAgent() : httpsAgent,
+                // Fail fast on the first attempt (dead-socket hangs waste the
+                // whole window); thinking models (Gemini) can exceed 30s on
+                // tool-heavy turns, so retries get the full 60s.
+                timeout: attempt === 1 ? 30000 : 60000
             });
 
             const choice = response.data?.choices?.[0];
