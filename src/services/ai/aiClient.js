@@ -46,7 +46,10 @@ const PROVIDER_DEFAULTS = {
     },
     gemini: {
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
-        model: 'gemini-3.5-flash-lite',
+        // 3.5-flash-lite is frequently overloaded (30s+ even on trivial
+        // prompts, blowing the request timeout); 3.1-flash-lite responds in
+        // ~1s with working tool-calls, and 2.x models are closed to new keys.
+        model: 'gemini-3.1-flash-lite',
         inputCostPer1M: 0.10,
         outputCostPer1M: 0.40
     }
@@ -200,6 +203,13 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
             if (status === 429 && attempt === maxAttempts) {
                 const err = new Error('AI rate limit reached (free tier). Please try again in a minute.');
                 err.code = 'AI_RATE_LIMIT';
+                throw err;
+            }
+            // Model overloaded (Gemini returns 503 UNAVAILABLE during demand
+            // spikes) — tell the admin what's happening instead of a generic 500
+            if (status === 503 && attempt === maxAttempts) {
+                const err = new Error('AI model is overloaded right now. Please try again in a minute.');
+                err.code = 'AI_UNAVAILABLE';
                 throw err;
             }
             if (!retriable || attempt === maxAttempts) break;

@@ -305,6 +305,40 @@
     }
 
     // ---------- Suggest reply (support chat modal) ----------
+
+    // Prefetch: warm the suggestion cache the moment a chat opens so the ✨
+    // click feels instant. Failures are silent — the button still works as a
+    // plain on-demand request.
+    const suggestPrefetch = new Map(); // key -> { promise, at }
+    const PREFETCH_FRESH_MS = 90 * 1000;
+
+    function suggestKey(phone, ticketId) {
+        return `${phone}:${ticketId || ''}`;
+    }
+
+    function prefetchSuggestions(phone, ticketId) {
+        if (!phone || !aiToken()) return;
+        const key = suggestKey(phone, ticketId);
+        const existing = suggestPrefetch.get(key);
+        if (existing && Date.now() - existing.at < PREFETCH_FRESH_MS) return;
+        suggestPrefetch.set(key, {
+            promise: aiFetch('/suggest-reply', 'POST', { phone, ticketId, prefetch: true }).catch(() => null),
+            at: Date.now()
+        });
+    }
+
+    // Wrap the dashboard's global openSupportChat (defined in main.js) so
+    // every chat open kicks off a background prefetch
+    function hookSupportChatOpen() {
+        const orig = window.openSupportChat;
+        if (typeof orig !== 'function' || orig.__aiPrefetchHooked) return;
+        window.openSupportChat = function (ticketId, phone, ...rest) {
+            try { prefetchSuggestions(phone, ticketId); } catch (e) { /* never block chat open */ }
+            return orig.call(this, ticketId, phone, ...rest);
+        };
+        window.openSupportChat.__aiPrefetchHooked = true;
+    }
+
     function injectSuggestReply() {
         const inputArea = document.querySelector('#supportChatModal .chat-input-area');
         if (!inputArea || document.getElementById('aiSuggestReplyBtn')) return;
@@ -329,7 +363,15 @@
             suggestionsBox.classList.add('open');
             suggestionsBox.innerHTML = '<div class="ai-suggestions-note">Generating suggestions…</div>';
             try {
-                const data = await aiFetch('/suggest-reply', 'POST', { phone, ticketId });
+                // Reuse the prefetch started when the chat opened — if it already
+                // resolved this renders instantly; otherwise we just await it
+                const key = suggestKey(phone, ticketId);
+                const pre = suggestPrefetch.get(key);
+                let data = (pre && Date.now() - pre.at < PREFETCH_FRESH_MS) ? await pre.promise : null;
+                suggestPrefetch.delete(key); // single-use: next click re-checks the server
+                if (!data || !data.suggestions) {
+                    data = await aiFetch('/suggest-reply', 'POST', { phone, ticketId });
+                }
                 if (!data.suggestions || !data.suggestions.length) {
                     suggestionsBox.innerHTML = '<div class="ai-suggestions-note">No suggestions available for this chat.</div>';
                 } else {
@@ -401,6 +443,7 @@
             }
         });
         injectSuggestReply();
+        hookSupportChatOpen();
     }
 
     if (document.readyState === 'loading') {

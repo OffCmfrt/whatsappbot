@@ -4916,7 +4916,7 @@ router.post('/ai/chat', verifyToken, async (req, res) => {
         res.json({ success: true, reply: result.reply, pendingAction: result.pendingAction, usage: result.usage });
     } catch (error) {
         console.error('AI chat error:', error.message);
-        const friendly = error.code === 'AI_RATE_LIMIT'
+        const friendly = ['AI_RATE_LIMIT', 'AI_UNAVAILABLE'].includes(error.code)
             ? error.message
             : 'AI request failed. Please try again.';
         res.status(500).json({ success: false, error: friendly });
@@ -4952,18 +4952,19 @@ router.post('/ai/cancel/:id', verifyToken, async (req, res) => {
 // AI reply suggestions for a customer chat (drafts only — never auto-sent)
 router.post('/ai/suggest-reply', verifyToken, async (req, res) => {
     try {
-        const { phone, ticketId } = req.body;
+        const { phone, ticketId, prefetch } = req.body;
         if (!phone) return res.status(400).json({ success: false, error: 'Customer phone is required' });
         const { suggestReply } = require('../services/ai/suggestReply');
         const result = await suggestReply({
             actor: req.admin?.username || 'admin',
             phone,
-            ticketId: ticketId || null
+            ticketId: ticketId || null,
+            prefetch: Boolean(prefetch)
         });
         res.json({ success: true, suggestions: result.suggestions });
     } catch (error) {
         console.error('AI suggest-reply error:', error.message);
-        const known = ['AI_NOT_CONFIGURED', 'AI_DISABLED', 'AI_LIMIT', 'NO_HISTORY', 'AI_RATE_LIMIT'];
+        const known = ['AI_NOT_CONFIGURED', 'AI_DISABLED', 'AI_LIMIT', 'NO_HISTORY', 'AI_RATE_LIMIT', 'AI_UNAVAILABLE'];
         const status = known.includes(error.code) ? 400 : 500;
         res.status(status).json({ success: false, error: known.includes(error.code) ? error.message : 'Failed to generate suggestions' });
     }
