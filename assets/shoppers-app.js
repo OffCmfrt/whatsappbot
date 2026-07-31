@@ -4658,6 +4658,11 @@ window.viewCampaignDetails = viewCampaignDetails;
 let shipState = null;          // active ship-modal wizard state
 let shipCarriersCache = null;  // configured carriers (cached per session)
 
+// Terminal shipment states — mirror the backend/DB "one open shipment per
+// order" rule. Delivered/RTO are terminal too, so those orders can be re-shipped.
+const SHIP_TERMINAL_STATUSES = ['cancelled', 'failed', 'delivered', 'rto'];
+function isTerminalShipStatus(status) { return SHIP_TERMINAL_STATUSES.includes(status); }
+
 function showShipToast(message, isError = false) {
     const toast = document.createElement('div');
     toast.className = `ship-toast ${isError ? 'error' : ''}`;
@@ -4675,7 +4680,9 @@ async function loadShipCarriers(force = false) {
 
 // ---------- Ship Modal (3-step wizard) ----------
 
-async function openShipModal(shopperId) {
+// reshipCtx (optional) puts the wizard in re-ship mode:
+// { ofShipmentId, reason, prevCarrier, prevCourierName, prevAwb }
+async function openShipModal(shopperId, reshipCtx = null) {
     shipState = {
         shopperId,
         step: 1,
@@ -4685,9 +4692,11 @@ async function openShipModal(shopperId) {
         courier: null,       // selected courier {id, name, rate}
         serviceable: false,
         shipping: false,
-        shipped: false
+        shipped: false,
+        reship: reshipCtx || null
     };
 
+    renderShipReshipBanner();
     document.getElementById('shipOrderIdLabel').textContent = '';
     const shipEditorMount = document.getElementById('shipOrderEditor');
     if (shipEditorMount) shipEditorMount.innerHTML = '<div class="ship-loading"><div class="spinner"></div><span>Loading order...</span></div>';
@@ -4711,8 +4720,9 @@ async function openShipModal(shopperId) {
             return;
         }
 
-        // Guard: order already has an active shipment → show history instead
-        const active = (draftRes.shipments || []).find(sh => !['cancelled', 'failed'].includes(sh.status));
+        // Guard: order already has an open shipment → show history instead
+        // (terminal states — cancelled/failed/delivered/rto — don't block re-shipping)
+        const active = (draftRes.shipments || []).find(sh => !isTerminalShipStatus(sh.status));
         if (active) {
             closeShipModal();
             showShipToast(`Order already shipped (AWB: ${active.awb || 'pending'}). Opening shipment history.`);
@@ -4739,6 +4749,19 @@ function closeShipModal() {
         // Also refresh the Shipped Orders view if it's open (retry / forward-ship flows)
         if (document.getElementById('shippedOrdersView')?.style.display === 'block') fetchShippedOrders();
     }
+}
+
+// Re-ship banner across all wizard steps — keeps the admin aware they're
+// creating a replacement for a previous shipment (with the tracked reason)
+function renderShipReshipBanner() {
+    const banner = document.getElementById('shipReshipBanner');
+    if (!banner) return;
+    const r = shipState?.reship;
+    if (!r) { banner.style.display = 'none'; banner.innerHTML = ''; return; }
+    banner.style.display = 'flex';
+    banner.innerHTML = `
+        <span class="reship-badge">🔄 Re-Ship</span>
+        <span>Replacing ${r.prevAwb ? `AWB <b>${escapeHtml(r.prevAwb)}</b>` : `shipment #${r.ofShipmentId}`}${r.prevCourierName ? ` via ${escapeHtml(r.prevCourierName)}` : ''} · Reason: <b>${escapeHtml(r.reason)}</b></span>`;
 }
 
 function renderShipStep1() {
@@ -4906,6 +4929,11 @@ async function shipGoNext() {
 
         renderShipCarrierCards();
         setShipStep(2);
+
+        // Re-ship: preselect the previously used carrier (rates re-check fresh)
+        if (shipState.reship?.prevCarrier && shipState.carriers.some(c => c.key === shipState.reship.prevCarrier)) {
+            selectShipCarrier(shipState.reship.prevCarrier);
+        }
     } else if (shipState.step === 2) {
         if (!shipState.carrier) { showShipToast('Select a carrier first', true); return; }
         if (!shipState.serviceable) { showShipToast('Selected carrier is not serviceable for this pincode', true); return; }
@@ -4928,7 +4956,7 @@ function renderShipCarrierCards() {
     }
     wrap.innerHTML = shipState.carriers.map(c => `
         <div class="ship-carrier-card ${shipState.carrier?.key === c.key ? 'selected' : ''}" id="carrier-card-${c.key}" onclick="selectShipCarrier('${c.key}')">
-            <div class="carrier-name">${escapeHtml(c.name)}</div>
+            <div class="carrier-name">${escapeHtml(c.name)}${shipState.reship?.prevCarrier === c.key ? ' <span class="reship-badge">previously used</span>' : ''}</div>
             <div class="carrier-sub">${c.capabilities.needsCourierSelection ? 'Aggregator · pick courier & rate' : 'Direct API · own network'}</div>
         </div>
     `).join('');
@@ -5034,6 +5062,9 @@ function renderShipSummary() {
         ['Carrier', escapeHtml(shipState.carrier.name)],
         ['Courier', `${escapeHtml(shipState.courier?.name || shipState.carrier.name)}${shipState.courier?.rate ? ` · ₹${shipState.courier.rate}` : ''}`]
     ];
+    if (shipState.reship) {
+        rows.unshift(['Re-Ship', `Replacing ${shipState.reship.prevAwb ? `AWB ${escapeHtml(shipState.reship.prevAwb)}` : `shipment #${shipState.reship.ofShipmentId}`} · ${escapeHtml(shipState.reship.reason)}`]);
+    }
     document.getElementById('shipSummaryTable').innerHTML =
         rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
     document.getElementById('shipSubmitError').innerHTML = '';
@@ -5056,7 +5087,9 @@ async function submitShip() {
             courierId: shipState.carrier.capabilities.needsCourierSelection ? shipState.courier.id : undefined,
             packageOverrides: o.packageOverrides,
             consigneeOverrides: o.consigneeOverrides,
-            notifyCustomer: document.getElementById('shipNotifyCustomer').checked
+            notifyCustomer: document.getElementById('shipNotifyCustomer').checked,
+            reshipOfShipmentId: shipState.reship?.ofShipmentId || undefined,
+            reshipReason: shipState.reship?.reason || undefined
         });
 
         if (!data || !data.success) {
@@ -5072,7 +5105,7 @@ async function submitShip() {
         shipState.shipping = false;
         renderShipSuccess(data);
         setShipStep(3);
-        showShipToast(`✅ Shipped! AWB ${data.awb} via ${data.courierName}`);
+        showShipToast(`✅ ${shipState.reship ? 'Re-shipped' : 'Shipped'}! AWB ${data.awb} via ${data.courierName}`);
     } catch (err) {
         console.error('[SHIP] Ship error:', err);
         document.getElementById('shipSubmitError').innerHTML = '<div class="ship-error-box">❌ Network error while shipping — check shipment history before retrying</div>';
@@ -5089,8 +5122,9 @@ function renderShipSuccess(data) {
     const panel = document.getElementById('shipSuccessPanel');
     panel.style.display = 'block';
     panel.innerHTML = `
-        <div class="success-icon">📦</div>
-        <h4>Shipment Created</h4>
+        <div class="success-icon">${shipState?.reship ? '🔄' : '📦'}</div>
+        <h4>${shipState?.reship ? 'Replacement Shipment Created' : 'Shipment Created'}</h4>
+        ${shipState?.reship ? `<div style="margin-bottom: 0.6rem;"><span class="reship-badge">Replaces ${shipState.reship.prevAwb ? `AWB ${escapeHtml(shipState.reship.prevAwb)}` : `shipment #${shipState.reship.ofShipmentId}`}</span></div>` : ''}
         <div class="ship-awb-display">
             AWB: ${escapeHtml(data.awb)}
             <button class="ship-awb-copy" onclick="copyShipAwb('${escapeHtml(data.awb)}')">COPY</button>
@@ -5218,6 +5252,7 @@ async function refreshShipmentsDrawer() {
             return;
         }
         const shipments = data.shipments || [];
+        cacheReshipShipments(shipments);
         if (shipments.length === 0) {
             body.innerHTML = `
                 <div style="text-align:center; color:#888; padding: 2.5rem 0;">No shipments for this order yet.</div>
@@ -5226,15 +5261,17 @@ async function refreshShipmentsDrawer() {
         }
 
         const minDate = formatDateForInput(new Date());
-        const hasActive = shipments.some(sh => !['cancelled', 'failed'].includes(sh.status));
+        const hasOpen = shipments.some(sh => !isTerminalShipStatus(sh.status));
         body.innerHTML = shipments.map(sh => {
-            const active = !['cancelled', 'failed'].includes(sh.status);
+            const open = !isTerminalShipStatus(sh.status);
+            const showActions = !['cancelled', 'failed'].includes(sh.status); // delivered/rto keep label + track
             const isShiprocket = sh.carrier === 'shiprocket';
             return `
             <div class="shipment-entry">
                 <div class="shipment-entry-head">
                     <span class="ship-carrier">${escapeHtml(sh.courier_name || sh.carrier)}</span>
                     <span class="shipment-status-pill ${sh.status}">${sh.status.replace(/_/g, ' ')}</span>
+                    ${sh.reship_of_shipment_id ? `<span class="reship-badge" title="${escapeHtml(sh.reship_reason || '')}">🔄 Re-ship of #${sh.reship_of_shipment_id}</span>` : ''}
                 </div>
                 <div class="shipment-meta">
                     ${sh.awb ? `AWB: <b>${escapeHtml(sh.awb)}</b> <button class="ship-awb-copy" onclick="copyShipAwb('${escapeHtml(sh.awb)}')">COPY</button><br>` : ''}
@@ -5242,16 +5279,18 @@ async function refreshShipmentsDrawer() {
                     ${sh.weight_grams ? `Package: ${sh.weight_grams}g · ${sh.length_cm}×${sh.breadth_cm}×${sh.height_cm} cm<br>` : ''}
                     ${sh.freight_charge ? `Freight: ₹${sh.freight_charge}<br>` : ''}
                     ${sh.pickup_date ? `Pickup: ${sh.pickup_date}${sh.pickup_token ? ` (Token ${escapeHtml(sh.pickup_token)})` : ''}<br>` : ''}
+                    ${sh.reship_reason ? `<span style="color:#ffc759;">Re-ship reason: ${escapeHtml(sh.reship_reason)}</span><br>` : ''}
                     ${sh.error_message ? `<span style="color:#ff6b7a;">Error: ${escapeHtml(sh.error_message)}</span><br>` : ''}
                     Created: ${formatDate(sh.created_at)} · by ${escapeHtml(sh.shipped_by || 'admin')}
                 </div>
-                ${active ? `
+                ${showActions ? `
                 <div class="shipment-entry-actions">
                     <button onclick="shipGetLabel(${sh.id})">Label</button>
                     ${isShiprocket ? `<button onclick="shipGetLabel(${sh.id}, 'manifest')">Manifest</button><button onclick="shipGetLabel(${sh.id}, 'invoice')">Invoice</button>` : ''}
                     <button onclick="shipDoTrack(${sh.id})">Track</button>
                     ${sh.tracking_url ? `<a href="${escapeHtml(sh.tracking_url)}" target="_blank">Open Tracking ↗</a>` : ''}
-                    <button class="danger" onclick="shipDoCancel(${sh.id})">Cancel</button>
+                    <button style="border-color: rgba(255,199,89,0.4); color: #ffc759;" onclick="openReshipModal(${sh.id})">🔄 Re-Ship</button>
+                    ${open ? `<button class="danger" onclick="shipDoCancel(${sh.id})">Cancel</button>` : ''}
                 </div>
                 ${['created', 'awb_assigned'].includes(sh.status) ? `
                 <div class="shipment-entry-actions" style="align-items: center;">
@@ -5260,11 +5299,153 @@ async function refreshShipmentsDrawer() {
                 </div>` : ''}
                 <div id="track-${sh.id}"></div>` : ''}
             </div>`;
-        }).join('') + (!hasActive ? `<button class="ship-btn" onclick="closeShipmentsDrawer(); openShipModal('${currentDrawerOrder.shopperId}')">🚚 Re-ship This Order</button>` : '');
+        }).join('') + (!hasOpen ? `<button class="ship-btn" onclick="openReshipModal(${shipments[0].id})">🔄 Re-ship This Order</button>` : '');
     } catch (err) {
         console.error('[SHIP] Drawer error:', err);
         body.innerHTML = '<div class="ship-error-box">❌ Failed to load shipments</div>';
     }
+}
+
+// ---------- Premium Re-Ship (reason-tracked replacement shipments) ----------
+//
+// Every shipped order can be re-shipped:
+//   • open shipments (awb_assigned → in_transit) → cancelled at the carrier
+//     first, then the ship wizard reopens for the replacement
+//   • terminal shipments (cancelled / failed / delivered / rto) → straight to
+//     the wizard — the original stays on record
+// The reason is persisted on the new shipment (reship_of_shipment_id +
+// reship_reason) and the customer WhatsApp message is worded as a replacement.
+
+const RESHIP_REASONS = [
+    { label: 'RTO received', icon: '↩️', hint: 'Package came back to origin' },
+    { label: 'Lost in transit', icon: '🕵️', hint: 'Courier lost the package' },
+    { label: 'Damaged in transit', icon: '💥', hint: 'Product damaged before delivery' },
+    { label: 'Delivery delayed / stuck', icon: '⏱️', hint: 'Ship a fresh one instead of waiting' },
+    { label: 'Incorrect address', icon: '📍', hint: 'Re-ship with a corrected address' },
+    { label: 'Customer requested replacement', icon: '🙋', hint: 'Replacement after delivery' },
+    { label: 'Other', icon: '✏️', hint: 'Describe it in the note below' }
+];
+
+const reshipShipmentCache = new Map(); // shipments seen in the drawer / shipped view
+let reshipState = null;                // { shipment, reasonIdx }
+
+function cacheReshipShipments(shipments) {
+    (shipments || []).forEach(sh => reshipShipmentCache.set(Number(sh.id), sh));
+}
+
+function openReshipModal(shipmentId) {
+    const sh = reshipShipmentCache.get(Number(shipmentId));
+    if (!sh) { showShipToast('Shipment details not loaded — refresh and try again', true); return; }
+    if (!sh.shopper_id) { showShipToast('No linked shopper record — use New Forward Shipment instead', true); return; }
+
+    reshipState = { shipment: sh, reasonIdx: null };
+    const open = !isTerminalShipStatus(sh.status);
+
+    document.getElementById('reshipOrderIdLabel').textContent = `#${sh.order_id}`;
+    document.getElementById('reshipPrevSummary').innerHTML = `
+        <div class="ship-section-title">${open ? 'Current Shipment' : 'Previous Shipment'}</div>
+        <div class="reship-prev-card">
+            <div class="reship-prev-head">
+                <span class="ship-carrier">${escapeHtml(sh.courier_name || sh.carrier)}</span>
+                <span class="shipment-status-pill ${sh.status}">${(sh.status || '').replace(/_/g, ' ')}</span>
+                ${sh.reship_of_shipment_id ? `<span class="reship-badge">🔄 Re-ship of #${sh.reship_of_shipment_id}</span>` : ''}
+            </div>
+            ${sh.awb ? `AWB: <b>${escapeHtml(sh.awb)}</b><br>` : ''}
+            Carrier: <b>${escapeHtml(sh.carrier)}</b> · ${escapeHtml(sh.payment_mode || '')}${Number(sh.cod_amount) > 0 ? ` · COD ₹${sh.cod_amount}` : ''}${sh.freight_charge ? ` · Freight ₹${sh.freight_charge}` : ''}<br>
+            ${sh.reship_reason ? `Re-ship reason: ${escapeHtml(sh.reship_reason)}<br>` : ''}
+            Created: ${formatDate(sh.created_at)} · by ${escapeHtml(sh.shipped_by || 'admin')}
+        </div>`;
+
+    document.getElementById('reshipReasonGrid').innerHTML = RESHIP_REASONS.map((r, idx) => `
+        <div class="reship-reason-chip" id="reship-reason-${idx}" onclick="selectReshipReason(${idx})" title="${escapeHtml(r.hint)}">
+            <span class="chip-icon">${r.icon}</span>${escapeHtml(r.label)}
+        </div>`).join('');
+    document.getElementById('reshipNote').value = '';
+
+    const warnBox = document.getElementById('reshipWarnBox');
+    if (open) {
+        warnBox.innerHTML = `<div class="reship-warn-box">⚠️ The current shipment ${sh.awb ? `(AWB <b>${escapeHtml(sh.awb)}</b> via ${escapeHtml(sh.courier_name || sh.carrier)}) ` : ''}will be <b>cancelled at the carrier</b> first — then the ship wizard opens so you can pick any carrier for the replacement.</div>`;
+    } else if (sh.status === 'delivered') {
+        warnBox.innerHTML = '<div class="reship-warn-box info">ℹ️ This order was already <b>delivered</b> — you are creating a replacement shipment. The delivered shipment stays on record.</div>';
+    } else {
+        warnBox.innerHTML = '';
+    }
+
+    document.getElementById('reshipError').innerHTML = '';
+    const btn = document.getElementById('reshipContinueBtn');
+    btn.disabled = false;
+    btn.textContent = open ? '✕ Cancel & Re-Ship' : '🔄 Continue to Re-Ship';
+    document.getElementById('reshipModal').classList.add('active');
+}
+
+function closeReshipModal() {
+    document.getElementById('reshipModal').classList.remove('active');
+    reshipState = null;
+}
+
+function selectReshipReason(idx) {
+    if (!reshipState) return;
+    reshipState.reasonIdx = idx;
+    document.querySelectorAll('.reship-reason-chip').forEach(el => el.classList.remove('selected'));
+    document.getElementById(`reship-reason-${idx}`)?.classList.add('selected');
+    document.getElementById('reshipError').innerHTML = '';
+}
+
+async function reshipContinue() {
+    if (!reshipState) return;
+    const sh = reshipState.shipment;
+    const errBox = document.getElementById('reshipError');
+    errBox.innerHTML = '';
+
+    if (reshipState.reasonIdx === null) {
+        errBox.innerHTML = '<div class="ship-error-box">⚠️ Pick a re-ship reason first</div>';
+        return;
+    }
+    const reasonLabel = RESHIP_REASONS[reshipState.reasonIdx].label;
+    const note = document.getElementById('reshipNote').value.trim();
+    if (reasonLabel === 'Other' && !note) {
+        errBox.innerHTML = '<div class="ship-error-box">⚠️ Add a short note describing the reason</div>';
+        return;
+    }
+    const reason = note ? `${reasonLabel} — ${note}` : reasonLabel;
+
+    const btn = document.getElementById('reshipContinueBtn');
+    const open = !isTerminalShipStatus(sh.status);
+    btn.disabled = true;
+
+    // Open shipment: cancel at the carrier first so the order becomes shippable
+    if (open) {
+        btn.textContent = 'Cancelling current shipment…';
+        try {
+            const data = await apiCall(`/shipping/shipments/${sh.id}/cancel`, 'POST');
+            if (!data || !data.success) {
+                errBox.innerHTML = `<div class="ship-error-box">❌ Cancellation failed: ${escapeHtml(data?.error || 'carrier rejected the request')} — the shipment was left untouched.</div>`;
+                btn.disabled = false;
+                btn.textContent = '✕ Cancel & Re-Ship';
+                return;
+            }
+            showShipToast(data.warning ? `⚠️ Cancelled with warning: ${data.warning}` : `✅ AWB ${sh.awb || ''} cancelled — opening the re-ship wizard`);
+            fetchShoppersData();
+        } catch (err) {
+            console.error('[RESHIP] Cancel error:', err);
+            errBox.innerHTML = '<div class="ship-error-box">❌ Network error while cancelling — check shipment history before retrying</div>';
+            btn.disabled = false;
+            btn.textContent = '✕ Cancel & Re-Ship';
+            return;
+        }
+    }
+
+    const reshipCtx = {
+        ofShipmentId: sh.id,
+        reason,
+        prevCarrier: sh.carrier,
+        prevCourierName: sh.courier_name,
+        prevAwb: sh.awb
+    };
+    closeReshipModal();
+    if (currentDrawerOrder) closeShipmentsDrawer();
+    if (document.getElementById('shippedOrdersView')?.style.display === 'block') fetchShippedOrders();
+    openShipModal(String(sh.shopper_id), reshipCtx);
 }
 
 // ---------- Bulk Ship ----------
@@ -5556,8 +5737,10 @@ function renderShippedOrders(data) {
     }
 
     const minDate = formatDateForInput(new Date());
+    cacheReshipShipments(shipments);
     container.innerHTML = shipments.map(sh => {
         const active = !['cancelled', 'failed'].includes(sh.status);
+        const open = !isTerminalShipStatus(sh.status); // delivered/rto are terminal → re-shippable, not cancellable
         const isShiprocket = sh.carrier === 'shiprocket';
         const isCod = (sh.payment_mode || '').toUpperCase() === 'COD';
         const canPickup = active && ['created', 'awb_assigned'].includes(sh.status);
@@ -5571,6 +5754,7 @@ function renderShippedOrders(data) {
             <div class="so-ship-head">
                 <span class="so-order-id">#${escapeHtml(String(sh.order_id || ''))}</span>
                 <span class="shipment-status-pill ${sh.status}">${(sh.status || '').replace(/_/g, ' ')}</span>
+                ${sh.reship_of_shipment_id ? `<span class="reship-badge" title="${escapeHtml(sh.reship_reason || '')}">🔄 Re-ship of #${sh.reship_of_shipment_id}</span>` : ''}
                 <span class="so-badge carrier">${escapeHtml(sh.courier_name || sh.carrier || '')}</span>
                 <span class="so-badge ${isCod ? 'cod' : 'prepaid'}">${isCod ? `COD${Number(sh.cod_amount) > 0 ? ` ₹${sh.cod_amount}` : ''}` : 'Prepaid'}</span>
                 ${sh.awb ? `<span class="so-awb" onclick="copyShipAwb('${escapeHtml(sh.awb)}')" title="Click to copy AWB">${escapeHtml(sh.awb)} ⧉</span>` : ''}
@@ -5593,6 +5777,7 @@ function renderShippedOrders(data) {
                     <span class="so-info-label">Package &amp; Freight</span>
                     <div class="so-info-value">${dims}<br><span class="sub">Freight: ${sh.freight_charge ? '₹' + sh.freight_charge : '—'}${sh.pickup_date ? ` · Pickup: ${escapeHtml(String(sh.pickup_date))}` : ''}</span></div>
                 </div>
+                ${sh.reship_reason ? `<div><span class="so-info-label">Re-Ship Reason</span><div class="so-info-value" style="color:#ffc759;">${escapeHtml(sh.reship_reason)}</div></div>` : ''}
                 ${sh.error_message ? `<div><span class="so-info-label">Error</span><div class="so-info-value" style="color:#ff6b7a;">${escapeHtml(sh.error_message)}</div></div>` : ''}
             </div>
             <div class="so-ship-actions">
@@ -5607,10 +5792,11 @@ function renderShippedOrders(data) {
                         <input type="date" class="so-pickup-date" id="so-pickup-${sh.id}" min="${minDate}" value="${minDate}" style="color-scheme: dark;">
                         <button class="so-act-btn pickup" onclick="shipDoPickup(${sh.id}, 'so-pickup-${sh.id}')">📅 Pickup</button>` : ''}
                     ${waPhone ? `<a class="so-act-btn wa" href="https://wa.me/${waPhone}" target="_blank">WhatsApp</a>` : ''}
-                    <button class="so-act-btn cancel" onclick="soDoCancel(${sh.id})" style="margin-left:auto;">✕ Cancel</button>
+                    ${sh.shopper_id ? `<button class="so-act-btn reship" onclick="openReshipModal(${sh.id})" title="${open ? 'Cancel this shipment and create a replacement — reason is tracked' : 'Create a replacement shipment — reason is tracked'}">🔄 Re-Ship</button>` : ''}
+                    ${open ? `<button class="so-act-btn cancel" onclick="soDoCancel(${sh.id})" style="margin-left:auto;">✕ Cancel</button>` : ''}
                 ` : `
                     <span style="font-size:0.72rem;color:rgba(255,255,255,0.35);font-family:'Archivo Narrow',sans-serif;letter-spacing:1px;text-transform:uppercase;">Shipment ${escapeHtml(sh.status || '')}</span>
-                    ${sh.shopper_id ? `<button class="so-act-btn retry" onclick="soRetryShipment('${escapeHtml(String(sh.shopper_id))}')" title="Re-ship this order — pick any carrier in the wizard">🔁 Retry Shipment</button>` : ''}
+                    ${sh.shopper_id ? `<button class="so-act-btn reship" onclick="openReshipModal(${sh.id})" title="Re-ship this order — reason is tracked and the wizard reopens">🔄 Re-Ship</button>` : ''}
                     ${waPhone ? `<a class="so-act-btn wa" href="https://wa.me/${waPhone}" target="_blank" style="margin-left:auto;">WhatsApp</a>` : ''}
                 `}
             </div>
@@ -5724,8 +5910,8 @@ async function soDoCancel(shipmentId) {
     fetchShippedOrders();
 }
 
-// Re-ship a failed/cancelled shipment — opens the ship wizard so the admin
-// can pick any configured carrier (the draft rebuilds from the shopper row)
+// Re-ship a failed/cancelled shipment — kept for backwards compatibility;
+// the premium flow (openReshipModal) is what the UI buttons use now
 function soRetryShipment(shopperId) {
     openShipModal(shopperId);
 }
@@ -5851,6 +6037,10 @@ async function exportShippedCsv() {
 window.soDoCancel = soDoCancel;
 window.soRemoveFilter = soRemoveFilter;
 window.soRetryShipment = soRetryShipment;
+window.openReshipModal = openReshipModal;
+window.closeReshipModal = closeReshipModal;
+window.selectReshipReason = selectReshipReason;
+window.reshipContinue = reshipContinue;
 window.openSoNewShipModal = openSoNewShipModal;
 window.closeSoNewShipModal = closeSoNewShipModal;
 window.soShipFromLookup = soShipFromLookup;

@@ -540,19 +540,29 @@ async function initializeShipmentsTable() {
         response_payload JSONB,
         error_message TEXT,
         shipped_by VARCHAR(100),
+        reship_of_shipment_id INTEGER,
+        reship_reason TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
 
+    // Re-ship audit columns (added later — safe on existing tables)
+    await pool.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS reship_of_shipment_id INTEGER');
+    await pool.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS reship_reason TEXT');
+
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_order_id ON shipments(order_id)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_awb ON shipments(awb)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status)');
-    // Idempotency guard: only one active shipment per order
+    // Idempotency guard: only one OPEN shipment per order. Terminal states
+    // (cancelled/failed/delivered/rto) release the slot so the order can be
+    // re-shipped: replacement after delivery, forward-ship after RTO, retry
+    // after cancellation/failure.
+    await pool.query('DROP INDEX IF EXISTS idx_shipments_active_order');
     await pool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_active_order
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_open_order
         ON shipments(order_id)
-        WHERE status NOT IN ('cancelled', 'failed')
+        WHERE status NOT IN ('cancelled', 'failed', 'delivered', 'rto')
     `);
 
     console.log('✅ Shipments table initialized');

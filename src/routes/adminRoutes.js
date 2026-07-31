@@ -4667,10 +4667,12 @@ router.post('/shipping/serviceability', verifyToken, async (req, res) => {
     }
 });
 
-// Create shipment (idempotent — 409 if an active shipment exists)
+// Create shipment (idempotent — 409 if an active shipment exists).
+// Re-ship: reshipOfShipmentId + reshipReason link the new shipment to the one
+// it replaces (audit trail + replacement-worded WhatsApp notification).
 router.post('/shipping/ship', verifyToken, async (req, res) => {
     try {
-        const { shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer } = req.body;
+        const { shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer, reshipOfShipmentId, reshipReason } = req.body;
         if (!shopperId || !carrier) return res.status(400).json({ success: false, error: 'shopperId and carrier are required' });
 
         const result = await shippingService.ship({
@@ -4680,7 +4682,9 @@ router.post('/shipping/ship', verifyToken, async (req, res) => {
             packageOverrides,
             consigneeOverrides,
             notifyCustomer: Boolean(notifyCustomer),
-            shippedBy: req.user?.username || 'admin'
+            shippedBy: req.user?.username || 'admin',
+            reshipOfShipmentId: reshipOfShipmentId ? parseInt(reshipOfShipmentId) : null,
+            reshipReason: reshipReason ? String(reshipReason).substring(0, 300) : null
         });
         if (result.error) {
             return res.status(result.status || 500).json({ success: false, error: result.error, shipment: result.shipment || null });
