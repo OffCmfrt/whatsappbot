@@ -406,7 +406,11 @@ async function generateDocument(shipmentId, type) {
     return { error: `Unknown document type: ${type}`, status: 400 };
 }
 
-async function cancelShipment(shipmentId) {
+// Cancel at the carrier, then mark cancelled locally.
+// force = the carrier refused (package already delivered/RTO/lost/closed) but the
+// admin still needs the order shippable again — the local row is closed with the
+// carrier's reason recorded, and the caller gets it back as a warning.
+async function cancelShipment(shipmentId, { force = false } = {}) {
     const loaded = await loadShipmentAndAdapter(shipmentId);
     if (loaded.error) return loaded;
     const { shipment, adapter } = loaded;
@@ -416,11 +420,34 @@ async function cancelShipment(shipmentId) {
     }
 
     const result = await adapter.cancelShipment(shipment);
+    let warning = result.data?.warning || null;
+
     if (!result.success) {
-        console.error(`❌ Carrier cancellation failed for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'}):`, result.error);
-        return { error: result.error, status: 502, raw: result.raw };
+        console.error(
+            `❌ Carrier cancellation failed for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'}):`,
+            result.error,
+            '| carrier response:', JSON.stringify(result.raw || {}).substring(0, 1000)
+        );
+
+        // Keep the reason on the row so the hub shows why it is still open
+        try {
+            await dbAdapter.update('shipments', {
+                error_message: `Cancel ${force ? 'refused by carrier (forced locally)' : 'failed'}: ${result.error}`.substring(0, 1000),
+                response_payload: result.raw ? JSON.stringify(result.raw) : null,
+                updated_at: new Date().toISOString()
+            }, { id: shipment.id });
+        } catch (auditError) {
+            console.error('⚠️ Failed to persist cancellation error on shipment row:', auditError.message);
+        }
+
+        if (!force) {
+            return { error: result.error, status: 502, raw: result.raw, carrierRejected: true };
+        }
+        console.warn(`⚠️ Force-closing shipment #${shipment.id} locally after carrier rejection (AWB ${shipment.awb || 'n/a'} may still be live at ${shipment.carrier})`);
+        warning = `${adapter.name} did not cancel AWB ${shipment.awb || 'n/a'} (${result.error}). Marked cancelled locally only — verify with the carrier.`;
+    } else {
+        console.log(`📦 Carrier cancellation OK for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'})`, JSON.stringify(result.raw || {}).substring(0, 300));
     }
-    console.log(`📦 Carrier cancellation OK for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'})`, JSON.stringify(result.raw || {}).substring(0, 300));
 
     await dbAdapter.update('shipments', {
         status: 'cancelled',
@@ -439,7 +466,7 @@ async function cancelShipment(shipmentId) {
     }
     invalidateShoppersCache();
 
-    return { data: { cancelled: true, warning: result.data?.warning || null, shipment: { ...shipment, status: 'cancelled' } } };
+    return { data: { cancelled: true, forced: force && !result.success, warning, shipment: { ...shipment, status: 'cancelled' } } };
 }
 
 // Cancel the active shipment (if any) for an order at its carrier.

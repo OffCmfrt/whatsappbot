@@ -213,19 +213,42 @@ class DelhiveryAdapter extends BaseCarrier {
         }
     }
 
+    // Cancel — POST /api/p/edit { waybill, cancellation: 'true' }
+    //
+    // Delhivery only allows cancellation while the package is Manifested /
+    // In Transit / Pending / Open / Scheduled. Anything already closed at their
+    // end (cancelled, delivered, RTO) comes back as HTTP 200 with status false
+    // and the reason in one of several fields — always logged raw, because a
+    // rejection here is what blocks a re-ship.
     async cancelShipment(shipment) {
+        if (!shipment.awb) return this.fail('Delhivery cancellation failed: shipment has no AWB on record');
+
         try {
             const response = await axios.post(`${this.baseURL}/api/p/edit`, {
-                waybill: shipment.awb,
+                waybill: String(shipment.awb),
                 cancellation: 'true'
             }, {
                 headers: { ...this.authHeaders(), 'Content-Type': 'application/json' },
                 timeout: 20000
             });
 
-            if (response.data?.status === false) {
-                return this.fail(`Delhivery cancellation rejected: ${response.data?.remark || 'unknown reason'}`, response.data);
+            // Delhivery is inconsistent here: boolean false, "false", "Failure"...
+            const status = response.data?.status;
+            const rejected = status === false || (typeof status === 'string' && /^(false|fail|failure|error)/i.test(status.trim()));
+
+            if (rejected) {
+                const reason = this.extractReason(response.data);
+                console.error(`❌ Delhivery cancel rejected for AWB ${shipment.awb}:`, JSON.stringify(response.data || {}).substring(0, 500));
+
+                // Already cancelled on their side → the goal is met, so don't
+                // dead-end the caller (re-ship) over a duplicate request
+                if (/already\s+(been\s+)?cancell?ed|cancell?ed\s+already/i.test(reason)) {
+                    return this.ok({ cancelled: true, warning: `Already cancelled at Delhivery: ${reason}` }, response.data);
+                }
+                return this.fail(`Delhivery cancellation rejected: ${reason}`, response.data);
             }
+
+            console.log(`📦 Delhivery cancel accepted for AWB ${shipment.awb}:`, JSON.stringify(response.data || {}).substring(0, 300));
             return this.ok({ cancelled: true }, response.data);
         } catch (error) {
             return this.fail(`Delhivery cancellation failed: ${this.describeAxiosError(error)}`, error.response?.data);

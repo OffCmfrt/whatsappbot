@@ -4769,11 +4769,20 @@ router.get('/shipping/shipments/:id/label', verifyToken, async (req, res) => {
     }
 });
 
-// Cancel shipment at the carrier + mark cancelled locally
+// Cancel shipment at the carrier + mark cancelled locally.
+// force=true closes the shipment locally even when the carrier refuses (already
+// delivered/RTO/lost) so the order can be re-shipped — the reason is returned as
+// a warning and stored on the shipment row.
 router.post('/shipping/shipments/:id/cancel', verifyToken, async (req, res) => {
     try {
-        const result = await shippingService.cancelShipment(req.params.id);
-        if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+        const result = await shippingService.cancelShipment(req.params.id, { force: Boolean(req.body?.force) });
+        if (result.error) {
+            return res.status(result.status || 500).json({
+                success: false,
+                error: result.error,
+                carrierRejected: Boolean(result.carrierRejected)
+            });
+        }
         res.json({ success: true, ...result.data });
     } catch (error) {
         console.error('Shipping cancel error:', error);

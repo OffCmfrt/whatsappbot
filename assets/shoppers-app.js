@@ -5184,7 +5184,18 @@ async function shipDoCancel(shipmentId) {
     if (!confirm('Cancel this shipment at the carrier? The order becomes shippable again.')) return;
     showShipToast('Cancelling shipment...');
     try {
-        const data = await apiCall(`/shipping/shipments/${shipmentId}/cancel`, 'POST');
+        let data = await apiCall(`/shipping/shipments/${shipmentId}/cancel`, 'POST');
+
+        // Carrier refused (already delivered / RTO'd / lost) — offer to close it in
+        // the hub only, so the order stops looking like it has a live shipment
+        if (data && !data.success && data.carrierRejected) {
+            if (!confirm(`Carrier refused to cancel:\n\n${data.error}\n\nMark it cancelled in the hub anyway? The AWB may still be live at the carrier.`)) {
+                showShipToast(data.error, true);
+                return;
+            }
+            data = await apiCall(`/shipping/shipments/${shipmentId}/cancel`, 'POST', { force: true });
+        }
+
         if (!data || !data.success) { showShipToast(data?.error || 'Cancellation failed', true); return; }
         showShipToast(data.warning ? `⚠️ Cancelled with warning: ${data.warning}` : '✅ Shipment cancelled');
         if (shipState) { shipState.shipped = true; closeShipModal(); }
@@ -5391,7 +5402,7 @@ function selectReshipReason(idx) {
     document.getElementById('reshipError').innerHTML = '';
 }
 
-async function reshipContinue() {
+async function reshipContinue(force = false) {
     if (!reshipState) return;
     const sh = reshipState.shipment;
     const errBox = document.getElementById('reshipError');
@@ -5415,11 +5426,18 @@ async function reshipContinue() {
 
     // Open shipment: cancel at the carrier first so the order becomes shippable
     if (open) {
-        btn.textContent = 'Cancelling current shipment…';
+        btn.textContent = force ? 'Closing shipment locally…' : 'Cancelling current shipment…';
         try {
-            const data = await apiCall(`/shipping/shipments/${sh.id}/cancel`, 'POST');
+            const data = await apiCall(`/shipping/shipments/${sh.id}/cancel`, 'POST', force ? { force: true } : {});
             if (!data || !data.success) {
-                errBox.innerHTML = `<div class="ship-error-box">❌ Cancellation failed: ${escapeHtml(data?.error || 'carrier rejected the request')} — the shipment was left untouched.</div>`;
+                // Carriers refuse to cancel packages they already closed (delivered,
+                // RTO'd, lost). The replacement still has to go out, so offer to
+                // close it locally instead of dead-ending the re-ship.
+                const forceOption = data?.carrierRejected
+                    ? `<div style="margin-top:0.6rem;">The carrier will not cancel this AWB (usually because it is already delivered, RTO'd or lost). You can close it in the hub and continue — the reason is recorded on the shipment.<br>
+                       <button class="ship-btn" style="margin-top:0.5rem;" onclick="reshipContinue(true)">Close locally & continue re-ship</button></div>`
+                    : '';
+                errBox.innerHTML = `<div class="ship-error-box">❌ Cancellation failed: ${escapeHtml(data?.error || 'carrier rejected the request')} — the shipment was left untouched.${forceOption}</div>`;
                 btn.disabled = false;
                 btn.textContent = '✕ Cancel & Re-Ship';
                 return;

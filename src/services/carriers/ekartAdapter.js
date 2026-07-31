@@ -396,7 +396,14 @@ class EkartAdapter extends BaseCarrier {
             // Response: { data: [ { status, remark, tracking_id } ] } (or a bare ack)
             const ack = response.data?.data?.[0] || response.data;
             if (ack?.status !== true) {
-                return this.fail(`Ekart cancellation rejected: ${ack?.remark || 'unknown reason'}`, response.data);
+                const reason = this.extractReason(ack);
+                console.error(`❌ Ekart cancel rejected for AWB ${shipment.awb}:`, JSON.stringify(response.data || {}).substring(0, 500));
+
+                // Already cancelled at Ekart → treat as done (keeps re-ship moving)
+                if (/already\s+(been\s+)?cancell?ed|cancell?ed\s+already/i.test(reason)) {
+                    return this.ok({ cancelled: true, warning: `Already cancelled at Ekart: ${reason}` }, response.data);
+                }
+                return this.fail(`Ekart cancellation rejected: ${reason}`, response.data);
             }
             return this.ok({ cancelled: true }, response.data);
         } catch (error) {
