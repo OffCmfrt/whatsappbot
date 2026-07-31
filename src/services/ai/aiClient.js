@@ -137,6 +137,11 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
     if (responseFormat) {
         body.response_format = responseFormat;
     }
+    // Gemini 3.x models "think" by default, adding latency and eating output
+    // tokens. Low effort keeps replies fast and cheap for support use.
+    if (cfg.provider === 'gemini') {
+        body.reasoning_effort = 'low';
+    }
 
     const maxAttempts = 3;
     let lastError = null;
@@ -148,7 +153,8 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
                     'Authorization': `Bearer ${cfg.apiKey}`,
                     'Content-Type': 'application/json'
                 },
-                timeout: 30000
+                // Thinking models (Gemini) can exceed 30s on tool-heavy turns
+                timeout: 60000
             });
 
             const choice = response.data?.choices?.[0];
