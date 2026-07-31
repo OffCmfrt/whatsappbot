@@ -69,6 +69,22 @@
     .ai-suggestion-chip { text-align: left; background: rgba(0,92,75,0.25); border: 1px solid rgba(0,115,94,0.6); color: #d1fae5; border-radius: 10px; padding: 8px 10px; font-size: 12.5px; line-height: 1.4; cursor: pointer; font-family: inherit; }
     .ai-suggestion-chip:hover { background: rgba(0,92,75,0.45); }
     .ai-suggestions-note { font-size: 11px; color: #8696a0; padding-bottom: 4px; }
+    #aiLearnedView { position: absolute; top: 62px; left: 0; right: 0; bottom: 0; background: #0b141a; display: none; flex-direction: column; z-index: 2; }
+    #aiLearnedView.open { display: flex; }
+    .ai-ln-toolbar { display: flex; gap: 6px; padding: 10px 12px; background: #111b21; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    .ai-ln-toolbar input { flex: 1; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; outline: none; background: rgba(255,255,255,0.06); color: #fff; font-family: inherit; }
+    .ai-ln-toolbar input::placeholder { color: rgba(255,255,255,0.3); }
+    .ai-ln-toolbar button { background: #005c4b; color: #e8f5e9; border: none; border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; font-family: inherit; }
+    .ai-ln-toolbar button:hover { background: #00735e; }
+    .ai-ln-list { flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+    .ai-ln-item { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 10px; font-size: 12.5px; }
+    .ai-ln-item.pinned { border-color: rgba(251,191,36,0.6); background: rgba(251,191,36,0.07); }
+    .ai-ln-q { font-weight: 600; color: #e2e8f0; margin-bottom: 4px; white-space: pre-wrap; word-wrap: break-word; }
+    .ai-ln-a { color: #94a3b8; white-space: pre-wrap; word-wrap: break-word; margin-bottom: 6px; }
+    .ai-ln-meta { font-size: 11px; color: #64748b; margin-bottom: 6px; }
+    .ai-ln-actions { display: flex; gap: 6px; }
+    .ai-ln-actions button { border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); color: #cbd5e1; border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 11.5px; font-family: inherit; }
+    .ai-ln-actions button:hover { background: rgba(0,92,75,0.4); }
     @media (max-width: 640px) { #aiCopilotPanel { right: 8px; bottom: 84px; } #aiCopilotFab { bottom: 16px; right: 16px; } }
     `;
     document.head.appendChild(style);
@@ -88,9 +104,18 @@
                 <small>Ask about shoppers, orders, tickets, shipments…</small>
             </div>
             <div class="ai-cp-header-btns">
+                <button id="aiCpLearned" title="Learned replies (what the AI has learned from your team)">📚</button>
                 <button id="aiCpClear" title="Clear conversation">Clear</button>
                 <button id="aiCpClose" title="Close">✕</button>
             </div>
+        </div>
+        <div id="aiLearnedView">
+            <div class="ai-ln-toolbar">
+                <button id="aiLnBack" title="Back to chat">←</button>
+                <input id="aiLnSearch" placeholder="Search learned replies…">
+                <button id="aiLnAdd" title="Add a golden Q→A example">＋ Add</button>
+            </div>
+            <div class="ai-ln-list" id="aiLnList"></div>
         </div>
         <div class="ai-cp-messages" id="aiCpMessages">
             <div class="ai-cp-msg system">Hi! I can look up shoppers, orders, tickets, Shopify orders and tracking — and prepare actions for your confirmation.</div>
@@ -210,6 +235,80 @@
         }
     }
 
+    // ---------- Learned replies manager (curation) ----------
+    let lnSearchTimer = null;
+
+    function toggleLearnedView(open) {
+        const view = document.getElementById('aiLearnedView');
+        view.classList.toggle('open', open);
+        if (open) loadLearned();
+    }
+
+    async function loadLearned() {
+        const list = document.getElementById('aiLnList');
+        const search = document.getElementById('aiLnSearch').value.trim();
+        list.innerHTML = '<div class="ai-suggestions-note">Loading…</div>';
+        try {
+            const data = await aiFetch(`/learned?search=${encodeURIComponent(search)}`);
+            const rows = data.learned || [];
+            if (!rows.length) {
+                list.innerHTML = '<div class="ai-suggestions-note">Nothing learned yet. Examples appear automatically as your team replies to customers — or add a golden one with ＋ Add.</div>';
+                return;
+            }
+            list.innerHTML = '';
+            rows.forEach(r => list.appendChild(renderLearnedItem(r)));
+        } catch (e) {
+            list.innerHTML = '';
+            const note = document.createElement('div');
+            note.className = 'ai-suggestions-note';
+            note.textContent = `❌ ${e.message}`;
+            list.appendChild(note);
+        }
+    }
+
+    function renderLearnedItem(r) {
+        const item = document.createElement('div');
+        item.className = 'ai-ln-item' + (r.pinned ? ' pinned' : '');
+        const q = document.createElement('div');
+        q.className = 'ai-ln-q';
+        q.textContent = (r.pinned ? '📌 ' : '') + r.customer_question;
+        const a = document.createElement('div');
+        a.className = 'ai-ln-a';
+        a.textContent = r.agent_reply;
+        const meta = document.createElement('div');
+        meta.className = 'ai-ln-meta';
+        meta.textContent = `reinforced ×${r.uses}` + (r.resolved_boost ? ` · resolved ×${r.resolved_boost}` : '');
+        const actions = document.createElement('div');
+        actions.className = 'ai-ln-actions';
+
+        const pinBtn = document.createElement('button');
+        pinBtn.textContent = r.pinned ? 'Unpin' : 'Pin';
+        pinBtn.onclick = async () => {
+            try { await aiFetch(`/learned/${r.id}`, 'PUT', { pinned: !r.pinned }); loadLearned(); }
+            catch (e) { alert(e.message); }
+        };
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Edit';
+        editBtn.onclick = async () => {
+            const question = prompt('Customer question:', r.customer_question);
+            if (question === null) return;
+            const reply = prompt('Approved reply:', r.agent_reply);
+            if (reply === null) return;
+            try { await aiFetch(`/learned/${r.id}`, 'PUT', { question, reply }); loadLearned(); }
+            catch (e) { alert(e.message); }
+        };
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.onclick = async () => {
+            if (!confirm('Delete this learned reply?')) return;
+            try { await aiFetch(`/learned/${r.id}`, 'DELETE'); item.remove(); }
+            catch (e) { alert(e.message); }
+        };
+        actions.append(pinBtn, editBtn, delBtn);
+        item.append(q, a, meta, actions);
+        return item;
+    }
+
     // ---------- Suggest reply (customer chat modal) ----------
     function injectSuggestReply() {
         const inputArea = document.querySelector('#chatModal .chat-input-area');
@@ -287,6 +386,20 @@
             messages.innerHTML = '<div class="ai-cp-msg system">Conversation cleared.</div>';
         };
         document.getElementById('aiCpSend').onclick = sendCopilotMessage;
+        document.getElementById('aiCpLearned').onclick = () => toggleLearnedView(true);
+        document.getElementById('aiLnBack').onclick = () => toggleLearnedView(false);
+        document.getElementById('aiLnSearch').addEventListener('input', () => {
+            clearTimeout(lnSearchTimer);
+            lnSearchTimer = setTimeout(loadLearned, 350);
+        });
+        document.getElementById('aiLnAdd').onclick = async () => {
+            const question = prompt('Customer question (pattern — use {{order_id}}, {{name}}… for variables):');
+            if (!question) return;
+            const reply = prompt('The ideal reply the AI should imitate:');
+            if (!reply) return;
+            try { await aiFetch('/learned', 'POST', { question, reply, pinned: true }); loadLearned(); }
+            catch (e) { alert(e.message); }
+        };
         document.getElementById('aiCpInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
