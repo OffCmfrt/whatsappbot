@@ -27,6 +27,24 @@ Rules:
 - Be concise: short paragraphs, dash lists, no markdown tables. Amounts INR; DB times UTC (IST = UTC+5:30).
 - If ambiguous, list options and ask. If a tool errors, say so plainly and suggest next steps.`;
 
+/**
+ * Models sometimes emit numbers as strings ("limit": "10"). Schemas accept both
+ * (['integer','string']) so the provider doesn't reject the call; here we coerce
+ * numeric strings back to integers based on the tool's declared schema.
+ */
+function coerceArgs(tool, args) {
+    const props = tool?.parameters?.properties;
+    if (!props || !args || typeof args !== 'object') return args;
+    for (const [key, schema] of Object.entries(props)) {
+        const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+        if (types.includes('integer') && typeof args[key] === 'string') {
+            const n = parseInt(args[key], 10);
+            if (!Number.isNaN(n)) args[key] = n;
+        }
+    }
+    return args;
+}
+
 /** Truncate oldest history turns so the estimated input stays under budget. */
 function truncateHistory(history, budgetTokens) {
     const out = [];
@@ -146,6 +164,8 @@ async function runAgent({ actor, userMessage }) {
             const tool = getTool(name);
             let resultJson;
 
+            if (tool) args = coerceArgs(tool, args);
+
             if (!tool) {
                 resultJson = JSON.stringify({ error: `Unknown tool: ${name}` });
             } else if (tool.requiresConfirmation) {
@@ -218,9 +238,10 @@ async function executeConfirmedAction(actionId, actor) {
     if (typeof args === 'string') {
         try { args = JSON.parse(args); } catch { args = {}; }
     }
+    args = coerceArgs(tool, args || {});
 
     try {
-        const result = await tool.execute(args || {}, { actor, confirmed: true });
+        const result = await tool.execute(args, { actor, confirmed: true });
         await aiStore.updatePendingAction(actionId, { status: 'executed', result: clampToolResult(result) });
         await aiStore.appendChatHistory(actor, 'assistant', `✅ Executed: ${action.summary}`);
         return { ok: true, result, summary: action.summary };

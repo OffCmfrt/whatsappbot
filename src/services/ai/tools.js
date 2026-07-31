@@ -88,7 +88,7 @@ const tools = [
             type: 'object',
             properties: {
                 phone: { type: 'string', description: 'Customer phone number (any format)' },
-                limit: { type: 'integer', description: 'Number of recent messages (default 20, max 50)' }
+                limit: { type: ['integer', 'string'], description: 'Number of recent messages (default 20, max 50)' }
             },
             required: ['phone']
         },
@@ -112,7 +112,7 @@ const tools = [
             properties: {
                 status: { type: 'string', description: 'Filter by status: open, resolved, closed' },
                 phone: { type: 'string', description: 'Filter by customer phone' },
-                limit: { type: 'integer', description: 'Max tickets to return (default 20, max 50)' }
+                limit: { type: ['integer', 'string'], description: 'Max tickets to return (default 20, max 50)' }
             },
             required: []
         },
@@ -151,7 +151,7 @@ const tools = [
         parameters: {
             type: 'object',
             properties: {
-                ticketId: { type: 'integer', description: 'Support ticket ID' },
+                ticketId: { type: ['integer', 'string'], description: 'Support ticket ID' },
                 status: { type: 'string', enum: ['open', 'resolved', 'closed'], description: 'New status' }
             },
             required: ['ticketId', 'status']
@@ -177,7 +177,7 @@ const tools = [
             type: 'object',
             properties: {
                 status: { type: 'string', description: 'Filter: pending, recovered, expired' },
-                limit: { type: 'integer', description: 'Max carts (default 20, max 50)' }
+                limit: { type: ['integer', 'string'], description: 'Max carts (default 20, max 50)' }
             },
             required: []
         },
@@ -199,7 +199,7 @@ const tools = [
             type: 'object',
             properties: {
                 orderName: { type: 'string', description: 'Order name like #1234 (omit to list recent orders)' },
-                limit: { type: 'integer', description: 'Max orders when listing recent (default 10, max 25)' }
+                limit: { type: ['integer', 'string'], description: 'Max orders when listing recent (default 10, max 25)' }
             },
             required: []
         },
@@ -307,7 +307,7 @@ const tools = [
             properties: {
                 orderId: { type: 'string', description: 'Filter by order ID' },
                 status: { type: 'string', description: 'Filter by shipment status' },
-                limit: { type: 'integer', description: 'Max results (default 20, max 50)' }
+                limit: { type: ['integer', 'string'], description: 'Max results (default 20, max 50)' }
             },
             required: []
         },
@@ -344,7 +344,7 @@ const tools = [
         parameters: {
             type: 'object',
             properties: {
-                shipmentId: { type: 'integer', description: 'Internal shipment ID (from list_shipments)' },
+                shipmentId: { type: ['integer', 'string'], description: 'Internal shipment ID (from list_shipments)' },
                 pickupDate: { type: 'string', description: 'Pickup date YYYY-MM-DD' }
             },
             required: ['shipmentId', 'pickupDate']
@@ -431,7 +431,7 @@ const tools = [
             properties: {
                 resource: { type: 'string', enum: ['requests', 'request_stats', 'influencers'], description: 'What to fetch from the returns system' },
                 query: { type: 'string', description: 'Optional filter, e.g. order number or status' },
-                limit: { type: 'integer', description: 'Max rows (default 20)' }
+                limit: { type: ['integer', 'string'], description: 'Max rows (default 20)' }
             },
             required: ['resource']
         },
