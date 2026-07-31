@@ -32,7 +32,7 @@ const PROVIDER_DEFAULTS = {
     },
     gemini: {
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
-        model: 'gemini-2.5-flash-lite',
+        model: 'gemini-3.5-flash-lite',
         inputCostPer1M: 0.10,
         outputCostPer1M: 0.40
     }
@@ -64,7 +64,7 @@ function getEmbeddingConfig() {
         || ((process.env.AI_PROVIDER || '').toLowerCase() === 'gemini' ? process.env.AI_API_KEY : null);
     return {
         apiKey,
-        model: process.env.AI_EMBED_MODEL || 'text-embedding-004'
+        model: process.env.AI_EMBED_MODEL || 'gemini-embedding-001'
     };
 }
 
@@ -73,8 +73,8 @@ function isEmbeddingConfigured() {
 }
 
 /**
- * Embed a text string. Returns an array of floats (768 dims for
- * text-embedding-004) or null when not configured / on failure.
+ * Embed a text string. Returns an array of floats (trimmed to 768 dims to
+ * match the pgvector column) or null when not configured / on failure.
  */
 async function embedText(text) {
     const { apiKey, model } = getEmbeddingConfig();
@@ -82,7 +82,11 @@ async function embedText(text) {
     try {
         const response = await axios.post(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`,
-            { model: `models/${model}`, content: { parts: [{ text: String(text).substring(0, 6000) }] } },
+            {
+                model: `models/${model}`,
+                content: { parts: [{ text: String(text).substring(0, 6000) }] },
+                outputDimensionality: 768
+            },
             { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
         );
         const values = response.data?.embedding?.values;

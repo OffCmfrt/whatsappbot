@@ -625,7 +625,7 @@ async function initializeAiTables() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_learned_replies_tsv ON ai_learned_replies
       USING GIN (to_tsvector('simple', customer_question || ' ' || agent_reply))`);
 
-    // Optional semantic search: pgvector embedding column (Gemini text-embedding-004,
+    // Optional semantic search: pgvector embedding column (Gemini gemini-embedding-001,
     // 768 dims). If the extension isn't available, full-text search still works.
     try {
       await pool.query('CREATE EXTENSION IF NOT EXISTS vector');
