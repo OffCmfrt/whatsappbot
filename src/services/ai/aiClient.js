@@ -136,7 +136,14 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
             }
             if (!retriable || attempt === maxAttempts) break;
 
-            const delayMs = 1000 * Math.pow(2, attempt - 1);
+            let delayMs = 1000 * Math.pow(2, attempt - 1);
+            // On 429, honor the provider's Retry-After header (capped at 20s)
+            if (status === 429) {
+                const retryAfter = parseFloat(error.response?.headers?.['retry-after']);
+                if (!isNaN(retryAfter) && retryAfter > 0) {
+                    delayMs = Math.min(Math.ceil(retryAfter * 1000) + 250, 20000);
+                }
+            }
             console.warn(`⚠️ [AI] ${cfg.provider} request failed (${status || error.code || error.message}), retry ${attempt}/${maxAttempts - 1} in ${delayMs}ms`);
             await new Promise(r => setTimeout(r, delayMs));
         }

@@ -27,8 +27,8 @@ async function gatherContext(phone, ticketId) {
 
     const [messages, customer, orders, tickets] = await Promise.all([
         dbAdapter.query(
-            `SELECT message_type, message_content, created_at FROM messages
-             WHERE customer_phone LIKE ? ORDER BY id DESC LIMIT 20`,
+            `SELECT message_type, message_content FROM messages
+             WHERE customer_phone LIKE ? ORDER BY id DESC LIMIT 12`,
             [phonePattern]
         ),
         dbAdapter.query('SELECT phone, name, email FROM customers WHERE phone LIKE ? LIMIT 1', [phonePattern]),
@@ -50,12 +50,21 @@ async function gatherContext(phone, ticketId) {
         customer: customer[0] || { phone: digits },
         conversation: messages.reverse().map(m => ({
             from: m.message_type === 'incoming' ? 'customer' : 'agent',
-            text: String(m.message_content || '').substring(0, 500),
-            at: m.created_at
+            text: String(m.message_content || '').substring(0, 300)
         })),
-        recentOrders: orders,
-        tickets
+        recentOrders: orders.map(compactRow),
+        tickets: tickets.map(compactRow)
     };
+}
+
+// Drop null/empty fields — they add tokens without adding information
+function compactRow(row) {
+    const out = {};
+    for (const [k, v] of Object.entries(row || {})) {
+        if (v === null || v === undefined || v === '') continue;
+        out[k] = v;
+    }
+    return out;
 }
 
 /**

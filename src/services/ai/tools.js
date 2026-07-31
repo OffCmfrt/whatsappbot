@@ -442,6 +442,46 @@ function getToolSchemas() {
     }));
 }
 
+// ---------- Token-lean tool routing ----------
+// Tool schemas are re-sent on every agent round and dominate the request size,
+// so we only send the tools whose triggers match the conversation context.
+// run_sql_read is always included as a generic escape hatch; if nothing
+// matches, the full toolbox is sent so capability is never lost.
+const TOOL_TRIGGERS = {
+    query_stats: /\b(stats?|statistics|overview|summary|dashboard|how many|total|count)\b/i,
+    search_customers: /\b(customers?|shoppers?|buyers?|clients?|who is|email|phone|number|contact)\b/i,
+    search_messages: /\b(messages?|chats?|conversations?|whatsapp|said|replied|history)\b/i,
+    list_tickets: /\b(tickets?|support|complaints?|issues?|queries|grievance)\b/i,
+    update_ticket: /\b(tickets?|resolve|closed?|reopen)\b/i,
+    get_abandoned_carts: /\b(carts?|abandon\w*|checkouts?|recover\w*)\b/i,
+    shopify_search_orders: /\b(orders?|shopify|purchases?|bought|payments?|refunds?|fulfill?\w*|cod|prepaid)\b|#\d+/i,
+    track_awb: /\b(track\w*|awb|waybill|shipments?|couriers?|deliver\w*|transit|shipping)\b/i,
+    check_serviceability: /\b(pin ?codes?|serviceab\w*|deliverable|cod|prepaid)\b/i,
+    list_shipments: /\b(shipments?|shipped|awb|couriers?|labels?|manifest|shipping)\b/i,
+    book_shipment: /\b(book\w*|ship\b|shipment|couriers?)\b/i,
+    schedule_pickup: /\b(pick ?-?ups?)\b/i,
+    send_whatsapp_message: /\b(send|message|whatsapp|reply|notify|inform|tell)\b/i,
+    create_broadcast_draft: /\b(broadcasts?|campaigns?|blast|announce\w*)\b/i,
+    run_sql_read: /\b(sql|query|database|db|tables?|select)\b/i,
+    query_returns_system: /\b(returns?|exchanges?|influencers?|refunds?)\b/i
+};
+
+/** Pick only the tool schemas relevant to the given conversation context. */
+function selectToolSchemas(contextText) {
+    const text = String(contextText || '');
+    const names = new Set(
+        tools.filter(t => TOOL_TRIGGERS[t.name] && TOOL_TRIGGERS[t.name].test(text)).map(t => t.name)
+    );
+    if (!names.size) return getToolSchemas(); // ambiguous intent — full toolbox
+    names.add('run_sql_read'); // generic fallback so routing misses stay answerable
+    return tools
+        .filter(t => names.has(t.name))
+        .map(t => ({
+            type: 'function',
+            function: { name: t.name, description: t.description, parameters: t.parameters }
+        }));
+}
+
 /** Human-readable summary for a confirmation-gated action. */
 function summarizeTool(name, args) {
     const tool = getTool(name);
@@ -452,4 +492,4 @@ function summarizeTool(name, args) {
     return `${name}(${JSON.stringify(args || {})})`;
 }
 
-module.exports = { tools, getTool, getToolSchemas, summarizeTool, validateReadOnlySql };
+module.exports = { tools, getTool, getToolSchemas, selectToolSchemas, summarizeTool, validateReadOnlySql };
