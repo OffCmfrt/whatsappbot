@@ -93,6 +93,18 @@ class EkartAdapter extends BaseCarrier {
         return this._token;
     }
 
+    // Swift (Ekart's platform) often returns a bare exception code (e.g.
+    // SWIFT_VALIDATION_EXCEPTION) in `message`/`error` with the field-level
+    // details elsewhere in the body — surface the whole body in that case.
+    describeAxiosError(error) {
+        const msg = super.describeAxiosError(error);
+        const data = error.response?.data;
+        if (data && typeof data === 'object' && /^[A-Z0-9_]{6,}$/.test(msg)) {
+            return `${msg} — ${JSON.stringify(data).substring(0, 400)}`;
+        }
+        return msg;
+    }
+
     // Authenticated request with a single retry on 401 (expired/rotated token)
     async request(config, retried = false) {
         const token = await this.ensureToken();
@@ -225,6 +237,20 @@ class EkartAdapter extends BaseCarrier {
             // Today in IST (dispatch + invoice date)
             const todayIst = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
 
+            // Swift validation rejects blank/null drop city & state — backfill
+            // them from Ekart's own pincode master when the order lacks them
+            let dropCity = (ctx.consignee.city || '').trim();
+            let dropState = (ctx.consignee.state || '').trim();
+            if (!dropCity || !dropState) {
+                try {
+                    const svc = await this.request({ method: 'get', url: `/api/v2/serviceability/${pin}`, timeout: 15000 });
+                    dropCity = dropCity || svc.data?.details?.city || '';
+                    dropState = dropState || svc.data?.details?.state || '';
+                } catch (lookupError) {
+                    console.warn(`⚠️ Ekart city/state backfill unavailable (${this.describeAxiosError(lookupError)})`);
+                }
+            }
+
             const payload = {
                 seller_name: process.env.EKART_SELLER_NAME,
                 seller_address: process.env.EKART_SELLER_ADDRESS,
@@ -254,10 +280,10 @@ class EkartAdapter extends BaseCarrier {
                 preferred_dispatch_date: todayIst,
                 drop_location: {
                     name: ctx.consignee.name,
-                    address: [ctx.consignee.address, ctx.consignee.city, ctx.consignee.state]
+                    address: [ctx.consignee.address, dropCity, dropState]
                         .filter(Boolean).join(', ').substring(0, 500),
-                    city: ctx.consignee.city || null,
-                    state: ctx.consignee.state || '',
+                    city: dropCity,
+                    state: dropState,
                     country: 'India',
                     phone: Number(phone),
                     pin: Number(pin)
@@ -279,7 +305,12 @@ class EkartAdapter extends BaseCarrier {
 
             const result = response.data || {};
             if (result.status !== true || !result.tracking_id) {
-                return this.fail(`Ekart shipment creation failed: ${result.remark || JSON.stringify(result).substring(0, 300)}`, result);
+                // A bare exception code as remark hides the real reason — dump the body
+                const remark = result.remark && !/^[A-Z0-9_]{6,}$/.test(result.remark)
+                    ? result.remark
+                    : `${result.remark || 'rejected'} — ${JSON.stringify(result).substring(0, 300)}`;
+                console.error(`❌ Ekart create rejected for order ${ctx.orderId}:`, JSON.stringify(result).substring(0, 600));
+                return this.fail(`Ekart shipment creation failed: ${remark}`, result);
             }
 
             return this.ok({
@@ -292,6 +323,7 @@ class EkartAdapter extends BaseCarrier {
                 requestPayload: payload
             }, result);
         } catch (error) {
+            console.error(`❌ Ekart create failed for order ${ctx.orderId}:`, JSON.stringify(error.response?.data || error.message).substring(0, 600));
             return this.fail(`Ekart shipment creation failed: ${this.describeAxiosError(error)}`, error.response?.data);
         }
     }
