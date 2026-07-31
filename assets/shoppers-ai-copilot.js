@@ -251,6 +251,9 @@
                                 input.style.height = '44px';
                                 input.style.height = Math.min(input.scrollHeight, 120) + 'px';
                             }
+                            // Remember the draft so the send flow can report whether
+                            // it was sent as-is or edited (AI learning signal)
+                            window.__aiSuggestedReply = s;
                             suggestionsBox.classList.remove('open');
                             suggestionsBox.innerHTML = '';
                         };

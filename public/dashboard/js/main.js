@@ -3284,8 +3284,10 @@ async function sendSupportChatMessage() {
     try {
         const data = await apiCall('/chat/send', 'POST', {
             phone: currentSupportChatPhone,
-            message: message
+            message: message,
+            suggestedText: window.__aiSuggestedReply || null
         });
+        window.__aiSuggestedReply = null;
         
         if (data.success) {
             // Refresh messages to get the actual status

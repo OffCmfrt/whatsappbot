@@ -605,6 +605,36 @@ async function initializeAiTables() {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_ai_usage_log_actor_created ON ai_usage_log(actor, created_at DESC)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_ai_usage_log_kind_created ON ai_usage_log(kind, created_at DESC)');
 
+    // Learned replies: question → approved agent reply, reinforced over time.
+    // Full-text searched ('simple' config) to inject few-shot examples into AI suggestions.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_learned_replies (
+        id SERIAL PRIMARY KEY,
+        customer_question TEXT NOT NULL,
+        agent_reply TEXT NOT NULL,
+        customer_phone VARCHAR(20),
+        uses INTEGER DEFAULT 1,
+        resolved_boost INTEGER DEFAULT 0,
+        pinned BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('ALTER TABLE ai_learned_replies ADD COLUMN IF NOT EXISTS resolved_boost INTEGER DEFAULT 0');
+    await pool.query('ALTER TABLE ai_learned_replies ADD COLUMN IF NOT EXISTS pinned BOOLEAN DEFAULT FALSE');
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_learned_replies_tsv ON ai_learned_replies
+      USING GIN (to_tsvector('simple', customer_question || ' ' || agent_reply))`);
+
+    // Optional semantic search: pgvector embedding column (Gemini text-embedding-004,
+    // 768 dims). If the extension isn't available, full-text search still works.
+    try {
+      await pool.query('CREATE EXTENSION IF NOT EXISTS vector');
+      await pool.query('ALTER TABLE ai_learned_replies ADD COLUMN IF NOT EXISTS embedding vector(768)');
+      console.log('✅ pgvector enabled for AI learned replies');
+    } catch (vectorError) {
+      console.warn('⚠️ pgvector unavailable, AI learning falls back to full-text search:', vectorError.message);
+    }
+
     console.log('✅ AI copilot tables initialized');
   } catch (error) {
     console.error('❌ Failed to initialize AI copilot tables:', error.message);

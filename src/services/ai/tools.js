@@ -129,6 +129,23 @@ const tools = [
         }
     },
     {
+        name: 'search_learned_replies',
+        description: 'Find approved replies our support team previously sent for similar customer questions. Use when drafting a reply to match proven wording and policies.',
+        parameters: {
+            type: 'object',
+            properties: {
+                question: { type: 'string', description: 'The customer question or topic to match' }
+            },
+            required: ['question']
+        },
+        requiresConfirmation: false,
+        async execute({ question }) {
+            const { findSimilarExamples } = require('./learning');
+            const examples = await findSimilarExamples(question, 3);
+            return { count: examples.length, examples };
+        }
+    },
+    {
         name: 'update_ticket',
         description: 'Update a support ticket status (open, resolved, closed). Requires admin confirmation.',
         parameters: {
@@ -142,9 +159,14 @@ const tools = [
         requiresConfirmation: true,
         summary: (args) => `Update support ticket #${args.ticketId} status to "${args.status}"`,
         async execute({ ticketId, status }) {
-            const rows = await dbAdapter.query('SELECT id, status FROM support_tickets WHERE id = ?', [ticketId]);
+            const rows = await dbAdapter.query('SELECT id, status, customer_phone FROM support_tickets WHERE id = ?', [ticketId]);
             if (!rows.length) throw new Error(`Ticket ${ticketId} not found`);
             await dbAdapter.update('support_tickets', { status, updated_at: new Date().toISOString() }, { id: ticketId });
+            // Outcome signal for AI learning: resolution means recent replies worked
+            if ((status === 'resolved' || status === 'closed') && rows[0].customer_phone) {
+                const { boostFromResolvedTicket } = require('./learning');
+                boostFromResolvedTicket(rows[0].customer_phone).catch(() => {});
+            }
             return { ticketId, previousStatus: rows[0].status, newStatus: status };
         }
     },
@@ -452,6 +474,7 @@ const TOOL_TRIGGERS = {
     search_customers: /\b(customers?|shoppers?|buyers?|clients?|who is|email|phone|number|contact)\b/i,
     search_messages: /\b(messages?|chats?|conversations?|whatsapp|said|replied|history)\b/i,
     list_tickets: /\b(tickets?|support|complaints?|issues?|queries|grievance)\b/i,
+    search_learned_replies: /\b(reply|replies|respond|draft|answer|suggest\w*|how (do|did|should) we)\b/i,
     update_ticket: /\b(tickets?|resolve|closed?|reopen)\b/i,
     get_abandoned_carts: /\b(carts?|abandon\w*|checkouts?|recover\w*)\b/i,
     shopify_search_orders: /\b(orders?|shopify|purchases?|bought|payments?|refunds?|fulfill?\w*|cod|prepaid)\b|#\d+/i,

@@ -8,6 +8,7 @@
 
 const { chatCompletion, isConfigured } = require('./aiClient');
 const aiStore = require('./aiStore');
+const { findSimilarExamples } = require('./learning');
 const Settings = require('../../models/Settings');
 const { dbAdapter } = require('../../database/db');
 
@@ -19,6 +20,7 @@ Rules:
 - Use ONLY facts from the provided context (orders, tracking, tickets). Never invent order numbers, dates, refund amounts or policies.
 - If the context lacks the answer, the draft should ask the customer for the missing detail or say the team is checking.
 - Reply in the same language style the customer used (English / Hindi / Hinglish).
+- approvedExamples (if present) are replies our team actually sent for similar past questions. Prefer their wording, tone and policies whenever they fit.
 - Respond with JSON only: {"suggestions": ["draft 1", "draft 2", "draft 3"]}. 1-3 drafts, each under 500 characters.`;
 
 async function gatherContext(phone, ticketId) {
@@ -101,11 +103,18 @@ async function suggestReply({ actor, phone, ticketId }) {
         throw err;
     }
 
+    // Learned few-shot examples: what our team actually replied to similar questions
+    const lastCustomerMsg = [...context.conversation].reverse().find(m => m.from === 'customer');
+    const approvedExamples = lastCustomerMsg
+        ? await findSimilarExamples(lastCustomerMsg.text, 3)
+        : [];
+
     const userContent = JSON.stringify({
         customer: context.customer,
         conversation: context.conversation,
         recentOrders: context.recentOrders,
-        openTickets: context.tickets
+        openTickets: context.tickets,
+        ...(approvedExamples.length ? { approvedExamples: approvedExamples.map(e => ({ q: e.q, a: e.a })) } : {})
     });
 
     const { message, usage, model } = await chatCompletion({

@@ -55,6 +55,44 @@ function isConfigured() {
     return Boolean(process.env.AI_API_KEY);
 }
 
+// ---------- Embeddings (semantic search for learned replies) ----------
+// Uses Gemini's embedding API (free tier) independently of the chat provider.
+// Key resolution: AI_EMBED_API_KEY, or AI_API_KEY when the chat provider is gemini.
+
+function getEmbeddingConfig() {
+    const apiKey = process.env.AI_EMBED_API_KEY
+        || ((process.env.AI_PROVIDER || '').toLowerCase() === 'gemini' ? process.env.AI_API_KEY : null);
+    return {
+        apiKey,
+        model: process.env.AI_EMBED_MODEL || 'text-embedding-004'
+    };
+}
+
+function isEmbeddingConfigured() {
+    return Boolean(getEmbeddingConfig().apiKey);
+}
+
+/**
+ * Embed a text string. Returns an array of floats (768 dims for
+ * text-embedding-004) or null when not configured / on failure.
+ */
+async function embedText(text) {
+    const { apiKey, model } = getEmbeddingConfig();
+    if (!apiKey || !text) return null;
+    try {
+        const response = await axios.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`,
+            { model: `models/${model}`, content: { parts: [{ text: String(text).substring(0, 6000) }] } },
+            { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
+        );
+        const values = response.data?.embedding?.values;
+        return Array.isArray(values) && values.length ? values : null;
+    } catch (error) {
+        console.warn('⚠️ [AI] embedText failed:', error.response?.data?.error?.message || error.message);
+        return null;
+    }
+}
+
 // Rough token estimate (~4 chars per token) used for history truncation
 function estimateTokens(text) {
     if (!text) return 0;
@@ -155,4 +193,4 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
     throw err;
 }
 
-module.exports = { chatCompletion, getConfig, isConfigured, estimateTokens, computeCostUsd };
+module.exports = { chatCompletion, getConfig, isConfigured, estimateTokens, computeCostUsd, embedText, isEmbeddingConfigured };

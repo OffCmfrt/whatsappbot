@@ -1653,6 +1653,16 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
         // Invalidate cache after ticket status change
         invalidateCache('stats');
 
+        // Outcome signal for AI learning: resolved ticket → recent examples from
+        // this customer's conversation worked (fire-and-forget)
+        if (status === 'resolved' || status === 'closed') {
+            const resolvedTicket = await dbAdapter.query('SELECT customer_phone FROM support_tickets WHERE id = ?', [id]);
+            if (resolvedTicket[0]?.customer_phone) {
+                const aiLearning = require('../services/ai/learning');
+                aiLearning.boostFromResolvedTicket(resolvedTicket[0].customer_phone).catch(() => {});
+            }
+        }
+
         res.json({ success: true, message: 'Ticket updated successfully' });
     } catch (error) {
         console.error('Error updating support ticket:', error);
@@ -2872,7 +2882,7 @@ router.get('/chat/:phone', verifyToken, async (req, res) => {
 // Send manual reply to customer
 router.post('/chat/send', verifyToken, async (req, res) => {
     try {
-        const { phone, message, type = 'text' } = req.body;
+        const { phone, message, type = 'text', suggestedText = null } = req.body;
         
         if (!phone || !message) {
             return res.status(400).json({ error: 'Phone and message are required' });
@@ -2907,6 +2917,14 @@ router.post('/chat/send', verifyToken, async (req, res) => {
              WHERE phone = ? OR phone = ?`,
             [new Date().toISOString(), formattedPhone, cleanPhone]
         );
+        
+        // AI learning: pair this human reply with the customer's latest question
+        // so future suggestions imitate approved answers (fire-and-forget).
+        // suggestedText tells us if an AI draft was accepted as-is or corrected.
+        if (type === 'text') {
+            const aiLearning = require('../services/ai/learning');
+            aiLearning.learnFromAgentReply({ phone: cleanPhone, replyText: message, suggestedText }).catch(() => {});
+        }
         
         res.json({
             success: true,
@@ -4987,6 +5005,59 @@ router.get('/ai/history', verifyToken, async (req, res) => {
         res.json({ success: true, history });
     } catch (error) {
         res.status(500).json({ success: false, error: 'Failed to load history' });
+    }
+});
+
+// ---------- Learned replies curation (AI learning) ----------
+
+// List learned examples (optional ?search= and ?limit=)
+router.get('/ai/learned', verifyToken, async (req, res) => {
+    try {
+        const aiLearning = require('../services/ai/learning');
+        const rows = await aiLearning.listLearnedReplies({ search: req.query.search || '', limit: req.query.limit });
+        res.json({ success: true, learned: rows });
+    } catch (error) {
+        console.error('AI learned list error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load learned replies' });
+    }
+});
+
+// Create a hand-written golden example (pinned by default)
+router.post('/ai/learned', verifyToken, async (req, res) => {
+    try {
+        const { question, reply, pinned } = req.body;
+        if (!question || !reply) return res.status(400).json({ success: false, error: 'Question and reply are required' });
+        const aiLearning = require('../services/ai/learning');
+        const row = await aiLearning.createLearnedReply({ question, reply, pinned: pinned !== false });
+        res.json({ success: true, learned: row });
+    } catch (error) {
+        console.error('AI learned create error:', error.message);
+        res.status(500).json({ success: false, error: error.message || 'Failed to create learned reply' });
+    }
+});
+
+// Edit or pin/unpin a learned example
+router.put('/ai/learned/:id', verifyToken, async (req, res) => {
+    try {
+        const { question, reply, pinned } = req.body;
+        const aiLearning = require('../services/ai/learning');
+        await aiLearning.updateLearnedReply(parseInt(req.params.id), { question, reply, pinned });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI learned update error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to update learned reply' });
+    }
+});
+
+// Delete a learned example
+router.delete('/ai/learned/:id', verifyToken, async (req, res) => {
+    try {
+        const aiLearning = require('../services/ai/learning');
+        await aiLearning.deleteLearnedReply(parseInt(req.params.id));
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI learned delete error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to delete learned reply' });
     }
 });
 

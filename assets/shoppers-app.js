@@ -2712,8 +2712,10 @@ async function sendChatMessage() {
     try {
         const data = await apiCall('/chat/send', 'POST', {
             phone: currentChatPhone,
-            message: message
+            message: message,
+            suggestedText: window.__aiSuggestedReply || null
         });
+        window.__aiSuggestedReply = null;
         
         if (data.success) {
             // Update check mark to sent
