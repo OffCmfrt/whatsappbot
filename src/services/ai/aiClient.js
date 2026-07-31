@@ -10,6 +10,12 @@
  */
 
 const axios = require('axios');
+const https = require('https');
+
+// Render/Node can resolve googleapis.com to IPv6 first and hang on a dead
+// route until the request timeout (curl does happy-eyeballs, Node doesn't).
+// Force IPv4 and reuse sockets so requests connect fast and reliably.
+const httpsAgent = new https.Agent({ keepAlive: true, family: 4, maxSockets: 10 });
 
 const PROVIDER_DEFAULTS = {
     groq: {
@@ -87,7 +93,7 @@ async function embedText(text) {
                 content: { parts: [{ text: String(text).substring(0, 6000) }] },
                 outputDimensionality: 768
             },
-            { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
+            { headers: { 'Content-Type': 'application/json' }, timeout: 15000, httpsAgent }
         );
         const values = response.data?.embedding?.values;
         return Array.isArray(values) && values.length ? values : null;
@@ -153,6 +159,7 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
                     'Authorization': `Bearer ${cfg.apiKey}`,
                     'Content-Type': 'application/json'
                 },
+                httpsAgent,
                 // Thinking models (Gemini) can exceed 30s on tool-heavy turns
                 timeout: 60000
             });
