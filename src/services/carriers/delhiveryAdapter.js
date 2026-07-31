@@ -103,7 +103,7 @@ class DelhiveryAdapter extends BaseCarrier {
             if (!pin) return this.fail('Invalid delivery pincode (must be 6 digits)');
 
             const isCod = ctx.payment.mode === 'COD';
-            const productsDesc = ctx.items.map(i => `${i.name} x${i.quantity}`).join(', ').substring(0, 200) || 'Apparel';
+            const productsDesc = this.formatProductsDesc(ctx.items);
             const totalQty = ctx.items.reduce((sum, i) => sum + (i.quantity || 1), 0) || 1;
 
             const cmuPayload = {

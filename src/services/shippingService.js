@@ -12,6 +12,7 @@
 
 const { dbAdapter } = require('../database/db');
 const { caches } = require('../utils/cache');
+const { extractItemSize } = require('../utils/orderItems');
 const { getConfiguredCarriers, getAdapter } = require('./carriers');
 
 // Default package when admin doesn't override (apparel-friendly)
@@ -37,7 +38,9 @@ function parseItems(itemsJson) {
             sku: item.sku || item.variant_id ? String(item.sku || item.variant_id) : null,
             quantity: parseInt(item.quantity) || 1,
             price: Number(item.price) || 0,
-            size: item.size || item.variant_size || item.product_size || null
+            // Shopify keeps the size in variant_title — resolve every shape
+            // so carriers can print it on the label
+            size: extractItemSize(item)
         }));
     } catch (e) {
         return [];

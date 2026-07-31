@@ -184,7 +184,8 @@ class ShiprocketAdapter extends BaseCarrier {
 
             const orderItems = (ctx.items.length > 0 ? ctx.items : [{ name: 'Product', quantity: 1, price: ctx.payment.declaredValue || 0 }])
                 .map((item, idx) => ({
-                    name: item.name,
+                    // Size goes in the name — Shiprocket labels/invoices print it from here
+                    name: `${item.name}${item.size ? ` (${item.size})` : ''}`,
                     sku: item.sku || `SKU-${ctx.orderId}-${idx + 1}`,
                     units: item.quantity || 1,
                     selling_price: Number(item.price) || 0

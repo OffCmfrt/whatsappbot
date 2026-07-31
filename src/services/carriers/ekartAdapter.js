@@ -231,7 +231,7 @@ class EkartAdapter extends BaseCarrier {
 
             // total_amount/taxable_amount have a minimum of 1 in the API
             const totalAmount = Math.max(1, Number(ctx.payment.declaredValue) || 0);
-            const productsDesc = ctx.items.map(i => `${i.name} x${i.quantity}`).join(', ').substring(0, 200) || 'Apparel';
+            const productsDesc = this.formatProductsDesc(ctx.items);
             const totalQty = ctx.items.reduce((sum, i) => sum + (i.quantity || 1), 0) || 1;
 
             // Today in IST (dispatch + invoice date)

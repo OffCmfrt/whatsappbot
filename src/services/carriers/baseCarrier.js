@@ -89,6 +89,26 @@ class BaseCarrier {
         return digits.length === 6 ? digits : '';
     }
 
+    // Product line printed on the label / packing slip:
+    //   "Relaxed Tee (M) x2, Cargo Pants (32) x1"
+    // Size matters for apparel returns & warehouse picking, so it is always
+    // included when the item carries one. Drops whole items (never half a
+    // product name) when the carrier's field length runs out.
+    formatProductsDesc(items = [], maxLength = 200, fallback = 'Apparel') {
+        const parts = [];
+        let length = 0;
+        for (const item of items) {
+            const part = `${item.name}${item.size ? ` (${item.size})` : ''} x${item.quantity || 1}`;
+            const added = parts.length ? part.length + 2 : part.length; // ', ' separator
+            if (length + added > maxLength) break;
+            parts.push(part);
+            length += added;
+        }
+        // A single oversized product still needs *something* descriptive
+        if (!parts.length && items.length) return items[0].name.substring(0, maxLength);
+        return parts.join(', ') || fallback;
+    }
+
     // Extract a readable error message from an axios error
     describeAxiosError(error) {
         const data = error.response?.data;
