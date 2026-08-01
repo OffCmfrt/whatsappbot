@@ -414,7 +414,7 @@
     function init() {
         document.body.appendChild(fab);
         document.body.appendChild(panel);
-        fab.onclick = () => togglePanel();
+        fab.onclick = () => { window.open('/dashboard/ai-copilot.html', '_blank'); };
         document.getElementById('aiCpClose').onclick = () => togglePanel(false);
         document.getElementById('aiCpClear').onclick = async () => {
             try { await aiFetch('/clear-history', 'POST'); } catch (e) { /* ignore */ }

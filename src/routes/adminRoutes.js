@@ -5075,4 +5075,124 @@ router.delete('/ai/learned/:id', verifyToken, async (req, res) => {
     }
 });
 
+// ---------- AI Copilot Pro routes ----------
+
+// Bulk import learned replies (CSV or JSON)
+router.post('/ai/learned/import', verifyToken, async (req, res) => {
+    try {
+        const { items } = req.body; // [{ question, reply, pinned? }]
+        if (!Array.isArray(items) || !items.length) {
+            return res.status(400).json({ success: false, error: 'items array is required' });
+        }
+        const aiLearning = require('../services/ai/learning');
+        let imported = 0;
+        const errors = [];
+        for (const item of items.slice(0, 200)) {
+            try {
+                await aiLearning.createLearnedReply({
+                    question: item.question || '',
+                    reply: item.reply || '',
+                    pinned: item.pinned !== false
+                });
+                imported++;
+            } catch (e) {
+                errors.push(`${item.question?.substring(0, 40) || '(empty)'}: ${e.message}`);
+            }
+        }
+        res.json({ success: true, imported, errors: errors.slice(0, 10) });
+    } catch (error) {
+        console.error('AI learned import error:', error.message);
+        res.status(500).json({ success: false, error: 'Import failed' });
+    }
+});
+
+// Test retrieval: see which learned examples match a sample question
+router.get('/ai/learned/test', verifyToken, async (req, res) => {
+    try {
+        const { findSimilarExamples } = require('../services/ai/learning');
+        const question = req.query.question || '';
+        if (!question.trim()) return res.status(400).json({ success: false, error: 'question param required' });
+        const examples = await findSimilarExamples(question, 5);
+        res.json({ success: true, examples });
+    } catch (error) {
+        console.error('AI learned test error:', error.message);
+        res.status(500).json({ success: false, error: 'Test failed' });
+    }
+});
+
+// AI behavior settings (save)
+router.put('/ai/settings', verifyToken, async (req, res) => {
+    try {
+        const Settings = require('../../models/Settings');
+        const allowed = ['ai_admin_copilot_enabled', 'ai_learning_enabled', 'ai_daily_admin_limit', 'ai_suggest_reply_daily_limit'];
+        for (const key of allowed) {
+            if (req.body[key] !== undefined) {
+                await Settings.set(key, String(req.body[key]));
+            }
+        }
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI settings save error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to save settings' });
+    }
+});
+
+// AI insights (analytics page data)
+router.get('/ai/insights', verifyToken, async (req, res) => {
+    try {
+        const { getInsights } = require('../services/ai/insights');
+        const insights = await getInsights();
+        res.json({ success: true, ...insights });
+    } catch (error) {
+        console.error('AI insights error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load insights' });
+    }
+});
+
+// ---------- AI Workflows CRUD ----------
+
+router.get('/ai/workflows', verifyToken, async (req, res) => {
+    try {
+        const workflows = require('../services/ai/workflows');
+        const rows = await workflows.listWorkflows();
+        res.json({ success: true, workflows: rows });
+    } catch (error) {
+        console.error('AI workflows list error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to list workflows' });
+    }
+});
+
+router.post('/ai/workflows', verifyToken, async (req, res) => {
+    try {
+        const workflows = require('../services/ai/workflows');
+        const row = await workflows.createWorkflow(req.body);
+        res.json({ success: true, workflow: row });
+    } catch (error) {
+        console.error('AI workflow create error:', error.message);
+        res.status(400).json({ success: false, error: error.message });
+    }
+});
+
+router.put('/ai/workflows/:id', verifyToken, async (req, res) => {
+    try {
+        const workflows = require('../services/ai/workflows');
+        await workflows.updateWorkflow(parseInt(req.params.id), req.body);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI workflow update error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to update workflow' });
+    }
+});
+
+router.delete('/ai/workflows/:id', verifyToken, async (req, res) => {
+    try {
+        const workflows = require('../services/ai/workflows');
+        await workflows.deleteWorkflow(parseInt(req.params.id));
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI workflow delete error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to delete workflow' });
+    }
+});
+
 module.exports = router;
