@@ -542,12 +542,120 @@ function setupModalEvents() {
 
 let chatPollingInterval = null;
 
+// ── AI Suggest Reply ──
+// Prefetch cache + in-flight dedupe so the ✨ click feels instant.
+const _suggestPrefetch = new Map(); // key -> { promise, at }
+const _PREFETCH_FRESH_MS = 90 * 1000;
+
+function _suggestKey(phone) { return String(phone).replace(/\D/g, '').slice(-10); }
+
+function prefetchSuggestions(phone) {
+    if (!phone || !authToken) return;
+    const key = _suggestKey(phone);
+    const existing = _suggestPrefetch.get(key);
+    if (existing && Date.now() - existing.at < _PREFETCH_FRESH_MS) return;
+    _suggestPrefetch.set(key, {
+        promise: apiCall('/ai/suggest-reply', 'POST', { phone, prefetch: true }).catch(() => null),
+        at: Date.now()
+    });
+}
+
+function injectSuggestReplyButton() {
+    const inputArea = document.querySelector('#chatModal .chat-input-area');
+    if (!inputArea || document.getElementById('aiSuggestReplyBtn')) return;
+
+    // Inject styles once
+    if (!document.getElementById('aiSuggestStyles')) {
+        const s = document.createElement('style');
+        s.id = 'aiSuggestStyles';
+        s.textContent = `
+        #aiSuggestions{padding:8px 12px 0;display:none;flex-direction:column;gap:6px;background:rgba(255,255,255,0.04);border-top:1px solid rgba(255,255,255,0.08)}
+        #aiSuggestions.open{display:flex}
+        .ai-suggestion-chip{text-align:left;background:rgba(0,92,75,0.15);border:1px solid rgba(0,115,94,0.3);color:#d1fae5;border-radius:10px;padding:8px 10px;font-size:12.5px;line-height:1.4;cursor:pointer;font-family:inherit}
+        .ai-suggestion-chip:hover{background:rgba(0,92,75,0.25)}
+        .ai-suggestions-note{font-size:11px;color:#8696a0;padding-bottom:4px}
+        #aiSuggestReplyBtn{background:linear-gradient(135deg,#005c4b,#00735e);color:#e8f5e9;border:none;border-radius:10px;padding:0 12px;cursor:pointer;font-size:16px;line-height:1;height:44px}
+        #aiSuggestReplyBtn:disabled{opacity:.5;cursor:wait}
+        `;
+        document.head.appendChild(s);
+    }
+
+    // Suggestions box (above input area)
+    const suggestionsBox = document.createElement('div');
+    suggestionsBox.id = 'aiSuggestions';
+    inputArea.parentNode.insertBefore(suggestionsBox, inputArea);
+
+    // ✨ button (before send button)
+    const btn = document.createElement('button');
+    btn.id = 'aiSuggestReplyBtn';
+    btn.title = 'AI: suggest replies';
+    btn.innerHTML = '✨';
+    const sendBtn = document.getElementById('sendChatBtn');
+    inputArea.insertBefore(btn, sendBtn);
+
+    btn.onclick = async () => {
+        const phone = currentChatPhone;
+        if (!phone) { alert('Open a customer chat first'); return; }
+        btn.disabled = true;
+        btn.innerHTML = '…';
+        suggestionsBox.classList.add('open');
+        suggestionsBox.innerHTML = '<div class="ai-suggestions-note">Generating suggestions…</div>';
+        try {
+            const key = _suggestKey(phone);
+            const pre = _suggestPrefetch.get(key);
+            let data = (pre && Date.now() - pre.at < _PREFETCH_FRESH_MS) ? await pre.promise : null;
+            _suggestPrefetch.delete(key);
+            if (!data || !data.suggestions) {
+                data = await apiCall('/ai/suggest-reply', 'POST', { phone });
+            }
+            if (data && data.success === false) {
+                throw new Error(data.error || 'Failed to generate suggestions');
+            }
+            if (!data || !data.suggestions || !data.suggestions.length) {
+                suggestionsBox.innerHTML = '<div class="ai-suggestions-note">No suggestions available for this chat.</div>';
+            } else {
+                suggestionsBox.innerHTML = '<div class="ai-suggestions-note">✨ Tap a draft to insert — review before sending:</div>';
+                data.suggestions.forEach(s => {
+                    const chip = document.createElement('button');
+                    chip.className = 'ai-suggestion-chip';
+                    chip.textContent = s;
+                    chip.onclick = () => {
+                        const input = document.getElementById('chatInput');
+                        if (input) {
+                            input.value = s;
+                            input.focus();
+                            input.style.height = '44px';
+                            input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+                        }
+                        window.__aiSuggestedReply = s;
+                        suggestionsBox.classList.remove('open');
+                        suggestionsBox.innerHTML = '';
+                    };
+                    suggestionsBox.appendChild(chip);
+                });
+            }
+        } catch (e) {
+            suggestionsBox.innerHTML = '';
+            const note = document.createElement('div');
+            note.className = 'ai-suggestions-note';
+            note.textContent = `❌ ${e.message || 'Failed to generate suggestions'}`;
+            suggestionsBox.appendChild(note);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '✨';
+        }
+    };
+}
+
 function setupChatEvents() {
     const chatModal = document.getElementById('chatModal');
     const closeChat = document.getElementById('closeChat');
     const sendChatBtn = document.getElementById('sendChatBtn');
     const chatInput = document.getElementById('chatInput');
     const markResolvedBtn = document.getElementById('markResolvedBtn');
+
+    // Inject AI suggest reply button
+    injectSuggestReplyButton();
 
     if (closeChat) {
         closeChat.addEventListener('click', () => {
@@ -2433,6 +2541,9 @@ async function openChat(phone, nameEnc, orderId, status) {
     
     chatMessages.innerHTML = '<div class="chat-loading"><div class="spinner"></div><span>Loading conversation...</span></div>';
     chatModal.classList.add('active');
+    
+    // Warm the AI suggestion cache so ✨ click feels instant
+    try { prefetchSuggestions(phone); } catch (e) { /* never block chat open */ }
     
     // Mark all messages for this phone as read when opening chat
     try {
