@@ -645,6 +645,14 @@ async function initializeAiTables() {
       console.warn('⚠️ pgvector unavailable, AI learning falls back to full-text search:', vectorError.message);
     }
 
+    // Seed SOP golden learned replies from Support Agent Workflow Framework
+    try {
+      const { seedSopLearnedReplies } = require('../services/ai/learning');
+      await seedSopLearnedReplies();
+    } catch (seedErr) {
+      console.warn('⚠️ SOP seeding skipped:', seedErr.message);
+    }
+
     console.log('✅ AI copilot tables initialized');
   } catch (error) {
     console.error('❌ Failed to initialize AI copilot tables:', error.message);

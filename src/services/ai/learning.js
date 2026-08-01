@@ -26,6 +26,45 @@ const RECENCY_HALF_LIFE_DAYS = 120;
 // match as-is alongside English.
 const TSV = `to_tsvector('simple', customer_question || ' ' || agent_reply)`;
 
+const SOP_GOLDEN_EXAMPLES = [
+    {
+        q: "Where is my order? Track my order status",
+        a: "Order tracking is checked strictly in partner sequence: 1. Shiprocket (primary), 2. Delhivery One, 3. Ekart (prepaid only). If 'Edit Details' was clicked without reply, calling executive contacts you: COD stays on hold; Prepaid ships as-is after 24h."
+    },
+    {
+        q: "Tracking says delivered but I have not received my order / item missing",
+        a: "Please check with neighbours, nearby flats, or security. We have notified our delivery partner and requested Proof of Delivery (POD). Once received (within 24h), we will share the POD with you."
+    },
+    {
+        q: "Can I get a refund back to my bank account / payment method?",
+        a: "Original payment method refunds (takes 5-7 days) are issued ONLY for: 1. Item damaged on arrival, 2. Wrong product delivered, 3. Prepaid order cancelled at confirmation, or 4. RTO return without receipt. All other cases receive store credit only."
+    },
+    {
+        q: "I want to change my size or request an exchange",
+        a: "Before dispatch: use 'Edit Details' on your Shoppers Hub confirmation message. After delivery: submit your exchange request on offcomfrt.in → Support → Return/Exchange."
+    },
+    {
+        q: "Received damaged defective or wrong product",
+        a: "Please submit proof at offcomfrt.in → Support → Return/Exchange. Mandatory: unboxing video for wrong product; photos for damage. Once verified, this qualifies for a refund."
+    },
+    {
+        q: "I need to change my delivery address",
+        a: "Pre-dispatch: click 'Edit Details' on Shoppers Hub message. Post-dispatch: address cannot be changed on active shipment. Prepaid: wait for RTO to reship or cancel in-transit to ship fresh order. COD: fresh order dispatched immediately."
+    },
+    {
+        q: "I already paid online but courier is asking for COD cash",
+        a: "This happens when 'Edit Details' converted the order to COD without re-applying discount. Please pay the delivery partner the amount requested at the door; we will refund that paid amount back to you separately."
+    },
+    {
+        q: "I want to cancel my order",
+        a: "Cancellations are actioned via the Shoppers Hub confirmation text (Confirm/Cancel/Edit Details). If already shipped: Prepaid is cancelled in transit with refund; COD customers should simply refuse delivery."
+    },
+    {
+        q: "I am frustrated / want a phone callback from manager",
+        a: "We resolve all issues over chat first and consult admin for the best possible solution before arranging any call. Please share your issue details here."
+    }
+];
+
 // ---------- PII scrubbing ----------
 
 /**
@@ -237,8 +276,14 @@ async function findSimilarExamples(questionText, limit = 3) {
 
         return rerank(candidates, limit);
     } catch (e) {
-        console.error('[AI] findSimilarExamples failed:', e.message);
-        return [];
+        console.warn('[AI] findSimilarExamples DB query unavailable, using SOP in-memory fallback');
+        const text = String(questionText || '').toLowerCase();
+        const fallbackMatches = SOP_GOLDEN_EXAMPLES.filter(ex => {
+            const words = ex.q.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+            return words.some(w => text.includes(w));
+        }).map(ex => ({ q: ex.q, a: ex.a, uses: 10 }));
+        
+        return fallbackMatches.slice(0, limit);
     }
 }
 
@@ -289,6 +334,36 @@ async function deleteLearnedReply(id) {
     await dbAdapter.run('DELETE FROM ai_learned_replies WHERE id = ?', [id]);
 }
 
+/**
+ * Seed standard operating procedure (SOP) golden learned replies from the
+ * Support Agent Workflow Framework (PDF) into ai_learned_replies table.
+ * All entries are pinned by default so they always rank top in similarity search.
+ */
+async function seedSopLearnedReplies() {
+    try {
+        for (const ex of SOP_GOLDEN_EXAMPLES) {
+            const existing = await dbAdapter.query(
+                'SELECT id FROM ai_learned_replies WHERE LOWER(customer_question) = LOWER(?) LIMIT 1',
+                [ex.q]
+            );
+            if (!existing || existing.length === 0) {
+                await dbAdapter.insert('ai_learned_replies', {
+                    customer_question: ex.q,
+                    agent_reply: ex.a,
+                    customer_phone: null,
+                    uses: 10,
+                    pinned: true,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                });
+            }
+        }
+        console.log('✅ SOP golden learned replies seeded successfully');
+    } catch (e) {
+        console.error('⚠️ Failed to seed SOP learned replies:', e.message);
+    }
+}
+
 module.exports = {
     learnFromAgentReply,
     boostFromResolvedTicket,
@@ -297,5 +372,6 @@ module.exports = {
     createLearnedReply,
     updateLearnedReply,
     deleteLearnedReply,
+    seedSopLearnedReplies,
     scrubPII
 };

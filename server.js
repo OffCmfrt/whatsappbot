@@ -401,8 +401,12 @@ async function startServer() {
         const dbConnected = await testConnection();
 
         if (!dbConnected) {
-            console.error('❌ Database connection failed. Ensure TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are set correctly.');
-            process.exit(1);
+            console.error('❌ Database connection failed. Ensure SUPABASE_DB_URL is set correctly in .env');
+            if (process.env.NODE_ENV === 'production') {
+                process.exit(1);
+            } else {
+                console.warn('⚠️ Running in development mode without an active DB connection. DB features will require SUPABASE_DB_URL.');
+            }
         }
 
         // Initialize database tables

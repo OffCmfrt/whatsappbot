@@ -6,6 +6,8 @@ const { dbAdapter } = require('../database/db');
 const { sanitizeInput } = require('../utils/validators');
 const { getPortalIdForNewTicket } = require('../utils/portalAssignment');
 
+const autoSupportAgent = require('../services/ai/autoSupportAgent');
+
 // Generate a candidate ticket number: TKT-YYMMDD-XXXX (9000 per day instead of per year)
 function generateTicketNumber() {
     const now = new Date();
@@ -164,8 +166,18 @@ class MessageHandler {
                 return;
             }
 
-            // Default path: every other inbound message becomes a support ticket
+            // Default path: Attempt autonomous AI resolution first using SOP decision pipeline
             const name = customer.name || senderName || 'Customer';
+            const autoResult = await autoSupportAgent.processCustomerMessage(phone, cleanMessage, name);
+
+            if (autoResult && autoResult.handled && autoResult.reply) {
+                await whatsappService.sendMessage(phone, autoResult.reply);
+                console.log(`🤖 [AUTO AI] Resolved customer request for ${phone} (Scenario: ${autoResult.scenario})`);
+                return;
+            }
+
+            // Fallback: Query cannot be resolved automatically -> Escalate to human admin via Support Ticket
+            console.log(`⚠️ [AUTO AI] Query for ${phone} could not be resolved automatically (${autoResult?.reason || 'unhandled'}). Escalating to admin...`);
 
             const existingTicket = await dbAdapter.query(
                 'SELECT id, ticket_number FROM support_tickets WHERE customer_phone = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
