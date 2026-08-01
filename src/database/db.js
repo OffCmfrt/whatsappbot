@@ -540,19 +540,29 @@ async function initializeShipmentsTable() {
         response_payload JSONB,
         error_message TEXT,
         shipped_by VARCHAR(100),
+        reship_of_shipment_id INTEGER,
+        reship_reason TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
 
+    // Re-ship audit columns (added later — safe on existing tables)
+    await pool.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS reship_of_shipment_id INTEGER');
+    await pool.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS reship_reason TEXT');
+
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_order_id ON shipments(order_id)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_awb ON shipments(awb)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status)');
-    // Idempotency guard: only one active shipment per order
+    // Idempotency guard: only one OPEN shipment per order. Terminal states
+    // (cancelled/failed/delivered/rto) release the slot so the order can be
+    // re-shipped: replacement after delivery, forward-ship after RTO, retry
+    // after cancellation/failure.
+    await pool.query('DROP INDEX IF EXISTS idx_shipments_active_order');
     await pool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_active_order
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_open_order
         ON shipments(order_id)
-        WHERE status NOT IN ('cancelled', 'failed')
+        WHERE status NOT IN ('cancelled', 'failed', 'delivered', 'rto')
     `);
 
     console.log('✅ Shipments table initialized');
@@ -604,6 +614,36 @@ async function initializeAiTables() {
     `);
     await pool.query('CREATE INDEX IF NOT EXISTS idx_ai_usage_log_actor_created ON ai_usage_log(actor, created_at DESC)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_ai_usage_log_kind_created ON ai_usage_log(kind, created_at DESC)');
+
+    // Learned replies: question → approved agent reply, reinforced over time.
+    // Full-text searched ('simple' config) to inject few-shot examples into AI suggestions.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_learned_replies (
+        id SERIAL PRIMARY KEY,
+        customer_question TEXT NOT NULL,
+        agent_reply TEXT NOT NULL,
+        customer_phone VARCHAR(20),
+        uses INTEGER DEFAULT 1,
+        resolved_boost INTEGER DEFAULT 0,
+        pinned BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('ALTER TABLE ai_learned_replies ADD COLUMN IF NOT EXISTS resolved_boost INTEGER DEFAULT 0');
+    await pool.query('ALTER TABLE ai_learned_replies ADD COLUMN IF NOT EXISTS pinned BOOLEAN DEFAULT FALSE');
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_learned_replies_tsv ON ai_learned_replies
+      USING GIN (to_tsvector('simple', customer_question || ' ' || agent_reply))`);
+
+    // Optional semantic search: pgvector embedding column (Gemini gemini-embedding-001,
+    // 768 dims). If the extension isn't available, full-text search still works.
+    try {
+      await pool.query('CREATE EXTENSION IF NOT EXISTS vector');
+      await pool.query('ALTER TABLE ai_learned_replies ADD COLUMN IF NOT EXISTS embedding vector(768)');
+      console.log('✅ pgvector enabled for AI learned replies');
+    } catch (vectorError) {
+      console.warn('⚠️ pgvector unavailable, AI learning falls back to full-text search:', vectorError.message);
+    }
 
     console.log('✅ AI copilot tables initialized');
   } catch (error) {

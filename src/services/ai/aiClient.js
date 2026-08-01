@@ -10,6 +10,20 @@
  */
 
 const axios = require('axios');
+const https = require('https');
+
+// Render/Node can resolve googleapis.com to IPv6 first and hang on a dead
+// route until the request timeout (curl does happy-eyeballs, Node doesn't).
+// Force IPv4 and reuse sockets so requests connect fast and reliably.
+// timeout reaps sockets idle >30s: Render's NAT silently drops idle keep-alive
+// connections, and reusing a half-dead socket hangs until the request timeout.
+const httpsAgent = new https.Agent({ keepAlive: true, family: 4, maxSockets: 10, timeout: 30000 });
+
+// One-shot agent for retries after a timeout — the pooled agent may keep
+// handing out stale sockets, so retry attempts connect fresh instead.
+function freshAgent() {
+    return new https.Agent({ keepAlive: false, family: 4 });
+}
 
 const PROVIDER_DEFAULTS = {
     groq: {
@@ -32,7 +46,10 @@ const PROVIDER_DEFAULTS = {
     },
     gemini: {
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
-        model: 'gemini-2.5-flash-lite',
+        // 3.5-flash-lite is frequently overloaded (30s+ even on trivial
+        // prompts, blowing the request timeout); 3.1-flash-lite responds in
+        // ~1s with working tool-calls, and 2.x models are closed to new keys.
+        model: 'gemini-3.1-flash-lite',
         inputCostPer1M: 0.10,
         outputCostPer1M: 0.40
     }
@@ -53,6 +70,48 @@ function getConfig() {
 
 function isConfigured() {
     return Boolean(process.env.AI_API_KEY);
+}
+
+// ---------- Embeddings (semantic search for learned replies) ----------
+// Uses Gemini's embedding API (free tier) independently of the chat provider.
+// Key resolution: AI_EMBED_API_KEY, or AI_API_KEY when the chat provider is gemini.
+
+function getEmbeddingConfig() {
+    const apiKey = process.env.AI_EMBED_API_KEY
+        || ((process.env.AI_PROVIDER || '').toLowerCase() === 'gemini' ? process.env.AI_API_KEY : null);
+    return {
+        apiKey,
+        model: process.env.AI_EMBED_MODEL || 'gemini-embedding-001'
+    };
+}
+
+function isEmbeddingConfigured() {
+    return Boolean(getEmbeddingConfig().apiKey);
+}
+
+/**
+ * Embed a text string. Returns an array of floats (trimmed to 768 dims to
+ * match the pgvector column) or null when not configured / on failure.
+ */
+async function embedText(text) {
+    const { apiKey, model } = getEmbeddingConfig();
+    if (!apiKey || !text) return null;
+    try {
+        const response = await axios.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`,
+            {
+                model: `models/${model}`,
+                content: { parts: [{ text: String(text).substring(0, 6000) }] },
+                outputDimensionality: 768
+            },
+            { headers: { 'Content-Type': 'application/json' }, timeout: 15000, httpsAgent }
+        );
+        const values = response.data?.embedding?.values;
+        return Array.isArray(values) && values.length ? values : null;
+    } catch (error) {
+        console.warn('⚠️ [AI] embedText failed:', error.response?.data?.error?.message || error.message);
+        return null;
+    }
 }
 
 // Rough token estimate (~4 chars per token) used for history truncation
@@ -95,18 +154,30 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
     if (responseFormat) {
         body.response_format = responseFormat;
     }
+    // Gemini 3.x models "think" by default, adding latency and eating output
+    // tokens. Low effort keeps replies fast and cheap for support use.
+    if (cfg.provider === 'gemini') {
+        body.reasoning_effort = 'low';
+    }
 
     const maxAttempts = 3;
     let lastError = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // After a timeout, bypass the keep-alive pool — the hang is usually a
+        // stale pooled socket, not the provider being slow.
+        const timedOutLastAttempt = lastError?.code === 'ECONNABORTED';
         try {
             const response = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
                 headers: {
                     'Authorization': `Bearer ${cfg.apiKey}`,
                     'Content-Type': 'application/json'
                 },
-                timeout: 30000
+                httpsAgent: timedOutLastAttempt ? freshAgent() : httpsAgent,
+                // Fail fast on the first attempt (dead-socket hangs waste the
+                // whole window); thinking models (Gemini) can exceed 30s on
+                // tool-heavy turns, so retries get the full 60s.
+                timeout: attempt === 1 ? 30000 : 60000
             });
 
             const choice = response.data?.choices?.[0];
@@ -134,9 +205,23 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
                 err.code = 'AI_RATE_LIMIT';
                 throw err;
             }
+            // Model overloaded (Gemini returns 503 UNAVAILABLE during demand
+            // spikes) — tell the admin what's happening instead of a generic 500
+            if (status === 503 && attempt === maxAttempts) {
+                const err = new Error('AI model is overloaded right now. Please try again in a minute.');
+                err.code = 'AI_UNAVAILABLE';
+                throw err;
+            }
             if (!retriable || attempt === maxAttempts) break;
 
-            const delayMs = 1000 * Math.pow(2, attempt - 1);
+            let delayMs = 1000 * Math.pow(2, attempt - 1);
+            // On 429, honor the provider's Retry-After header (capped at 20s)
+            if (status === 429) {
+                const retryAfter = parseFloat(error.response?.headers?.['retry-after']);
+                if (!isNaN(retryAfter) && retryAfter > 0) {
+                    delayMs = Math.min(Math.ceil(retryAfter * 1000) + 250, 20000);
+                }
+            }
             console.warn(`⚠️ [AI] ${cfg.provider} request failed (${status || error.code || error.message}), retry ${attempt}/${maxAttempts - 1} in ${delayMs}ms`);
             await new Promise(r => setTimeout(r, delayMs));
         }
@@ -148,4 +233,4 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
     throw err;
 }
 
-module.exports = { chatCompletion, getConfig, isConfigured, estimateTokens, computeCostUsd };
+module.exports = { chatCompletion, getConfig, isConfigured, estimateTokens, computeCostUsd, embedText, isEmbeddingConfigured };

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>AI Copilot Pro — OffComfrt Bot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* ── Reset & base ── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg-primary: #0f172a; --bg-secondary: #1e293b; --bg-card: #1e293b;
+            --bg-input: rgba(255,255,255,0.06); --border: rgba(255,255,255,0.1);
+            --text-primary: #f1f5f9; --text-secondary: #94a3b8; --text-muted: #64748b;
+            --accent: #6366f1; --accent-hover: #818cf8; --accent-bg: rgba(99,102,241,0.12);
+            --success: #22c55e; --warning: #f59e0b; --danger: #ef4444;
+            --sidebar-w: 240px; --topbar-h: 56px;
+            --radius: 12px; --radius-sm: 8px;
+        }
+        html, body { height: 100%; font-family: 'Inter', system-ui, sans-serif; background: var(--bg-primary); color: var(--text-primary); }
+        a { color: var(--accent-hover); text-decoration: none; }
+        button { font-family: inherit; cursor: pointer; }
+        input, textarea, select { font-family: inherit; }
+
+        /* ── Layout ── */
+        .copilot-app { display: flex; height: 100vh; overflow: hidden; }
+
+        /* ── Sidebar ── */
+        .copilot-sidebar {
+            width: var(--sidebar-w); background: var(--bg-secondary); border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; flex-shrink: 0; transition: width .2s;
+        }
+        .copilot-sidebar.collapsed { width: 64px; }
+        .copilot-sidebar.collapsed .sidebar-label, .copilot-sidebar.collapsed .sidebar-header span,
+        .copilot-sidebar.collapsed .sidebar-footer-text { display: none; }
+        .sidebar-header {
+            padding: 16px; display: flex; align-items: center; gap: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        .sidebar-header .logo { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #8b5cf6); display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+        .sidebar-header span { font-weight: 700; font-size: 15px; white-space: nowrap; }
+        .sidebar-nav { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+        .nav-btn {
+            display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+            border-radius: var(--radius-sm); border: none; background: transparent;
+            color: var(--text-secondary); font-size: 13.5px; font-weight: 500;
+            text-align: left; width: 100%; transition: all .15s;
+        }
+        .nav-btn:hover { background: var(--bg-input); color: var(--text-primary); }
+        .nav-btn.active { background: var(--accent-bg); color: var(--accent-hover); }
+        .nav-btn svg { flex-shrink: 0; }
+        .sidebar-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); padding: 16px 12px 6px; }
+        .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
+        .sidebar-footer a { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; padding: 8px 12px; border-radius: var(--radius-sm); }
+        .sidebar-footer a:hover { background: var(--bg-input); color: var(--text-primary); }
+
+        /* ── Main area ── */
+        .copilot-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .copilot-topbar {
+            height: var(--topbar-h); padding: 0 20px; display: flex; align-items: center;
+            justify-content: space-between; border-bottom: 1px solid var(--border);
+            background: var(--bg-secondary); flex-shrink: 0;
+        }
+        .topbar-left { display: flex; align-items: center; gap: 12px; }
+        .topbar-left h2 { font-size: 16px; font-weight: 600; }
+        .topbar-right { display: flex; align-items: center; gap: 12px; }
+        .topbar-badge { font-size: 11px; padding: 4px 10px; border-radius: 20px; background: var(--accent-bg); color: var(--accent-hover); font-weight: 600; }
+        .topbar-usage { font-size: 12px; color: var(--text-muted); }
+        .copilot-content { flex: 1; overflow-y: auto; padding: 0; }
+        .section-page { display: none; height: 100%; }
+        .section-page.active { display: flex; flex-direction: column; }
+
+        /* ── Mobile menu toggle ── */
+        .mobile-toggle { display: none; background: none; border: none; color: var(--text-primary); padding: 8px; }
+        .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 99; }
+
+        /* ── Shared components ── */
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+        .card-header h3 { font-size: 14px; font-weight: 600; }
+        .btn-primary { background: var(--accent); color: #fff; border: none; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-secondary { background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border); padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; }
+        .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+        .btn-danger { background: var(--danger); color: #fff; border: none; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; }
+        .input-field { background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; color: var(--text-primary); font-size: 13px; outline: none; width: 100%; }
+        .input-field:focus { border-color: var(--accent); }
+        .input-field::placeholder { color: var(--text-muted); }
+        textarea.input-field { resize: vertical; min-height: 60px; }
+        select.input-field { appearance: none; cursor: pointer; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+        .badge-success { background: rgba(34,197,94,.15); color: var(--success); }
+        .badge-warning { background: rgba(245,158,11,.15); color: var(--warning); }
+        .badge-danger { background: rgba(239,68,68,.15); color: var(--danger); }
+        .badge-info { background: var(--accent-bg); color: var(--accent-hover); }
+        .empty-state { text-align: center; padding: 48px 24px; color: var(--text-muted); }
+        .empty-state svg { margin-bottom: 12px; opacity: .4; }
+        .empty-state p { font-size: 14px; margin-top: 8px; }
+        .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Login screen ── */
+        .login-overlay { position: fixed; inset: 0; background: var(--bg-primary); z-index: 200; display: flex; align-items: center; justify-content: center; }
+        .login-box { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; width: 360px; max-width: 90vw; text-align: center; }
+        .login-box h2 { margin-bottom: 8px; }
+        .login-box p { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
+        .login-box .form-group { margin-bottom: 12px; }
+        .login-box .error-msg { color: var(--danger); font-size: 13px; margin-top: 8px; }
+
+        /* ── Responsive ── */
+        @media (max-width: 768px) {
+            .copilot-sidebar { position: fixed; left: -260px; top: 0; bottom: 0; z-index: 100; width: 260px !important; transition: left .25s; }
+            .copilot-sidebar.mobile-open { left: 0; }
+            .sidebar-overlay.show { display: block; }
+            .mobile-toggle { display: block; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Login (reuses admin auth) -->
+    <div id="loginOverlay" class="login-overlay" style="display:none;">
+        <div class="login-box">
+            <h2>AI Copilot Pro</h2>
+            <p>Sign in with your admin credentials</p>
+            <form id="loginForm">
+                <div class="form-group"><input class="input-field" type="text" id="loginUser" placeholder="Username" required></div>
+                <div class="form-group"><input class="input-field" type="password" id="loginPass" placeholder="Password" required></div>
+                <button class="btn-primary" type="submit" style="width:100%;margin-top:8px;">Sign In</button>
+                <div id="loginError" class="error-msg"></div>
+            </form>
+        </div>
+    </div>
+
+    <div class="copilot-app" id="copilotApp" style="display:none;">
+        <!-- Sidebar overlay (mobile) -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- Sidebar -->
+        <aside class="copilot-sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">&#x2728;</div>
+                <span>AI Copilot Pro</span>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="sidebar-label">Main</div>
+                <button class="nav-btn active" data-section="chat">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <span class="sidebar-label" style="display:inline;padding:0;font-size:13.5px;text-transform:none;letter-spacing:0;">Chat</span>
+                </button>
+                <button class="nav-btn" data-section="training">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                    <span class="sidebar-label" style="display:inline;padding:0;font-size:13.5px;text-transform:none;letter-spacing:0;">Training</span>
+                </button>
+                <button class="nav-btn" data-section="actions">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                    <span class="sidebar-label" style="display:inline;padding:0;font-size:13.5px;text-transform:none;letter-spacing:0;">Actions</span>
+                </button>
+                <div class="sidebar-label">Insights</div>
+                <button class="nav-btn" data-section="analytics">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+                    <span class="sidebar-label" style="display:inline;padding:0;font-size:13.5px;text-transform:none;letter-spacing:0;">Analytics</span>
+                </button>
+                <button class="nav-btn" data-section="workflows">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                    <span class="sidebar-label" style="display:inline;padding:0;font-size:13.5px;text-transform:none;letter-spacing:0;">Workflows</span>
+                </button>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="/dashboard">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    <span class="sidebar-footer-text">Back to Dashboard</span>
+                </a>
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <div class="copilot-main">
+            <div class="copilot-topbar">
+                <div class="topbar-left">
+                    <button class="mobile-toggle" id="mobileToggle">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                    </button>
+                    <h2 id="sectionTitle">Chat</h2>
+                </div>
+                <div class="topbar-right">
+                    <span class="topbar-badge" id="modelBadge">AI</span>
+                    <span class="topbar-usage" id="usageBadge"></span>
+                </div>
+            </div>
+            <div class="copilot-content">
+                <div id="section-chat" class="section-page active"></div>
+                <div id="section-training" class="section-page"></div>
+                <div id="section-actions" class="section-page"></div>
+                <div id="section-analytics" class="section-page"></div>
+                <div id="section-workflows" class="section-page"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/dashboard/js/ai-copilot-pro/app.js?v=1"></script>
+    <script src="/dashboard/js/ai-copilot-pro/chat.js?v=1"></script>
+    <script src="/dashboard/js/ai-copilot-pro/training.js?v=1"></script>
+    <script src="/dashboard/js/ai-copilot-pro/actions.js?v=1"></script>
+    <script src="/dashboard/js/ai-copilot-pro/analytics.js?v=1"></script>
+    <script src="/dashboard/js/ai-copilot-pro/workflows.js?v=1"></script>
+</body>
+</html>

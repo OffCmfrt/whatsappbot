@@ -8,8 +8,18 @@
 
 const { chatCompletion, isConfigured } = require('./aiClient');
 const aiStore = require('./aiStore');
+const { findSimilarExamples } = require('./learning');
 const Settings = require('../../models/Settings');
 const { dbAdapter } = require('../../database/db');
+
+// Suggestion cache + in-flight dedupe, keyed by phone+ticket. Entries are
+// validated against the latest message id, so a new customer message always
+// forces a fresh generation while repeat/prefetched requests return instantly
+// (and cost nothing — cache hits skip the AI call and usage log entirely).
+const SUGGEST_CACHE_TTL_MS = 10 * 60 * 1000;
+const SUGGEST_CACHE_MAX = 100;
+const suggestionCache = new Map(); // key -> { latestMsgId, result, at }
+const inFlight = new Map();        // key -> Promise<result>
 
 const SUGGEST_SYSTEM_PROMPT = `You are a customer support assistant for OFFCOMFRT (Indian D2C clothing brand). Draft WhatsApp replies for a human support agent to review and send.
 
@@ -19,6 +29,7 @@ Rules:
 - Use ONLY facts from the provided context (orders, tracking, tickets). Never invent order numbers, dates, refund amounts or policies.
 - If the context lacks the answer, the draft should ask the customer for the missing detail or say the team is checking.
 - Reply in the same language style the customer used (English / Hindi / Hinglish).
+- approvedExamples (if present) are replies our team actually sent for similar past questions. Prefer their wording, tone and policies whenever they fit.
 - Respond with JSON only: {"suggestions": ["draft 1", "draft 2", "draft 3"]}. 1-3 drafts, each under 500 characters.`;
 
 async function gatherContext(phone, ticketId) {
@@ -27,8 +38,8 @@ async function gatherContext(phone, ticketId) {
 
     const [messages, customer, orders, tickets] = await Promise.all([
         dbAdapter.query(
-            `SELECT message_type, message_content, created_at FROM messages
-             WHERE customer_phone LIKE ? ORDER BY id DESC LIMIT 20`,
+            `SELECT id, message_type, message_content FROM messages
+             WHERE customer_phone LIKE ? ORDER BY id DESC LIMIT 12`,
             [phonePattern]
         ),
         dbAdapter.query('SELECT phone, name, email FROM customers WHERE phone LIKE ? LIMIT 1', [phonePattern]),
@@ -48,21 +59,35 @@ async function gatherContext(phone, ticketId) {
 
     return {
         customer: customer[0] || { phone: digits },
+        latestMsgId: messages[0]?.id || null,
         conversation: messages.reverse().map(m => ({
             from: m.message_type === 'incoming' ? 'customer' : 'agent',
-            text: String(m.message_content || '').substring(0, 500),
-            at: m.created_at
+            text: String(m.message_content || '').substring(0, 300)
         })),
-        recentOrders: orders,
-        tickets
+        recentOrders: orders.map(compactRow),
+        tickets: tickets.map(compactRow)
     };
+}
+
+// Drop null/empty fields — they add tokens without adding information
+function compactRow(row) {
+    const out = {};
+    for (const [k, v] of Object.entries(row || {})) {
+        if (v === null || v === undefined || v === '') continue;
+        out[k] = v;
+    }
+    return out;
 }
 
 /**
  * Generate reply suggestions for a customer's chat.
+ * Served from cache when the conversation hasn't changed since the last
+ * generation; concurrent requests for the same chat share one AI call.
+ * @param {boolean} [prefetch] — cache-warming request (chat just opened):
+ *   keeps the tail of the daily budget reserved for explicit clicks.
  * @returns {{ suggestions: string[], context: object }}
  */
-async function suggestReply({ actor, phone, ticketId }) {
+async function suggestReply({ actor, phone, ticketId, prefetch = false }) {
     if (!isConfigured()) {
         const err = new Error('AI is not configured. Set AI_API_KEY in the server environment.');
         err.code = 'AI_NOT_CONFIGURED';
@@ -76,15 +101,6 @@ async function suggestReply({ actor, phone, ticketId }) {
         throw err;
     }
 
-    // Separate daily cap for suggestions (shared across admins)
-    const dailyLimit = parseInt(await Settings.get('ai_suggest_reply_daily_limit', '100')) || 100;
-    const totalToday = await countAllSuggestionsToday();
-    if (totalToday >= dailyLimit) {
-        const err = new Error(`AI suggestion daily limit reached (${dailyLimit}). Try again tomorrow.`);
-        err.code = 'AI_LIMIT';
-        throw err;
-    }
-
     const context = await gatherContext(phone, ticketId);
     if (!context.conversation.length) {
         const err = new Error('No conversation history found for this customer.');
@@ -92,11 +108,55 @@ async function suggestReply({ actor, phone, ticketId }) {
         throw err;
     }
 
+    const cacheKey = `${String(phone).replace(/\D/g, '').slice(-10)}:${ticketId || ''}`;
+
+    // Conversation unchanged since the last generation → instant, free
+    const cached = suggestionCache.get(cacheKey);
+    if (cached && cached.latestMsgId === context.latestMsgId
+        && Date.now() - cached.at < SUGGEST_CACHE_TTL_MS) {
+        return cached.result;
+    }
+    suggestionCache.delete(cacheKey);
+
+    // A generation for this chat is already running (e.g. the open-chat
+    // prefetch) — share its result instead of paying for a second AI call
+    const pending = inFlight.get(cacheKey);
+    if (pending) return pending;
+
+    // Separate daily cap for suggestions (shared across admins). Prefetches
+    // stop at 90% so explicit ✨ clicks keep the last slice of the budget.
+    const dailyLimit = parseInt(await Settings.get('ai_suggest_reply_daily_limit', '100')) || 100;
+    const totalToday = await countAllSuggestionsToday();
+    if (totalToday >= dailyLimit || (prefetch && totalToday >= dailyLimit * 0.9)) {
+        const err = new Error(`AI suggestion daily limit reached (${dailyLimit}). Try again tomorrow.`);
+        err.code = 'AI_LIMIT';
+        throw err;
+    }
+
+    const generation = generateSuggestions({ actor, context, cacheKey });
+    inFlight.set(cacheKey, generation);
+    try {
+        return await generation;
+    } finally {
+        inFlight.delete(cacheKey);
+    }
+}
+
+// The expensive part: learned-example lookup + AI call. Result is cached
+// against the conversation version (latest message id) for repeat requests.
+async function generateSuggestions({ actor, context, cacheKey }) {
+    // Learned few-shot examples: what our team actually replied to similar questions
+    const lastCustomerMsg = [...context.conversation].reverse().find(m => m.from === 'customer');
+    const approvedExamples = lastCustomerMsg
+        ? await findSimilarExamples(lastCustomerMsg.text, 3)
+        : [];
+
     const userContent = JSON.stringify({
         customer: context.customer,
         conversation: context.conversation,
         recentOrders: context.recentOrders,
-        openTickets: context.tickets
+        openTickets: context.tickets,
+        ...(approvedExamples.length ? { approvedExamples: approvedExamples.map(e => ({ q: e.q, a: e.a })) } : {})
     });
 
     const { message, usage, model } = await chatCompletion({
@@ -130,7 +190,15 @@ async function suggestReply({ actor, phone, ticketId }) {
         completionTokens: usage.completion_tokens
     });
 
-    return { suggestions, customer: context.customer };
+    const result = { suggestions, customer: context.customer };
+    if (suggestions.length) {
+        if (suggestionCache.size >= SUGGEST_CACHE_MAX) {
+            // Evict the oldest entry (Map preserves insertion order)
+            suggestionCache.delete(suggestionCache.keys().next().value);
+        }
+        suggestionCache.set(cacheKey, { latestMsgId: context.latestMsgId, result, at: Date.now() });
+    }
+    return result;
 }
 
 async function countAllSuggestionsToday() {

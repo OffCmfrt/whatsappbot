@@ -1157,8 +1157,8 @@
         .awb-chip-mini { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.3rem 0.6rem; background: rgba(37, 211, 102, 0.08); border: 1px solid rgba(37, 211, 102, 0.3); border-radius: 14px; color: #25d366; font-size: 0.68rem; cursor: pointer; white-space: nowrap; }
 
         /* Ship Modal */
-        #shipModal, #bulkShipModal, #shipmentsDrawer, #soNewShipModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); backdrop-filter: blur(12px); z-index: 2600; justify-content: center; align-items: center; }
-        #shipModal.active, #bulkShipModal.active, #soNewShipModal.active { display: flex; }
+        #shipModal, #bulkShipModal, #shipmentsDrawer, #soNewShipModal, #reshipModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); backdrop-filter: blur(12px); z-index: 2600; justify-content: center; align-items: center; }
+        #shipModal.active, #bulkShipModal.active, #soNewShipModal.active, #reshipModal.active { display: flex; }
         #shipmentsDrawer.active { display: flex; justify-content: flex-end; }
         .ship-modal-content { background: #0a0a0a; border: 1px solid rgba(255,255,255,0.15); border-radius: 14px; width: 94%; max-width: 720px; max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.9); overflow: hidden; }
         .ship-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1.4rem 1.8rem; border-bottom: 1px solid rgba(255,255,255,0.08); }
@@ -3741,6 +3741,84 @@
         .so-act-btn.wa:hover { background: #25d366; color: #000; border-color: #25d366; }
         .so-act-btn.retry { border-color: rgba(162,155,254,0.35); color: #a29bfe; }
         .so-act-btn.retry:hover { background: #a29bfe; color: #000; border-color: #a29bfe; }
+        .so-act-btn.reship { border-color: rgba(255,199,89,0.4); color: #ffc759; }
+        .so-act-btn.reship:hover { background: #ffc759; color: #000; border-color: #ffc759; }
+
+        /* Premium Re-Ship flow */
+        .reship-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.12rem 0.55rem;
+            border-radius: 20px;
+            font-size: 0.64rem;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            font-family: 'Archivo Narrow', sans-serif;
+            font-weight: 600;
+            background: rgba(255,199,89,0.14);
+            color: #ffc759;
+            border: 1px solid rgba(255,199,89,0.3);
+            white-space: nowrap;
+        }
+        .reship-prev-card {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 0.9rem 1rem;
+            margin-bottom: 1.1rem;
+            font-size: 0.82rem;
+            line-height: 1.7;
+            color: rgba(255,255,255,0.75);
+        }
+        .reship-prev-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.45rem; }
+        .reship-reason-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 0.5rem;
+            margin-bottom: 0.9rem;
+        }
+        .reship-reason-chip {
+            padding: 0.6rem 0.5rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.03);
+            color: rgba(255,255,255,0.75);
+            font-size: 0.78rem;
+            line-height: 1.4;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s ease;
+            user-select: none;
+        }
+        .reship-reason-chip .chip-icon { font-size: 1rem; display: block; margin-bottom: 0.15rem; }
+        .reship-reason-chip:hover { border-color: rgba(255,199,89,0.5); color: #fff; }
+        .reship-reason-chip.selected { background: rgba(255,199,89,0.15); border-color: #ffc759; color: #ffc759; font-weight: 600; }
+        .reship-warn-box {
+            background: rgba(255,165,2,0.08);
+            border: 1px solid rgba(255,165,2,0.3);
+            color: #ffa502;
+            border-radius: 8px;
+            padding: 0.7rem 0.9rem;
+            font-size: 0.8rem;
+            line-height: 1.55;
+            margin-bottom: 0.6rem;
+        }
+        .reship-warn-box.info { background: rgba(83,189,235,0.08); border-color: rgba(83,189,235,0.3); color: #53bdeb; }
+        #shipReshipBanner {
+            display: none;
+            align-items: center;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+            margin: 0.9rem 1.5rem 0;
+            padding: 0.6rem 0.9rem;
+            border-radius: 8px;
+            background: rgba(255,199,89,0.08);
+            border: 1px solid rgba(255,199,89,0.3);
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.8);
+            line-height: 1.5;
+        }
         
         /* New Forward Shipment lookup results */
         .so-lookup-item { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 0.9rem 1rem; margin-bottom: 0.7rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
@@ -5052,6 +5130,7 @@
                 <h3>🚚 Ship Order <span class="ship-order-label" id="shipOrderIdLabel"></span></h3>
                 <button class="ship-close" onclick="closeShipModal()">&times;</button>
             </div>
+            <div id="shipReshipBanner"></div>
             <div class="ship-steps">
                 <div class="ship-step-tab active" id="shipStepTab1">1 &middot; Review &amp; Package</div>
                 <div class="ship-step-tab" id="shipStepTab2">2 &middot; Carrier &amp; Rates</div>
@@ -5169,8 +5248,33 @@
         </div>
     </div>
 
+    <!-- Premium Re-Ship Modal (reason-tracked replacement shipments) -->
+    <div id="reshipModal" onclick="if(event.target === this) closeReshipModal()">
+        <div class="ship-modal-content" style="max-width: 640px;">
+            <div class="ship-modal-header">
+                <h3>🔄 Re-Ship Order <span class="ship-order-label" id="reshipOrderIdLabel"></span></h3>
+                <button class="ship-close" onclick="closeReshipModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div id="reshipPrevSummary"></div>
+                <div class="ship-section-title">Why are you re-shipping?</div>
+                <div class="reship-reason-grid" id="reshipReasonGrid"></div>
+                <div class="form-group">
+                    <label>Note <span style="color:#888; font-weight:400;">(optional — saved in the shipment audit trail)</span></label>
+                    <input type="text" id="reshipNote" maxlength="200" placeholder="e.g. courier confirmed package lost at hub" autocomplete="off">
+                </div>
+                <div id="reshipWarnBox"></div>
+                <div id="reshipError"></div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" onclick="closeReshipModal()">Back</button>
+                <button class="btn btn-primary" id="reshipContinueBtn" onclick="reshipContinue()">Continue</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
-    <script src="{{ 'shoppers-app.js' | asset_url }}?v=1712700004"></script>
-    <script src="{{ 'shoppers-ai-copilot.js' | asset_url }}?v=1712700001"></script>
+    <script src="{{ 'shoppers-app.js' | asset_url }}?v=1712700006"></script>
+    <script src="{{ 'shoppers-ai-copilot-pro.js' | asset_url }}?v=1"></script>
 </body>
 </html>

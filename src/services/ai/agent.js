@@ -8,42 +8,81 @@
  */
 
 const { chatCompletion, isConfigured, estimateTokens } = require('./aiClient');
-const { getTool, getToolSchemas, summarizeTool } = require('./tools');
+const { getTool, selectToolSchemas, summarizeTool } = require('./tools');
 const aiStore = require('./aiStore');
 const Settings = require('../../models/Settings');
 
-const MAX_TOOL_ROUNDS = 6;
-const MAX_INPUT_TOKENS = 8000;
-const TOOL_RESULT_MAX_CHARS = 12000;
+const MAX_TOOL_ROUNDS = 4;
+const MAX_INPUT_TOKENS = 6000;
+// Keep tool results small: they are re-sent on every subsequent round, so large
+// results multiply token usage and trip Groq's free-tier 12k tokens/min limit.
+const TOOL_RESULT_MAX_CHARS = 5000;
+const HISTORY_TURN_MAX_CHARS = 1200;
 
-const SYSTEM_PROMPT = `You are the OFFCOMFRT admin AI copilot inside the WhatsApp bot dashboard.
-You help the internal team query customers, orders, WhatsApp messages, support tickets, abandoned carts, Shopify orders, shipments and carrier tracking, and perform admin actions.
-
+// Compact on purpose — the system prompt is re-sent on every agent round.
+const SYSTEM_PROMPT = `You are the OFFCOMFRT admin AI copilot in the WhatsApp bot dashboard, helping the team with customers, orders, messages, tickets, carts, shipments and tracking.
 Rules:
-- Use the provided tools to fetch real data. Never invent order numbers, tracking status or statistics.
-- Actions that change anything (send message, update ticket, book shipment, schedule pickup, create broadcast draft) require admin confirmation — when you call such a tool, the system pauses and asks the admin to confirm. Tell the admin you've prepared the action and they need to confirm it.
-- Keep answers concise and formatted for a chat panel: short paragraphs, dashes for lists. No markdown tables.
-- Amounts are INR unless stated otherwise. Dates/times are UTC in the database; mention IST when relevant (UTC+5:30).
-- If a request is ambiguous (e.g. multiple matching customers), show the options and ask which one.
-- If a tool errors, report the error plainly and suggest what to try next.`;
+- Fetch real data with tools; never invent orders, tracking or stats. Prefer answering from data already in this conversation instead of re-calling tools.
+- Confirmation-gated tools (send message, update ticket, book shipment, schedule pickup, broadcast draft) pause for admin confirm — say the action is prepared and needs confirmation.
+- Be concise: short paragraphs, dash lists, no markdown tables. Amounts INR; DB times UTC (IST = UTC+5:30).
+- If ambiguous, list options and ask. If a tool errors, say so plainly and suggest next steps.`;
+
+/**
+ * Models sometimes emit numbers as strings ("limit": "10"). Schemas accept both
+ * (['integer','string']) so the provider doesn't reject the call; here we coerce
+ * numeric strings back to integers based on the tool's declared schema.
+ */
+function coerceArgs(tool, args) {
+    const props = tool?.parameters?.properties;
+    if (!props || !args || typeof args !== 'object') return args;
+    for (const [key, schema] of Object.entries(props)) {
+        const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+        if (types.includes('integer') && typeof args[key] === 'string') {
+            const n = parseInt(args[key], 10);
+            if (!Number.isNaN(n)) args[key] = n;
+        }
+    }
+    return args;
+}
 
 /** Truncate oldest history turns so the estimated input stays under budget. */
 function truncateHistory(history, budgetTokens) {
     const out = [];
     let total = 0;
     for (let i = history.length - 1; i >= 0; i--) {
-        const t = estimateTokens(history[i].content) + 4;
+        let content = String(history[i].content || '');
+        // Clamp single oversized turns so one long answer doesn't evict all context
+        if (content.length > HISTORY_TURN_MAX_CHARS) {
+            content = content.substring(0, HISTORY_TURN_MAX_CHARS) + '…';
+        }
+        const t = estimateTokens(content) + 4;
         if (total + t > budgetTokens) break;
         total += t;
-        out.unshift(history[i]);
+        out.unshift({ ...history[i], content });
     }
     return out;
+}
+
+/** Recursively drop null/empty values — DB rows are full of them and they cost tokens. */
+function compactValue(value) {
+    if (Array.isArray(value)) {
+        return value.map(compactValue);
+    }
+    if (value && typeof value === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(value)) {
+            if (v === null || v === undefined || v === '') continue;
+            out[k] = compactValue(v);
+        }
+        return out;
+    }
+    return value;
 }
 
 function clampToolResult(result) {
     let json;
     try {
-        json = JSON.stringify(result);
+        json = JSON.stringify(compactValue(result));
     } catch {
         json = String(result);
     }
@@ -74,14 +113,18 @@ async function runAgent({ actor, userMessage }) {
     }
 
     const history = await aiStore.getChatHistory(actor);
-    const budget = MAX_INPUT_TOKENS - estimateTokens(SYSTEM_PROMPT) - estimateTokens(userMessage) - 1500; // reserve for tool schemas
+    const budget = MAX_INPUT_TOKENS - estimateTokens(SYSTEM_PROMPT) - estimateTokens(userMessage) - 1000; // reserve for tool schemas
+    const recentHistory = truncateHistory(history, Math.max(budget, 1000));
     const messages = [
         { role: 'system', content: SYSTEM_PROMPT },
-        ...truncateHistory(history, Math.max(budget, 1000)),
+        ...recentHistory,
         { role: 'user', content: userMessage }
     ];
 
-    const toolSchemas = getToolSchemas();
+    // Route: only send tool schemas relevant to the question (+ recent context),
+    // instead of all 14 schemas on every round — the single biggest token saver.
+    const routingContext = `${recentHistory.slice(-4).map(h => h.content).join('\n')}\n${userMessage}`;
+    const toolSchemas = selectToolSchemas(routingContext);
     const usageTotal = { prompt_tokens: 0, completion_tokens: 0 };
     const toolCallLog = [];
     let pendingAction = null;
@@ -120,6 +163,8 @@ async function runAgent({ actor, userMessage }) {
 
             const tool = getTool(name);
             let resultJson;
+
+            if (tool) args = coerceArgs(tool, args);
 
             if (!tool) {
                 resultJson = JSON.stringify({ error: `Unknown tool: ${name}` });
@@ -193,9 +238,10 @@ async function executeConfirmedAction(actionId, actor) {
     if (typeof args === 'string') {
         try { args = JSON.parse(args); } catch { args = {}; }
     }
+    args = coerceArgs(tool, args || {});
 
     try {
-        const result = await tool.execute(args || {}, { actor, confirmed: true });
+        const result = await tool.execute(args, { actor, confirmed: true });
         await aiStore.updatePendingAction(actionId, { status: 'executed', result: clampToolResult(result) });
         await aiStore.appendChatHistory(actor, 'assistant', `✅ Executed: ${action.summary}`);
         return { ok: true, result, summary: action.summary };

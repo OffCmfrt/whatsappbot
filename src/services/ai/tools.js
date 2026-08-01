@@ -88,7 +88,7 @@ const tools = [
             type: 'object',
             properties: {
                 phone: { type: 'string', description: 'Customer phone number (any format)' },
-                limit: { type: 'integer', description: 'Number of recent messages (default 20, max 50)' }
+                limit: { type: ['integer', 'string'], description: 'Number of recent messages (default 20, max 50)' }
             },
             required: ['phone']
         },
@@ -112,7 +112,7 @@ const tools = [
             properties: {
                 status: { type: 'string', description: 'Filter by status: open, resolved, closed' },
                 phone: { type: 'string', description: 'Filter by customer phone' },
-                limit: { type: 'integer', description: 'Max tickets to return (default 20, max 50)' }
+                limit: { type: ['integer', 'string'], description: 'Max tickets to return (default 20, max 50)' }
             },
             required: []
         },
@@ -129,12 +129,29 @@ const tools = [
         }
     },
     {
+        name: 'search_learned_replies',
+        description: 'Find approved replies our support team previously sent for similar customer questions. Use when drafting a reply to match proven wording and policies.',
+        parameters: {
+            type: 'object',
+            properties: {
+                question: { type: 'string', description: 'The customer question or topic to match' }
+            },
+            required: ['question']
+        },
+        requiresConfirmation: false,
+        async execute({ question }) {
+            const { findSimilarExamples } = require('./learning');
+            const examples = await findSimilarExamples(question, 3);
+            return { count: examples.length, examples };
+        }
+    },
+    {
         name: 'update_ticket',
         description: 'Update a support ticket status (open, resolved, closed). Requires admin confirmation.',
         parameters: {
             type: 'object',
             properties: {
-                ticketId: { type: 'integer', description: 'Support ticket ID' },
+                ticketId: { type: ['integer', 'string'], description: 'Support ticket ID' },
                 status: { type: 'string', enum: ['open', 'resolved', 'closed'], description: 'New status' }
             },
             required: ['ticketId', 'status']
@@ -142,9 +159,14 @@ const tools = [
         requiresConfirmation: true,
         summary: (args) => `Update support ticket #${args.ticketId} status to "${args.status}"`,
         async execute({ ticketId, status }) {
-            const rows = await dbAdapter.query('SELECT id, status FROM support_tickets WHERE id = ?', [ticketId]);
+            const rows = await dbAdapter.query('SELECT id, status, customer_phone FROM support_tickets WHERE id = ?', [ticketId]);
             if (!rows.length) throw new Error(`Ticket ${ticketId} not found`);
             await dbAdapter.update('support_tickets', { status, updated_at: new Date().toISOString() }, { id: ticketId });
+            // Outcome signal for AI learning: resolution means recent replies worked
+            if ((status === 'resolved' || status === 'closed') && rows[0].customer_phone) {
+                const { boostFromResolvedTicket } = require('./learning');
+                boostFromResolvedTicket(rows[0].customer_phone).catch(() => {});
+            }
             return { ticketId, previousStatus: rows[0].status, newStatus: status };
         }
     },
@@ -155,7 +177,7 @@ const tools = [
             type: 'object',
             properties: {
                 status: { type: 'string', description: 'Filter: pending, recovered, expired' },
-                limit: { type: 'integer', description: 'Max carts (default 20, max 50)' }
+                limit: { type: ['integer', 'string'], description: 'Max carts (default 20, max 50)' }
             },
             required: []
         },
@@ -177,7 +199,7 @@ const tools = [
             type: 'object',
             properties: {
                 orderName: { type: 'string', description: 'Order name like #1234 (omit to list recent orders)' },
-                limit: { type: 'integer', description: 'Max orders when listing recent (default 10, max 25)' }
+                limit: { type: ['integer', 'string'], description: 'Max orders when listing recent (default 10, max 25)' }
             },
             required: []
         },
@@ -285,7 +307,7 @@ const tools = [
             properties: {
                 orderId: { type: 'string', description: 'Filter by order ID' },
                 status: { type: 'string', description: 'Filter by shipment status' },
-                limit: { type: 'integer', description: 'Max results (default 20, max 50)' }
+                limit: { type: ['integer', 'string'], description: 'Max results (default 20, max 50)' }
             },
             required: []
         },
@@ -322,7 +344,7 @@ const tools = [
         parameters: {
             type: 'object',
             properties: {
-                shipmentId: { type: 'integer', description: 'Internal shipment ID (from list_shipments)' },
+                shipmentId: { type: ['integer', 'string'], description: 'Internal shipment ID (from list_shipments)' },
                 pickupDate: { type: 'string', description: 'Pickup date YYYY-MM-DD' }
             },
             required: ['shipmentId', 'pickupDate']
@@ -409,7 +431,7 @@ const tools = [
             properties: {
                 resource: { type: 'string', enum: ['requests', 'request_stats', 'influencers'], description: 'What to fetch from the returns system' },
                 query: { type: 'string', description: 'Optional filter, e.g. order number or status' },
-                limit: { type: 'integer', description: 'Max rows (default 20)' }
+                limit: { type: ['integer', 'string'], description: 'Max rows (default 20)' }
             },
             required: ['resource']
         },
@@ -424,6 +446,186 @@ const tools = [
                 timeout: 15000
             });
             return response.data;
+        }
+    },
+    // ---------- Batch / bulk tools ----------
+    {
+        name: 'batch_update_tickets',
+        description: 'Update multiple support tickets at once (resolve, close, or reopen). Requires admin confirmation. Returns count of affected tickets.',
+        parameters: {
+            type: 'object',
+            properties: {
+                ticketIds: { type: 'string', description: 'Comma-separated ticket IDs, e.g. "12,15,18"' },
+                status: { type: 'string', enum: ['open', 'resolved', 'closed'], description: 'New status for all selected tickets' },
+                filterStatus: { type: 'string', description: 'Alternatively, update ALL tickets matching this status (open/resolved/closed)' },
+                filterPortalId: { type: ['integer', 'string'], description: 'Limit filter to a specific support portal ID' }
+            },
+            required: ['status']
+        },
+        requiresConfirmation: true,
+        summary: (args) => {
+            if (args.ticketIds) return `Update ${String(args.ticketIds).split(',').length} ticket(s) to "${args.status}"`;
+            return `Update all "${args.filterStatus || 'open'}" tickets to "${args.status}"`;
+        },
+        async execute({ ticketIds, status, filterStatus, filterPortalId }) {
+            let ids = [];
+            if (ticketIds) {
+                ids = String(ticketIds).split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+            } else if (filterStatus) {
+                let sql = 'SELECT id FROM support_tickets WHERE status = ?';
+                const params = [filterStatus];
+                if (filterPortalId) { sql += ' AND portal_id = ?'; params.push(filterPortalId); }
+                sql += ' LIMIT 100';
+                const rows = await dbAdapter.query(sql, params);
+                ids = rows.map(r => r.id);
+            }
+            if (!ids.length) throw new Error('No tickets matched the criteria');
+            const now = new Date().toISOString();
+            for (const id of ids) {
+                await dbAdapter.update('support_tickets', { status, updated_at: now }, { id });
+            }
+            return { updated: ids.length, ticketIds: ids, newStatus: status };
+        }
+    },
+    {
+        name: 'bulk_send_whatsapp',
+        description: 'Send the same WhatsApp message to multiple customers. Requires admin confirmation. Max 50 recipients per call. Free-form messages only deliver inside the 24h service window.',
+        parameters: {
+            type: 'object',
+            properties: {
+                phones: { type: 'string', description: 'Comma-separated phone numbers, or a segment keyword: "all_customers", "open_tickets", "pending_carts"' },
+                message: { type: 'string', description: 'Message text to send to all recipients' }
+            },
+            required: ['phones', 'message']
+        },
+        requiresConfirmation: true,
+        summary: (args) => {
+            const count = /^all_customers|open_tickets|pending_carts$/i.test(args.phones) ? args.phones : String(args.phones).split(',').length;
+            return `Send WhatsApp to ${count} recipient(s): "${String(args.message).substring(0, 80)}…"`;
+        },
+        async execute({ phones, message }) {
+            const whatsappService = require('../whatsappService');
+            let recipients = [];
+            const segment = String(phones).trim();
+            if (/^all_customers$/i.test(segment)) {
+                const rows = await dbAdapter.query('SELECT phone FROM customers LIMIT 50');
+                recipients = rows.map(r => r.phone);
+            } else if (/^open_tickets$/i.test(segment)) {
+                const rows = await dbAdapter.query('SELECT DISTINCT customer_phone FROM support_tickets WHERE status = \'open\' LIMIT 50');
+                recipients = rows.map(r => r.customer_phone);
+            } else if (/^pending_carts$/i.test(segment)) {
+                const rows = await dbAdapter.query('SELECT DISTINCT customer_phone FROM abandoned_carts WHERE status = \'pending\' LIMIT 50');
+                recipients = rows.map(r => r.customer_phone);
+            } else {
+                recipients = segment.split(',').map(p => p.trim()).filter(Boolean).slice(0, 50);
+            }
+            if (!recipients.length) throw new Error('No recipients found');
+            const results = { sent: 0, failed: 0, errors: [] };
+            for (const phone of recipients) {
+                try {
+                    const r = await whatsappService.sendMessage(phone, message);
+                    if (r === false) results.failed++;
+                    else results.sent++;
+                } catch (e) {
+                    results.failed++;
+                    results.errors.push(`${phone}: ${e.message}`);
+                }
+            }
+            return { ...results, totalRecipients: recipients.length };
+        }
+    },
+    {
+        name: 'batch_book_shipments',
+        description: 'Book shipments for multiple shopper orders at once. Requires admin confirmation. Max 25 per batch.',
+        parameters: {
+            type: 'object',
+            properties: {
+                shopperIds: { type: 'string', description: 'Comma-separated shopper record IDs' },
+                carrier: { type: 'string', enum: ['delhivery', 'shiprocket'], description: 'Carrier to use for all shipments' }
+            },
+            required: ['shopperIds', 'carrier']
+        },
+        requiresConfirmation: true,
+        summary: (args) => `Book ${String(args.shopperIds).split(',').length} ${args.carrier} shipment(s)`,
+        async execute({ shopperIds, carrier }) {
+            const shippingService = require('../shippingService');
+            const ids = String(shopperIds).split(',').map(s => s.trim()).filter(Boolean).slice(0, 25);
+            if (!ids.length) throw new Error('No shopper IDs provided');
+            const results = { booked: 0, failed: 0, errors: [] };
+            for (const shopperId of ids) {
+                try {
+                    await shippingService.ship({ shopperId, carrier, shippedBy: 'ai-copilot-batch' });
+                    results.booked++;
+                } catch (e) {
+                    results.failed++;
+                    results.errors.push(`${shopperId}: ${e.message}`);
+                }
+            }
+            return { ...results, carrier };
+        }
+    },
+    {
+        name: 'smart_triage_tickets',
+        description: 'AI-powered analysis of open support tickets: groups them by topic, estimates priority, and suggests portal assignment. Read-only — does not modify tickets.',
+        parameters: {
+            type: 'object',
+            properties: {
+                limit: { type: ['integer', 'string'], description: 'Max tickets to analyze (default 30, max 50)' }
+            },
+            required: []
+        },
+        requiresConfirmation: false,
+        async execute({ limit }) {
+            const n = Math.min(parseInt(limit) || 30, 50);
+            const rows = await dbAdapter.query(
+                `SELECT id, ticket_number, customer_phone, customer_name, message, status, portal_id, created_at
+                 FROM support_tickets WHERE status = 'open' ORDER BY created_at ASC LIMIT ?`,
+                [n]
+            );
+            // Simple keyword-based triage (no extra AI call needed)
+            const categories = {
+                'Order Status': /\b(where|status|track|when|deliver|arriv|ship)\b/i,
+                'Return/Exchange': /\b(return|exchange|refund|replace|size|wrong)\b/i,
+                'Payment': /\b(payment|pay|cod|prepaid|refund|upi|card|money)\b/i,
+                'Product Query': /\b(product|stock|available|size|color|material|fabric)\b/i,
+                'Complaint': /\b(complain|bad|worst|damage|defect|broken|poor)\b/i,
+                'General': /./
+            };
+            const triaged = rows.map(t => {
+                let category = 'General';
+                for (const [cat, pattern] of Object.entries(categories)) {
+                    if (pattern.test(t.message || '')) { category = cat; break; }
+                }
+                const ageHours = Math.round((Date.now() - new Date(t.created_at).getTime()) / 3600000);
+                const priority = ageHours > 48 ? 'high' : ageHours > 24 ? 'medium' : 'low';
+                return { id: t.id, ticket_number: t.ticket_number, customer_name: t.customer_name, message: String(t.message || '').substring(0, 120), category, priority, ageHours, portal_id: t.portal_id };
+            });
+            const summary = {};
+            triaged.forEach(t => { summary[t.category] = (summary[t.category] || 0) + 1; });
+            return { total: triaged.length, categorySummary: summary, tickets: triaged };
+        }
+    },
+    {
+        name: 'get_pending_shipments',
+        description: 'List shopper orders that are confirmed but not yet shipped. Shows order details ready for batch shipment booking.',
+        parameters: {
+            type: 'object',
+            properties: {
+                limit: { type: ['integer', 'string'], description: 'Max results (default 25, max 50)' }
+            },
+            required: []
+        },
+        requiresConfirmation: false,
+        async execute({ limit }) {
+            const n = Math.min(parseInt(limit) || 25, 50);
+            const rows = await dbAdapter.query(
+                `SELECT id, customer_name, customer_phone, product_name, total_amount, status, created_at
+                 FROM store_shoppers
+                 WHERE status IN ('confirmed', 'processing')
+                 ORDER BY created_at ASC LIMIT ?`,
+                [n]
+            );
+            return { count: rows.length, pendingShipment: rows };
         }
     }
 ];
@@ -442,6 +644,52 @@ function getToolSchemas() {
     }));
 }
 
+// ---------- Token-lean tool routing ----------
+// Tool schemas are re-sent on every agent round and dominate the request size,
+// so we only send the tools whose triggers match the conversation context.
+// run_sql_read is always included as a generic escape hatch; if nothing
+// matches, the full toolbox is sent so capability is never lost.
+const TOOL_TRIGGERS = {
+    query_stats: /\b(stats?|statistics|overview|summary|dashboard|how many|total|count)\b/i,
+    search_customers: /\b(customers?|shoppers?|buyers?|clients?|who is|email|phone|number|contact)\b/i,
+    search_messages: /\b(messages?|chats?|conversations?|whatsapp|said|replied|history)\b/i,
+    list_tickets: /\b(tickets?|support|complaints?|issues?|queries|grievance)\b/i,
+    search_learned_replies: /\b(reply|replies|respond|draft|answer|suggest\w*|how (do|did|should) we)\b/i,
+    update_ticket: /\b(tickets?|resolve|closed?|reopen)\b/i,
+    get_abandoned_carts: /\b(carts?|abandon\w*|checkouts?|recover\w*)\b/i,
+    shopify_search_orders: /\b(orders?|shopify|purchases?|bought|payments?|refunds?|fulfill?\w*|cod|prepaid)\b|#\d+/i,
+    track_awb: /\b(track\w*|awb|waybill|shipments?|couriers?|deliver\w*|transit|shipping)\b/i,
+    check_serviceability: /\b(pin ?codes?|serviceab\w*|deliverable|cod|prepaid)\b/i,
+    list_shipments: /\b(shipments?|shipped|awb|couriers?|labels?|manifest|shipping)\b/i,
+    book_shipment: /\b(book\w*|ship\b|shipment|couriers?)\b/i,
+    schedule_pickup: /\b(pick ?-?ups?)\b/i,
+    send_whatsapp_message: /\b(send|message|whatsapp|reply|notify|inform|tell)\b/i,
+    create_broadcast_draft: /\b(broadcasts?|campaigns?|blast|announce\w*)\b/i,
+    run_sql_read: /\b(sql|query|database|db|tables?|select)\b/i,
+    query_returns_system: /\b(returns?|exchanges?|influencers?|refunds?)\b/i,
+    batch_update_tickets: /\b(batch|bulk|mass|all tickets|resolve all|close all)\b/i,
+    bulk_send_whatsapp: /\b(bulk\s*send|broadcast\s*whatsapp|mass\s*message|send\s*to\s*all)\b/i,
+    batch_book_shipments: /\b(batch\s*ship|bulk\s*ship|ship\s*all|book\s*all)\b/i,
+    smart_triage_tickets: /\b(triage|categorize|classify|prioritiz|sort\s*tickets)\b/i,
+    get_pending_shipments: /\b(pending\s*ship|unshipped|not\s*shipped|ready\s*to\s*ship)\b/i
+};
+
+/** Pick only the tool schemas relevant to the given conversation context. */
+function selectToolSchemas(contextText) {
+    const text = String(contextText || '');
+    const names = new Set(
+        tools.filter(t => TOOL_TRIGGERS[t.name] && TOOL_TRIGGERS[t.name].test(text)).map(t => t.name)
+    );
+    if (!names.size) return getToolSchemas(); // ambiguous intent — full toolbox
+    names.add('run_sql_read'); // generic fallback so routing misses stay answerable
+    return tools
+        .filter(t => names.has(t.name))
+        .map(t => ({
+            type: 'function',
+            function: { name: t.name, description: t.description, parameters: t.parameters }
+        }));
+}
+
 /** Human-readable summary for a confirmation-gated action. */
 function summarizeTool(name, args) {
     const tool = getTool(name);
@@ -452,4 +700,4 @@ function summarizeTool(name, args) {
     return `${name}(${JSON.stringify(args || {})})`;
 }
 
-module.exports = { tools, getTool, getToolSchemas, summarizeTool, validateReadOnlySql };
+module.exports = { tools, getTool, getToolSchemas, selectToolSchemas, summarizeTool, validateReadOnlySql };

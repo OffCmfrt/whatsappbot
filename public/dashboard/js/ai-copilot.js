@@ -66,6 +66,20 @@
     .ai-suggestion-chip { text-align: left; background: #eef2ff; border: 1px solid #c7d2fe; color: #3730a3; border-radius: 10px; padding: 8px 10px; font-size: 12.5px; line-height: 1.4; cursor: pointer; }
     .ai-suggestion-chip:hover { background: #e0e7ff; }
     .ai-suggestions-note { font-size: 11px; color: #64748b; padding-bottom: 4px; }
+    #aiLearnedView { position: absolute; top: 58px; left: 0; right: 0; bottom: 0; background: #f8fafc; display: none; flex-direction: column; z-index: 2; }
+    #aiLearnedView.open { display: flex; }
+    .ai-ln-toolbar { display: flex; gap: 6px; padding: 10px 12px; background: #fff; border-bottom: 1px solid #e2e8f0; }
+    .ai-ln-toolbar input { flex: 1; border: 1px solid #cbd5e1; border-radius: 8px; padding: 6px 10px; font-size: 12.5px; outline: none; }
+    .ai-ln-toolbar button { background: #6366f1; color: #fff; border: none; border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+    .ai-ln-list { flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+    .ai-ln-item { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; font-size: 12.5px; }
+    .ai-ln-item.pinned { border-color: #fbbf24; background: #fffbeb; }
+    .ai-ln-q { font-weight: 600; color: #1e293b; margin-bottom: 4px; white-space: pre-wrap; word-wrap: break-word; }
+    .ai-ln-a { color: #475569; white-space: pre-wrap; word-wrap: break-word; margin-bottom: 6px; }
+    .ai-ln-meta { font-size: 11px; color: #94a3b8; margin-bottom: 6px; }
+    .ai-ln-actions { display: flex; gap: 6px; }
+    .ai-ln-actions button { border: 1px solid #e2e8f0; background: #f8fafc; color: #334155; border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 11.5px; }
+    .ai-ln-actions button:hover { background: #eef2ff; }
     @media (max-width: 640px) { #aiCopilotPanel { right: 8px; bottom: 84px; } #aiCopilotFab { bottom: 16px; right: 16px; } }
     `;
     document.head.appendChild(style);
@@ -85,9 +99,18 @@
                 <small>Ask about customers, orders, tickets, shipments…</small>
             </div>
             <div class="ai-cp-header-btns">
+                <button id="aiCpLearned" title="Learned replies (what the AI has learned from your team)">📚</button>
                 <button id="aiCpClear" title="Clear conversation">Clear</button>
                 <button id="aiCpClose" title="Close">✕</button>
             </div>
+        </div>
+        <div id="aiLearnedView">
+            <div class="ai-ln-toolbar">
+                <button id="aiLnBack" title="Back to chat">←</button>
+                <input id="aiLnSearch" placeholder="Search learned replies…">
+                <button id="aiLnAdd" title="Add a golden Q→A example">＋ Add</button>
+            </div>
+            <div class="ai-ln-list" id="aiLnList"></div>
         </div>
         <div class="ai-cp-messages" id="aiCpMessages">
             <div class="ai-cp-msg system">Hi! I can look up customers, orders, tickets, carts, Shopify orders and tracking — and prepare actions for your confirmation.</div>
@@ -207,7 +230,115 @@
         }
     }
 
+    // ---------- Learned replies manager (curation) ----------
+    let lnSearchTimer = null;
+
+    function toggleLearnedView(open) {
+        const view = document.getElementById('aiLearnedView');
+        view.classList.toggle('open', open);
+        if (open) loadLearned();
+    }
+
+    async function loadLearned() {
+        const list = document.getElementById('aiLnList');
+        const search = document.getElementById('aiLnSearch').value.trim();
+        list.innerHTML = '<div class="ai-suggestions-note">Loading…</div>';
+        try {
+            const data = await aiFetch(`/learned?search=${encodeURIComponent(search)}`);
+            const rows = data.learned || [];
+            if (!rows.length) {
+                list.innerHTML = '<div class="ai-suggestions-note">Nothing learned yet. Examples appear automatically as your team replies to customers — or add a golden one with ＋ Add.</div>';
+                return;
+            }
+            list.innerHTML = '';
+            rows.forEach(r => list.appendChild(renderLearnedItem(r)));
+        } catch (e) {
+            list.innerHTML = '';
+            const note = document.createElement('div');
+            note.className = 'ai-suggestions-note';
+            note.textContent = `❌ ${e.message}`;
+            list.appendChild(note);
+        }
+    }
+
+    function renderLearnedItem(r) {
+        const item = document.createElement('div');
+        item.className = 'ai-ln-item' + (r.pinned ? ' pinned' : '');
+        const q = document.createElement('div');
+        q.className = 'ai-ln-q';
+        q.textContent = (r.pinned ? '📌 ' : '') + r.customer_question;
+        const a = document.createElement('div');
+        a.className = 'ai-ln-a';
+        a.textContent = r.agent_reply;
+        const meta = document.createElement('div');
+        meta.className = 'ai-ln-meta';
+        meta.textContent = `reinforced ×${r.uses}` + (r.resolved_boost ? ` · resolved ×${r.resolved_boost}` : '');
+        const actions = document.createElement('div');
+        actions.className = 'ai-ln-actions';
+
+        const pinBtn = document.createElement('button');
+        pinBtn.textContent = r.pinned ? 'Unpin' : 'Pin';
+        pinBtn.onclick = async () => {
+            try { await aiFetch(`/learned/${r.id}`, 'PUT', { pinned: !r.pinned }); loadLearned(); }
+            catch (e) { alert(e.message); }
+        };
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Edit';
+        editBtn.onclick = async () => {
+            const question = prompt('Customer question:', r.customer_question);
+            if (question === null) return;
+            const reply = prompt('Approved reply:', r.agent_reply);
+            if (reply === null) return;
+            try { await aiFetch(`/learned/${r.id}`, 'PUT', { question, reply }); loadLearned(); }
+            catch (e) { alert(e.message); }
+        };
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.onclick = async () => {
+            if (!confirm('Delete this learned reply?')) return;
+            try { await aiFetch(`/learned/${r.id}`, 'DELETE'); item.remove(); }
+            catch (e) { alert(e.message); }
+        };
+        actions.append(pinBtn, editBtn, delBtn);
+        item.append(q, a, meta, actions);
+        return item;
+    }
+
     // ---------- Suggest reply (support chat modal) ----------
+
+    // Prefetch: warm the suggestion cache the moment a chat opens so the ✨
+    // click feels instant. Failures are silent — the button still works as a
+    // plain on-demand request.
+    const suggestPrefetch = new Map(); // key -> { promise, at }
+    const PREFETCH_FRESH_MS = 90 * 1000;
+
+    function suggestKey(phone, ticketId) {
+        return `${phone}:${ticketId || ''}`;
+    }
+
+    function prefetchSuggestions(phone, ticketId) {
+        if (!phone || !aiToken()) return;
+        const key = suggestKey(phone, ticketId);
+        const existing = suggestPrefetch.get(key);
+        if (existing && Date.now() - existing.at < PREFETCH_FRESH_MS) return;
+        suggestPrefetch.set(key, {
+            promise: aiFetch('/suggest-reply', 'POST', { phone, ticketId, prefetch: true }).catch(() => null),
+            at: Date.now()
+        });
+    }
+
+    // Wrap the dashboard's global openSupportChat (defined in main.js) so
+    // every chat open kicks off a background prefetch
+    function hookSupportChatOpen() {
+        const orig = window.openSupportChat;
+        if (typeof orig !== 'function' || orig.__aiPrefetchHooked) return;
+        window.openSupportChat = function (ticketId, phone, ...rest) {
+            try { prefetchSuggestions(phone, ticketId); } catch (e) { /* never block chat open */ }
+            return orig.call(this, ticketId, phone, ...rest);
+        };
+        window.openSupportChat.__aiPrefetchHooked = true;
+    }
+
     function injectSuggestReply() {
         const inputArea = document.querySelector('#supportChatModal .chat-input-area');
         if (!inputArea || document.getElementById('aiSuggestReplyBtn')) return;
@@ -232,7 +363,15 @@
             suggestionsBox.classList.add('open');
             suggestionsBox.innerHTML = '<div class="ai-suggestions-note">Generating suggestions…</div>';
             try {
-                const data = await aiFetch('/suggest-reply', 'POST', { phone, ticketId });
+                // Reuse the prefetch started when the chat opened — if it already
+                // resolved this renders instantly; otherwise we just await it
+                const key = suggestKey(phone, ticketId);
+                const pre = suggestPrefetch.get(key);
+                let data = (pre && Date.now() - pre.at < PREFETCH_FRESH_MS) ? await pre.promise : null;
+                suggestPrefetch.delete(key); // single-use: next click re-checks the server
+                if (!data || !data.suggestions) {
+                    data = await aiFetch('/suggest-reply', 'POST', { phone, ticketId });
+                }
                 if (!data.suggestions || !data.suggestions.length) {
                     suggestionsBox.innerHTML = '<div class="ai-suggestions-note">No suggestions available for this chat.</div>';
                 } else {
@@ -249,6 +388,9 @@
                                 input.style.height = '48px';
                                 input.style.height = Math.min(input.scrollHeight, 120) + 'px';
                             }
+                            // Remember the draft so the send flow can report whether
+                            // it was sent as-is or edited (AI learning signal)
+                            window.__aiSuggestedReply = s;
                             suggestionsBox.classList.remove('open');
                             suggestionsBox.innerHTML = '';
                         };
@@ -272,7 +414,7 @@
     function init() {
         document.body.appendChild(fab);
         document.body.appendChild(panel);
-        fab.onclick = () => togglePanel();
+        fab.onclick = () => { window.open('/dashboard/ai-copilot.html', '_blank'); };
         document.getElementById('aiCpClose').onclick = () => togglePanel(false);
         document.getElementById('aiCpClear').onclick = async () => {
             try { await aiFetch('/clear-history', 'POST'); } catch (e) { /* ignore */ }
@@ -280,6 +422,20 @@
             messages.innerHTML = '<div class="ai-cp-msg system">Conversation cleared.</div>';
         };
         document.getElementById('aiCpSend').onclick = sendCopilotMessage;
+        document.getElementById('aiCpLearned').onclick = () => toggleLearnedView(true);
+        document.getElementById('aiLnBack').onclick = () => toggleLearnedView(false);
+        document.getElementById('aiLnSearch').addEventListener('input', () => {
+            clearTimeout(lnSearchTimer);
+            lnSearchTimer = setTimeout(loadLearned, 350);
+        });
+        document.getElementById('aiLnAdd').onclick = async () => {
+            const question = prompt('Customer question (pattern — use {{order_id}}, {{name}}… for variables):');
+            if (!question) return;
+            const reply = prompt('The ideal reply the AI should imitate:');
+            if (!reply) return;
+            try { await aiFetch('/learned', 'POST', { question, reply, pinned: true }); loadLearned(); }
+            catch (e) { alert(e.message); }
+        };
         document.getElementById('aiCpInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -287,6 +443,7 @@
             }
         });
         injectSuggestReply();
+        hookSupportChatOpen();
     }
 
     if (document.readyState === 'loading') {

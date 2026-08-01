@@ -89,6 +89,58 @@ class BaseCarrier {
         return digits.length === 6 ? digits : '';
     }
 
+    // Product line printed on the label / packing slip:
+    //   "Relaxed Tee (M) x2, Cargo Pants (32) x1"
+    // Size matters for apparel returns & warehouse picking, so it is always
+    // included when the item carries one. Drops whole items (never half a
+    // product name) when the carrier's field length runs out.
+    formatProductsDesc(items = [], maxLength = 200, fallback = 'Apparel') {
+        const parts = [];
+        let length = 0;
+        for (const item of items) {
+            const part = `${item.name}${item.size ? ` (${item.size})` : ''} x${item.quantity || 1}`;
+            const added = parts.length ? part.length + 2 : part.length; // ', ' separator
+            if (length + added > maxLength) break;
+            parts.push(part);
+            length += added;
+        }
+        // A single oversized product still needs *something* descriptive
+        if (!parts.length && items.length) return items[0].name.substring(0, maxLength);
+        return parts.join(', ') || fallback;
+    }
+
+    // Extract the rejection reason from a carrier's JSON body (HTTP 200 + a
+    // failure flag). Carriers scatter it across remark/rmk/error/errors/message
+    // and flip between string, array and nested shapes, so every known spot is
+    // tried before falling back to the body itself — a rejection must never be
+    // reported as "unknown reason" when the carrier did explain itself.
+    extractReason(payload, fallback = 'no reason returned by the carrier') {
+        const flatten = (value) => {
+            if (value === null || value === undefined) return '';
+            if (Array.isArray(value)) return value.map(flatten).filter(Boolean).join('; ');
+            if (typeof value === 'object') return JSON.stringify(value);
+            return String(value).trim();
+        };
+
+        if (!payload || typeof payload !== 'object') return flatten(payload) || fallback;
+
+        const candidates = [
+            payload.remark, payload.remarks, payload.rmk, payload.reason,
+            payload.error, payload.errors, payload.error_message,
+            payload.message, payload.msg,
+            payload.packages?.[0]?.remarks, payload.packages?.[0]?.remark,
+            payload.data?.[0]?.remark, payload.data?.[0]?.remarks, payload.data?.remark
+        ];
+        for (const candidate of candidates) {
+            const text = flatten(candidate);
+            if (text && text !== '{}' && text !== '[]') return text.substring(0, 300);
+        }
+
+        // Nothing recognizable — surface the raw body so the reason isn't lost
+        const body = JSON.stringify(payload);
+        return body && body !== '{}' ? `${fallback} (response: ${body.substring(0, 300)})` : fallback;
+    }
+
     // Extract a readable error message from an axios error
     describeAxiosError(error) {
         const data = error.response?.data;

@@ -9,9 +9,7 @@
  *   EKART_SELLER_NAME      — seller name printed on the label/invoice (required by create API)
  *   EKART_SELLER_ADDRESS   — seller billing address (required by create API)
  *   EKART_SELLER_GST_TIN   — seller GST TIN (required by create API)
- *   EKART_PICKUP_ALIAS     — OPTIONAL. Alias of the registered pickup address. Only needed
- *                            when multiple pickup locations are registered with Ekart —
- *                            with a single registered address Ekart autofills it.
+ *   EKART_PICKUP_ALIAS     — Alias of the registered pickup address (required by Ekart)
  *   EKART_RETURN_ALIAS     — OPTIONAL. RTO address alias (defaults to pickup)
  *   EKART_PICKUP_PINCODE   — OPTIONAL. Enables rate estimates in the serviceability step
  *   EKART_CATEGORY_OF_GOODS— OPTIONAL. Category on the shipment (default: Apparel)
@@ -64,7 +62,8 @@ class EkartAdapter extends BaseCarrier {
             process.env.EKART_PASSWORD &&
             process.env.EKART_SELLER_NAME &&
             process.env.EKART_SELLER_ADDRESS &&
-            process.env.EKART_SELLER_GST_TIN
+            process.env.EKART_SELLER_GST_TIN &&
+            process.env.EKART_PICKUP_ALIAS
         );
     }
 
@@ -91,6 +90,18 @@ class EkartAdapter extends BaseCarrier {
         // Refresh 5 minutes before expiry (expires_in is in seconds)
         this._tokenExpiry = Date.now() + (Math.max(Number(expiresIn) || 3600, 600) - 300) * 1000;
         return this._token;
+    }
+
+    // Swift (Ekart's platform) often returns a bare exception code (e.g.
+    // SWIFT_VALIDATION_EXCEPTION) in `message`/`error` with the field-level
+    // details elsewhere in the body — surface the whole body in that case.
+    describeAxiosError(error) {
+        const msg = super.describeAxiosError(error);
+        const data = error.response?.data;
+        if (data && typeof data === 'object' && /^[A-Z0-9_]{6,}$/.test(msg)) {
+            return `${msg} — ${JSON.stringify(data).substring(0, 400)}`;
+        }
+        return msg;
     }
 
     // Authenticated request with a single retry on 401 (expired/rotated token)
@@ -219,11 +230,27 @@ class EkartAdapter extends BaseCarrier {
 
             // total_amount/taxable_amount have a minimum of 1 in the API
             const totalAmount = Math.max(1, Number(ctx.payment.declaredValue) || 0);
-            const productsDesc = ctx.items.map(i => `${i.name} x${i.quantity}`).join(', ').substring(0, 200) || 'Apparel';
+            const productsDesc = this.formatProductsDesc(ctx.items);
             const totalQty = ctx.items.reduce((sum, i) => sum + (i.quantity || 1), 0) || 1;
 
-            // Today in IST (dispatch + invoice date)
-            const todayIst = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+            // Today in IST (invoice date) — dispatch date must be tomorrow or later
+            const nowIst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+            const todayIst = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(nowIst);
+            const tomorrowIst = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(nowIst.getFullYear(), nowIst.getMonth(), nowIst.getDate() + 1));
+
+            // Swift validation rejects blank/null drop city & state — backfill
+            // them from Ekart's own pincode master when the order lacks them
+            let dropCity = (ctx.consignee.city || '').trim();
+            let dropState = (ctx.consignee.state || '').trim();
+            if (!dropCity || !dropState) {
+                try {
+                    const svc = await this.request({ method: 'get', url: `/api/v2/serviceability/${pin}`, timeout: 15000 });
+                    dropCity = dropCity || svc.data?.details?.city || '';
+                    dropState = dropState || svc.data?.details?.state || '';
+                } catch (lookupError) {
+                    console.warn(`⚠️ Ekart city/state backfill unavailable (${this.describeAxiosError(lookupError)})`);
+                }
+            }
 
             const payload = {
                 seller_name: process.env.EKART_SELLER_NAME,
@@ -236,7 +263,7 @@ class EkartAdapter extends BaseCarrier {
                 invoice_number: String(ctx.orderId),
                 invoice_date: todayIst,
                 consignee_name: ctx.consignee.name,
-                consignee_alternate_phone: phone,
+                consignee_phone: phone,
                 payment_mode: isCod ? 'COD' : 'Prepaid',
                 category_of_goods: process.env.EKART_CATEGORY_OF_GOODS || 'Apparel',
                 products_desc: productsDesc,
@@ -251,25 +278,30 @@ class EkartAdapter extends BaseCarrier {
                 width: Math.max(1, Math.round(Number(ctx.package.breadthCm) || 40)),
                 height: Math.max(1, Math.round(Number(ctx.package.heightCm) || 2)),
                 return_reason: '', // forward shipment — not applicable
-                preferred_dispatch_date: todayIst,
+                preferred_dispatch_date: tomorrowIst,
                 drop_location: {
                     name: ctx.consignee.name,
-                    address: [ctx.consignee.address, ctx.consignee.city, ctx.consignee.state]
+                    address: [ctx.consignee.address, dropCity, dropState]
                         .filter(Boolean).join(', ').substring(0, 500),
-                    city: ctx.consignee.city || null,
-                    state: ctx.consignee.state || '',
+                    city: dropCity,
+                    state: dropState,
                     country: 'India',
                     phone: Number(phone),
                     pin: Number(pin)
                 }
             };
 
-            // Pickup/RTO addresses are registered with Ekart beforehand. With a single
-            // registered address these fields are autofilled; with multiple, send the alias.
-            if (process.env.EKART_PICKUP_ALIAS) {
-                payload.pickup_location = { name: process.env.EKART_PICKUP_ALIAS };
-                payload.return_location = { name: process.env.EKART_RETURN_ALIAS || process.env.EKART_PICKUP_ALIAS };
+            // Only set alternate phone when we have a *different* second number —
+            // Ekart SWIFT validation rejects identical primary & alternate phones.
+            const altPhone = this.normalizePhone(ctx.consignee.alternatePhone);
+            if (altPhone && altPhone !== phone && /^\d{10}$/.test(altPhone)) {
+                payload.consignee_alternate_phone = altPhone;
             }
+
+            // Pickup/RTO addresses are registered with Ekart beforehand.
+            // Ekart now requires explicit pickup_location in the payload.
+            payload.pickup_location = { name: process.env.EKART_PICKUP_ALIAS };
+            payload.return_location = { name: process.env.EKART_RETURN_ALIAS || process.env.EKART_PICKUP_ALIAS };
 
             const response = await this.request({
                 method: 'put',
@@ -279,7 +311,12 @@ class EkartAdapter extends BaseCarrier {
 
             const result = response.data || {};
             if (result.status !== true || !result.tracking_id) {
-                return this.fail(`Ekart shipment creation failed: ${result.remark || JSON.stringify(result).substring(0, 300)}`, result);
+                // A bare exception code as remark hides the real reason — dump the body
+                const remark = result.remark && !/^[A-Z0-9_]{6,}$/.test(result.remark)
+                    ? result.remark
+                    : `${result.remark || 'rejected'} — ${JSON.stringify(result).substring(0, 300)}`;
+                console.error(`❌ Ekart create rejected for order ${ctx.orderId}:`, JSON.stringify(result).substring(0, 600));
+                return this.fail(`Ekart shipment creation failed: ${remark}`, result);
             }
 
             return this.ok({
@@ -292,6 +329,7 @@ class EkartAdapter extends BaseCarrier {
                 requestPayload: payload
             }, result);
         } catch (error) {
+            console.error(`❌ Ekart create failed for order ${ctx.orderId}:`, JSON.stringify(error.response?.data || error.message).substring(0, 600));
             return this.fail(`Ekart shipment creation failed: ${this.describeAxiosError(error)}`, error.response?.data);
         }
     }
@@ -364,7 +402,14 @@ class EkartAdapter extends BaseCarrier {
             // Response: { data: [ { status, remark, tracking_id } ] } (or a bare ack)
             const ack = response.data?.data?.[0] || response.data;
             if (ack?.status !== true) {
-                return this.fail(`Ekart cancellation rejected: ${ack?.remark || 'unknown reason'}`, response.data);
+                const reason = this.extractReason(ack);
+                console.error(`❌ Ekart cancel rejected for AWB ${shipment.awb}:`, JSON.stringify(response.data || {}).substring(0, 500));
+
+                // Already cancelled at Ekart → treat as done (keeps re-ship moving)
+                if (/already\s+(been\s+)?cancell?ed|cancell?ed\s+already/i.test(reason)) {
+                    return this.ok({ cancelled: true, warning: `Already cancelled at Ekart: ${reason}` }, response.data);
+                }
+                return this.fail(`Ekart cancellation rejected: ${reason}`, response.data);
             }
             return this.ok({ cancelled: true }, response.data);
         } catch (error) {

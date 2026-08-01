@@ -12,10 +12,15 @@
 
 const { dbAdapter } = require('../database/db');
 const { caches } = require('../utils/cache');
+const { extractItemSize } = require('../utils/orderItems');
 const { getConfiguredCarriers, getAdapter } = require('./carriers');
 
 // Default package when admin doesn't override (apparel-friendly)
 const DEFAULT_PACKAGE = { weightGrams: 500, lengthCm: 30, breadthCm: 40, heightCm: 2 };
+
+// Terminal shipment states — they release the one-open-shipment-per-order slot
+// (mirrors the idx_shipments_open_order partial unique index in db.js)
+const TERMINAL_STATUSES = ['cancelled', 'failed', 'delivered', 'rto'];
 
 function invalidateShoppersCache() {
     if (caches && caches.shoppers) {
@@ -33,7 +38,9 @@ function parseItems(itemsJson) {
             sku: item.sku || item.variant_id ? String(item.sku || item.variant_id) : null,
             quantity: parseInt(item.quantity) || 1,
             price: Number(item.price) || 0,
-            size: item.size || item.variant_size || item.product_size || null
+            // Shopify keeps the size in variant_title — resolve every shape
+            // so carriers can print it on the label
+            size: extractItemSize(item)
         }));
     } catch (e) {
         return [];
@@ -113,10 +120,11 @@ async function buildShipmentContext(shopperId, overrides = {}) {
     return { ctx, shopper };
 }
 
-// Active (non-cancelled, non-failed) shipment for an order, if any
+// Open (non-terminal) shipment for an order, if any — blocks a new shipment.
+// Delivered/RTO shipments are terminal too, so replacement re-ships are allowed.
 async function getActiveShipment(orderId) {
     const rows = await dbAdapter.query(
-        `SELECT * FROM shipments WHERE order_id = ? AND status NOT IN ('cancelled', 'failed') ORDER BY id DESC LIMIT 1`,
+        `SELECT * FROM shipments WHERE order_id = ? AND status NOT IN ('cancelled', 'failed', 'delivered', 'rto') ORDER BY id DESC LIMIT 1`,
         [orderId]
     );
     return rows[0] || null;
@@ -138,8 +146,11 @@ async function checkServiceability({ shopperId, carrier, packageOverrides, consi
     return { data: result.data };
 }
 
-// Create the shipment: idempotency guard → carrier call → audit row → orders sync
-async function ship({ shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer, shippedBy }) {
+// Create the shipment: idempotency guard → carrier call → audit row → orders sync.
+// Re-ship: pass reshipOfShipmentId (+ optional reshipReason) to link the new
+// shipment to the one it replaces — persisted for audit and used to word the
+// customer WhatsApp notification as a replacement shipment.
+async function ship({ shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer, shippedBy, reshipOfShipmentId, reshipReason }) {
     const adapter = getAdapter(carrier);
     if (!adapter) return { error: `Carrier '${carrier}' is not configured`, status: 400 };
 
@@ -155,7 +166,20 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
         return { error: `Invalid shipment data: ${ctx.validationErrors.join('; ')}`, status: 400 };
     }
 
-    // Idempotency: one active shipment per order (also enforced by DB partial unique index)
+    // Re-ship lineage: the referenced shipment must exist, belong to this order
+    // and already be terminal (cancelled/failed/delivered/rto)
+    let reshipOf = null;
+    if (reshipOfShipmentId) {
+        reshipOf = await getShipmentById(reshipOfShipmentId);
+        if (!reshipOf || reshipOf.order_id !== ctx.orderId) {
+            return { error: 'Re-ship source shipment not found for this order', status: 400 };
+        }
+        if (!TERMINAL_STATUSES.includes(reshipOf.status)) {
+            return { error: `Cancel the existing shipment first (AWB: ${reshipOf.awb || 'pending'} is still ${reshipOf.status})`, status: 409, shipment: reshipOf };
+        }
+    }
+
+    // Idempotency: one open shipment per order (also enforced by DB partial unique index)
     const existing = await getActiveShipment(ctx.orderId);
     if (existing) {
         return {
@@ -184,7 +208,9 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
                 request_payload: JSON.stringify(ctx),
                 response_payload: result.raw ? JSON.stringify(result.raw) : null,
                 error_message: result.error,
-                shipped_by: shippedBy || 'admin'
+                shipped_by: shippedBy || 'admin',
+                reship_of_shipment_id: reshipOf ? reshipOf.id : null,
+                reship_reason: reshipReason || null
             });
         } catch (auditError) {
             console.error('⚠️ Failed to persist failed-shipment audit row:', auditError.message);
@@ -214,7 +240,9 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
             tracking_url: data.trackingUrl || null,
             request_payload: JSON.stringify(data.requestPayload || ctx),
             response_payload: result.raw ? JSON.stringify(result.raw) : null,
-            shipped_by: shippedBy || 'admin'
+            shipped_by: shippedBy || 'admin',
+            reship_of_shipment_id: reshipOf ? reshipOf.id : null,
+            reship_reason: reshipReason || null
         });
     } catch (dbError) {
         // Unique-index race: another request shipped this order between our check and insert
@@ -235,12 +263,12 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
 
     // Optional best-effort WhatsApp notification (never blocks the response)
     if (notifyCustomer) {
-        notifyCustomerShipped(shopper, data).catch(err =>
+        notifyCustomerShipped(shopper, data, { isReship: Boolean(reshipOf), reason: reshipReason }).catch(err =>
             console.warn('⚠️ Shipping WhatsApp notification failed (non-blocking):', err.message)
         );
     }
 
-    return { data: { ...data, shipment: shipmentRow } };
+    return { data: { ...data, shipment: shipmentRow, reship: reshipOf ? { ofShipmentId: reshipOf.id, previousAwb: reshipOf.awb, reason: reshipReason || null } : null } };
 }
 
 // Upsert the orders row with the fresh AWB/courier/tracking
@@ -272,13 +300,18 @@ async function syncOrderRow(ctx, data, shopper) {
     }
 }
 
-async function notifyCustomerShipped(shopper, data) {
+async function notifyCustomerShipped(shopper, data, { isReship = false, reason = null } = {}) {
     const whatsappService = require('./whatsappService');
     const trackingLine = data.trackingUrl ? `\n\n📍 Track your order: ${data.trackingUrl}` : '';
-    const message = `🎉 Great news, ${shopper.name || 'there'}!\n\n` +
-        `Your OFFCOMFRT order *${shopper.order_id}* has been shipped via *${data.courierName}*.\n\n` +
-        `📦 Tracking Number (AWB): *${data.awb}*${trackingLine}\n\n` +
-        `Thank you for shopping with us! 🖤`;
+    const message = isReship
+        ? `🔄 Update on your order, ${shopper.name || 'there'}!\n\n` +
+          `We've re-shipped your OFFCOMFRT order *${shopper.order_id}*${reason ? ` (${reason.toLowerCase()})` : ''} — a fresh shipment is on its way via *${data.courierName}*.\n\n` +
+          `📦 New Tracking Number (AWB): *${data.awb}*${trackingLine}\n\n` +
+          `Sorry for the wait — thank you for your patience! 🖤`
+        : `🎉 Great news, ${shopper.name || 'there'}!\n\n` +
+          `Your OFFCOMFRT order *${shopper.order_id}* has been shipped via *${data.courierName}*.\n\n` +
+          `📦 Tracking Number (AWB): *${data.awb}*${trackingLine}\n\n` +
+          `Thank you for shopping with us! 🖤`;
     await whatsappService.sendMessage(shopper.phone, message, 'shipping_confirmation');
 }
 
@@ -373,7 +406,11 @@ async function generateDocument(shipmentId, type) {
     return { error: `Unknown document type: ${type}`, status: 400 };
 }
 
-async function cancelShipment(shipmentId) {
+// Cancel at the carrier, then mark cancelled locally.
+// force = the carrier refused (package already delivered/RTO/lost/closed) but the
+// admin still needs the order shippable again — the local row is closed with the
+// carrier's reason recorded, and the caller gets it back as a warning.
+async function cancelShipment(shipmentId, { force = false } = {}) {
     const loaded = await loadShipmentAndAdapter(shipmentId);
     if (loaded.error) return loaded;
     const { shipment, adapter } = loaded;
@@ -383,11 +420,34 @@ async function cancelShipment(shipmentId) {
     }
 
     const result = await adapter.cancelShipment(shipment);
+    let warning = result.data?.warning || null;
+
     if (!result.success) {
-        console.error(`❌ Carrier cancellation failed for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'}):`, result.error);
-        return { error: result.error, status: 502, raw: result.raw };
+        console.error(
+            `❌ Carrier cancellation failed for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'}):`,
+            result.error,
+            '| carrier response:', JSON.stringify(result.raw || {}).substring(0, 1000)
+        );
+
+        // Keep the reason on the row so the hub shows why it is still open
+        try {
+            await dbAdapter.update('shipments', {
+                error_message: `Cancel ${force ? 'refused by carrier (forced locally)' : 'failed'}: ${result.error}`.substring(0, 1000),
+                response_payload: result.raw ? JSON.stringify(result.raw) : null,
+                updated_at: new Date().toISOString()
+            }, { id: shipment.id });
+        } catch (auditError) {
+            console.error('⚠️ Failed to persist cancellation error on shipment row:', auditError.message);
+        }
+
+        if (!force) {
+            return { error: result.error, status: 502, raw: result.raw, carrierRejected: true };
+        }
+        console.warn(`⚠️ Force-closing shipment #${shipment.id} locally after carrier rejection (AWB ${shipment.awb || 'n/a'} may still be live at ${shipment.carrier})`);
+        warning = `${adapter.name} did not cancel AWB ${shipment.awb || 'n/a'} (${result.error}). Marked cancelled locally only — verify with the carrier.`;
+    } else {
+        console.log(`📦 Carrier cancellation OK for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'})`, JSON.stringify(result.raw || {}).substring(0, 300));
     }
-    console.log(`📦 Carrier cancellation OK for shipment #${shipment.id} (${shipment.carrier}, AWB ${shipment.awb || 'n/a'})`, JSON.stringify(result.raw || {}).substring(0, 300));
 
     await dbAdapter.update('shipments', {
         status: 'cancelled',
@@ -406,7 +466,7 @@ async function cancelShipment(shipmentId) {
     }
     invalidateShoppersCache();
 
-    return { data: { cancelled: true, warning: result.data?.warning || null, shipment: { ...shipment, status: 'cancelled' } } };
+    return { data: { cancelled: true, forced: force && !result.success, warning, shipment: { ...shipment, status: 'cancelled' } } };
 }
 
 // Cancel the active shipment (if any) for an order at its carrier.

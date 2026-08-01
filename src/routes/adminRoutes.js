@@ -1653,6 +1653,16 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
         // Invalidate cache after ticket status change
         invalidateCache('stats');
 
+        // Outcome signal for AI learning: resolved ticket → recent examples from
+        // this customer's conversation worked (fire-and-forget)
+        if (status === 'resolved' || status === 'closed') {
+            const resolvedTicket = await dbAdapter.query('SELECT customer_phone FROM support_tickets WHERE id = ?', [id]);
+            if (resolvedTicket[0]?.customer_phone) {
+                const aiLearning = require('../services/ai/learning');
+                aiLearning.boostFromResolvedTicket(resolvedTicket[0].customer_phone).catch(() => {});
+            }
+        }
+
         res.json({ success: true, message: 'Ticket updated successfully' });
     } catch (error) {
         console.error('Error updating support ticket:', error);
@@ -2872,7 +2882,7 @@ router.get('/chat/:phone', verifyToken, async (req, res) => {
 // Send manual reply to customer
 router.post('/chat/send', verifyToken, async (req, res) => {
     try {
-        const { phone, message, type = 'text' } = req.body;
+        const { phone, message, type = 'text', suggestedText = null } = req.body;
         
         if (!phone || !message) {
             return res.status(400).json({ error: 'Phone and message are required' });
@@ -2907,6 +2917,14 @@ router.post('/chat/send', verifyToken, async (req, res) => {
              WHERE phone = ? OR phone = ?`,
             [new Date().toISOString(), formattedPhone, cleanPhone]
         );
+        
+        // AI learning: pair this human reply with the customer's latest question
+        // so future suggestions imitate approved answers (fire-and-forget).
+        // suggestedText tells us if an AI draft was accepted as-is or corrected.
+        if (type === 'text') {
+            const aiLearning = require('../services/ai/learning');
+            aiLearning.learnFromAgentReply({ phone: cleanPhone, replyText: message, suggestedText }).catch(() => {});
+        }
         
         res.json({
             success: true,
@@ -4649,10 +4667,12 @@ router.post('/shipping/serviceability', verifyToken, async (req, res) => {
     }
 });
 
-// Create shipment (idempotent — 409 if an active shipment exists)
+// Create shipment (idempotent — 409 if an active shipment exists).
+// Re-ship: reshipOfShipmentId + reshipReason link the new shipment to the one
+// it replaces (audit trail + replacement-worded WhatsApp notification).
 router.post('/shipping/ship', verifyToken, async (req, res) => {
     try {
-        const { shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer } = req.body;
+        const { shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer, reshipOfShipmentId, reshipReason } = req.body;
         if (!shopperId || !carrier) return res.status(400).json({ success: false, error: 'shopperId and carrier are required' });
 
         const result = await shippingService.ship({
@@ -4662,7 +4682,9 @@ router.post('/shipping/ship', verifyToken, async (req, res) => {
             packageOverrides,
             consigneeOverrides,
             notifyCustomer: Boolean(notifyCustomer),
-            shippedBy: req.user?.username || 'admin'
+            shippedBy: req.user?.username || 'admin',
+            reshipOfShipmentId: reshipOfShipmentId ? parseInt(reshipOfShipmentId) : null,
+            reshipReason: reshipReason ? String(reshipReason).substring(0, 300) : null
         });
         if (result.error) {
             return res.status(result.status || 500).json({ success: false, error: result.error, shipment: result.shipment || null });
@@ -4747,11 +4769,20 @@ router.get('/shipping/shipments/:id/label', verifyToken, async (req, res) => {
     }
 });
 
-// Cancel shipment at the carrier + mark cancelled locally
+// Cancel shipment at the carrier + mark cancelled locally.
+// force=true closes the shipment locally even when the carrier refuses (already
+// delivered/RTO/lost) so the order can be re-shipped — the reason is returned as
+// a warning and stored on the shipment row.
 router.post('/shipping/shipments/:id/cancel', verifyToken, async (req, res) => {
     try {
-        const result = await shippingService.cancelShipment(req.params.id);
-        if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+        const result = await shippingService.cancelShipment(req.params.id, { force: Boolean(req.body?.force) });
+        if (result.error) {
+            return res.status(result.status || 500).json({
+                success: false,
+                error: result.error,
+                carrierRejected: Boolean(result.carrierRejected)
+            });
+        }
         res.json({ success: true, ...result.data });
     } catch (error) {
         console.error('Shipping cancel error:', error);
@@ -4894,7 +4925,7 @@ router.post('/ai/chat', verifyToken, async (req, res) => {
         res.json({ success: true, reply: result.reply, pendingAction: result.pendingAction, usage: result.usage });
     } catch (error) {
         console.error('AI chat error:', error.message);
-        const friendly = error.code === 'AI_RATE_LIMIT'
+        const friendly = ['AI_RATE_LIMIT', 'AI_UNAVAILABLE'].includes(error.code)
             ? error.message
             : 'AI request failed. Please try again.';
         res.status(500).json({ success: false, error: friendly });
@@ -4930,18 +4961,19 @@ router.post('/ai/cancel/:id', verifyToken, async (req, res) => {
 // AI reply suggestions for a customer chat (drafts only — never auto-sent)
 router.post('/ai/suggest-reply', verifyToken, async (req, res) => {
     try {
-        const { phone, ticketId } = req.body;
+        const { phone, ticketId, prefetch } = req.body;
         if (!phone) return res.status(400).json({ success: false, error: 'Customer phone is required' });
         const { suggestReply } = require('../services/ai/suggestReply');
         const result = await suggestReply({
             actor: req.admin?.username || 'admin',
             phone,
-            ticketId: ticketId || null
+            ticketId: ticketId || null,
+            prefetch: Boolean(prefetch)
         });
         res.json({ success: true, suggestions: result.suggestions });
     } catch (error) {
         console.error('AI suggest-reply error:', error.message);
-        const known = ['AI_NOT_CONFIGURED', 'AI_DISABLED', 'AI_LIMIT', 'NO_HISTORY', 'AI_RATE_LIMIT'];
+        const known = ['AI_NOT_CONFIGURED', 'AI_DISABLED', 'AI_LIMIT', 'NO_HISTORY', 'AI_RATE_LIMIT', 'AI_UNAVAILABLE'];
         const status = known.includes(error.code) ? 400 : 500;
         res.status(status).json({ success: false, error: known.includes(error.code) ? error.message : 'Failed to generate suggestions' });
     }
@@ -4987,6 +5019,179 @@ router.get('/ai/history', verifyToken, async (req, res) => {
         res.json({ success: true, history });
     } catch (error) {
         res.status(500).json({ success: false, error: 'Failed to load history' });
+    }
+});
+
+// ---------- Learned replies curation (AI learning) ----------
+
+// List learned examples (optional ?search= and ?limit=)
+router.get('/ai/learned', verifyToken, async (req, res) => {
+    try {
+        const aiLearning = require('../services/ai/learning');
+        const rows = await aiLearning.listLearnedReplies({ search: req.query.search || '', limit: req.query.limit });
+        res.json({ success: true, learned: rows });
+    } catch (error) {
+        console.error('AI learned list error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load learned replies' });
+    }
+});
+
+// Create a hand-written golden example (pinned by default)
+router.post('/ai/learned', verifyToken, async (req, res) => {
+    try {
+        const { question, reply, pinned } = req.body;
+        if (!question || !reply) return res.status(400).json({ success: false, error: 'Question and reply are required' });
+        const aiLearning = require('../services/ai/learning');
+        const row = await aiLearning.createLearnedReply({ question, reply, pinned: pinned !== false });
+        res.json({ success: true, learned: row });
+    } catch (error) {
+        console.error('AI learned create error:', error.message);
+        res.status(500).json({ success: false, error: error.message || 'Failed to create learned reply' });
+    }
+});
+
+// Edit or pin/unpin a learned example
+router.put('/ai/learned/:id', verifyToken, async (req, res) => {
+    try {
+        const { question, reply, pinned } = req.body;
+        const aiLearning = require('../services/ai/learning');
+        await aiLearning.updateLearnedReply(parseInt(req.params.id), { question, reply, pinned });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI learned update error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to update learned reply' });
+    }
+});
+
+// Delete a learned example
+router.delete('/ai/learned/:id', verifyToken, async (req, res) => {
+    try {
+        const aiLearning = require('../services/ai/learning');
+        await aiLearning.deleteLearnedReply(parseInt(req.params.id));
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI learned delete error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to delete learned reply' });
+    }
+});
+
+// ---------- AI Copilot Pro routes ----------
+
+// Bulk import learned replies (CSV or JSON)
+router.post('/ai/learned/import', verifyToken, async (req, res) => {
+    try {
+        const { items } = req.body; // [{ question, reply, pinned? }]
+        if (!Array.isArray(items) || !items.length) {
+            return res.status(400).json({ success: false, error: 'items array is required' });
+        }
+        const aiLearning = require('../services/ai/learning');
+        let imported = 0;
+        const errors = [];
+        for (const item of items.slice(0, 200)) {
+            try {
+                await aiLearning.createLearnedReply({
+                    question: item.question || '',
+                    reply: item.reply || '',
+                    pinned: item.pinned !== false
+                });
+                imported++;
+            } catch (e) {
+                errors.push(`${item.question?.substring(0, 40) || '(empty)'}: ${e.message}`);
+            }
+        }
+        res.json({ success: true, imported, errors: errors.slice(0, 10) });
+    } catch (error) {
+        console.error('AI learned import error:', error.message);
+        res.status(500).json({ success: false, error: 'Import failed' });
+    }
+});
+
+// Test retrieval: see which learned examples match a sample question
+router.get('/ai/learned/test', verifyToken, async (req, res) => {
+    try {
+        const { findSimilarExamples } = require('../services/ai/learning');
+        const question = req.query.question || '';
+        if (!question.trim()) return res.status(400).json({ success: false, error: 'question param required' });
+        const examples = await findSimilarExamples(question, 5);
+        res.json({ success: true, examples });
+    } catch (error) {
+        console.error('AI learned test error:', error.message);
+        res.status(500).json({ success: false, error: 'Test failed' });
+    }
+});
+
+// AI behavior settings (save)
+router.put('/ai/settings', verifyToken, async (req, res) => {
+    try {
+        const Settings = require('../../models/Settings');
+        const allowed = ['ai_admin_copilot_enabled', 'ai_learning_enabled', 'ai_daily_admin_limit', 'ai_suggest_reply_daily_limit'];
+        for (const key of allowed) {
+            if (req.body[key] !== undefined) {
+                await Settings.set(key, String(req.body[key]));
+            }
+        }
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI settings save error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to save settings' });
+    }
+});
+
+// AI insights (analytics page data)
+router.get('/ai/insights', verifyToken, async (req, res) => {
+    try {
+        const { getInsights } = require('../services/ai/insights');
+        const insights = await getInsights();
+        res.json({ success: true, ...insights });
+    } catch (error) {
+        console.error('AI insights error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load insights' });
+    }
+});
+
+// ---------- AI Workflows CRUD ----------
+
+router.get('/ai/workflows', verifyToken, async (req, res) => {
+    try {
+        const workflows = require('../services/ai/workflows');
+        const rows = await workflows.listWorkflows();
+        res.json({ success: true, workflows: rows });
+    } catch (error) {
+        console.error('AI workflows list error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to list workflows' });
+    }
+});
+
+router.post('/ai/workflows', verifyToken, async (req, res) => {
+    try {
+        const workflows = require('../services/ai/workflows');
+        const row = await workflows.createWorkflow(req.body);
+        res.json({ success: true, workflow: row });
+    } catch (error) {
+        console.error('AI workflow create error:', error.message);
+        res.status(400).json({ success: false, error: error.message });
+    }
+});
+
+router.put('/ai/workflows/:id', verifyToken, async (req, res) => {
+    try {
+        const workflows = require('../services/ai/workflows');
+        await workflows.updateWorkflow(parseInt(req.params.id), req.body);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI workflow update error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to update workflow' });
+    }
+});
+
+router.delete('/ai/workflows/:id', verifyToken, async (req, res) => {
+    try {
+        const workflows = require('../services/ai/workflows');
+        await workflows.deleteWorkflow(parseInt(req.params.id));
+        res.json({ success: true });
+    } catch (error) {
+        console.error('AI workflow delete error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to delete workflow' });
     }
 });
 

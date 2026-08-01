@@ -35,6 +35,7 @@ class ShiprocketAdapter extends BaseCarrier {
         this.baseURL = shiprocketService.baseURL;
         this._pickupPincode = null; // cached after first lookup
         this._channelId = null;     // cached after first lookup
+        this._channelCreateDisabled = false; // set once the channel rejects API creates
     }
 
     get capabilities() {
@@ -184,18 +185,18 @@ class ShiprocketAdapter extends BaseCarrier {
 
             const orderItems = (ctx.items.length > 0 ? ctx.items : [{ name: 'Product', quantity: 1, price: ctx.payment.declaredValue || 0 }])
                 .map((item, idx) => ({
-                    name: item.name,
+                    // Size goes in the name — Shiprocket labels/invoices print it from here
+                    name: `${item.name}${item.size ? ` (${item.size})` : ''}`,
                     sku: item.sku || `SKU-${ctx.orderId}-${idx + 1}`,
                     units: item.quantity || 1,
                     selling_price: Number(item.price) || 0
                 }));
 
             const subTotal = orderItems.reduce((sum, i) => sum + (i.selling_price * i.units), 0) || Number(ctx.payment.declaredValue) || 0;
-            const channelId = await this.resolveChannelId();
+            const channelId = this._channelCreateDisabled ? null : await this.resolveChannelId();
 
             const orderPayload = {
                 order_id: ctx.orderId,
-                ...(channelId ? { channel_id: channelId } : {}),
                 order_date: new Date().toISOString().slice(0, 16).replace('T', ' '),
                 pickup_location: process.env.SHIPROCKET_PICKUP_LOCATION,
                 billing_customer_name: firstName,
@@ -223,12 +224,36 @@ class ShiprocketAdapter extends BaseCarrier {
             let createRes;
             if (channelId) {
                 try {
-                    createRes = await axios.post(`${this.baseURL}/orders/create`, orderPayload, {
+                    createRes = await axios.post(`${this.baseURL}/orders/create`, { ...orderPayload, channel_id: channelId }, {
                         headers,
                         timeout: 30000
                     });
                 } catch (channelError) {
-                    console.warn(`⚠️ Shiprocket: channel-specific order create failed (${this.describeAxiosError(channelError)}); retrying via adhoc (Custom channel)`);
+                    const httpStatus = channelError.response?.status;
+
+                    // No response (timeout/network) or a 5xx: Shiprocket may well have
+                    // created the order before failing. Retrying via adhoc would file a
+                    // SECOND order and burn a second AWB, so stop and let the admin check.
+                    if (!httpStatus || httpStatus >= 500) {
+                        return this.fail(
+                            `Shiprocket order create failed on channel ${channelId} (${this.describeAxiosError(channelError)}). ` +
+                            `Not retrying — the order may already exist at Shiprocket, check the panel before shipping again.`,
+                            channelError.response?.data
+                        );
+                    }
+
+                    // A 4xx is a validation rejection, so nothing was created and adhoc is
+                    // safe. Shiprocket answers with a generic "Oops! Invalid Data." and
+                    // buries the per-field detail in the body — log it raw, or this is
+                    // undiagnosable. Some channels (Shopify-integrated ones, where the
+                    // order already exists via sync) never accept API creates, so remember
+                    // the refusal instead of re-failing the same call on every shipment.
+                    this._channelCreateDisabled = true;
+                    console.warn(
+                        `⚠️ Shiprocket: channel ${channelId} rejected API order creation (HTTP ${httpStatus}: ${this.describeAxiosError(channelError)}); ` +
+                        `filing under the Custom channel for the rest of this process. ` +
+                        `Raw response: ${JSON.stringify(channelError.response?.data || {}).substring(0, 500)}`
+                    );
                     createRes = await axios.post(`${this.baseURL}/orders/create/adhoc`, orderPayload, {
                         headers,
                         timeout: 30000
