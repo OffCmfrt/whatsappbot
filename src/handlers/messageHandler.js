@@ -166,19 +166,18 @@ class MessageHandler {
                 return;
             }
 
-            // Default path: Attempt autonomous AI resolution first using SOP decision pipeline
+            // Default path: Process AI decision engine to generate suggested reply for Admin Dashboard
             const name = customer.name || senderName || 'Customer';
             const autoResult = await autoSupportAgent.processCustomerMessage(phone, cleanMessage, name);
 
-            if (autoResult && autoResult.handled && autoResult.reply) {
-                await whatsappService.sendMessage(phone, autoResult.reply);
-                console.log(`🤖 [AUTO AI] Resolved customer request for ${phone} (Scenario: ${autoResult.scenario})`);
-                return;
+            const aiSuggestion = (autoResult && autoResult.reply) ? autoResult.reply : null;
+            const scenarioTag = (autoResult && autoResult.scenario) ? autoResult.scenario : 'general';
+
+            if (aiSuggestion) {
+                console.log(`💡 [AI DASHBOARD SUGGESTION] Generated for ${phone} (Scenario: ${scenarioTag}). Routing to Admin Dashboard.`);
             }
 
-            // Fallback: Query cannot be resolved automatically -> Escalate to human admin via Support Ticket
-            console.log(`⚠️ [AUTO AI] Query for ${phone} could not be resolved automatically (${autoResult?.reason || 'unhandled'}). Escalating to admin...`);
-
+            // Create or update Support Ticket for Admin Dashboard (DO NOT send to customer directly)
             const existingTicket = await dbAdapter.query(
                 'SELECT id, ticket_number FROM support_tickets WHERE customer_phone = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
                 [phone, 'open']
@@ -188,50 +187,33 @@ class MessageHandler {
                 const ticketId = existingTicket[0].id;
                 const existingNumber = existingTicket[0].ticket_number;
 
-                // Check if customer explicitly wants a new ticket
-                if (cleanMessage.toLowerCase() === 'create new ticket') {
-                    // Resolve the old ticket
-                    await dbAdapter.query(
-                        `UPDATE support_tickets SET status = 'resolved', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-                        [ticketId]
-                    );
-                    // Create a brand new ticket with the message
-                    const ticketNumber = await generateUniqueTicketNumber();
-                    const portalId = await getPortalIdForNewTicket();
-                    await dbAdapter.query(
-                        'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, portal_id, is_read) VALUES (?, ?, ?, ?, ?, false)',
-                        [ticketNumber, phone, name, cleanMessage, portalId]
-                    );
-                    await whatsappService.sendMessage(
-                        phone,
-                        `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *New ticket created, ${name}.*\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will respond within *24 hours*.`
-                    );
-                    console.log(`[TICKET] Resolved ${existingNumber}, created new ticket ${ticketNumber} for ${phone}`);
-                } else {
-                    // Auto-append to the existing open ticket
-                    await dbAdapter.query(
-                        `UPDATE support_tickets
-                         SET message = message || '\n\n---\n' || ?,
-                             is_read = false,
-                             updated_at = CURRENT_TIMESTAMP
-                         WHERE id = ?`,
-                        [cleanMessage, ticketId]
-                    );
-                    console.log(`[TICKET] Appended message to existing ticket ${existingNumber} for ${phone}`);
-                }
-            } else {
-                // No open ticket — ask customer to describe their issue first
+                // Auto-append to existing open ticket with AI suggestion attached
+                const appendContent = aiSuggestion
+                    ? `${cleanMessage}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag}]\n${aiSuggestion}`
+                    : cleanMessage;
+
                 await dbAdapter.query(
-                    `INSERT INTO conversations (customer_phone, state, context, updated_at)
-                     VALUES (?, 'awaiting_customer_question', '{}', CURRENT_TIMESTAMP)
-                     ON CONFLICT(customer_phone) DO UPDATE SET state = 'awaiting_customer_question', context = '{}', updated_at = CURRENT_TIMESTAMP`,
-                    [phone]
+                    `UPDATE support_tickets
+                     SET message = message || '\n\n---\n' || ?,
+                         is_read = false,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?`,
+                    [appendContent, ticketId]
                 );
-                await whatsappService.sendMessage(
-                    phone,
-                    `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Hello, ${name}.*\n▫️ Please describe your issue and we'll create a support ticket for you.`
+                console.log(`[DASHBOARD TICKET] Appended message & AI suggestion to open ticket ${existingNumber} for ${phone}`);
+            } else {
+                // Create brand new ticket for Admin Dashboard with customer message + AI suggested reply
+                const ticketNumber = await generateUniqueTicketNumber();
+                const portalId = await getPortalIdForNewTicket();
+                const ticketMessage = aiSuggestion
+                    ? `${cleanMessage}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag}]\n${aiSuggestion}`
+                    : cleanMessage;
+
+                await dbAdapter.query(
+                    'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, portal_id, is_read) VALUES (?, ?, ?, ?, ?, false)',
+                    [ticketNumber, phone, name, ticketMessage, portalId]
                 );
-                console.log(`[TICKET] Asked ${phone} to describe their issue`);
+                console.log(`[DASHBOARD TICKET] Created ticket ${ticketNumber} for ${phone} with AI suggestion ready for Admin review.`);
             }
 
         } catch (error) {
