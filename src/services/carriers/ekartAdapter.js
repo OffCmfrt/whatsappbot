@@ -9,9 +9,7 @@
  *   EKART_SELLER_NAME      — seller name printed on the label/invoice (required by create API)
  *   EKART_SELLER_ADDRESS   — seller billing address (required by create API)
  *   EKART_SELLER_GST_TIN   — seller GST TIN (required by create API)
- *   EKART_PICKUP_ALIAS     — OPTIONAL. Alias of the registered pickup address. Only needed
- *                            when multiple pickup locations are registered with Ekart —
- *                            with a single registered address Ekart autofills it.
+ *   EKART_PICKUP_ALIAS     — Alias of the registered pickup address (required by Ekart)
  *   EKART_RETURN_ALIAS     — OPTIONAL. RTO address alias (defaults to pickup)
  *   EKART_PICKUP_PINCODE   — OPTIONAL. Enables rate estimates in the serviceability step
  *   EKART_CATEGORY_OF_GOODS— OPTIONAL. Category on the shipment (default: Apparel)
@@ -64,7 +62,8 @@ class EkartAdapter extends BaseCarrier {
             process.env.EKART_PASSWORD &&
             process.env.EKART_SELLER_NAME &&
             process.env.EKART_SELLER_ADDRESS &&
-            process.env.EKART_SELLER_GST_TIN
+            process.env.EKART_SELLER_GST_TIN &&
+            process.env.EKART_PICKUP_ALIAS
         );
     }
 
@@ -234,8 +233,10 @@ class EkartAdapter extends BaseCarrier {
             const productsDesc = this.formatProductsDesc(ctx.items);
             const totalQty = ctx.items.reduce((sum, i) => sum + (i.quantity || 1), 0) || 1;
 
-            // Today in IST (dispatch + invoice date)
-            const todayIst = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+            // Today in IST (invoice date) — dispatch date must be tomorrow or later
+            const nowIst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+            const todayIst = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(nowIst);
+            const tomorrowIst = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(nowIst.getFullYear(), nowIst.getMonth(), nowIst.getDate() + 1));
 
             // Swift validation rejects blank/null drop city & state — backfill
             // them from Ekart's own pincode master when the order lacks them
@@ -297,12 +298,10 @@ class EkartAdapter extends BaseCarrier {
                 payload.consignee_alternate_phone = altPhone;
             }
 
-            // Pickup/RTO addresses are registered with Ekart beforehand. With a single
-            // registered address these fields are autofilled; with multiple, send the alias.
-            if (process.env.EKART_PICKUP_ALIAS) {
-                payload.pickup_location = { name: process.env.EKART_PICKUP_ALIAS };
-                payload.return_location = { name: process.env.EKART_RETURN_ALIAS || process.env.EKART_PICKUP_ALIAS };
-            }
+            // Pickup/RTO addresses are registered with Ekart beforehand.
+            // Ekart now requires explicit pickup_location in the payload.
+            payload.pickup_location = { name: process.env.EKART_PICKUP_ALIAS };
+            payload.return_location = { name: process.env.EKART_RETURN_ALIAS || process.env.EKART_PICKUP_ALIAS };
 
             const response = await this.request({
                 method: 'put',
