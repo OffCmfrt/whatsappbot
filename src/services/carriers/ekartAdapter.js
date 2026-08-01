@@ -262,7 +262,7 @@ class EkartAdapter extends BaseCarrier {
                 invoice_number: String(ctx.orderId),
                 invoice_date: todayIst,
                 consignee_name: ctx.consignee.name,
-                consignee_alternate_phone: phone,
+                consignee_phone: phone,
                 payment_mode: isCod ? 'COD' : 'Prepaid',
                 category_of_goods: process.env.EKART_CATEGORY_OF_GOODS || 'Apparel',
                 products_desc: productsDesc,
@@ -289,6 +289,13 @@ class EkartAdapter extends BaseCarrier {
                     pin: Number(pin)
                 }
             };
+
+            // Only set alternate phone when we have a *different* second number —
+            // Ekart SWIFT validation rejects identical primary & alternate phones.
+            const altPhone = this.normalizePhone(ctx.consignee.alternatePhone);
+            if (altPhone && altPhone !== phone && /^\d{10}$/.test(altPhone)) {
+                payload.consignee_alternate_phone = altPhone;
+            }
 
             // Pickup/RTO addresses are registered with Ekart beforehand. With a single
             // registered address these fields are autofilled; with multiple, send the alias.
