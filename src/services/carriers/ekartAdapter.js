@@ -278,7 +278,7 @@ class EkartAdapter extends BaseCarrier {
                 width: Math.max(1, Math.round(Number(ctx.package.breadthCm) || 40)),
                 height: Math.max(1, Math.round(Number(ctx.package.heightCm) || 2)),
                 return_reason: '', // forward shipment — not applicable
-                preferred_dispatch_date: todayIst,
+                preferred_dispatch_date: tomorrowIst,
                 drop_location: {
                     name: ctx.consignee.name,
                     address: [ctx.consignee.address, dropCity, dropState]
