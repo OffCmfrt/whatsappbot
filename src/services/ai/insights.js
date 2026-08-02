@@ -152,7 +152,7 @@ async function getSentimentTrends(days = 14) {
             COUNT(CASE WHEN sentiment = 'negative' THEN 1 END)::int AS negative,
             COUNT(CASE WHEN sentiment = 'frustrated' THEN 1 END)::int AS frustrated
          FROM support_tickets
-         WHERE created_at >= NOW() - INTERVAL '? days'
+         WHERE created_at >= NOW() - (? * INTERVAL '1 day')
            AND sentiment IS NOT NULL
          GROUP BY DATE(created_at)
          ORDER BY day ASC`,

@@ -427,6 +427,16 @@ async function initializeSupportPortalsTable() {
     await addColumnIfNotExists('support_tickets', 'reengagement_sent', 'BOOLEAN DEFAULT false');
     await addColumnIfNotExists('support_tickets', 'reengagement_sent_at', 'TIMESTAMP');
 
+    // Add AI classification columns (sentiment, confidence, scenario)
+    await addColumnIfNotExists('support_tickets', 'sentiment', 'VARCHAR(20)');
+    await addColumnIfNotExists('support_tickets', 'ai_confidence', 'DECIMAL(3,2)');
+    await addColumnIfNotExists('support_tickets', 'ai_scenario', 'VARCHAR(50)');
+    await addColumnIfNotExists('support_tickets', 'source', "VARCHAR(20) DEFAULT 'whatsapp'");
+
+    // AI classification indexes
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_tickets_sentiment ON support_tickets(sentiment) WHERE sentiment IS NOT NULL');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_tickets_ai_scenario ON support_tickets(ai_scenario) WHERE ai_scenario IS NOT NULL');
+
     // Create re-engagement index
     await pool.query('CREATE INDEX IF NOT EXISTS idx_reengagement_pending ON support_tickets(reengagement_sent, status, created_at)');
 

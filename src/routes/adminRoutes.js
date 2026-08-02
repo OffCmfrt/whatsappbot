@@ -5222,8 +5222,10 @@ router.get('/ai/conversations', verifyToken, async (req, res) => {
         }
 
         // Count total before pagination
-        const countSql = sql.replace(/SELECT .+? FROM/, 'SELECT COUNT(*)::int AS total FROM');
-        const countRows = await dbAdapter.query(countSql, params);
+        const countSql = `SELECT COUNT(*)::int AS total FROM support_tickets t WHERE 1=1` +
+            sql.slice(sql.indexOf('WHERE 1=1') + 'WHERE 1=1'.length);
+        const countParams = params.slice();
+        const countRows = await dbAdapter.query(countSql, countParams);
         const total = countRows[0]?.total || 0;
 
         sql += ' ORDER BY t.created_at DESC LIMIT ? OFFSET ?';
