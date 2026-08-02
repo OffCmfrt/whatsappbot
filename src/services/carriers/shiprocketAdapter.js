@@ -35,7 +35,6 @@ class ShiprocketAdapter extends BaseCarrier {
         this.baseURL = shiprocketService.baseURL;
         this._pickupPincode = null; // cached after first lookup
         this._channelId = null;     // cached after first lookup
-        this._channelCreateDisabled = false; // set once the channel rejects API creates
     }
 
     get capabilities() {
@@ -193,7 +192,7 @@ class ShiprocketAdapter extends BaseCarrier {
                 }));
 
             const subTotal = orderItems.reduce((sum, i) => sum + (i.selling_price * i.units), 0) || Number(ctx.payment.declaredValue) || 0;
-            const channelId = this._channelCreateDisabled ? null : await this.resolveChannelId();
+            const channelId = await this.resolveChannelId();
 
             const orderPayload = {
                 order_id: ctx.orderId,
@@ -246,12 +245,11 @@ class ShiprocketAdapter extends BaseCarrier {
                     // safe. Shiprocket answers with a generic "Oops! Invalid Data." and
                     // buries the per-field detail in the body — log it raw, or this is
                     // undiagnosable. Some channels (Shopify-integrated ones, where the
-                    // order already exists via sync) never accept API creates, so remember
-                    // the refusal instead of re-failing the same call on every shipment.
-                    this._channelCreateDisabled = true;
+                    // order already exists via sync) never accept API creates, so fall
+                    // back to adhoc (Custom) for this order only.
                     console.warn(
                         `⚠️ Shiprocket: channel ${channelId} rejected API order creation (HTTP ${httpStatus}: ${this.describeAxiosError(channelError)}); ` +
-                        `filing under the Custom channel for the rest of this process. ` +
+                        `filing under the Custom channel for this order only. ` +
                         `Raw response: ${JSON.stringify(channelError.response?.data || {}).substring(0, 500)}`
                     );
                     createRes = await axios.post(`${this.baseURL}/orders/create/adhoc`, orderPayload, {
