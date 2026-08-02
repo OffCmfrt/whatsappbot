@@ -120,8 +120,8 @@
     function openWidget() {
         const widget = document.getElementById('offcomfrt-widget');
         const btn = document.getElementById('offcomfrt-widget-btn');
-        widget.classList.add('offcomfrt-open');
-        btn.classList.add('offcomfrt-hidden');
+        widget.classList.add('open');
+        btn.style.display = 'none';
         isOpen = true;
         setTimeout(function () {
             document.getElementById('offcomfrt-input').focus();
@@ -131,8 +131,8 @@
     function closeWidget() {
         const widget = document.getElementById('offcomfrt-widget');
         const btn = document.getElementById('offcomfrt-widget-btn');
-        widget.classList.remove('offcomfrt-open');
-        btn.classList.remove('offcomfrt-hidden');
+        widget.classList.remove('open');
+        btn.style.display = 'flex';
         isOpen = false;
     }
 
