@@ -95,7 +95,7 @@
 .offcomfrt-header {
     background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 50%, #0a0a0a 100%);
     color: #fff;
-    padding: 22px 20px 20px;
+    padding: 24px 22px 22px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -122,8 +122,8 @@
 }
 
 .offcomfrt-header-avatar {
-    width: 44px;
-    height: 44px;
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
     background: #fff;
     display: flex;
@@ -171,14 +171,14 @@
 }
 
 .offcomfrt-header-title {
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 700;
-    letter-spacing: 1.5px;
+    letter-spacing: 1.8px;
     text-transform: uppercase;
 }
 
 .offcomfrt-header-subtitle {
-    font-size: 12px;
+    font-size: 13px;
     opacity: 0.7;
     font-weight: 500;
     display: flex;
@@ -225,10 +225,10 @@
 .offcomfrt-chat {
     flex: 1;
     overflow-y: auto;
-    padding: 32px 24px;
+    padding: 24px 20px;
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 20px;
     scroll-behavior: smooth;
     background: #fafafa;
     min-height: 0;
@@ -257,7 +257,7 @@
     flex-direction: column;
     gap: 4px;
     animation: offcomfrt-slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-    padding: 0 8px;
+    padding: 0 12px;
     width: 100%;
 }
 
@@ -275,12 +275,12 @@
 }
 
 .offcomfrt-msg {
-    max-width: 80%;
-    min-width: 120px;
-    padding: 18px 22px;
+    max-width: 82%;
+    min-width: 140px;
+    padding: 20px 24px;
     border-radius: 20px;
     font-size: 14px;
-    line-height: 1.6;
+    line-height: 1.65;
     word-wrap: break-word;
     letter-spacing: 0.01em;
 }
@@ -340,21 +340,21 @@
 
 /* ---------- Input Area ---------- */
 .offcomfrt-input-area {
-    padding: 20px 24px 24px;
+    padding: 16px 20px 18px;
     border-top: 2px solid #000;
     display: flex;
     align-items: center;
     gap: 12px;
     flex-shrink: 0;
     background: #fff;
-    min-height: 90px;
+    min-height: 80px;
 }
 
 .offcomfrt-input {
     flex: 1;
     border: 1.5px solid rgba(0, 0, 0, 0.12);
     border-radius: 28px;
-    padding: 16px 22px;
+    padding: 14px 20px;
     font-size: 14px;
     font-family: inherit;
     outline: none;
@@ -362,7 +362,7 @@
     background: #f8f9fa;
     color: #1a1a1a;
     letter-spacing: 0.01em;
-    min-height: 52px;
+    min-height: 48px;
     width: 100%;
 }
 
@@ -377,8 +377,8 @@
 }
 
 .offcomfrt-send-btn {
-    width: 52px;
-    height: 52px;
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
     background: linear-gradient(135deg, #1a1a1a 0%, #000 100%);
     border: none;
@@ -413,7 +413,7 @@
 /* ---------- Powered By ---------- */
 .offcomfrt-powered {
     text-align: center;
-    padding: 14px;
+    padding: 12px;
     font-size: 10px;
     color: #999;
     letter-spacing: 0.5px;
