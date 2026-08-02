@@ -52,10 +52,10 @@
         document.head.appendChild(fontLink);
     }
 
-    // Load widget CSS
+    // Load widget CSS (with cache-busting)
     var cssLink = document.createElement('link');
     cssLink.rel = 'stylesheet';
-    cssLink.href = baseUrl + '/widget/css/widget.css';
+    cssLink.href = baseUrl + '/widget/css/widget.css?v=' + Date.now();
     document.head.appendChild(cssLink);
 
     // Load widget JS
