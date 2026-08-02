@@ -29,6 +29,14 @@
 
     let isOpen = false;
     let isTyping = false;
+
+    // Clear old chat history if from previous version
+    var storedVersion = sessionStorage.getItem('offcomfrt_version');
+    if (storedVersion !== '2') {
+        sessionStorage.removeItem('offcomfrt_chat');
+        sessionStorage.setItem('offcomfrt_version', '2');
+    }
+
     let chatHistory = JSON.parse(sessionStorage.getItem('offcomfrt_chat') || '[]');
 
     // ---------- DOM Creation ----------
@@ -280,11 +288,15 @@
 
     function showTicketSuggestion() {
         var chat = document.getElementById('offcomfrt-chat');
+        var wrapper = document.createElement('div');
+        wrapper.className = 'offcomfrt-msg-wrapper offcomfrt-align-left';
         var msg = document.createElement('div');
-        msg.className = 'offcomfrt-msg offcomfrt-msg-system';
-        msg.innerHTML = 'Would you like to speak with a human agent? <button class="offcomfrt-chip" onclick="window.__offcomfrt_showTicket()" style="margin-left:6px;font-size:11px;padding:4px 10px;">Create Ticket</button>';
-        chat.appendChild(msg);
+        msg.className = 'offcomfrt-msg offcomfrt-msg-bot';
+        msg.innerHTML = 'Would you like to speak with a human agent? <button class="offcomfrt-chip" id="offcomfrt-suggest-ticket-btn" style="margin-left:6px;font-size:11px;padding:4px 12px;">Create Ticket</button>';
+        wrapper.appendChild(msg);
+        chat.appendChild(wrapper);
         scrollToBottom();
+        document.getElementById('offcomfrt-suggest-ticket-btn').addEventListener('click', showTicketForm);
     }
 
     // Expose for inline onclick
@@ -331,6 +343,9 @@
 
     function addTrackingCard(data, save) {
         var chat = document.getElementById('offcomfrt-chat');
+        var wrapper = document.createElement('div');
+        wrapper.className = 'offcomfrt-msg-wrapper offcomfrt-align-left';
+
         var card = document.createElement('div');
         card.className = 'offcomfrt-tracking-card';
 
@@ -340,7 +355,6 @@
         else if (/transit|shipped|dispatched|in.?transit|out.?for.?delivery/i.test(statusText)) statusClass = 'offcomfrt-status-transit';
 
         var carrierName = data.carrierName || 'Carrier';
-        // Clean up carrier name display
         if (carrierName.toUpperCase() === 'SHIPROCKET') carrierName = 'Shiprocket';
         else if (carrierName.toUpperCase() === 'DELHIVERY') carrierName = 'Delhivery';
         else if (carrierName.toUpperCase() === 'EKART') carrierName = 'Ekart';
@@ -369,11 +383,12 @@
             html += '<div class="offcomfrt-tracking-row"><span></span><span style="color:#666;font-style:italic;font-size:12px;">' + escapeHtml(data.note) + '</span></div>';
         }
         if (data.trackingUrl) {
-            html += '<a href="' + escapeHtml(data.trackingUrl) + '" target="_blank" class="offcomfrt-tracking-link">Track Live →</a>';
+            html += '<a href="' + escapeHtml(data.trackingUrl) + '" target="_blank" class="offcomfrt-tracking-link">Track Live &rarr;</a>';
         }
 
         card.innerHTML = html;
-        chat.appendChild(card);
+        wrapper.appendChild(card);
+        chat.appendChild(wrapper);
         scrollToBottom();
 
         if (save !== false) {
@@ -465,8 +480,11 @@
 
     function addTicketConfirmation(data, save) {
         var chat = document.getElementById('offcomfrt-chat');
+        var wrapper = document.createElement('div');
+        wrapper.className = 'offcomfrt-msg-wrapper offcomfrt-align-left';
+
         var confirm = document.createElement('div');
-        confirm.className = 'offcomfrt-ticket-confirm';
+        confirm.className = 'offcomfrt-ticket-confirmation';
         confirm.innerHTML = `
             <div class="offcomfrt-ticket-confirm-icon">
                 <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
@@ -480,7 +498,8 @@
                 Continue on WhatsApp
             </a>
         `;
-        chat.appendChild(confirm);
+        wrapper.appendChild(confirm);
+        chat.appendChild(wrapper);
         scrollToBottom();
 
         if (save !== false) {
