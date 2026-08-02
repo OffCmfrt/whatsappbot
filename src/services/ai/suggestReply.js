@@ -41,6 +41,11 @@ MANDATORY 4-STEP WORKFLOW PIPELINE:
    - Escalation/frustration: Resolve over chat first; consult admin before taking any action. Never default to phone callback.
 4. STEP 4 — DRAFT OR REVERT: If context data is missing or rule validation fails, draft a response stating our team is checking with admin to resolve it immediately. NEVER invent unverified tracking, dates, or promises.
 
+SENTIMENT AWARENESS:
+- If customerSentiment is "frustrated" or "negative": lead with empathy, acknowledge the inconvenience, and be extra reassuring.
+- If customerSentiment is "positive": keep the tone light and friendly.
+- If detectedScenario is provided, align your reply with that scenario's SOP rules.
+
 Formatting Rules:
 - Write up to 3 alternative reply drafts to the customer's latest messages.
 - Tone: warm, professional, concise. WhatsApp style — short sentences, at most one emoji per draft.
@@ -66,9 +71,9 @@ async function gatherContext(phone, ticketId) {
             [phonePattern]
         ),
         ticketId
-            ? dbAdapter.query('SELECT id, ticket_number, message, status, created_at FROM support_tickets WHERE id = ?', [ticketId])
+            ? dbAdapter.query('SELECT id, ticket_number, message, status, sentiment, ai_confidence, ai_scenario, created_at FROM support_tickets WHERE id = ?', [ticketId])
             : dbAdapter.query(
-                `SELECT id, ticket_number, message, status, created_at FROM support_tickets
+                `SELECT id, ticket_number, message, status, sentiment, ai_confidence, ai_scenario, created_at FROM support_tickets
                  WHERE customer_phone LIKE ? AND status = 'open' ORDER BY created_at DESC LIMIT 3`,
                 [phonePattern]
             )
@@ -82,7 +87,11 @@ async function gatherContext(phone, ticketId) {
             text: String(m.message_content || '').substring(0, 300)
         })),
         recentOrders: orders.map(compactRow),
-        tickets: tickets.map(compactRow)
+        tickets: tickets.map(compactRow),
+        // Carry forward AI classification for context-aware suggestions
+        sentiment: tickets[0]?.sentiment || null,
+        aiScenario: tickets[0]?.ai_scenario || null,
+        aiConfidence: tickets[0]?.ai_confidence || null
     };
 }
 
@@ -170,9 +179,11 @@ async function generateSuggestions({ actor, context, cacheKey }) {
 
     const userContent = JSON.stringify({
         customer: context.customer,
-        conversation: context.conversation,
+        conversation: context.conversation.slice(-6), // last 3 turns (6 messages)
         recentOrders: context.recentOrders,
         openTickets: context.tickets,
+        ...(context.sentiment ? { customerSentiment: context.sentiment } : {}),
+        ...(context.aiScenario ? { detectedScenario: context.aiScenario } : {}),
         ...(approvedExamples.length ? { approvedExamples: approvedExamples.map(e => ({ q: e.q, a: e.a })) } : {})
     });
 

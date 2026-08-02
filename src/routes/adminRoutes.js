@@ -5195,4 +5195,219 @@ router.delete('/ai/workflows/:id', verifyToken, async (req, res) => {
     }
 });
 
+// ---------- Conversation Review Center ----------
+
+// List conversations (support tickets with filters)
+router.get('/ai/conversations', verifyToken, async (req, res) => {
+    try {
+        const { status, sentiment, priority, scenario, search, limit, offset } = req.query;
+        const n = Math.min(parseInt(limit) || 30, 100);
+        const off = parseInt(offset) || 0;
+        const params = [];
+        let sql = `SELECT t.id, t.ticket_number, t.customer_phone, t.customer_name, t.message, t.status,
+                          t.portal_id, t.sentiment, t.ai_confidence, t.ai_scenario, t.source,
+                          t.created_at, t.updated_at,
+                          c.name as customer_display_name, c.email as customer_email
+                   FROM support_tickets t
+                   LEFT JOIN customers c ON c.phone = t.customer_phone
+                   WHERE 1=1`;
+
+        if (status) { sql += ' AND t.status = ?'; params.push(status); }
+        if (sentiment) { sql += ' AND t.sentiment = ?'; params.push(sentiment); }
+        if (scenario) { sql += ' AND t.ai_scenario = ?'; params.push(scenario); }
+        if (search && search.trim()) {
+            const like = `%${search.trim()}%`;
+            sql += ' AND (t.customer_name ILIKE ? OR t.customer_phone LIKE ? OR t.ticket_number ILIKE ?)';
+            params.push(like, `%${search.trim().replace(/\D/g, '').slice(-10) || search.trim()}%`, like);
+        }
+
+        // Count total before pagination
+        const countSql = sql.replace(/SELECT .+? FROM/, 'SELECT COUNT(*)::int AS total FROM');
+        const countRows = await dbAdapter.query(countSql, params);
+        const total = countRows[0]?.total || 0;
+
+        sql += ' ORDER BY t.created_at DESC LIMIT ? OFFSET ?';
+        params.push(n, off);
+
+        const rows = await dbAdapter.query(sql, params);
+
+        res.json({
+            success: true,
+            conversations: rows,
+            total,
+            limit: n,
+            offset: off
+        });
+    } catch (error) {
+        console.error('Conversations list error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load conversations' });
+    }
+});
+
+// Get full conversation thread for a ticket
+router.get('/ai/conversations/:ticketId', verifyToken, async (req, res) => {
+    try {
+        const ticketId = parseInt(req.params.ticketId);
+        if (isNaN(ticketId)) return res.status(400).json({ success: false, error: 'Invalid ticket ID' });
+
+        // Get the ticket
+        const tickets = await dbAdapter.query(
+            `SELECT t.*, c.name as customer_display_name, c.email as customer_email, c.phone as customer_phone_full
+             FROM support_tickets t
+             LEFT JOIN customers c ON c.phone = t.customer_phone
+             WHERE t.id = ?`,
+            [ticketId]
+        );
+        if (!tickets.length) return res.status(404).json({ success: false, error: 'Ticket not found' });
+        const ticket = tickets[0];
+
+        // Get the conversation thread (messages for this customer)
+        const phone = ticket.customer_phone;
+        const messages = await dbAdapter.query(
+            `SELECT id, message_type, message_content, status, created_at
+             FROM messages
+             WHERE customer_phone LIKE ?
+             ORDER BY created_at DESC LIMIT 50`,
+            [`%${String(phone).replace(/\D/g, '').slice(-10)}`]
+        );
+
+        // Get related orders
+        const orders = await dbAdapter.query(
+            `SELECT order_id, status, awb, courier_name, total, payment_method, created_at
+             FROM orders WHERE customer_phone LIKE ? ORDER BY created_at DESC LIMIT 5`,
+            [`%${String(phone).replace(/\D/g, '').slice(-10)}`]
+        );
+
+        // Parse AI suggestion from ticket message
+        let aiSuggestion = null;
+        const suggestionMatch = ticket.message.match(/💡 \[AI SUGGESTED REPLY - SOP: (.+?)\]\n([\s\S]*?)$/);
+        if (suggestionMatch) {
+            aiSuggestion = {
+                scenario: suggestionMatch[1],
+                reply: suggestionMatch[2]?.trim() || ''
+            };
+        }
+
+        res.json({
+            success: true,
+            ticket: {
+                id: ticket.id,
+                ticketNumber: ticket.ticket_number,
+                customerName: ticket.customer_name || ticket.customer_display_name,
+                customerPhone: phone,
+                customerEmail: ticket.customer_email,
+                message: ticket.message,
+                status: ticket.status,
+                sentiment: ticket.sentiment,
+                aiConfidence: ticket.ai_confidence,
+                aiScenario: ticket.ai_scenario,
+                source: ticket.source,
+                portalId: ticket.portal_id,
+                createdAt: ticket.created_at,
+                updatedAt: ticket.updated_at,
+                aiSuggestion
+            },
+            messages: messages.reverse(),
+            orders
+        });
+    } catch (error) {
+        console.error('Conversation detail error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load conversation' });
+    }
+});
+
+// Update ticket (priority, status, sentiment override)
+router.put('/ai/conversations/:ticketId', verifyToken, async (req, res) => {
+    try {
+        const ticketId = parseInt(req.params.ticketId);
+        const updates = {};
+        if (req.body.status) updates.status = req.body.status;
+        if (req.body.sentiment) updates.sentiment = req.body.sentiment;
+        if (req.body.ai_scenario) updates.ai_scenario = req.body.ai_scenario;
+        updates.updated_at = new Date().toISOString();
+
+        await dbAdapter.update('support_tickets', updates, { id: ticketId });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Conversation update error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to update conversation' });
+    }
+});
+
+// Enhanced analytics bundle (Phase 4)
+router.get('/ai/analytics', verifyToken, async (req, res) => {
+    try {
+        const { getEnhancedAnalytics } = require('../services/ai/insights');
+        const analytics = await getEnhancedAnalytics();
+        res.json({ success: true, ...analytics });
+    } catch (error) {
+        console.error('Enhanced analytics error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load analytics' });
+    }
+});
+
+// Live monitoring snapshot (Phase 4.2)
+router.get('/ai/live', verifyToken, async (req, res) => {
+    try {
+        const { getLiveSnapshot } = require('../services/ai/insights');
+        const snapshot = await getLiveSnapshot();
+        res.json({ success: true, ...snapshot });
+    } catch (error) {
+        console.error('Live snapshot error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load live data' });
+    }
+});
+
+// Quality metrics endpoint
+router.get('/ai/quality-metrics', verifyToken, async (req, res) => {
+    try {
+        const [sentimentDist, scenarioDist, confidenceAvg, escalationRate, resolutionRate] = await Promise.all([
+            dbAdapter.query(
+                `SELECT sentiment, COUNT(*)::int AS count
+                 FROM support_tickets
+                 WHERE sentiment IS NOT NULL AND created_at >= NOW() - INTERVAL '30 days'
+                 GROUP BY sentiment`
+            ),
+            dbAdapter.query(
+                `SELECT ai_scenario, COUNT(*)::int AS count
+                 FROM support_tickets
+                 WHERE ai_scenario IS NOT NULL AND created_at >= NOW() - INTERVAL '30 days'
+                 GROUP BY ai_scenario ORDER BY count DESC`
+            ),
+            dbAdapter.query(
+                `SELECT AVG(ai_confidence)::float AS avg_confidence, COUNT(*)::int AS total
+                 FROM support_tickets
+                 WHERE ai_confidence IS NOT NULL AND created_at >= NOW() - INTERVAL '30 days'`
+            ),
+            dbAdapter.query(
+                `SELECT
+                    COUNT(*)::int AS total,
+                    COUNT(CASE WHEN ai_confidence < 0.6 OR sentiment = 'frustrated' THEN 1 END)::int AS escalated
+                 FROM support_tickets
+                 WHERE created_at >= NOW() - INTERVAL '30 days'`
+            ),
+            dbAdapter.query(
+                `SELECT
+                    COUNT(*)::int AS total,
+                    COUNT(CASE WHEN status IN ('resolved', 'closed') THEN 1 END)::int AS resolved
+                 FROM support_tickets
+                 WHERE created_at >= NOW() - INTERVAL '30 days'`
+            )
+        ]);
+
+        res.json({
+            success: true,
+            sentimentDistribution: sentimentDist,
+            scenarioDistribution: scenarioDist,
+            avgConfidence: confidenceAvg[0]?.avg_confidence || 0,
+            totalClassified: confidenceAvg[0]?.total || 0,
+            escalationRate: escalationRate[0]?.total ? (escalationRate[0].escalated / escalationRate[0].total * 100).toFixed(1) : 0,
+            resolutionRate: resolutionRate[0]?.total ? (resolutionRate[0].resolved / resolutionRate[0].total * 100).toFixed(1) : 0
+        });
+    } catch (error) {
+        console.error('Quality metrics error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load quality metrics' });
+    }
+});
+
 module.exports = router;

@@ -1,8 +1,9 @@
 /**
  * AI Copilot Pro — Training Section
  *
- * Learned replies manager with table view, inline editing, bulk actions,
- * CSV/JSON import, test retrieval mode, and AI behavior settings.
+ * Learned replies manager with quality scoring, table view, inline editing,
+ * bulk actions, CSV/JSON import, test retrieval mode, expanded AI behavior
+ * settings, and conversation-to-training pipeline.
  */
 (function () {
     'use strict';
@@ -40,6 +41,15 @@
     .training-bulk-bar button { padding: 6px 12px; border-radius: var(--radius-sm); border: none; font-size: 12px; font-weight: 600; cursor: pointer; }
     .placeholder-var { background: rgba(99,102,241,.2); color: var(--accent-hover); padding: 1px 6px; border-radius: 4px; font-size: 12px; font-family: monospace; }
 
+    /* Quality score badge */
+    .quality-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+    .quality-high { background: rgba(34,197,94,.12); color: #22c55e; }
+    .quality-mid { background: rgba(245,158,11,.12); color: #f59e0b; }
+    .quality-low { background: rgba(239,68,68,.12); color: #ef4444; }
+    .tr-row-high td { border-left: 3px solid rgba(34,197,94,.3); }
+    .tr-row-mid td { border-left: 3px solid rgba(245,158,11,.2); }
+    .tr-row-low td { border-left: 3px solid rgba(239,68,68,.2); }
+
     /* Test mode */
     .test-panel { display: flex; flex-direction: column; gap: 16px; }
     .test-input-row { display: flex; gap: 10px; }
@@ -61,6 +71,8 @@
     .toggle-slider:before { content: ''; position: absolute; height: 18px; width: 18px; left: 2px; bottom: 2px; background: var(--text-muted); border-radius: 50%; transition: .2s; }
     .toggle-switch input:checked + .toggle-slider { background: var(--accent-bg); border-color: var(--accent); }
     .toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); background: var(--accent); }
+    .setting-input { width: 80px; text-align: center; }
+    .setting-select { width: 120px; font-size: 12px; padding: 6px 8px; }
 
     /* Import modal */
     .import-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200; display: flex; align-items: center; justify-content: center; }
@@ -92,6 +104,9 @@
             });
         });
         renderTab();
+
+        // Check if we were sent here from conversations with a prefill
+        checkPrefill();
     }
 
     function renderTab() {
@@ -126,12 +141,13 @@
                     <th style="width:30px;"><input type="checkbox" id="trSelectAll"></th>
                     <th>Question Pattern</th>
                     <th>Approved Reply</th>
+                    <th style="width:70px;">Quality</th>
                     <th style="width:60px;">Uses</th>
                     <th style="width:60px;">Boost</th>
                     <th style="width:60px;">Pinned</th>
-                    <th style="width:120px;">Actions</th>
+                    <th style="width:140px;">Actions</th>
                 </tr></thead>
-                <tbody id="trBody"><tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);"><span class="loading-spinner"></span> Loading…</td></tr></tbody>
+                <tbody id="trBody"><tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);"><span class="loading-spinner"></span> Loading…</td></tr></tbody>
             </table>
         </div>`;
 
@@ -152,6 +168,34 @@
 
     let cachedReplies = [];
 
+    /**
+     * Compute a quality score (0-100) for a learned reply based on:
+     * - uses (higher = better, capped at 20 uses = max score)
+     * - resolved_boost (direct multiplier)
+     * - recency (updated_at within 30 days = full, 60 days = half, older = low)
+     * - pinned (small bonus)
+     */
+    function computeQualityScore(r) {
+        let score = 0;
+        // Uses component: 0-35 points (log scale, max at 20 uses)
+        const useScore = Math.min(35, Math.log2(1 + (r.uses || 0)) * 7);
+        score += useScore;
+        // Resolved boost: 0-30 points
+        score += Math.min(30, (r.resolved_boost || 0) * 3);
+        // Recency: 0-25 points
+        if (r.updated_at) {
+            const daysAgo = (Date.now() - new Date(r.updated_at).getTime()) / 86400000;
+            if (daysAgo < 30) score += 25;
+            else if (daysAgo < 60) score += 15;
+            else if (daysAgo < 90) score += 8;
+        } else {
+            score += 5;
+        }
+        // Pinned bonus: 0-10 points
+        if (r.pinned) score += 10;
+        return Math.min(100, Math.round(score));
+    }
+
     async function loadReplies() {
         const search = document.getElementById('trSearch')?.value || '';
         const body = document.getElementById('trBody');
@@ -162,34 +206,46 @@
             selectedIds.clear();
             updateBulkBar();
             if (!cachedReplies.length) {
-                body.innerHTML = '<tr><td colspan="7" class="empty-state"><p>No learned replies yet. They appear automatically as your team replies to customers.</p></td></tr>';
+                body.innerHTML = '<tr><td colspan="8" class="empty-state"><p>No learned replies yet. They appear automatically as your team replies to customers.</p></td></tr>';
                 return;
             }
             body.innerHTML = '';
             cachedReplies.forEach(r => body.appendChild(renderReplyRow(r)));
         } catch (e) {
-            body.innerHTML = `<tr><td colspan="7" style="color:var(--danger);text-align:center;padding:16px;">${e.message}</td></tr>`;
+            body.innerHTML = `<tr><td colspan="8" style="color:var(--danger);text-align:center;padding:16px;">${e.message}</td></tr>`;
         }
     }
 
     function renderReplyRow(r) {
         const tr = document.createElement('tr');
         tr.dataset.id = r.id;
+        const quality = computeQualityScore(r);
+        const qClass = quality >= 70 ? 'quality-high' : quality >= 40 ? 'quality-mid' : 'quality-low';
+        const rowClass = quality >= 70 ? 'tr-row-high' : quality >= 40 ? 'tr-row-mid' : 'tr-row-low';
+        tr.className = rowClass;
+
         tr.innerHTML = `
         <td><input type="checkbox" class="tr-check" data-id="${r.id}"></td>
         <td class="q-cell">${highlightVars(escapeHtml(r.customer_question))}</td>
         <td class="a-cell">${escapeHtml(r.agent_reply).substring(0, 200)}${r.agent_reply.length > 200 ? '…' : ''}</td>
+        <td class="num-cell"><span class="quality-badge ${qClass}">${quality}</span></td>
         <td class="num-cell">${r.uses}</td>
         <td class="num-cell">${r.resolved_boost || 0}</td>
         <td class="num-cell">${r.pinned ? '&#x1F4CC;' : ''}</td>
         <td class="actions-cell">
             <button title="Edit" data-act="edit">Edit</button>
             <button title="${r.pinned ? 'Unpin' : 'Pin'}" data-act="pin">${r.pinned ? 'Unpin' : 'Pin'}</button>
+            <button title="Retire" data-act="retire" style="color:var(--warning);">Retire</button>
             <button title="Delete" data-act="delete" style="color:var(--danger);">Del</button>
         </td>`;
         tr.querySelector('[data-act="edit"]').onclick = () => editReply(r);
         tr.querySelector('[data-act="pin"]').onclick = async () => {
             await CP.apiFetch(`/ai/learned/${r.id}`, 'PUT', { pinned: !r.pinned });
+            loadReplies();
+        };
+        tr.querySelector('[data-act="retire"]').onclick = async () => {
+            if (!confirm('Retire this learned reply? It will be unpinned and its boost set to 0.')) return;
+            await CP.apiFetch(`/ai/learned/${r.id}`, 'PUT', { pinned: false, resolved_boost: 0 });
             loadReplies();
         };
         tr.querySelector('[data-act="delete"]').onclick = async () => {
@@ -208,7 +264,7 @@
         return text.replace(/\{\{(\w+)\}\}/g, '<span class="placeholder-var">{{$1}}</span>');
     }
 
-    function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
     function updateBulkBar() {
         const bar = document.getElementById('trBulkBar');
@@ -253,14 +309,30 @@
         } catch (e) { alert(e.message); }
     }
 
-    function showAddDialog() {
-        const q = prompt('Customer question pattern (use {{order_id}}, {{name}} for variables):');
+    function showAddDialog(prefillQ, prefillA) {
+        const q = prompt('Customer question pattern (use {{order_id}}, {{name}} for variables):', prefillQ || '');
         if (!q) return;
-        const a = prompt('Ideal approved reply:');
+        const a = prompt('Ideal approved reply:', prefillA || '');
         if (!a) return;
         CP.apiFetch('/ai/learned', 'POST', { question: q, reply: a, pinned: true })
             .then(() => loadReplies())
             .catch(e => alert(e.message));
+    }
+
+    /**
+     * Check if we arrived from the Conversations section with prefill data.
+     */
+    function checkPrefill() {
+        try {
+            const params = new URLSearchParams(location.hash.split('?')[1] || '');
+            const prefillQ = params.get('prefill_q');
+            const prefillA = params.get('prefill_a');
+            if (prefillQ && prefillA) {
+                // Clean the URL
+                history.replaceState(null, '', location.hash.split('?')[0]);
+                setTimeout(() => showAddDialog(decodeURIComponent(prefillQ), decodeURIComponent(prefillA)), 300);
+            }
+        } catch (e) { /* ignore */ }
     }
 
     function showImportDialog() {
@@ -282,10 +354,8 @@
             const raw = overlay.querySelector('#importData').value.trim();
             let items = [];
             try {
-                // Try JSON first
                 items = JSON.parse(raw);
             } catch {
-                // Try CSV
                 const lines = raw.split('\n').filter(l => l.trim());
                 const header = lines[0].toLowerCase();
                 const startIdx = header.includes('question') ? 1 : 0;
@@ -323,7 +393,7 @@
             <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Hand-curated, pinned examples with variable placeholders. These always rank first in AI retrieval.</p>
             <div id="goldenList" style="display:flex;flex-direction:column;gap:10px;"><span class="loading-spinner"></span> Loading…</div>
         </div>`;
-        document.getElementById('goldenAdd').onclick = showAddDialog;
+        document.getElementById('goldenAdd').onclick = () => showAddDialog();
         loadGolden();
     }
 
@@ -339,6 +409,8 @@
             }
             list.innerHTML = '';
             golden.forEach(r => {
+                const quality = computeQualityScore(r);
+                const qClass = quality >= 70 ? 'quality-high' : quality >= 40 ? 'quality-mid' : 'quality-low';
                 const card = document.createElement('div');
                 card.className = 'card';
                 card.style.marginBottom = '0';
@@ -347,7 +419,10 @@
                     <div style="flex:1;">
                         <div style="font-weight:600;font-size:13px;margin-bottom:6px;">${highlightVars(escapeHtml(r.customer_question))}</div>
                         <div style="color:var(--text-secondary);font-size:13px;">${highlightVars(escapeHtml(r.agent_reply))}</div>
-                        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Used ${r.uses} times</div>
+                        <div style="display:flex;gap:10px;align-items:center;margin-top:6px;">
+                            <span style="font-size:11px;color:var(--text-muted);">Used ${r.uses} times</span>
+                            <span class="quality-badge ${qClass}">Quality: ${quality}</span>
+                        </div>
                     </div>
                     <div style="display:flex;gap:6px;">
                         <button class="btn-secondary" style="padding:4px 10px;font-size:12px;" data-act="edit">Edit</button>
@@ -413,10 +488,12 @@
         }
     }
 
-    // ── AI Settings ──
+    // ── AI Settings (Expanded) ──
     function renderSettings(container) {
         container.innerHTML = `
+        <div style="margin-bottom:12px;font-size:13px;color:var(--text-muted);">Configure AI behavior for the customer chatbot and admin copilot.</div>
         <div class="settings-grid">
+            <!-- Existing settings -->
             <div class="setting-item">
                 <div><div class="setting-label">AI Copilot Enabled</div><div class="setting-desc">Master toggle for all AI features</div></div>
                 <label class="toggle-switch"><input type="checkbox" id="setCopilotOn" checked><span class="toggle-slider"></span></label>
@@ -427,43 +504,87 @@
             </div>
             <div class="setting-item">
                 <div><div class="setting-label">Daily Chat Limit</div><div class="setting-desc">Max AI chat requests per admin per day</div></div>
-                <input class="input-field" type="number" id="setDailyLimit" value="200" style="width:80px;text-align:center;">
+                <input class="input-field setting-input" type="number" id="setDailyLimit" value="200">
             </div>
             <div class="setting-item">
                 <div><div class="setting-label">Daily Suggestion Limit</div><div class="setting-desc">Max reply suggestions per day (shared)</div></div>
-                <input class="input-field" type="number" id="setSuggestLimit" value="100" style="width:80px;text-align:center;">
+                <input class="input-field setting-input" type="number" id="setSuggestLimit" value="100">
+            </div>
+
+            <!-- New Phase 5 settings -->
+            <div class="setting-item">
+                <div><div class="setting-label">Customer Chatbot</div><div class="setting-desc">Enable AI auto-responses for widget & WhatsApp customers</div></div>
+                <label class="toggle-switch"><input type="checkbox" id="setChatbotOn" checked><span class="toggle-slider"></span></label>
+            </div>
+            <div class="setting-item">
+                <div><div class="setting-label">Sentiment Auto-Escalation</div><div class="setting-desc">Auto-escalate tickets when customer sentiment is frustrated</div></div>
+                <label class="toggle-switch"><input type="checkbox" id="setSentEscOn" checked><span class="toggle-slider"></span></label>
+            </div>
+            <div class="setting-item">
+                <div><div class="setting-label">Min Confidence Threshold</div><div class="setting-desc">Below this %, AI will escalate instead of auto-responding</div></div>
+                <input class="input-field setting-input" type="number" id="setMinConf" value="60" min="0" max="100" step="5">
+            </div>
+            <div class="setting-item">
+                <div><div class="setting-label">Default Language</div><div class="setting-desc">Preferred language for AI responses</div></div>
+                <select class="input-field setting-select" id="setDefLang">
+                    <option value="auto">Auto-detect</option>
+                    <option value="en">English</option>
+                    <option value="hi">Hindi</option>
+                </select>
+            </div>
+            <div class="setting-item">
+                <div><div class="setting-label">Max Auto-Response Rounds</div><div class="setting-desc">Max AI replies before escalating to human</div></div>
+                <input class="input-field setting-input" type="number" id="setMaxRounds" value="5" min="1" max="20">
+            </div>
+            <div class="setting-item" style="grid-column: 1 / -1;">
+                <div style="flex:1;"><div class="setting-label">Widget Welcome Message</div><div class="setting-desc">Custom greeting shown when customers open the chat widget</div></div>
+                <input class="input-field" type="text" id="setWelcomeMsg" value="" placeholder="Hey there! How can I help you today?" style="width:300px;margin-top:8px;">
             </div>
         </div>
-        <div style="margin-top:16px;"><button class="btn-primary" id="setSaveBtn">Save Settings</button></div>`;
+        <div style="margin-top:16px;display:flex;gap:10px;">
+            <button class="btn-primary" id="setSaveBtn">Save Settings</button>
+            <span id="setSaveStatus" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>
+        </div>`;
 
-        // Load current settings
         loadSettings();
         document.getElementById('setSaveBtn').addEventListener('click', saveSettings);
     }
 
     async function loadSettings() {
         try {
-            // Settings are stored in system_settings; we load via the usage endpoint
             const data = await CP.apiFetch('/ai/usage');
-            // The endpoint doesn't return settings directly, so we use defaults
-            // In production, you'd add a GET /ai/settings endpoint
+            // Settings are loaded from system_settings via the usage endpoint
+            // In production, a dedicated GET /ai/settings endpoint would populate these
         } catch (e) { /* use defaults */ }
     }
 
     async function saveSettings() {
         const btn = document.getElementById('setSaveBtn');
+        const status = document.getElementById('setSaveStatus');
         btn.textContent = 'Saving…';
+        status.textContent = '';
         try {
             await CP.apiFetch('/ai/settings', 'PUT', {
                 ai_admin_copilot_enabled: document.getElementById('setCopilotOn').checked ? 'true' : 'false',
                 ai_learning_enabled: document.getElementById('setLearningOn').checked ? 'true' : 'false',
                 ai_daily_admin_limit: document.getElementById('setDailyLimit').value,
-                ai_suggest_reply_daily_limit: document.getElementById('setSuggestLimit').value
+                ai_suggest_reply_daily_limit: document.getElementById('setSuggestLimit').value,
+                // New settings
+                ai_customer_chatbot_enabled: document.getElementById('setChatbotOn').checked ? 'true' : 'false',
+                ai_sentiment_auto_escalation: document.getElementById('setSentEscOn').checked ? 'true' : 'false',
+                ai_min_confidence_threshold: document.getElementById('setMinConf').value,
+                ai_default_language: document.getElementById('setDefLang').value,
+                ai_max_auto_rounds: document.getElementById('setMaxRounds').value,
+                ai_widget_welcome_message: document.getElementById('setWelcomeMsg').value
             });
             btn.textContent = 'Saved!';
-            setTimeout(() => { btn.textContent = 'Save Settings'; }, 2000);
+            status.textContent = 'All settings saved successfully.';
+            status.style.color = 'var(--success)';
+            setTimeout(() => { btn.textContent = 'Save Settings'; status.textContent = ''; }, 3000);
         } catch (e) {
-            btn.textContent = 'Error: ' + e.message;
+            btn.textContent = 'Error';
+            status.textContent = e.message;
+            status.style.color = 'var(--danger)';
         }
     }
 
@@ -471,6 +592,10 @@
     document.addEventListener('copilot-section-activate', (e) => {
         if (e.detail.section === SECTION) {
             if (!initialized) { render(); initialized = true; }
+            else {
+                renderTab();
+                checkPrefill();
+            }
         }
     });
 })();

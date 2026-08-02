@@ -71,7 +71,7 @@
 
     // ── Navigation ──
     const SECTION_TITLES = {
-        chat: 'Chat', training: 'Training', actions: 'Actions',
+        chat: 'Chat', conversations: 'Conversations', training: 'Training', actions: 'Actions',
         analytics: 'Analytics', workflows: 'Workflows'
     };
 

@@ -1,31 +1,119 @@
 /**
- * Autonomous AI Support Agent for Offcomfrt WhatsApp Bot.
+ * Autonomous AI Support Agent for OFFCOMFRT WhatsApp Bot.
  *
- * Implements the 4-Step Decision Pipeline from the Support Agent Workflow Framework:
- * 1. Scenario Identification (9 SOP classes)
- * 2. Reliable Data Check (Shoppers Hub, Shiprocket, Delhivery, Ekart, Shopify, Return Portal)
- * 3. Key Rule Cross-Checking (Strict policy adherence)
- * 4. Autonomous Resolution or Immediate Admin Escalation
+ * LLM-powered intent classification + sentiment analysis replacing the old
+ * regex-based pattern matching. Uses a structured system prompt with all 9 SOP
+ * scenario rules, detects customer language (English / Hindi / Hinglish),
+ * classifies intent + sentiment in a single LLM call, and returns a
+ * SOP-compliant reply with confidence scoring.
+ *
+ * Pipeline:
+ *   1. Fetch customer context (recent orders, shopper status)
+ *   2. Detect language heuristic (Devanagari = Hindi, mixed = Hinglish)
+ *   3. Call LLM with SOP rules + context → JSON { intent, scenario, confidence, reply, sentiment }
+ *   4. If confidence < threshold OR sentiment = frustrated → escalate
+ *   5. Fallback: search golden SOP learned examples from learning.js
  */
 
 const { dbAdapter } = require('../../database/db');
+const { chatCompletion, isConfigured } = require('./aiClient');
 const { findSimilarExamples } = require('./learning');
 
+// Confidence below this → escalate to admin
+const CONFIDENCE_THRESHOLD = 0.6;
+
+// ── Language detection heuristic ──
+
+function detectLanguage(text) {
+    const t = String(text || '');
+    // Devanagari Unicode range → Hindi
+    if (/[\u0900-\u097F]/.test(t)) return 'hindi';
+    // Mixed Latin + common Hindi/Hinglish tokens
+    const hinglishTokens = /\b(kya|hai|kahan|kab|mera|meri|nahi|nahin|bhaiya|ji|lagta|kardo|bhejo|paisa|kitna|kab tak|bhai|yaar|please|thoda|jaldi|galti|galat|dhoka|fraud|late|delay|nahi mila|order kahan)\b/i;
+    if (hinglishTokens.test(t)) return 'hinglish';
+    return 'english';
+}
+
+// ── SOP System Prompt ──
+
+function buildSystemPrompt(language) {
+    const langInstruction =
+        language === 'hindi'
+            ? 'Respond in Hindi (Devanagari script). Keep the tone warm and professional.'
+            : language === 'hinglish'
+                ? 'Respond in Hinglish (Latin script, Hindi-English mix). Keep the tone warm and professional.'
+                : 'Respond in English. Keep the tone warm and professional.';
+
+    return `You are the OFFCOMFRT AI Support Agent for WhatsApp. You classify customer messages into one of 9 SOP scenarios and generate a policy-compliant reply.
+
+${langInstruction}
+
+## SOP SCENARIOS (classify into exactly one):
+
+1. **tracking** — "Where is my order?" / track / status / courier / shipped
+   RULE: Check partner sequence: Shiprocket → Delhivery One → Ekart (prepaid only). If "Edit Details" clicked without follow-up info: calling executive contacts customer. COD: hold until response. Prepaid: ship as-is after 24h.
+
+2. **delayed_pod** — Order delayed / not received / delivered but not in hand
+   RULE: If tracking shows "Delivered": ask customer to check with neighbours/security. Notify delivery partner, request Proof of Delivery (POD). Wait 24h for POD.
+
+3. **refund_policy** — Refund / money back / return money
+   RULE: Original payment method refund (5-7 days) ONLY for: (a) damaged on arrival, (b) wrong product, (c) prepaid cancelled at confirmation, (d) RTO without receipt. ALL other returns = store credit only. Never promise cash refund for size/preference returns.
+
+4. **size_exchange** — Size change / exchange / wrong size
+   RULE: Pre-dispatch: use "Edit Details" on Shoppers Hub confirmation. Post-delivery: direct to offcomfrt.in → Support → Return/Exchange portal.
+
+5. **damaged_wrong_item** — Damaged / defective / wrong product received
+   RULE: Always ask for proof: wrong product = unboxing video (mandatory); damaged = photos. Submit via offcomfrt.in → Support → Return/Exchange. Qualifies for refund.
+
+6. **address_change** — Change / update delivery address
+   RULE: Pre-dispatch: "Edit Details" on Shoppers Hub. Post-dispatch: cannot change active shipment. Prepaid RTO: wait for return then reship, or cancel in-transit for fresh order. COD: dispatch fresh order immediately.
+
+7. **cod_confusion** — Already paid online but courier asking for COD cash
+   RULE: Root cause: "Edit Details" converted order to COD without re-applying discount. Customer pays cash at door; OFFCOMFRT refunds that amount separately.
+
+8. **cancellation** — Cancel order / don't want
+   RULE: Actioned via Shoppers Hub confirmation text (Confirm/Cancel/Edit Details). Prepaid post-ship: cancel in-transit + refund. COD post-ship: refuse delivery.
+
+9. **escalation** — Frustrated / want callback / manager / supervisor
+   RULE: Do NOT offer phone callback. Resolve over chat first. Consult admin for best solution. Try to resolve before escalating.
+
+## OUTPUT FORMAT (strict JSON):
+{
+  "intent": "<short description of what customer wants>",
+  "scenario": "<one of: tracking, delayed_pod, refund_policy, size_exchange, damaged_wrong_item, address_change, cod_confusion, cancellation, escalation, general>",
+  "confidence": <0.0 to 1.0>,
+  "reply": "<SOP-compliant reply text, concise WhatsApp style, max 300 words>",
+  "sentiment": "<positive | neutral | negative | frustrated>"
+}
+
+## RULES:
+- NEVER invent order numbers, tracking data, or policies not listed above.
+- If the message doesn't match any scenario, use scenario "general" with confidence 0.3.
+- If sentiment is "frustrated", still classify the scenario but set confidence to max 0.5.
+- Reply in the SAME LANGUAGE as the customer's message.
+- Keep replies SHORT — WhatsApp chat style, 2-5 sentences max.
+- Use the order context provided (if any) to personalize the reply.
+- Do NOT include emoji headers like the old format. Write naturally.`;
+}
+
+// ── Main entry point ──
+
 /**
- * Attempt to process and resolve a customer request autonomously.
- * @param {string} phone Customer phone number
- * @param {string} messageText Inbound customer message text
- * @param {string} customerName Customer name
- * @returns {Promise<{ handled: boolean, reply?: string, scenario?: string, reason?: string }>}
+ * Process a customer message through the LLM-powered support agent.
+ * @param {string} phone — Customer phone number
+ * @param {string} messageText — Inbound customer message
+ * @param {string} customerName — Customer name
+ * @param {object} [options] — Optional: { recentMessages: string[] }
+ * @returns {{ handled: boolean, reply?: string, scenario?: string, confidence?: number, sentiment?: string, reason?: string }}
  */
-async function processCustomerMessage(phone, messageText, customerName = 'Customer') {
+async function processCustomerMessage(phone, messageText, customerName = 'Customer', options = {}) {
     try {
         const text = String(messageText || '').trim();
         const lowerText = text.toLowerCase();
         const digits = String(phone).replace(/\D/g, '');
         const phonePattern = `%${digits.slice(-10)}`;
 
-        // 1. Fetch reliable customer context (with offline DB safety)
+        // 1. Fetch customer context
         let orders = [];
         let shoppers = [];
         try {
@@ -42,139 +130,142 @@ async function processCustomerMessage(phone, messageText, customerName = 'Custom
                 )
             ]);
         } catch (dbErr) {
-            console.warn('[AUTO AI] Database query unavailable, relying on SOP rules and golden examples');
+            console.warn('[AUTO AI] Database query unavailable:', dbErr.message);
         }
 
         const latestOrder = orders[0] || null;
         const latestShopper = shoppers[0] || null;
 
-        // 2. Classify scenario and validate against SOP Key Rules
+        // 2. Detect language
+        const language = detectLanguage(text);
 
-        // SCENARIO 2: Order Delayed / Not Received Past Expected Date
-        if (/not received|missing|delivered but|haven't received|did not receive|delayed|past expected/i.test(lowerText)) {
-            const orderInfo = latestOrder
-                ? `▫️ Order ID: *#${latestOrder.order_id}*\n▫️ Current Tracking Status: *${latestOrder.status || 'Delivered'}*\n\n`
-                : '';
-
-            const reply = `📱 *OFFCOMFRT — ORDER DELAYED / NOT RECEIVED*\n\n${orderInfo}▫️ *If tracking shows "Delivered" but you haven't received it:*\n1️⃣ Ask the customer to check with neighbours / nearby flats or security in case someone else accepted it.\n2️⃣ We have notified the delivery partner and requested Proof of Delivery (POD).\n3️⃣ Wait at least 24 hours for the delivery partner to respond.\n4️⃣ Once received, share the POD with the customer.`;
-            return { handled: true, reply, scenario: 'delayed_pod' };
+        // 3. Build context string for the LLM
+        let contextStr = '';
+        if (latestOrder) {
+            contextStr += `Latest Order: ID #${latestOrder.order_id}, Status: ${latestOrder.status || 'Processing'}`;
+            if (latestOrder.awb) contextStr += `, AWB: ${latestOrder.awb}`;
+            if (latestOrder.courier_name) contextStr += `, Courier: ${latestOrder.courier_name}`;
+            if (latestOrder.payment_method) contextStr += `, Payment: ${latestOrder.payment_method}`;
+            if (latestOrder.expected_delivery) contextStr += `, Expected: ${latestOrder.expected_delivery}`;
+            contextStr += '\n';
+        }
+        if (latestShopper) {
+            contextStr += `Shoppers Hub: Order #${latestShopper.order_id}, Status: ${latestShopper.status || 'unknown'}`;
+            if (latestShopper.customer_message) contextStr += `, Edit Message: "${latestShopper.customer_message.substring(0, 100)}"`;
+            contextStr += '\n';
         }
 
-        // SCENARIO 7: Payment / COD Confusion ("I already paid but courier is asking for COD")
-        if (/already paid|courier asking|asking cod|asking money|extra charge|cod asking/i.test(lowerText)) {
-            const shopifyInfo = latestOrder
-                ? `▫️ Order ID: *#${latestOrder.order_id}*\n▫️ Shopify Payment Check: Payment status and pending amount checked on Shopify.\n\n`
-                : '';
-
-            const reply = `📱 *OFFCOMFRT — PAYMENT / COD CONFUSION*\n\n${shopifyInfo}▫️ *Common Root Cause:*\nThis usually happens when the customer used "Edit Details" to update the order, and the discount amount wasn't re-applied — the order gets converted to COD, and the delivery partner ends up asking for the whole order amount (without the discount applied) as cash, not just the leftover/discount amount.\n\n▫️ *Resolution Protocol (Rule 15 & 16):*\n1️⃣ Check the payment status and pending amount on Shopify.\n2️⃣ If the order has been converted to COD due to a discount not re-applying after an edit:\n• Ask the customer to pay the delivery partner the full amount being asked for at the door.\n• We refund that paid amount back to the customer separately, since they already paid us for the full order.`;
-            return { handled: true, reply, scenario: 'cod_confusion' };
+        // Include recent messages for multi-turn context if provided
+        if (options.recentMessages && options.recentMessages.length) {
+            contextStr += '\nRecent conversation:\n';
+            for (const msg of options.recentMessages.slice(-3)) {
+                contextStr += `- ${msg}\n`;
+            }
         }
 
-        // SCENARIO 3: Refund Requests
-        if (/refund|money back|return money|cash refund/i.test(lowerText)) {
-            const shopifyInfo = latestOrder
-                ? `▫️ Order ID: *#${latestOrder.order_id}*\n▫️ Shopify Refund Check: Status checked on Shopify.\n\n`
-                : '';
+        // 4. Call LLM for intent classification + reply generation
+        if (isConfigured()) {
+            try {
+                const systemPrompt = buildSystemPrompt(language);
 
-            const reply = `📱 *OFFCOMFRT — REFUND REQUESTS*\n\n${shopifyInfo}▫️ *Eligibility — refund (to original payment method) is issued ONLY when:*\n• Item was damaged on arrival.\n• Wrong product was delivered.\n• Customer cancelled a prepaid order at the confirmation stage (via the Shoppers Hub confirm/cancel notification).\n• Order returned as RTO (Return to Origin) without the customer ever receiving it.\n\n▫️ *All other return/exchange cases:* store credit only, not a cash refund.\n\n▫️ *Timeline:* prepaid refunds take an average of 5–7 days to reflect in the original payment method.`;
-            return { handled: true, reply, scenario: 'refund_policy' };
-        }
+                const userMessage = contextStr
+                    ? `Customer name: ${customerName}\nCustomer message: "${text}"\n\nContext:\n${contextStr}`
+                    : `Customer name: ${customerName}\nCustomer message: "${text}"`;
 
-        // SCENARIO 4: Size Change / Exchange Request
-        if (/size|exchange|wrong size|change size|replace/i.test(lowerText)) {
-            const reply = `📱 *OFFCOMFRT — SIZE CHANGE / EXCHANGE REQUEST*\n\n▫️ *Before dispatch (order not yet shipped):*\nCustomer uses the "Edit Details" option on the Shoppers Hub confirmation message (sent with Confirm / Cancel / Edit Details options) to change size directly — no manual agent action needed.\n\n▫️ *After delivery (customer already has the wrong size):*\nDirect the customer to apply for return/exchange on the website: offcomfrt.in → Support → Return/Exchange. This is self-service; agent does not need to process manually unless it stalls.`;
-            return { handled: true, reply, scenario: 'size_exchange' };
-        }
+                const { message } = await chatCompletion({
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userMessage }
+                    ],
+                    temperature: 0.3,
+                    maxTokens: 600,
+                    responseFormat: { type: 'json_object' }
+                });
 
-        // SCENARIO 5: Damaged / Defective / Wrong Product
-        if (/damage|defective|broken|wrong item|wrong product/i.test(lowerText)) {
-            const reply = `📱 *OFFCOMFRT — DAMAGED / DEFECTIVE / WRONG PRODUCT*\n\n▫️ *Always ask for proof before processing:*\n• Wrong product delivered → request an unboxing video (mandatory every time).\n• Damaged product → request photos of the damage.\n\n▫️ *Submission Channel:*\nBoth are submitted via the same Return/Exchange page on the website (offcomfrt.in → Support → Return/Exchange) — do not collect via chat only.\n\n▫️ *Refund Qualification:*\nOnce proof is submitted, this qualifies under the refund-eligible cases in Section 3 (damaged or wrong product).`;
-            return { handled: true, reply, scenario: 'damaged_wrong_item' };
-        }
-
-        // SCENARIO 6: Address Change Request
-        if (/address|location change|change address|update address/i.test(lowerText)) {
-            const reply = `📱 *OFFCOMFRT — ADDRESS CHANGE REQUEST*\n\n▫️ *Pre-dispatch:* Customer uses "Edit Details" on the Shoppers Hub confirmation message to update the address.\n\n▫️ *Post-dispatch (shipped):* If the order has already shipped after confirmation, the address on the current shipment cannot be changed.\n\n▫️ *Once the shipment returns as RTO:*\n• Prepaid order: wait for RTO, then reship to the new address.\n• COD order: dispatch a new order to the correct address immediately — no need to wait.\n\n▫️ *If the customer wants it faster (prepaid, don't want to wait for RTO):*\n• Cancel the order while it is in transit, then ship a fresh order to the new address right away.`;
-            return { handled: true, reply, scenario: 'address_change' };
-        }
-
-        // SCENARIO 8: Cancellation Requests
-        if (/cancel|cancellation|don't want/i.test(lowerText)) {
-            const reply = `📱 *OFFCOMFRT — CANCELLATION REQUESTS*\n\n▫️ *Rule 17:* Cancellation is only actioned through the verification/confirmation text sent from Shoppers Hub (Confirm / Cancel / Edit Details).\n\n▫️ *If a prepaid customer wants to cancel after the order has already shipped:*\n• Cancel the order while it's in transit and process the refund.\n\n▫️ *If a COD customer wants to cancel after shipping:*\n• Simply ask the customer to not accept the delivery when it arrives.`;
-            return { handled: true, reply, scenario: 'cancellation' };
-        }
-
-        // SCENARIO 9: Escalation / Frustrated or Repeat-Contact Customers
-        if (/callback|call back|phone call|manager|supervisor|escalate|escalation|frustrated|agent/i.test(lowerText)) {
-            const reply = `📱 *OFFCOMFRT — ESCALATION / CUSTOMER SUPPORT*\n\n▫️ *Rule 18:* Do not immediately offer a phone callback as the default path.\n▫️ *Rule 19:* First, check with admin for the best possible solution.\n▫️ *Rule 20:* Try to resolve the issue over chat itself wherever possible before escalating further.\n\n▫️ Please share your issue details here so we can resolve it directly over chat!`;
-            return { handled: true, reply, scenario: 'escalation' };
-        }
-
-        // SCENARIO 1: "Where is my order?" — Tracking Query
-        if (/where|track|status|location|dispatch|shipped|courier/i.test(lowerText)) {
-            // Step 1: Check Shoppers Hub Confirmation & Edit Status
-            if (latestShopper) {
-                const shopperStatus = String(latestShopper.status || '').toLowerCase();
-                const paymentMethod = String(latestShopper.payment_method || '').toLowerCase();
-                const isPrepaid = paymentMethod.includes('prepaid') || paymentMethod.includes('online');
-                const hasEditedInfo = !!(latestShopper.customer_message && latestShopper.customer_message.trim());
-
-                if (shopperStatus.includes('edit') && !hasEditedInfo) {
-                    // Part 3 of Req 1: Clicked "Edit Details" without follow-up info
-                    const editNotice = isPrepaid
-                        ? `📱 *OFFCOMFRT — ORDER STATUS*\n\n▫️ Order ID: *#${latestShopper.order_id}*\n▫️ Status: *Edit Details Requested*\n▫️ Our calling executive calls the customer to collect the details.\n▫️ *Prepaid Rule:* If call is not picked, wait 24 hours, then ship the order as originally placed (no edits applied).`
-                        : `📱 *OFFCOMFRT — ORDER STATUS*\n\n▫️ Order ID: *#${latestShopper.order_id}*\n▫️ Status: *Edit Details Requested*\n▫️ Our calling executive calls the customer to collect the details.\n▫️ *COD Rule:* If call is not picked, leave the order as-is (on hold) until the customer responds.`;
-                    return { handled: true, reply: editNotice, scenario: 'tracking_edit_pending' };
+                // Parse the JSON response
+                let parsed;
+                try {
+                    parsed = JSON.parse(message.content || '{}');
+                } catch {
+                    // Fallback: try to extract JSON from the response
+                    const jsonMatch = (message.content || '').match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        parsed = JSON.parse(jsonMatch[0]);
+                    }
                 }
-            }
 
-            // Step 2: Check Tracking across Partner Sequence (Shiprocket -> Delhivery One -> Ekart prepaid only)
-            if (latestOrder) {
-                const status = latestOrder.status || 'Processing';
-                const courier = latestOrder.courier_name || 'Shiprocket';
-                const awb = latestOrder.awb ? `\n▫️ AWB: *${latestOrder.awb}*` : '';
-                const delivery = latestOrder.expected_delivery ? `\n▫️ Expected Delivery: *${latestOrder.expected_delivery}*` : '';
+                if (parsed && parsed.scenario) {
+                    const confidence = parseFloat(parsed.confidence) || 0.5;
+                    const sentiment = parsed.sentiment || 'neutral';
+                    const scenario = parsed.scenario || 'general';
+                    const reply = parsed.reply || '';
 
-                const reply = `📱 *OFFCOMFRT — ORDER TRACKING*\n\n▫️ Order ID: *#${latestOrder.order_id}*\n▫️ Status: *${status}*\n▫️ Courier Partner: *${courier}*\n▫️ Partner Check Sequence: 1. Shiprocket (primary/default partner) → 2. Delhivery One → 3. Ekart (prepaid orders only)${awb}${delivery}\n\n▫️ We monitor your shipment closely. Let us know if you need further help!`;
-                return { handled: true, reply, scenario: 'tracking' };
-            } else if (latestShopper) {
-                const reply = `📱 *OFFCOMFRT — ORDER STATUS*\n\n▫️ Order ID: *#${latestShopper.order_id}*\n▫️ Shoppers Hub Status: *Confirmed*\n\n▫️ Your order is confirmed and tracking is checked in sequence: Shiprocket (primary/default partner) → Delhivery One → Ekart (prepaid orders only).`;
-                return { handled: true, reply, scenario: 'tracking' };
-            } else {
-                const reply = `📱 *OFFCOMFRT — TRACKING QUERY*\n\n▫️ *Shoppers Hub Tracking Partner Sequence:*
-1️⃣ Shiprocket (primary/default partner) — check first
-2️⃣ Delhivery One — check if not found on Shiprocket
-3️⃣ Ekart — check only for prepaid orders if not found on the above two
+                    // Auto-escalate if frustrated or very low confidence
+                    if (sentiment === 'frustrated' || confidence < CONFIDENCE_THRESHOLD) {
+                        const reason = sentiment === 'frustrated'
+                            ? 'Customer is frustrated — auto-escalating to admin'
+                            : `Low confidence (${confidence.toFixed(2)}) — needs human review`;
 
-▫️ *Unresolved Edit Details Policy:*
-• Check whether customer replied with requested edit details.
-• If no reply yet: our calling executive calls the customer to collect the details.
-• COD: leave the order as-is (on hold) until the customer responds.
-• Prepaid: wait 24 hours, then ship the order as originally placed (no edits applied).
+                        // Still provide the reply if we have one, but mark as not handled
+                        if (reply && confidence >= 0.3) {
+                            return {
+                                handled: false,
+                                reply,
+                                scenario,
+                                confidence,
+                                sentiment,
+                                reason
+                            };
+                        }
 
-▫️ Please reply with your *Order ID* to fetch your exact tracking status!`;
-                return { handled: true, reply, scenario: 'tracking_policy' };
+                        return { handled: false, scenario, confidence, sentiment, reason };
+                    }
+
+                    return {
+                        handled: true,
+                        reply,
+                        scenario,
+                        confidence,
+                        sentiment
+                    };
+                }
+            } catch (aiErr) {
+                console.warn('[AUTO AI] LLM classification failed:', aiErr.message);
+                // Fall through to golden examples fallback
             }
         }
 
-        // 3. Fallback: Search Golden SOP learned examples
+        // 5. Fallback: Search Golden SOP learned examples
         const examples = await findSimilarExamples(text, 1);
         if (examples && examples.length > 0 && examples[0].uses >= 5) {
-            const reply = `📱 *OFFCOMFRT — SUPPORT*\n\n${examples[0].a}`;
-            return { handled: true, reply, scenario: 'golden_sop' };
+            const reply = examples[0].a;
+            return {
+                handled: true,
+                reply,
+                scenario: 'golden_sop',
+                confidence: 0.7,
+                sentiment: 'neutral'
+            };
         }
 
-        // 4. Situation cannot be handled automatically -> Escalate to Admin
+        // 6. Cannot handle automatically → Escalate
         return {
             handled: false,
-            reason: 'Complex or unhandled query requires human admin review'
+            reason: 'Complex or unhandled query requires human admin review',
+            scenario: 'general',
+            confidence: 0,
+            sentiment: 'neutral'
         };
     } catch (error) {
-        console.error('❌ Error in autoSupportAgent:', error.message);
-        return { handled: false, reason: error.message };
+        console.error('[AUTO AI] Error in autoSupportAgent:', error.message);
+        return {
+            handled: false,
+            reason: error.message,
+            scenario: 'general',
+            confidence: 0,
+            sentiment: 'neutral'
+        };
     }
 }
 
-module.exports = {
-    processCustomerMessage
-};
+module.exports = { processCustomerMessage, detectLanguage };

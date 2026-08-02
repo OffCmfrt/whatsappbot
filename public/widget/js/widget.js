@@ -147,6 +147,33 @@
             '.offcomfrt-whatsapp-btn:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(37,211,102,0.4)}',
             '.offcomfrt-whatsapp-btn svg{width:18px;height:18px;fill:currentColor}',
 
+            /* Rich Message Formatting */
+            '.offcomfrt-msg-bot strong{font-weight:700}',
+            '.offcomfrt-msg-bot em{font-style:italic}',
+            '.offcomfrt-msg-bot ul,.offcomfrt-msg-bot ol{margin:6px 0;padding-left:18px}',
+            '.offcomfrt-msg-bot li{margin:2px 0}',
+            '.offcomfrt-msg-bot br+br{display:none}',
+
+            /* Return/Exchange Status Card */
+            '.offcomfrt-return-card{background:#fff;border:1px solid #e0e0e0;border-radius:16px;padding:20px;margin:4px 0;box-shadow:0 4px 16px rgba(0,0,0,0.06);animation:offcomfrt-slideUp 0.35s cubic-bezier(0.16,1,0.3,1);width:100%}',
+            '.offcomfrt-return-card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #f0f0f0}',
+            '.offcomfrt-return-type{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:0.8px}',
+            '.offcomfrt-return-status{font-size:11px;font-weight:600;padding:5px 12px;border-radius:12px;text-transform:uppercase;letter-spacing:0.5px}',
+            '.offcomfrt-return-approved{background:#dcfce7;color:#16a34a}',
+            '.offcomfrt-return-pending{background:#fef3c7;color:#d97706}',
+            '.offcomfrt-return-rejected{background:#fee2e2;color:#dc2626}',
+            '.offcomfrt-return-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f5f5f5;font-size:13px}',
+            '.offcomfrt-return-row:last-child{border-bottom:none}',
+            '.offcomfrt-return-row .label{color:#999;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}',
+            '.offcomfrt-return-row .value{color:#1a1a1a;font-weight:500}',
+
+            /* Resolution Card */
+            '.offcomfrt-resolution-card{background:linear-gradient(135deg,#f0fdf4,#dcfce7);border:1px solid #bbf7d0;border-radius:16px;padding:24px;margin:4px 0;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,0.06);animation:offcomfrt-slideUp 0.35s cubic-bezier(0.16,1,0.3,1);width:100%}',
+            '.offcomfrt-resolution-icon{width:44px;height:44px;border-radius:50%;background:#22c55e;display:flex;align-items:center;justify-content:center;margin:0 auto 12px}',
+            '.offcomfrt-resolution-icon svg{width:22px;height:22px;stroke:#fff;stroke-width:2.5;fill:none;stroke-linecap:round;stroke-linejoin:round}',
+            '.offcomfrt-resolution-card h4{font-size:15px;font-weight:700;color:#16a34a;margin-bottom:6px}',
+            '.offcomfrt-resolution-card p{font-size:13px;color:#4b5563;line-height:1.5}',
+
             /* Mobile */
             '@media(max-width:480px){',
             '#offcomfrt-widget{bottom:0;right:0;left:0;width:100%;height:90vh;max-height:750px;border-radius:24px 24px 0 0;border:none;border-top:2px solid #000;box-shadow:0 -12px 48px rgba(0,0,0,0.2)}',
@@ -226,6 +253,8 @@
                 if (msg.type === 'bot') addBotMessage(msg.text, false);
                 else if (msg.type === 'user') addUserMessage(msg.text, false);
                 else if (msg.type === 'tracking') addTrackingCard(msg.data, false);
+                else if (msg.type === 'return') addReturnCard(msg.data, false);
+                else if (msg.type === 'resolution') addResolutionCard(msg.data, false);
                 else if (msg.type === 'ticket') addTicketConfirmation(msg.data, false);
             });
             scrollToBottom();
@@ -275,7 +304,10 @@
         actionsEl.innerHTML = '';
         var actions = [
             { label: 'Track Order', action: 'track' },
+            { label: 'Return / Exchange', action: 'return_exchange' },
             { label: 'Return Policy', action: 'return_policy' },
+            { label: 'Report Issue', action: 'report_issue' },
+            { label: 'Cancel Order', action: 'cancel_order' },
             { label: 'Talk to Support', action: 'support' }
         ];
         actions.forEach(function (a) {
@@ -301,6 +333,15 @@
         } else if (action === 'return_policy') {
             addUserMessage('What is your return policy?');
             sendToAI('What is your return policy?');
+        } else if (action === 'return_exchange') {
+            addBotMessage('I can help with returns and exchanges. Please share your order number so I can check eligibility.');
+            setInputPlaceholder('Enter your order #...');
+        } else if (action === 'report_issue') {
+            addBotMessage('Sorry to hear about the issue! Please describe what happened and your order number, and I\'ll help resolve it.');
+            setInputPlaceholder('Describe the issue...');
+        } else if (action === 'cancel_order') {
+            addBotMessage('I can help with order cancellation. Please share your order number.');
+            setInputPlaceholder('Enter order # to cancel...');
         } else if (action === 'support') {
             showTicketForm();
         }
@@ -351,7 +392,7 @@
         wrapper.className = 'offcomfrt-msg-wrapper offcomfrt-align-left';
         var msg = document.createElement('div');
         msg.className = 'offcomfrt-msg offcomfrt-msg-bot';
-        msg.textContent = text;
+        msg.innerHTML = formatBotMessage(text);
         wrapper.appendChild(msg);
         chat.appendChild(wrapper);
         scrollToBottom();
@@ -359,6 +400,38 @@
             chatHistory.push({ type: 'bot', text: text });
             saveChatHistory();
         }
+    }
+
+    /**
+     * Convert simple markdown-like formatting to HTML:
+     * **bold** → <strong>, *italic* → <em>,
+     * - item → <li> (grouped into <ul>),
+     * \n → <br>
+     */
+    function formatBotMessage(text) {
+        if (!text) return '';
+        var escaped = escapeHtml(text);
+        // Bold: **text**
+        escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        // Italic: *text*
+        escaped = escaped.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        // Lists: lines starting with "- "
+        var lines = escaped.split('\n');
+        var html = '';
+        var inList = false;
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (/^- (.+)$/.test(line)) {
+                if (!inList) { html += '<ul>'; inList = true; }
+                html += '<li>' + line.replace(/^- /, '') + '</li>';
+            } else {
+                if (inList) { html += '</ul>'; inList = false; }
+                html += line;
+                if (i < lines.length - 1) html += '<br>';
+            }
+        }
+        if (inList) html += '</ul>';
+        return html;
     }
 
     function showTyping() {
@@ -392,6 +465,12 @@
                 hideTyping();
                 if (data.reply) {
                     addBotMessage(data.reply);
+                }
+                // Handle rich card responses from the AI
+                if (data.cardType === 'return' && data.cardData) {
+                    addReturnCard(data.cardData);
+                } else if (data.cardType === 'resolution' && data.cardData) {
+                    addResolutionCard(data.cardData);
                 }
                 if (data.suggestedAction === 'create_ticket') {
                     showTicketSuggestion();
@@ -506,6 +585,90 @@
 
         if (save !== false) {
             chatHistory.push({ type: 'tracking', data: data });
+            saveChatHistory();
+        }
+    }
+
+    // ---------- Return/Exchange Status Card ----------
+
+    function addReturnCard(data, save) {
+        var chat = document.getElementById('offcomfrt-chat');
+        var wrapper = document.createElement('div');
+        wrapper.className = 'offcomfrt-msg-wrapper offcomfrt-align-left';
+
+        var card = document.createElement('div');
+        card.className = 'offcomfrt-return-card';
+
+        var statusText = data.status || 'Pending';
+        var statusClass = 'offcomfrt-return-pending';
+        if (/approved|completed|picked.?up/i.test(statusText)) statusClass = 'offcomfrt-return-approved';
+        else if (/rejected|denied|cancelled/i.test(statusText)) statusClass = 'offcomfrt-return-rejected';
+
+        var typeLabel = data.type || 'Return';
+
+        var html = '<div class="offcomfrt-return-card-header">';
+        html += '<span class="offcomfrt-return-type">' + escapeHtml(typeLabel) + '</span>';
+        html += '<span class="offcomfrt-return-status ' + statusClass + '">' + escapeHtml(statusText) + '</span>';
+        html += '</div>';
+
+        if (data.orderId) {
+            html += '<div class="offcomfrt-return-row"><span class="label">Order</span><span class="value">#' + escapeHtml(data.orderId) + '</span></div>';
+        }
+        if (data.returnId) {
+            html += '<div class="offcomfrt-return-row"><span class="label">Return ID</span><span class="value">' + escapeHtml(data.returnId) + '</span></div>';
+        }
+        if (data.reason) {
+            html += '<div class="offcomfrt-return-row"><span class="label">Reason</span><span class="value">' + escapeHtml(data.reason) + '</span></div>';
+        }
+        if (data.refundAmount) {
+            html += '<div class="offcomfrt-return-row"><span class="label">Refund</span><span class="value" style="color:#16a34a;font-weight:700;">' + escapeHtml(data.refundAmount) + '</span></div>';
+        }
+        if (data.eta) {
+            html += '<div class="offcomfrt-return-row"><span class="label">Expected</span><span class="value">' + escapeHtml(data.eta) + '</span></div>';
+        }
+        if (data.note) {
+            html += '<div class="offcomfrt-return-row"><span class="label"></span><span class="value" style="color:#666;font-style:italic;font-size:12px;">' + escapeHtml(data.note) + '</span></div>';
+        }
+
+        card.innerHTML = html;
+        wrapper.appendChild(card);
+        chat.appendChild(wrapper);
+        scrollToBottom();
+
+        if (save !== false) {
+            chatHistory.push({ type: 'return', data: data });
+            saveChatHistory();
+        }
+    }
+
+    // ---------- Resolution Confirmation Card ----------
+
+    function addResolutionCard(data, save) {
+        var chat = document.getElementById('offcomfrt-chat');
+        var wrapper = document.createElement('div');
+        wrapper.className = 'offcomfrt-msg-wrapper offcomfrt-align-left';
+
+        var card = document.createElement('div');
+        card.className = 'offcomfrt-resolution-card';
+
+        var html = '<div class="offcomfrt-resolution-icon">' +
+            '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>' +
+            '</div>';
+        html += '<h4>' + escapeHtml(data.title || 'Issue Resolved') + '</h4>';
+        if (data.description) {
+            html += '<p>' + escapeHtml(data.description) + '</p>';
+        }
+        if (data.reference) {
+            html += '<div style="margin-top:12px;font-size:12px;color:#6b7280;">Reference: <strong>' + escapeHtml(data.reference) + '</strong></div>';
+        }
+
+        card.innerHTML = html;
+        wrapper.appendChild(card);
+        chat.appendChild(wrapper);
+        scrollToBottom();
+
+        if (save !== false) {
+            chatHistory.push({ type: 'resolution', data: data });
             saveChatHistory();
         }
     }

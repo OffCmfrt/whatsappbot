@@ -6,11 +6,18 @@
  *
  * Uses the same aiClient.js pipeline (Groq/Gemini) but with a customer-friendly
  * system prompt and a restricted tool set (read-only + ticket creation).
+ *
+ * Enhanced with:
+ * - Multi-turn context tracking (orderId, awb, entities persist across turns)
+ * - Entity extraction from messages (order IDs, AWBs, pin codes)
+ * - Expanded tool set (search_orders_by_phone, faq_lookup, check_return_eligibility)
+ * - Multi-language awareness (detects and responds in customer's language)
  */
 
 const { chatCompletion, isConfigured, estimateTokens } = require('./aiClient');
 const { getTool } = require('./tools');
 const { dbAdapter } = require('../../database/db');
+const { detectLanguage } = require('./autoSupportAgent');
 
 // ---------- Session store (in-memory, 30-min TTL) ----------
 
@@ -20,21 +27,20 @@ const MAX_HISTORY_TURNS = 10;
 
 function getSession(sessionId) {
     const entry = sessions.get(sessionId);
-    if (!entry) return { history: [] };
+    if (!entry) return { history: [], context: {} };
     if (Date.now() - entry.lastAccess > SESSION_TTL_MS) {
         sessions.delete(sessionId);
-        return { history: [] };
+        return { history: [], context: {} };
     }
     entry.lastAccess = Date.now();
-    return { history: entry.history || [] };
+    return { history: entry.history || [], context: entry.context || {} };
 }
 
-function saveSession(sessionId, history) {
-    // Prune oldest turns to stay within budget
+function saveSession(sessionId, history, context) {
     while (history.length > MAX_HISTORY_TURNS * 2) {
         history.shift();
     }
-    sessions.set(sessionId, { history, lastAccess: Date.now() });
+    sessions.set(sessionId, { history, context: context || {}, lastAccess: Date.now() });
 }
 
 // Periodic cleanup of expired sessions (every 10 min)
@@ -45,14 +51,49 @@ setInterval(() => {
     }
 }, 10 * 60 * 1000).unref();
 
+// ---------- Entity extraction ----------
+
+function extractEntities(text) {
+    const entities = {};
+    // Order IDs: #1234 or ORD-1234 or plain 7+ digit numbers
+    const orderMatch = text.match(/#(\d{3,})/) || text.match(/\b(?:ORD|ORDER)[-_ ]?(\d{3,})\b/i);
+    if (orderMatch) entities.orderId = orderMatch[1];
+    // AWB: 8-16 digit numbers (not matching order pattern)
+    const awbMatch = text.match(/\b(\d{10,16})\b/);
+    if (awbMatch && !entities.orderId) entities.awb = awbMatch[1];
+    // Pin code: 6-digit number
+    const pinMatch = text.match(/\b(\d{6})\b/);
+    if (pinMatch) entities.pincode = pinMatch[1];
+    return entities;
+}
+
 // ---------- System prompt ----------
 
-const SYSTEM_PROMPT = `You are the OFFCOMFRT customer support assistant — a helpful, friendly AI that helps shoppers with their orders.
+function buildSystemPrompt(context, language) {
+    const langInstruction =
+        language === 'hindi'
+            ? 'Respond in Hindi (Devanagari script).'
+            : language === 'hinglish'
+                ? 'Respond in Hinglish (Latin script, Hindi-English mix).'
+                : 'Respond in English.';
+
+    let contextStr = '';
+    if (context.orderId) contextStr += `\n- Customer's order ID (from earlier in conversation): #${context.orderId}`;
+    if (context.awb) contextStr += `\n- AWB tracking number (from earlier): ${context.awb}`;
+    if (context.pincode) contextStr += `\n- Pincode mentioned: ${context.pincode}`;
+    if (context.lastScenario) contextStr += `\n- Previous topic: ${context.lastScenario}`;
+
+    return `You are the OFFCOMFRT customer support assistant — a helpful, friendly AI that helps shoppers with their orders.
+
+${langInstruction}
 
 YOUR CAPABILITIES:
 - Track orders by order number (e.g. #1234) or AWB tracking number
 - Check delivery status across carriers (Delhivery, Ekart, Shiprocket)
 - Answer questions about OFFCOMFRT's return/exchange policy, shipping times, sizing
+- Check if an order is eligible for return
+- Search customer's recent orders by phone
+- Look up FAQ answers from the knowledge base
 - Create a support ticket when you cannot resolve the issue
 
 OFFCOMFRT POLICIES (use these to answer FAQ):
@@ -61,19 +102,32 @@ OFFCOMFRT POLICIES (use these to answer FAQ):
 - Shipping: Orders are shipped via Delhivery, Ekart, or Shiprocket depending on the location
 - COD: Cash on delivery available for select pin codes
 - Refunds: Processed to original payment method within 5-7 business days for eligible cases
+  - Eligible: damaged item, wrong product, prepaid cancelled at confirmation, RTO without receipt
+  - All other returns = store credit only
+
+${contextStr ? `CONVERSATION CONTEXT (from earlier messages):${contextStr}` : ''}
 
 RULES:
 - Be warm, concise, and helpful. Use short paragraphs.
-- Always ask for the order number or AWB before tracking.
-- If you cannot resolve the issue after 2-3 attempts, offer to create a support ticket so the customer can continue on WhatsApp with a human agent.
+- If the customer previously shared an order number, use it for follow-up questions without asking again.
+- Always ask for the order number or AWB before tracking (unless already provided in context).
+- If you cannot resolve the issue after 2-3 attempts, offer to create a support ticket.
 - Never invent order numbers, tracking data, or policies. If unsure, say so.
 - Amounts are in INR. Times are in IST (UTC+5:30).
 - When creating a ticket, ask for the customer's name, phone number, and a brief description of their issue.
 - Keep responses SHORT — this is a chat widget, not an email. 2-4 sentences max per reply.`;
+}
 
 // ---------- Customer tool set ----------
 
-const CUSTOMER_TOOLS = ['shopify_search_orders', 'track_awb', 'check_serviceability'];
+const CUSTOMER_TOOLS = [
+    'shopify_search_orders',
+    'track_awb',
+    'check_serviceability',
+    'search_orders_by_phone',
+    'faq_lookup',
+    'check_return_eligibility'
+];
 
 function getCustomerToolSchemas() {
     const { tools } = require('./tools');
@@ -105,8 +159,17 @@ async function runCustomerAgent({ sessionId, message }) {
     const session = getSession(sessionId);
     const toolSchemas = getCustomerToolSchemas();
 
+    // Extract entities from this message and merge into session context
+    const newEntities = extractEntities(message);
+    const context = { ...session.context, ...newEntities };
+
+    // Detect language
+    const language = detectLanguage(message);
+
+    const systemPrompt = buildSystemPrompt(context, language);
+
     const messages = [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         ...session.history,
         { role: 'user', content: message }
     ];
@@ -163,16 +226,24 @@ async function runCustomerAgent({ sessionId, message }) {
 
     if (reply === null) reply = 'Sorry, I could not process your request. Please try again or contact support.';
 
+    // Update context with detected scenario from reply
+    if (reply) {
+        if (/track|order|status|deliver|ship/i.test(message)) context.lastScenario = 'tracking';
+        else if (/return|exchange|size/i.test(message)) context.lastScenario = 'return_exchange';
+        else if (/cancel/i.test(message)) context.lastScenario = 'cancellation';
+        else if (/refund|money back/i.test(message)) context.lastScenario = 'refund';
+    }
+
     // Detect if the AI is suggesting escalation
     let suggestedAction = null;
     if (/ticket|support agent|human agent|whatsapp|escalat/i.test(reply)) {
         suggestedAction = 'create_ticket';
     }
 
-    // Save session
+    // Save session with updated context
     session.history.push({ role: 'user', content: message });
     session.history.push({ role: 'assistant', content: reply });
-    saveSession(sessionId, session.history);
+    saveSession(sessionId, session.history, context);
 
     return { reply, suggestedAction };
 }

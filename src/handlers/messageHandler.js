@@ -168,13 +168,29 @@ class MessageHandler {
 
             // Default path: Process AI decision engine to generate suggested reply for Admin Dashboard
             const name = customer.name || senderName || 'Customer';
-            const autoResult = await autoSupportAgent.processCustomerMessage(phone, cleanMessage, name);
+
+            // Fetch recent messages for multi-turn context
+            let recentMessages = [];
+            try {
+                const recentRows = await dbAdapter.query(
+                    `SELECT message_content, message_type FROM messages
+                     WHERE customer_phone LIKE ? ORDER BY id DESC LIMIT 6`,
+                    [`%${phone.slice(-10)}`]
+                );
+                recentMessages = (recentRows || []).reverse().map(r =>
+                    `${r.message_type === 'incoming' ? 'Customer' : 'Agent'}: ${String(r.message_content || '').substring(0, 150)}`
+                );
+            } catch (e) { /* non-critical */ }
+
+            const autoResult = await autoSupportAgent.processCustomerMessage(phone, cleanMessage, name, { recentMessages });
 
             const aiSuggestion = (autoResult && autoResult.reply) ? autoResult.reply : null;
             const scenarioTag = (autoResult && autoResult.scenario) ? autoResult.scenario : 'general';
+            const aiConfidence = (autoResult && autoResult.confidence != null) ? autoResult.confidence : null;
+            const aiSentiment = (autoResult && autoResult.sentiment) ? autoResult.sentiment : null;
 
             if (aiSuggestion) {
-                console.log(`💡 [AI DASHBOARD SUGGESTION] Generated for ${phone} (Scenario: ${scenarioTag}). Routing to Admin Dashboard.`);
+                console.log(`💡 [AI DASHBOARD SUGGESTION] Generated for ${phone} (Scenario: ${scenarioTag}, Confidence: ${aiConfidence}, Sentiment: ${aiSentiment}). Routing to Admin Dashboard.`);
             }
 
             // Create or update Support Ticket for Admin Dashboard (DO NOT send to customer directly)
@@ -189,16 +205,19 @@ class MessageHandler {
 
                 // Auto-append to existing open ticket with AI suggestion attached
                 const appendContent = aiSuggestion
-                    ? `${cleanMessage}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag}]\n${aiSuggestion}`
+                    ? `${cleanMessage}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag} | Confidence: ${aiConfidence} | Sentiment: ${aiSentiment}]\n${aiSuggestion}`
                     : cleanMessage;
 
                 await dbAdapter.query(
                     `UPDATE support_tickets
                      SET message = message || '\n\n---\n' || ?,
                          is_read = false,
-                         updated_at = CURRENT_TIMESTAMP
+                         updated_at = CURRENT_TIMESTAMP,
+                         sentiment = COALESCE(?, sentiment),
+                         ai_confidence = COALESCE(?, ai_confidence),
+                         ai_scenario = COALESCE(?, ai_scenario)
                      WHERE id = ?`,
-                    [appendContent, ticketId]
+                    [appendContent, aiSentiment, aiConfidence, scenarioTag, ticketId]
                 );
                 console.log(`[DASHBOARD TICKET] Appended message & AI suggestion to open ticket ${existingNumber} for ${phone}`);
             } else {
@@ -206,12 +225,13 @@ class MessageHandler {
                 const ticketNumber = await generateUniqueTicketNumber();
                 const portalId = await getPortalIdForNewTicket();
                 const ticketMessage = aiSuggestion
-                    ? `${cleanMessage}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag}]\n${aiSuggestion}`
+                    ? `${cleanMessage}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag} | Confidence: ${aiConfidence} | Sentiment: ${aiSentiment}]\n${aiSuggestion}`
                     : cleanMessage;
 
                 await dbAdapter.query(
-                    'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, portal_id, is_read) VALUES (?, ?, ?, ?, ?, false)',
-                    [ticketNumber, phone, name, ticketMessage, portalId]
+                    `INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, portal_id, is_read, sentiment, ai_confidence, ai_scenario)
+                     VALUES (?, ?, ?, ?, ?, false, ?, ?, ?)`,
+                    [ticketNumber, phone, name, ticketMessage, portalId, aiSentiment, aiConfidence, scenarioTag]
                 );
                 console.log(`[DASHBOARD TICKET] Created ticket ${ticketNumber} for ${phone} with AI suggestion ready for Admin review.`);
             }

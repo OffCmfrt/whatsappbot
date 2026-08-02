@@ -7,6 +7,8 @@
 
 const { dbAdapter } = require('../../database/db');
 
+// ── Existing functions ──────────────────────────────────────────────────────
+
 /**
  * Ticket category breakdown for open tickets (keyword-based).
  */
@@ -135,6 +137,145 @@ async function generateSuggestions() {
     return suggestions;
 }
 
+// ── Enhanced Analytics (Phase 4) ────────────────────────────────────────────
+
+/**
+ * Daily sentiment breakdown over the last N days.
+ * Returns array of { day, positive, neutral, negative, frustrated }.
+ */
+async function getSentimentTrends(days = 14) {
+    const rows = await dbAdapter.query(
+        `SELECT
+            DATE(created_at) AS day,
+            COUNT(CASE WHEN sentiment = 'positive' THEN 1 END)::int AS positive,
+            COUNT(CASE WHEN sentiment = 'neutral' THEN 1 END)::int AS neutral,
+            COUNT(CASE WHEN sentiment = 'negative' THEN 1 END)::int AS negative,
+            COUNT(CASE WHEN sentiment = 'frustrated' THEN 1 END)::int AS frustrated
+         FROM support_tickets
+         WHERE created_at >= NOW() - INTERVAL '? days'
+           AND sentiment IS NOT NULL
+         GROUP BY DATE(created_at)
+         ORDER BY day ASC`,
+        [Math.min(days, 90)]
+    );
+    return rows;
+}
+
+/**
+ * Intent classification counts (last 30 days).
+ */
+async function getScenarioDistribution() {
+    return dbAdapter.query(
+        `SELECT ai_scenario, COUNT(*)::int AS count
+         FROM support_tickets
+         WHERE ai_scenario IS NOT NULL AND created_at >= NOW() - INTERVAL '30 days'
+         GROUP BY ai_scenario ORDER BY count DESC`
+    );
+}
+
+/**
+ * AI performance metrics: acceptance rate, avg confidence, resolution rate,
+ * cost per resolution.
+ */
+async function getAIPerformanceMetrics() {
+    const [confidence, resolution, costData, totalTickets] = await Promise.all([
+        dbAdapter.query(
+            `SELECT AVG(ai_confidence)::float AS avg_confidence,
+                    COUNT(*)::int AS classified
+             FROM support_tickets
+             WHERE ai_confidence IS NOT NULL AND created_at >= NOW() - INTERVAL '30 days'`
+        ),
+        dbAdapter.query(
+            `SELECT
+                COUNT(*)::int AS total,
+                COUNT(CASE WHEN status IN ('resolved','closed') THEN 1 END)::int AS resolved
+             FROM support_tickets
+             WHERE created_at >= NOW() - INTERVAL '30 days'`
+        ),
+        dbAdapter.query(
+            `SELECT COALESCE(SUM(cost_usd), 0)::float AS total_cost
+             FROM ai_usage_log
+             WHERE created_at >= NOW() - INTERVAL '30 days'`
+        ),
+        dbAdapter.query(
+            `SELECT COUNT(*)::int AS total FROM support_tickets
+             WHERE created_at >= NOW() - INTERVAL '30 days'`
+        )
+    ]);
+
+    const resolved = resolution[0]?.resolved || 0;
+    const totalCost = costData[0]?.total_cost || 0;
+
+    return {
+        avgConfidence: confidence[0]?.avg_confidence || 0,
+        classifiedCount: confidence[0]?.classified || 0,
+        resolutionRate: resolution[0]?.total ? (resolved / resolution[0].total * 100) : 0,
+        resolvedCount: resolved,
+        totalTickets: totalTickets[0]?.total || 0,
+        totalCost: totalCost,
+        costPerResolution: resolved > 0 ? totalCost / resolved : 0
+    };
+}
+
+/**
+ * Top escalation reasons — scenarios where AI confidence was low or sentiment
+ * was frustrated, leading to auto-escalation.
+ */
+async function getEscalationReasons() {
+    return dbAdapter.query(
+        `SELECT
+            COALESCE(ai_scenario, 'unknown') AS scenario,
+            COUNT(*)::int AS count,
+            AVG(ai_confidence)::float AS avg_confidence
+         FROM support_tickets
+         WHERE (ai_confidence < 0.6 OR sentiment = 'frustrated')
+           AND created_at >= NOW() - INTERVAL '30 days'
+         GROUP BY ai_scenario
+         ORDER BY count DESC
+         LIMIT 10`
+    );
+}
+
+/**
+ * Live monitoring snapshot: open tickets, recent escalations, today's AI usage,
+ * and active session indicators.
+ */
+async function getLiveSnapshot() {
+    const [openTickets, recentEscalations, todayUsage, sentimentBreakdown] = await Promise.all([
+        dbAdapter.query(
+            `SELECT COUNT(*)::int AS count FROM support_tickets WHERE status = 'open'`
+        ),
+        dbAdapter.query(
+            `SELECT ticket_number, customer_phone, customer_name, ai_scenario, sentiment, ai_confidence, created_at
+             FROM support_tickets
+             WHERE (ai_confidence < 0.6 OR sentiment = 'frustrated')
+               AND created_at >= NOW() - INTERVAL '1 hour'
+             ORDER BY created_at DESC LIMIT 10`
+        ),
+        dbAdapter.query(
+            `SELECT COUNT(*)::int AS requests, COALESCE(SUM(cost_usd), 0)::float AS cost
+             FROM ai_usage_log
+             WHERE created_at >= date_trunc('day', NOW())`
+        ),
+        dbAdapter.query(
+            `SELECT sentiment, COUNT(*)::int AS count
+             FROM support_tickets
+             WHERE status = 'open' AND sentiment IS NOT NULL
+             GROUP BY sentiment`
+        )
+    ]);
+
+    return {
+        openTickets: openTickets[0]?.count || 0,
+        sentimentBreakdown: sentimentBreakdown,
+        recentEscalations: recentEscalations,
+        todayUsage: {
+            requests: todayUsage[0]?.requests || 0,
+            cost: todayUsage[0]?.cost || 0
+        }
+    };
+}
+
 /**
  * Master insights endpoint — returns everything the analytics page needs.
  */
@@ -148,4 +289,29 @@ async function getInsights() {
     return { ticketCategories, resolutionTimes, topQuestions, suggestions };
 }
 
-module.exports = { getInsights, ticketCategoryAnalysis, resolutionTimeTrends, topCustomerQuestions, generateSuggestions };
+/**
+ * Enhanced analytics bundle — all the new Phase 4 metrics.
+ */
+async function getEnhancedAnalytics() {
+    const [sentimentTrends, scenarioDist, aiPerf, escalationReasons] = await Promise.all([
+        getSentimentTrends(14),
+        getScenarioDistribution(),
+        getAIPerformanceMetrics(),
+        getEscalationReasons()
+    ]);
+    return { sentimentTrends, scenarioDistribution: scenarioDist, aiPerformance: aiPerf, escalationReasons };
+}
+
+module.exports = {
+    getInsights,
+    getEnhancedAnalytics,
+    getSentimentTrends,
+    getScenarioDistribution,
+    getAIPerformanceMetrics,
+    getEscalationReasons,
+    getLiveSnapshot,
+    ticketCategoryAnalysis,
+    resolutionTimeTrends,
+    topCustomerQuestions,
+    generateSuggestions
+};

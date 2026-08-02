@@ -122,6 +122,10 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     portal_id INTEGER REFERENCES support_portals(id),
     reengagement_sent BOOLEAN DEFAULT false,
     reengagement_sent_at TIMESTAMP,
+    sentiment VARCHAR(20),
+    ai_confidence DECIMAL(3,2),
+    ai_scenario VARCHAR(50),
+    source VARCHAR(20) DEFAULT 'whatsapp',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

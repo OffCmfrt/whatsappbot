@@ -627,6 +627,86 @@ const tools = [
             );
             return { count: rows.length, pendingShipment: rows };
         }
+    },
+    // ---------- Customer-facing tools ----------
+    {
+        name: 'search_orders_by_phone',
+        description: 'Look up a customer\'s recent orders using their phone number. Returns order IDs, status, and basic details.',
+        parameters: {
+            type: 'object',
+            properties: {
+                phone: { type: 'string', description: 'Customer phone number (with or without country code)' }
+            },
+            required: ['phone']
+        },
+        requiresConfirmation: false,
+        async execute({ phone }) {
+            const digits = String(phone || '').replace(/\D/g, '');
+            const phonePattern = `%${digits.slice(-10)}`;
+            const rows = await dbAdapter.query(
+                `SELECT order_id, status, awb, courier_name, total, payment_method, expected_delivery, created_at
+                 FROM orders WHERE customer_phone LIKE ? ORDER BY created_at DESC LIMIT 5`,
+                [phonePattern]
+            );
+            return { count: rows.length, orders: rows };
+        }
+    },
+    {
+        name: 'faq_lookup',
+        description: 'Search the knowledge base of learned FAQ replies for answers to common customer questions about OFFCOMFRT policies, shipping, returns, etc.',
+        parameters: {
+            type: 'object',
+            properties: {
+                question: { type: 'string', description: 'Customer question to find a matching FAQ answer for' }
+            },
+            required: ['question']
+        },
+        requiresConfirmation: false,
+        async execute({ question }) {
+            const { findSimilarExamples } = require('./learning');
+            const examples = await findSimilarExamples(question, 3);
+            return {
+                count: examples.length,
+                answers: examples.map(e => ({ question: e.q, answer: e.a, relevance: e.uses }))
+            };
+        }
+    },
+    {
+        name: 'check_return_eligibility',
+        description: 'Check if an order is eligible for return/exchange based on delivery date (within 2-day window).',
+        parameters: {
+            type: 'object',
+            properties: {
+                orderId: { type: 'string', description: 'Order ID to check eligibility for' }
+            },
+            required: ['orderId']
+        },
+        requiresConfirmation: false,
+        async execute({ orderId }) {
+            const name = String(orderId || '').replace(/^#/, '');
+            const rows = await dbAdapter.query(
+                `SELECT order_id, status, created_at, expected_delivery
+                 FROM orders WHERE order_id = ? LIMIT 1`,
+                [name]
+            );
+            if (!rows.length) return { eligible: false, reason: 'Order not found' };
+            const order = rows[0];
+            // Check if order is delivered and within 2-day return window
+            const deliveredDate = order.status?.toLowerCase().includes('delivered')
+                ? new Date(order.created_at)
+                : null;
+            if (!deliveredDate) return { eligible: false, reason: 'Order not yet delivered', status: order.status };
+            const daysSinceDelivery = (Date.now() - deliveredDate.getTime()) / (1000 * 60 * 60 * 24);
+            const eligible = daysSinceDelivery <= 2;
+            return {
+                eligible,
+                orderId: order.order_id,
+                status: order.status,
+                daysSinceDelivery: Math.round(daysSinceDelivery * 10) / 10,
+                reason: eligible ? 'Within 2-day return window' : 'Return window expired (more than 2 days since delivery)',
+                portalUrl: 'offcomfrt.in → Support → Return/Exchange'
+            };
+        }
     }
 ];
 
