@@ -1,0 +1,596 @@
+/**
+ * OFFCOMFRT Support Widget — Premium Black & White Aesthetic
+ * Embedded via loader.js into Shopify theme pages.
+ */
+
+/* ---------- Reset & Scope ---------- */
+#offcomfrt-widget *,
+#offcomfrt-widget *::before,
+#offcomfrt-widget *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* ---------- Floating Trigger Button ---------- */
+#offcomfrt-widget-btn {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #000;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    z-index: 99998;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+#offcomfrt-widget-btn:hover {
+    transform: scale(1.08);
+    box-shadow: 0 6px 28px rgba(0, 0, 0, 0.35);
+}
+
+#offcomfrt-widget-btn:active {
+    transform: scale(0.95);
+}
+
+#offcomfrt-widget-btn svg {
+    width: 24px;
+    height: 24px;
+    fill: none;
+    stroke: #fff;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+#offcomfrt-widget-btn.offcomfrt-hidden {
+    display: none;
+}
+
+/* ---------- Widget Container ---------- */
+#offcomfrt-widget {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 380px;
+    height: 520px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
+    z-index: 99999;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+#offcomfrt-widget.offcomfrt-open {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+}
+
+/* ---------- Header ---------- */
+.offcomfrt-header {
+    background: #000;
+    color: #fff;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+}
+
+.offcomfrt-header-brand {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.offcomfrt-header-title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+}
+
+.offcomfrt-header-subtitle {
+    font-size: 11px;
+    font-weight: 400;
+    opacity: 0.7;
+    letter-spacing: 0.3px;
+}
+
+.offcomfrt-header-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+}
+
+.offcomfrt-header-close:hover {
+    opacity: 1;
+}
+
+.offcomfrt-header-close svg {
+    width: 18px;
+    height: 18px;
+    stroke: #fff;
+    stroke-width: 2;
+    fill: none;
+}
+
+/* ---------- Chat Area ---------- */
+.offcomfrt-chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    scroll-behavior: smooth;
+}
+
+.offcomfrt-chat::-webkit-scrollbar {
+    width: 4px;
+}
+
+.offcomfrt-chat::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.offcomfrt-chat::-webkit-scrollbar-thumb {
+    background: #ddd;
+    border-radius: 2px;
+}
+
+/* ---------- Messages ---------- */
+.offcomfrt-msg {
+    max-width: 85%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    word-wrap: break-word;
+    animation: offcomfrt-fadeIn 0.2s ease;
+}
+
+@keyframes offcomfrt-fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.offcomfrt-msg-bot {
+    align-self: flex-start;
+    background: #f5f5f5;
+    color: #1a1a1a;
+    border-bottom-left-radius: 4px;
+}
+
+.offcomfrt-msg-user {
+    align-self: flex-end;
+    background: #000;
+    color: #fff;
+    border-bottom-right-radius: 4px;
+}
+
+.offcomfrt-msg-system {
+    align-self: center;
+    background: transparent;
+    color: #888;
+    font-size: 11px;
+    text-align: center;
+    padding: 6px 12px;
+}
+
+/* ---------- Quick Actions ---------- */
+.offcomfrt-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 16px 12px;
+    flex-shrink: 0;
+}
+
+.offcomfrt-chip {
+    background: #fff;
+    border: 1px solid #000;
+    color: #000;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    font-family: inherit;
+}
+
+.offcomfrt-chip:hover {
+    background: #000;
+    color: #fff;
+}
+
+/* ---------- Tracking Card ---------- */
+.offcomfrt-tracking-card {
+    align-self: flex-start;
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 10px;
+    padding: 12px 14px;
+    max-width: 90%;
+    font-size: 12px;
+    animation: offcomfrt-fadeIn 0.2s ease;
+}
+
+.offcomfrt-tracking-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eee;
+}
+
+.offcomfrt-tracking-carrier {
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #666;
+}
+
+.offcomfrt-tracking-status {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #000;
+    color: #fff;
+}
+
+.offcomfrt-tracking-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    color: #444;
+}
+
+.offcomfrt-tracking-row span:first-child {
+    color: #888;
+    font-size: 11px;
+}
+
+.offcomfrt-tracking-row span:last-child {
+    font-weight: 500;
+    text-align: right;
+    max-width: 60%;
+}
+
+.offcomfrt-tracking-link {
+    display: inline-block;
+    margin-top: 8px;
+    color: #000;
+    font-weight: 600;
+    font-size: 11px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* ---------- Ticket Form ---------- */
+.offcomfrt-ticket-form {
+    align-self: stretch;
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 10px;
+    padding: 14px;
+    animation: offcomfrt-fadeIn 0.2s ease;
+}
+
+.offcomfrt-ticket-form h4 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: #000;
+}
+
+.offcomfrt-form-group {
+    margin-bottom: 8px;
+}
+
+.offcomfrt-form-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: 500;
+    color: #666;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.offcomfrt-form-group input,
+.offcomfrt-form-group textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    background: #fff;
+    transition: border-color 0.15s;
+    outline: none;
+}
+
+.offcomfrt-form-group input:focus,
+.offcomfrt-form-group textarea:focus {
+    border-color: #000;
+}
+
+.offcomfrt-form-group textarea {
+    resize: none;
+    height: 60px;
+}
+
+.offcomfrt-form-submit {
+    width: 100%;
+    padding: 10px;
+    background: #000;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.15s;
+    margin-top: 4px;
+}
+
+.offcomfrt-form-submit:hover {
+    opacity: 0.85;
+}
+
+.offcomfrt-form-submit:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ---------- Ticket Confirmation ---------- */
+.offcomfrt-ticket-confirm {
+    align-self: stretch;
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+    animation: offcomfrt-fadeIn 0.2s ease;
+}
+
+.offcomfrt-ticket-confirm-icon {
+    width: 40px;
+    height: 40px;
+    background: #000;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 10px;
+}
+
+.offcomfrt-ticket-confirm-icon svg {
+    width: 20px;
+    height: 20px;
+    stroke: #fff;
+    stroke-width: 2.5;
+    fill: none;
+}
+
+.offcomfrt-ticket-confirm h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.offcomfrt-ticket-confirm p {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 12px;
+}
+
+.offcomfrt-ticket-number {
+    font-family: monospace;
+    font-size: 13px;
+    font-weight: 600;
+    background: #f0f0f0;
+    padding: 4px 10px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 12px;
+}
+
+.offcomfrt-whatsapp-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    background: #000;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    text-decoration: none;
+    transition: opacity 0.15s;
+}
+
+.offcomfrt-whatsapp-btn:hover {
+    opacity: 0.85;
+}
+
+.offcomfrt-whatsapp-btn svg {
+    width: 18px;
+    height: 18px;
+    fill: #25D366;
+}
+
+/* ---------- Input Area ---------- */
+.offcomfrt-input-area {
+    padding: 12px 16px;
+    border-top: 1px solid #f0f0f0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    background: #fff;
+}
+
+.offcomfrt-input {
+    flex: 1;
+    border: 1px solid #e0e0e0;
+    border-radius: 20px;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+    background: #fafafa;
+}
+
+.offcomfrt-input:focus {
+    border-color: #000;
+    background: #fff;
+}
+
+.offcomfrt-input::placeholder {
+    color: #aaa;
+}
+
+.offcomfrt-send-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #000;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: opacity 0.15s, transform 0.1s;
+}
+
+.offcomfrt-send-btn:hover {
+    opacity: 0.8;
+}
+
+.offcomfrt-send-btn:active {
+    transform: scale(0.9);
+}
+
+.offcomfrt-send-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.offcomfrt-send-btn svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: #fff;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* ---------- Typing Indicator ---------- */
+.offcomfrt-typing {
+    align-self: flex-start;
+    display: flex;
+    gap: 4px;
+    padding: 12px 16px;
+    background: #f5f5f5;
+    border-radius: 12px;
+    border-bottom-left-radius: 4px;
+}
+
+.offcomfrt-typing-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #999;
+    animation: offcomfrt-bounce 1.2s infinite;
+}
+
+.offcomfrt-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.offcomfrt-typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes offcomfrt-bounce {
+    0%, 60%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-4px); }
+}
+
+/* ---------- Powered By ---------- */
+.offcomfrt-powered {
+    text-align: center;
+    padding: 6px;
+    font-size: 10px;
+    color: #bbb;
+    letter-spacing: 0.3px;
+    flex-shrink: 0;
+}
+
+/* ---------- Mobile Responsive ---------- */
+@media (max-width: 480px) {
+    #offcomfrt-widget {
+        bottom: 0;
+        right: 0;
+        left: 0;
+        width: 100%;
+        height: 85vh;
+        max-height: 600px;
+        border-radius: 16px 16px 0 0;
+    }
+
+    #offcomfrt-widget-btn {
+        bottom: 16px;
+        right: 16px;
+    }
+}
+
+/* ---------- Loading State ---------- */
+.offcomfrt-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.offcomfrt-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #eee;
+    border-top-color: #000;
+    border-radius: 50%;
+    animation: offcomfrt-spin 0.6s linear infinite;
+}
+
+@keyframes offcomfrt-spin {
+    to { transform: rotate(360deg); }
+}

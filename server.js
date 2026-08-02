@@ -132,6 +132,10 @@ app.use('/api/portal', portalRoutes);
 const apiRoutes = require('./src/routes/apiRoutes');
 app.use('/api/internal', apiRoutes);
 
+// Customer-facing support widget API routes
+const widgetRoutes = require('./src/routes/widgetRoutes');
+app.use('/api/widget', widgetRoutes);
+
 // Payment and return webhook routes (specific paths to avoid conflict)
 const paymentWebhookRoutes = require('./src/routes/paymentWebhookRoutes');
 app.use(paymentWebhookRoutes);

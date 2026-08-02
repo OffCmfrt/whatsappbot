@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OFFCOMFRT - Widget Test</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #fafafa;
+            color: #1a1a1a;
+            min-height: 100vh;
+        }
+        .test-header {
+            background: #000;
+            color: #fff;
+            padding: 20px 40px;
+            text-align: center;
+        }
+        .test-header h1 {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+        .test-header p {
+            font-size: 12px;
+            opacity: 0.6;
+            margin-top: 4px;
+        }
+        .test-content {
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        .test-card {
+            background: #fff;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .test-card h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        .test-card p {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.6;
+        }
+        .test-card code {
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .test-instructions {
+            background: #f5f5f5;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .test-instructions h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .test-instructions ol {
+            padding-left: 20px;
+        }
+        .test-instructions li {
+            font-size: 13px;
+            color: #444;
+            margin-bottom: 6px;
+            line-height: 1.5;
+        }
+        .test-badge {
+            display: inline-block;
+            background: #000;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-header">
+        <h1>OFFCOMFRT</h1>
+        <p>Support Widget Test Page</p>
+    </div>
+
+    <div class="test-content">
+        <div class="test-instructions">
+            <span class="test-badge">Testing</span>
+            <h3>How to test the widget</h3>
+            <ol>
+                <li>Click the black chat button in the bottom-right corner</li>
+                <li>Try the quick actions: Track Order, Return Policy, Talk to Support</li>
+                <li>For tracking, try entering an order number like <code>#1234</code> or an AWB</li>
+                <li>Click "Talk to Support" to test the ticket creation flow</li>
+                <li>After creating a ticket, click "Continue on WhatsApp" to test the deep link</li>
+                <li>Refresh the page -- your chat history should persist in sessionStorage</li>
+            </ol>
+        </div>
+
+        <div class="test-card">
+            <h2>Welcome to the OFFCOMFRT Store</h2>
+            <p>This is a test page simulating the Shopify storefront. The support widget should appear as a floating button in the bottom-right corner. Click it to open the AI-powered support chat.</p>
+        </div>
+
+        <div class="test-card">
+            <h2>Embed Code for Shopify</h2>
+            <p>Add this to your Shopify theme's <code>theme.liquid</code> file, just before the closing <code>&lt;/body&gt;</code> tag:</p>
+            <br>
+            <p><code>&lt;script src="https://your-bot-server.onrender.com/widget/loader.js" defer&gt;&lt;/script&gt;</code></p>
+        </div>
+
+        <div class="test-card">
+            <h2>With Customer Data (Shopify Liquid)</h2>
+            <p>To pre-fill customer info, add this before the loader script:</p>
+            <br>
+            <p><code>&lt;script&gt; window.__offcomfrt_widget = { apiUrl: 'https://your-bot-server.onrender.com', customerName: '{{ customer.first_name }}', customerEmail: '{{ customer.email }}', customerPhone: '{{ customer.phone }}' }; &lt;/script&gt;</code></p>
+        </div>
+    </div>
+
+    <!-- Widget config (for local testing, point to your server) -->
+    <script>
+        window.__offcomfrt_widget = {
+            apiUrl: window.location.origin,
+            brandName: 'OFFCOMFRT',
+            customerName: 'Test Customer',
+            customerEmail: 'test@example.com',
+            customerPhone: '+919876543210'
+        };
+    </script>
+    <script src="/widget/loader.js" defer></script>
+</body>
+</html>

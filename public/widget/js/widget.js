@@ -1,0 +1,501 @@
+/**
+ * OFFCOMFRT Support Widget — Frontend Logic
+ *
+ * Self-contained widget that:
+ * - Creates a floating chat button + dialog
+ * - Handles AI chat via /api/widget/chat
+ * - Tracks orders via /api/widget/track-order (multi-carrier)
+ * - Creates support tickets via /api/widget/ticket
+ * - Shows WhatsApp deep link for escalation
+ */
+
+(function () {
+    'use strict';
+
+    // ---------- Configuration ----------
+    const config = window.__offcomfrt_widget || {};
+    const API_URL = (config.apiUrl || '').replace(/\/$/, '');
+    const BRAND_NAME = config.brandName || 'OFFCOMFRT';
+    const CUSTOMER_NAME = config.customerName || '';
+    const CUSTOMER_EMAIL = config.customerEmail || '';
+    const CUSTOMER_PHONE = config.customerPhone || '';
+
+    // ---------- Session Management ----------
+    let sessionId = sessionStorage.getItem('offcomfrt_session');
+    if (!sessionId) {
+        sessionId = 'sess_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 8);
+        sessionStorage.setItem('offcomfrt_session', sessionId);
+    }
+
+    let isOpen = false;
+    let isTyping = false;
+    let chatHistory = JSON.parse(sessionStorage.getItem('offcomfrt_chat') || '[]');
+
+    // ---------- DOM Creation ----------
+
+    function createWidget() {
+        // Floating button
+        const btn = document.createElement('button');
+        btn.id = 'offcomfrt-widget-btn';
+        btn.setAttribute('aria-label', 'Open support chat');
+        btn.innerHTML = `
+            <svg viewBox="0 0 24 24">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+        `;
+        btn.addEventListener('click', toggleWidget);
+        document.body.appendChild(btn);
+
+        // Widget container
+        const widget = document.createElement('div');
+        widget.id = 'offcomfrt-widget';
+        widget.innerHTML = `
+            <div class="offcomfrt-header">
+                <div class="offcomfrt-header-brand">
+                    <span class="offcomfrt-header-title">${BRAND_NAME}</span>
+                    <span class="offcomfrt-header-subtitle">Support</span>
+                </div>
+                <button class="offcomfrt-header-close" aria-label="Close">
+                    <svg viewBox="0 0 24 24">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="offcomfrt-chat" id="offcomfrt-chat"></div>
+            <div class="offcomfrt-actions" id="offcomfrt-actions"></div>
+            <div class="offcomfrt-input-area">
+                <input type="text" class="offcomfrt-input" id="offcomfrt-input" placeholder="Type a message..." autocomplete="off" />
+                <button class="offcomfrt-send-btn" id="offcomfrt-send-btn" aria-label="Send">
+                    <svg viewBox="0 0 24 24">
+                        <line x1="22" y1="2" x2="11" y2="13"/>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="offcomfrt-powered">Powered by ${BRAND_NAME}</div>
+        `;
+        document.body.appendChild(widget);
+
+        // Event listeners
+        widget.querySelector('.offcomfrt-header-close').addEventListener('click', closeWidget);
+        widget.querySelector('#offcomfrt-send-btn').addEventListener('click', handleSend);
+        widget.querySelector('#offcomfrt-input').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+            }
+        });
+
+        // Restore chat history or show welcome
+        if (chatHistory.length > 0) {
+            chatHistory.forEach(function (msg) {
+                if (msg.type === 'bot') addBotMessage(msg.text, false);
+                else if (msg.type === 'user') addUserMessage(msg.text, false);
+                else if (msg.type === 'tracking') addTrackingCard(msg.data, false);
+                else if (msg.type === 'ticket') addTicketConfirmation(msg.data, false);
+            });
+            scrollToBottom();
+        } else {
+            showWelcome();
+        }
+    }
+
+    // ---------- Widget Open/Close ----------
+
+    function toggleWidget() {
+        if (isOpen) closeWidget();
+        else openWidget();
+    }
+
+    function openWidget() {
+        const widget = document.getElementById('offcomfrt-widget');
+        const btn = document.getElementById('offcomfrt-widget-btn');
+        widget.classList.add('offcomfrt-open');
+        btn.classList.add('offcomfrt-hidden');
+        isOpen = true;
+        setTimeout(function () {
+            document.getElementById('offcomfrt-input').focus();
+        }, 300);
+    }
+
+    function closeWidget() {
+        const widget = document.getElementById('offcomfrt-widget');
+        const btn = document.getElementById('offcomfrt-widget-btn');
+        widget.classList.remove('offcomfrt-open');
+        btn.classList.remove('offcomfrt-hidden');
+        isOpen = false;
+    }
+
+    // ---------- Welcome & Quick Actions ----------
+
+    function showWelcome() {
+        addBotMessage('Hi! Welcome to ' + BRAND_NAME + '. How can I help you today?');
+        showQuickActions();
+    }
+
+    function showQuickActions() {
+        const actionsEl = document.getElementById('offcomfrt-actions');
+        actionsEl.innerHTML = '';
+        var actions = [
+            { label: 'Track Order', action: 'track' },
+            { label: 'Return Policy', action: 'return_policy' },
+            { label: 'Talk to Support', action: 'support' }
+        ];
+        actions.forEach(function (a) {
+            var chip = document.createElement('button');
+            chip.className = 'offcomfrt-chip';
+            chip.textContent = a.label;
+            chip.addEventListener('click', function () {
+                handleQuickAction(a.action);
+            });
+            actionsEl.appendChild(chip);
+        });
+    }
+
+    function hideQuickActions() {
+        document.getElementById('offcomfrt-actions').innerHTML = '';
+    }
+
+    function handleQuickAction(action) {
+        hideQuickActions();
+        if (action === 'track') {
+            addBotMessage('Sure! Please enter your order number (e.g. #1234) or AWB tracking number.');
+            setInputPlaceholder('Enter order # or AWB...');
+        } else if (action === 'return_policy') {
+            addUserMessage('What is your return policy?');
+            sendToAI('What is your return policy?');
+        } else if (action === 'support') {
+            showTicketForm();
+        }
+    }
+
+    function setInputPlaceholder(text) {
+        document.getElementById('offcomfrt-input').placeholder = text;
+    }
+
+    // ---------- Message Handling ----------
+
+    function handleSend() {
+        var input = document.getElementById('offcomfrt-input');
+        var text = input.value.trim();
+        if (!text || isTyping) return;
+
+        input.value = '';
+        addUserMessage(text);
+        hideQuickActions();
+        setInputPlaceholder('Type a message...');
+
+        // Check if this looks like an order/AWB number
+        if (/^#\d+$/i.test(text) || /^\d{10,}$/.test(text.replace(/\s/g, ''))) {
+            trackOrder(text);
+        } else {
+            sendToAI(text);
+        }
+    }
+
+    function addUserMessage(text, save) {
+        var chat = document.getElementById('offcomfrt-chat');
+        var msg = document.createElement('div');
+        msg.className = 'offcomfrt-msg offcomfrt-msg-user';
+        msg.textContent = text;
+        chat.appendChild(msg);
+        scrollToBottom();
+        if (save !== false) {
+            chatHistory.push({ type: 'user', text: text });
+            saveChatHistory();
+        }
+    }
+
+    function addBotMessage(text, save) {
+        var chat = document.getElementById('offcomfrt-chat');
+        var msg = document.createElement('div');
+        msg.className = 'offcomfrt-msg offcomfrt-msg-bot';
+        msg.textContent = text;
+        chat.appendChild(msg);
+        scrollToBottom();
+        if (save !== false) {
+            chatHistory.push({ type: 'bot', text: text });
+            saveChatHistory();
+        }
+    }
+
+    function showTyping() {
+        isTyping = true;
+        var chat = document.getElementById('offcomfrt-chat');
+        var typing = document.createElement('div');
+        typing.className = 'offcomfrt-typing';
+        typing.id = 'offcomfrt-typing';
+        typing.innerHTML = '<div class="offcomfrt-typing-dot"></div><div class="offcomfrt-typing-dot"></div><div class="offcomfrt-typing-dot"></div>';
+        chat.appendChild(typing);
+        scrollToBottom();
+    }
+
+    function hideTyping() {
+        isTyping = false;
+        var typing = document.getElementById('offcomfrt-typing');
+        if (typing) typing.remove();
+    }
+
+    // ---------- AI Chat ----------
+
+    function sendToAI(message) {
+        showTyping();
+        fetch(API_URL + '/api/widget/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: sessionId, message: message })
+        })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                hideTyping();
+                if (data.reply) {
+                    addBotMessage(data.reply);
+                }
+                if (data.suggestedAction === 'create_ticket') {
+                    showTicketSuggestion();
+                }
+            })
+            .catch(function (err) {
+                hideTyping();
+                console.error('[offcomfrt] chat error:', err);
+                addBotMessage('Sorry, something went wrong. Please try again or reach out on WhatsApp.');
+            });
+    }
+
+    function showTicketSuggestion() {
+        var chat = document.getElementById('offcomfrt-chat');
+        var msg = document.createElement('div');
+        msg.className = 'offcomfrt-msg offcomfrt-msg-system';
+        msg.innerHTML = 'Would you like to speak with a human agent? <button class="offcomfrt-chip" onclick="window.__offcomfrt_showTicket()" style="margin-left:6px;font-size:11px;padding:4px 10px;">Create Ticket</button>';
+        chat.appendChild(msg);
+        scrollToBottom();
+    }
+
+    // Expose for inline onclick
+    window.__offcomfrt_showTicket = showTicketForm;
+
+    // ---------- Order Tracking ----------
+
+    function trackOrder(query) {
+        showTyping();
+        var body = {};
+        // Determine if it's an AWB or order ID
+        if (/^#\d+$/i.test(query)) {
+            body.orderId = query.replace(/^#/, '');
+        } else if (/^\d{10,}$/.test(query.replace(/\s/g, ''))) {
+            // Could be AWB (long number) — try both
+            body.awb = query.replace(/\s/g, '');
+            body.orderId = query.replace(/^#/, '');
+        } else {
+            body.orderId = query;
+        }
+
+        fetch(API_URL + '/api/widget/track-order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                hideTyping();
+                if (data.error) {
+                    addBotMessage(data.error);
+                    addBotMessage('You can also try entering a different order number or AWB, or talk to our support team.');
+                    showQuickActions();
+                } else {
+                    addTrackingCard(data);
+                }
+            })
+            .catch(function (err) {
+                hideTyping();
+                console.error('[offcomfrt] tracking error:', err);
+                addBotMessage('Unable to fetch tracking info right now. Please try again later.');
+            });
+    }
+
+    function addTrackingCard(data, save) {
+        var chat = document.getElementById('offcomfrt-chat');
+        var card = document.createElement('div');
+        card.className = 'offcomfrt-tracking-card';
+
+        var statusText = data.status || 'Unknown';
+        var html = '<div class="offcomfrt-tracking-card-header">';
+        html += '<span class="offcomfrt-tracking-carrier">' + escapeHtml(data.carrierName || 'Carrier') + '</span>';
+        html += '<span class="offcomfrt-tracking-status">' + escapeHtml(statusText) + '</span>';
+        html += '</div>';
+
+        if (data.awb) {
+            html += '<div class="offcomfrt-tracking-row"><span>AWB</span><span>' + escapeHtml(data.awb) + '</span></div>';
+        }
+        if (data.location) {
+            html += '<div class="offcomfrt-tracking-row"><span>Location</span><span>' + escapeHtml(data.location) + '</span></div>';
+        }
+        if (data.shippedDate) {
+            html += '<div class="offcomfrt-tracking-row"><span>Shipped</span><span>' + escapeHtml(data.shippedDate) + '</span></div>';
+        }
+        if (data.expectedDelivery) {
+            html += '<div class="offcomfrt-tracking-row"><span>Expected</span><span>' + escapeHtml(data.expectedDelivery) + '</span></div>';
+        }
+        if (data.deliveredDate) {
+            html += '<div class="offcomfrt-tracking-row"><span>Delivered</span><span>' + escapeHtml(data.deliveredDate) + '</span></div>';
+        }
+        if (data.note) {
+            html += '<div class="offcomfrt-tracking-row"><span></span><span style="color:#666;font-style:italic;">' + escapeHtml(data.note) + '</span></div>';
+        }
+        if (data.trackingUrl) {
+            html += '<a href="' + escapeHtml(data.trackingUrl) + '" target="_blank" class="offcomfrt-tracking-link">Track live</a>';
+        }
+
+        card.innerHTML = html;
+        chat.appendChild(card);
+        scrollToBottom();
+
+        if (save !== false) {
+            chatHistory.push({ type: 'tracking', data: data });
+            saveChatHistory();
+        }
+    }
+
+    // ---------- Ticket Creation ----------
+
+    function showTicketForm() {
+        hideQuickActions();
+        var chat = document.getElementById('offcomfrt-chat');
+        var form = document.createElement('div');
+        form.className = 'offcomfrt-ticket-form';
+        form.id = 'offcomfrt-ticket-form';
+        form.innerHTML = `
+            <h4>Contact Support</h4>
+            <div class="offcomfrt-form-group">
+                <label>Name</label>
+                <input type="text" id="offcomfrt-t-name" value="${escapeHtml(CUSTOMER_NAME)}" placeholder="Your name" />
+            </div>
+            <div class="offcomfrt-form-group">
+                <label>Phone</label>
+                <input type="tel" id="offcomfrt-t-phone" value="${escapeHtml(CUSTOMER_PHONE)}" placeholder="+91..." />
+            </div>
+            <div class="offcomfrt-form-group">
+                <label>Email (optional)</label>
+                <input type="email" id="offcomfrt-t-email" value="${escapeHtml(CUSTOMER_EMAIL)}" placeholder="you@example.com" />
+            </div>
+            <div class="offcomfrt-form-group">
+                <label>Issue</label>
+                <textarea id="offcomfrt-t-message" placeholder="Describe your issue..."></textarea>
+            </div>
+            <button class="offcomfrt-form-submit" id="offcomfrt-t-submit">Submit Ticket</button>
+        `;
+        chat.appendChild(form);
+        scrollToBottom();
+
+        document.getElementById('offcomfrt-t-submit').addEventListener('click', submitTicket);
+    }
+
+    function submitTicket() {
+        var name = document.getElementById('offcomfrt-t-name').value.trim();
+        var phone = document.getElementById('offcomfrt-t-phone').value.trim();
+        var email = document.getElementById('offcomfrt-t-email').value.trim();
+        var message = document.getElementById('offcomfrt-t-message').value.trim();
+
+        if (!message) {
+            alert('Please describe your issue.');
+            return;
+        }
+        if (!phone && !email) {
+            alert('Please provide your phone number or email.');
+            return;
+        }
+
+        var submitBtn = document.getElementById('offcomfrt-t-submit');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Submitting...';
+
+        fetch(API_URL + '/api/widget/ticket', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, phone: phone, email: email, message: message })
+        })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                // Remove the form
+                var form = document.getElementById('offcomfrt-ticket-form');
+                if (form) form.remove();
+
+                if (data.success) {
+                    addTicketConfirmation({
+                        ticketNumber: data.ticketNumber,
+                        whatsappLink: data.whatsappLink
+                    });
+                } else {
+                    addBotMessage('Sorry, could not create the ticket. Please try again.');
+                }
+            })
+            .catch(function (err) {
+                console.error('[offcomfrt] ticket error:', err);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Submit Ticket';
+                addBotMessage('Something went wrong. Please try again.');
+            });
+    }
+
+    function addTicketConfirmation(data, save) {
+        var chat = document.getElementById('offcomfrt-chat');
+        var confirm = document.createElement('div');
+        confirm.className = 'offcomfrt-ticket-confirm';
+        confirm.innerHTML = `
+            <div class="offcomfrt-ticket-confirm-icon">
+                <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <h4>Ticket Created</h4>
+            <p>Your support ticket has been received.</p>
+            <div class="offcomfrt-ticket-number">${escapeHtml(data.ticketNumber)}</div>
+            <br/><br/>
+            <a href="${escapeHtml(data.whatsappLink)}" target="_blank" class="offcomfrt-whatsapp-btn">
+                <svg viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.955 9.955 0 0 0 12 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
+                Continue on WhatsApp
+            </a>
+        `;
+        chat.appendChild(confirm);
+        scrollToBottom();
+
+        if (save !== false) {
+            chatHistory.push({ type: 'ticket', data: data });
+            saveChatHistory();
+        }
+    }
+
+    // ---------- Utilities ----------
+
+    function scrollToBottom() {
+        var chat = document.getElementById('offcomfrt-chat');
+        if (chat) {
+            setTimeout(function () {
+                chat.scrollTop = chat.scrollHeight;
+            }, 50);
+        }
+    }
+
+    function saveChatHistory() {
+        // Keep last 20 messages in sessionStorage
+        if (chatHistory.length > 20) {
+            chatHistory = chatHistory.slice(-20);
+        }
+        sessionStorage.setItem('offcomfrt_chat', JSON.stringify(chatHistory));
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // ---------- Initialize ----------
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', createWidget);
+    } else {
+        createWidget();
+    }
+
+})();
