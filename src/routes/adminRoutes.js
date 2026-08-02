@@ -5241,8 +5241,8 @@ router.get('/ai/conversations', verifyToken, async (req, res) => {
             offset: off
         });
     } catch (error) {
-        console.error('Conversations list error:', error.message);
-        res.status(500).json({ success: false, error: 'Failed to load conversations' });
+        console.error('Conversations list error:', error.message, error.stack);
+        res.status(500).json({ success: false, error: `Failed to load conversations: ${error.message}` });
     }
 });
 
@@ -5343,8 +5343,8 @@ router.get('/ai/analytics', verifyToken, async (req, res) => {
         const analytics = await getEnhancedAnalytics();
         res.json({ success: true, ...analytics });
     } catch (error) {
-        console.error('Enhanced analytics error:', error.message);
-        res.status(500).json({ success: false, error: 'Failed to load analytics' });
+        console.error('Enhanced analytics error:', error.message, error.stack);
+        res.status(500).json({ success: false, error: `Failed to load analytics: ${error.message}` });
     }
 });
 
@@ -5355,8 +5355,8 @@ router.get('/ai/live', verifyToken, async (req, res) => {
         const snapshot = await getLiveSnapshot();
         res.json({ success: true, ...snapshot });
     } catch (error) {
-        console.error('Live snapshot error:', error.message);
-        res.status(500).json({ success: false, error: 'Failed to load live data' });
+        console.error('Live snapshot error:', error.message, error.stack);
+        res.status(500).json({ success: false, error: `Failed to load live data: ${error.message}` });
     }
 });
 

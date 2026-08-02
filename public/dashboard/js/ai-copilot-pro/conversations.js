@@ -287,9 +287,9 @@
                     ${ticket.source ? `<span class="conv-badge" style="background:var(--bg-input);color:var(--text-muted);">${ticket.source}</span>` : ''}
                 </div>
                 <div class="conv-detail-actions">
-                    ${ticket.status === 'open' ? `<button class="btn-primary" onclick="window.CopilotConversations.resolveTicket(${ticket.id})">Mark Resolved</button>` : ''}
-                    ${ticket.status !== 'closed' ? `<button class="btn-secondary" onclick="window.CopilotConversations.closeTicket(${ticket.id})">Close</button>` : ''}
-                    <button class="btn-secondary" onclick="window.CopilotConversations.addtotraining(${ticket.id})">Add to Training</button>
+                    ${ticket.status === 'open' ? `<button class="btn-primary" data-action="resolve" data-id="${ticket.id}">Mark Resolved</button>` : ''}
+                    ${ticket.status !== 'closed' ? `<button class="btn-secondary" data-action="close" data-id="${ticket.id}">Close</button>` : ''}
+                    <button class="btn-secondary" data-action="train" data-id="${ticket.id}">Add to Training</button>
                 </div>
             </div>
             <div class="conv-thread">`;
@@ -331,6 +331,14 @@
             }
 
             panel.innerHTML = html;
+
+            // Bind action buttons via event listeners (CSP-safe, no inline handlers)
+            panel.querySelectorAll('[data-action]').forEach(btn => {
+                const id = parseInt(btn.dataset.id);
+                if (btn.dataset.action === 'resolve') btn.onclick = () => resolveTicket(id);
+                else if (btn.dataset.action === 'close') btn.onclick = () => closeTicket(id);
+                else if (btn.dataset.action === 'train') btn.onclick = () => addtotraining(id);
+            });
 
             // Mobile: show detail
             const layout = document.getElementById('convLayout');
@@ -428,8 +436,7 @@
         }).catch(() => { location.hash = 'training'; });
     }
 
-    // Expose actions globally for onclick handlers
-    window.CopilotConversations = { resolveTicket, closeTicket, addtotraining };
+    // Actions are bound via event listeners in openTicket (CSP-safe)
 
     // ── Helpers ──
     function escapeHtml(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
