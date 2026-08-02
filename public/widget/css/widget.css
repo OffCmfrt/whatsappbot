@@ -66,7 +66,7 @@
     bottom: 28px;
     right: 28px;
     width: 420px;
-    height: 680px;
+    height: 700px;
     max-height: calc(100vh - 56px);
     background: #fff;
     border-radius: 24px;
@@ -225,12 +225,13 @@
 .offcomfrt-chat {
     flex: 1;
     overflow-y: auto;
-    padding: 28px 24px;
+    padding: 32px 24px;
     display: flex;
     flex-direction: column;
     gap: 24px;
     scroll-behavior: smooth;
     background: #fafafa;
+    min-height: 0;
 }
 
 .offcomfrt-chat::-webkit-scrollbar {
@@ -275,8 +276,8 @@
 
 .offcomfrt-msg {
     max-width: 80%;
-    min-width: 100px;
-    padding: 16px 20px;
+    min-width: 120px;
+    padding: 18px 22px;
     border-radius: 20px;
     font-size: 14px;
     line-height: 1.6;
@@ -307,7 +308,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    padding: 0 20px 16px;
+    padding: 0 24px 16px;
     flex-shrink: 0;
 }
 
@@ -346,13 +347,14 @@
     gap: 12px;
     flex-shrink: 0;
     background: #fff;
+    min-height: 90px;
 }
 
 .offcomfrt-input {
     flex: 1;
     border: 1.5px solid rgba(0, 0, 0, 0.12);
     border-radius: 28px;
-    padding: 14px 20px;
+    padding: 16px 22px;
     font-size: 14px;
     font-family: inherit;
     outline: none;
@@ -360,7 +362,8 @@
     background: #f8f9fa;
     color: #1a1a1a;
     letter-spacing: 0.01em;
-    min-height: 50px;
+    min-height: 52px;
+    width: 100%;
 }
 
 .offcomfrt-input:focus {
@@ -374,8 +377,8 @@
 }
 
 .offcomfrt-send-btn {
-    width: 48px;
-    height: 48px;
+    width: 52px;
+    height: 52px;
     border-radius: 50%;
     background: linear-gradient(135deg, #1a1a1a 0%, #000 100%);
     border: none;
@@ -398,8 +401,8 @@
 }
 
 .offcomfrt-send-btn svg {
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
     fill: none;
     stroke: #fff;
     stroke-width: 2;
@@ -425,7 +428,7 @@
 .offcomfrt-typing {
     display: flex;
     gap: 5px;
-    padding: 14px 18px;
+    padding: 16px 20px;
     background: #fff;
     border-radius: 20px;
     border-bottom-left-radius: 8px;
@@ -764,8 +767,8 @@
     }
 
     .offcomfrt-chat {
-        padding: 20px 16px;
-        gap: 18px;
+        padding: 24px 16px;
+        gap: 20px;
     }
 
     .offcomfrt-actions {
