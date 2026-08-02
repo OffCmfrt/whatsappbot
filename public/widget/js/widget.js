@@ -52,8 +52,13 @@
         widget.innerHTML = `
             <div class="offcomfrt-header">
                 <div class="offcomfrt-header-brand">
-                    <span class="offcomfrt-header-title">${BRAND_NAME}</span>
-                    <span class="offcomfrt-header-subtitle">Support</span>
+                    <div class="offcomfrt-header-avatar">
+                        <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    </div>
+                    <div class="offcomfrt-header-info">
+                        <span class="offcomfrt-header-title">${BRAND_NAME}</span>
+                        <span class="offcomfrt-header-subtitle">Online now</span>
+                    </div>
                 </div>
                 <button class="offcomfrt-header-close" aria-label="Close">
                     <svg viewBox="0 0 24 24">
@@ -96,6 +101,10 @@
                 else if (msg.type === 'ticket') addTicketConfirmation(msg.data, false);
             });
             scrollToBottom();
+            // Show quick actions after restoring history
+            if (chatHistory.length <= 2) {
+                showQuickActions();
+            }
         } else {
             showWelcome();
         }
@@ -130,7 +139,7 @@
     // ---------- Welcome & Quick Actions ----------
 
     function showWelcome() {
-        addBotMessage('Hi! Welcome to ' + BRAND_NAME + '. How can I help you today?');
+        addBotMessage('Hey there! Welcome to ' + BRAND_NAME + '. I\'m here to help with your orders, returns, or any questions. How can I assist you today?');
         showQuickActions();
     }
 
@@ -196,10 +205,13 @@
 
     function addUserMessage(text, save) {
         var chat = document.getElementById('offcomfrt-chat');
+        var wrapper = document.createElement('div');
+        wrapper.className = 'offcomfrt-msg-wrapper';
         var msg = document.createElement('div');
         msg.className = 'offcomfrt-msg offcomfrt-msg-user';
         msg.textContent = text;
-        chat.appendChild(msg);
+        wrapper.appendChild(msg);
+        chat.appendChild(wrapper);
         scrollToBottom();
         if (save !== false) {
             chatHistory.push({ type: 'user', text: text });
@@ -209,10 +221,13 @@
 
     function addBotMessage(text, save) {
         var chat = document.getElementById('offcomfrt-chat');
+        var wrapper = document.createElement('div');
+        wrapper.className = 'offcomfrt-msg-wrapper';
         var msg = document.createElement('div');
         msg.className = 'offcomfrt-msg offcomfrt-msg-bot';
         msg.textContent = text;
-        chat.appendChild(msg);
+        wrapper.appendChild(msg);
+        chat.appendChild(wrapper);
         scrollToBottom();
         if (save !== false) {
             chatHistory.push({ type: 'bot', text: text });
