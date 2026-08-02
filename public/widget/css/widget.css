@@ -257,8 +257,9 @@
     flex-direction: column;
     gap: 4px;
     animation: offcomfrt-slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-    padding: 0 16px;
-    width: 100%;
+    padding: 0 8px;
+    margin: 0 8px;
+    width: calc(100% - 16px);
 }
 
 .offcomfrt-align-left {
@@ -767,15 +768,21 @@
     }
 
     .offcomfrt-chat {
-        padding: 24px 16px;
+        padding: 24px 12px;
         gap: 20px;
     }
 
+    .offcomfrt-msg-wrapper {
+        padding: 0 6px;
+        margin: 0 6px;
+        width: calc(100% - 12px);
+    }
+
     .offcomfrt-actions {
-        padding: 0 16px 14px;
+        padding: 0 12px 14px;
     }
 
     .offcomfrt-input-area {
-        padding: 16px 16px 20px;
+        padding: 16px 12px 20px;
     }
 }
