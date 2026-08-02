@@ -61,7 +61,7 @@
             <div class="offcomfrt-header">
                 <div class="offcomfrt-header-brand">
                     <div class="offcomfrt-header-avatar">
-                        <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                        <img src="${API_URL}/widget/logo.jpg" alt="${BRAND_NAME}" />
                     </div>
                     <div class="offcomfrt-header-info">
                         <span class="offcomfrt-header-title">${BRAND_NAME}</span>
