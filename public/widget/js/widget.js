@@ -335,31 +335,41 @@
         card.className = 'offcomfrt-tracking-card';
 
         var statusText = data.status || 'Unknown';
+        var statusClass = 'offcomfrt-status-unknown';
+        if (/delivered/i.test(statusText)) statusClass = 'offcomfrt-status-delivered';
+        else if (/transit|shipped|dispatched|in.?transit|out.?for.?delivery/i.test(statusText)) statusClass = 'offcomfrt-status-transit';
+
+        var carrierName = data.carrierName || 'Carrier';
+        // Clean up carrier name display
+        if (carrierName.toUpperCase() === 'SHIPROCKET') carrierName = 'Shiprocket';
+        else if (carrierName.toUpperCase() === 'DELHIVERY') carrierName = 'Delhivery';
+        else if (carrierName.toUpperCase() === 'EKART') carrierName = 'Ekart';
+
         var html = '<div class="offcomfrt-tracking-card-header">';
-        html += '<span class="offcomfrt-tracking-carrier">' + escapeHtml(data.carrierName || 'Carrier') + '</span>';
-        html += '<span class="offcomfrt-tracking-status">' + escapeHtml(statusText) + '</span>';
+        html += '<span class="offcomfrt-tracking-carrier">' + escapeHtml(carrierName) + '</span>';
+        html += '<span class="offcomfrt-tracking-status ' + statusClass + '">' + escapeHtml(statusText) + '</span>';
         html += '</div>';
 
         if (data.awb) {
-            html += '<div class="offcomfrt-tracking-row"><span>AWB</span><span>' + escapeHtml(data.awb) + '</span></div>';
+            html += '<div class="offcomfrt-tracking-row"><span>AWB Number</span><span>' + escapeHtml(data.awb) + '</span></div>';
         }
         if (data.location) {
-            html += '<div class="offcomfrt-tracking-row"><span>Location</span><span>' + escapeHtml(data.location) + '</span></div>';
+            html += '<div class="offcomfrt-tracking-row"><span>Current Location</span><span>' + escapeHtml(data.location) + '</span></div>';
         }
         if (data.shippedDate) {
-            html += '<div class="offcomfrt-tracking-row"><span>Shipped</span><span>' + escapeHtml(data.shippedDate) + '</span></div>';
+            html += '<div class="offcomfrt-tracking-row"><span>Shipped Date</span><span>' + escapeHtml(data.shippedDate) + '</span></div>';
         }
         if (data.expectedDelivery) {
-            html += '<div class="offcomfrt-tracking-row"><span>Expected</span><span>' + escapeHtml(data.expectedDelivery) + '</span></div>';
+            html += '<div class="offcomfrt-tracking-row"><span>Expected Delivery</span><span>' + escapeHtml(data.expectedDelivery) + '</span></div>';
         }
         if (data.deliveredDate) {
-            html += '<div class="offcomfrt-tracking-row"><span>Delivered</span><span>' + escapeHtml(data.deliveredDate) + '</span></div>';
+            html += '<div class="offcomfrt-tracking-row"><span>Delivered Date</span><span>' + escapeHtml(data.deliveredDate) + '</span></div>';
         }
         if (data.note) {
-            html += '<div class="offcomfrt-tracking-row"><span></span><span style="color:#666;font-style:italic;">' + escapeHtml(data.note) + '</span></div>';
+            html += '<div class="offcomfrt-tracking-row"><span></span><span style="color:#666;font-style:italic;font-size:12px;">' + escapeHtml(data.note) + '</span></div>';
         }
         if (data.trackingUrl) {
-            html += '<a href="' + escapeHtml(data.trackingUrl) + '" target="_blank" class="offcomfrt-tracking-link">Track live</a>';
+            html += '<a href="' + escapeHtml(data.trackingUrl) + '" target="_blank" class="offcomfrt-tracking-link">Track Live →</a>';
         }
 
         card.innerHTML = html;
