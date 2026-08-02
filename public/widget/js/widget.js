@@ -206,7 +206,7 @@
     function addUserMessage(text, save) {
         var chat = document.getElementById('offcomfrt-chat');
         var wrapper = document.createElement('div');
-        wrapper.className = 'offcomfrt-msg-wrapper';
+        wrapper.className = 'offcomfrt-msg-wrapper offcomfrt-align-right';
         var msg = document.createElement('div');
         msg.className = 'offcomfrt-msg offcomfrt-msg-user';
         msg.textContent = text;
@@ -222,7 +222,7 @@
     function addBotMessage(text, save) {
         var chat = document.getElementById('offcomfrt-chat');
         var wrapper = document.createElement('div');
-        wrapper.className = 'offcomfrt-msg-wrapper';
+        wrapper.className = 'offcomfrt-msg-wrapper offcomfrt-align-left';
         var msg = document.createElement('div');
         msg.className = 'offcomfrt-msg offcomfrt-msg-bot';
         msg.textContent = text;
