@@ -14,8 +14,11 @@
  * Endpoints used:
  *   Channels       : GET  /channels
  *   Serviceability : GET  /courier/serviceability/
- *   Create order   : POST /orders/create (channel-specific, files under Shopify)
- *                    POST /orders/create/adhoc (fallback — Custom channel only)
+ *   Reuse synced   : GET  /orders?search=<id> (Shopify-integrated orders are
+ *                    already synced under the Shopify channel — we only assign
+ *                    an AWB to them, never create a duplicate)
+ *   Create order   : POST /orders/create (channel-specific, only for orders
+ *                    not yet synced) — orders are NEVER filed under "Custom"
  *   Assign AWB     : POST /courier/assign/awb
  *   Label          : POST /courier/generate/label
  *   Pickup         : POST /courier/generate/pickup
@@ -35,6 +38,7 @@ class ShiprocketAdapter extends BaseCarrier {
         this.baseURL = shiprocketService.baseURL;
         this._pickupPincode = null; // cached after first lookup
         this._channelId = null;     // cached after first lookup
+        this._channels = [];        // full channel list, cached by resolveChannelId
     }
 
     get capabilities() {
@@ -101,6 +105,7 @@ class ShiprocketAdapter extends BaseCarrier {
             });
 
             const channels = response.data?.data || [];
+            this._channels = channels; // cached for custom-channel detection later
             const isCustom = c => (c.base_channel_code || '').toUpperCase() === 'CS' || /custom/i.test(c.name || '');
             // Prefer an explicit Shopify match; otherwise fall back to the first
             // non-custom channel (Shopify channels are often named after the store)
@@ -120,6 +125,65 @@ class ShiprocketAdapter extends BaseCarrier {
             console.warn(`⚠️ Shiprocket: channel lookup failed (${this.describeAxiosError(error)}); orders will use the default (Custom) channel`);
         }
         return null;
+    }
+
+    // Find the order that Shiprocket already synced from the Shopify channel.
+    // When the Shopify integration is active, orders land in Shiprocket under
+    // the Shopify channel automatically — creating another one via the API is
+    // rejected (or worse, duplicates it under Custom), so we reuse this row
+    // and only assign an AWB to it.
+    async findSyncedOrder(headers, orderId, channelId) {
+        // Shopify order names carry a "#" prefix; our rows usually don't.
+        // Search every plausible spelling of the same order number.
+        const bare = String(orderId).replace(/^#/, '').trim();
+        const candidates = [...new Set([bare, `#${bare}`])];
+
+        const normalize = v => String(v ?? '').replace(/^#/, '').trim().toLowerCase();
+
+        for (const candidate of candidates) {
+            try {
+                const response = await axios.get(`${this.baseURL}/orders`, {
+                    headers,
+                    params: { search: candidate, per_page: 20 },
+                    timeout: 20000
+                });
+
+                const orders = response.data?.data || [];
+                const matches = orders.filter(o =>
+                    normalize(o.channel_order_id) === normalize(bare) ||
+                    normalize(o.order_id) === normalize(bare)
+                );
+                if (matches.length === 0) continue;
+
+                // Prefer the copy living on the Shopify channel; skip stale
+                // duplicates that earlier adhoc runs filed under "Custom"
+                const onShopify = matches.find(o => String(o.channel_id) === String(channelId));
+                if (onShopify) return onShopify;
+
+                const nonCustom = matches.find(o => !this.isCustomChannelId(o.channel_id));
+                if (nonCustom) {
+                    console.warn(`⚠️ Shiprocket: order ${bare} matched on channel ${nonCustom.channel_id} (expected ${channelId}) — reusing it anyway`);
+                    return nonCustom;
+                }
+                console.warn(`⚠️ Shiprocket: order ${bare} only exists on the Custom channel — ignoring it so shipping stays on Shopify`);
+            } catch (error) {
+                console.warn(`⚠️ Shiprocket: synced-order lookup for "${candidate}" failed (${this.describeAxiosError(error)})`);
+            }
+        }
+        return null;
+    }
+
+    // True when the cached channel list says this channel id is a "Custom" one
+    isCustomChannelId(channelId) {
+        const channel = (this._channels || []).find(c => String(c.id) === String(channelId));
+        if (!channel) return false; // unknown channel — don't exclude on guesswork
+        return (channel.base_channel_code || '').toUpperCase() === 'CS' || /custom/i.test(channel.name || '');
+    }
+
+    // Extract the Shiprocket shipment id from an order row (shape varies by endpoint)
+    extractShipmentId(order) {
+        const sid = order?.shipment_id || order?.shipments?.[0]?.shipment_id || order?.shipments?.[0]?.id;
+        return sid ? String(sid) : null;
     }
 
     // Live courier list with rates/ETA/rating for admin to choose from
@@ -170,13 +234,91 @@ class ShiprocketAdapter extends BaseCarrier {
         }
     }
 
-    // Two-step flow: create adhoc order → assign AWB for the chosen courier
+    // Ship orders ONLY under the Shopify channel. Two routes, never "Custom":
+    //   1. The order was already synced from Shopify → reuse it, assign AWB only.
+    //   2. Not synced yet → create it via the channel-specific endpoint.
     async createShipment(ctx) {
         try {
             const deliveryPin = this.normalizePincode(ctx.consignee.pincode);
             if (!deliveryPin) return this.fail('Invalid delivery pincode (must be 6 digits)');
 
             const headers = await this.authHeaders();
+
+            // Without a Shopify channel we refuse to ship — the old adhoc
+            // fallback silently filed everything under "Custom", which is
+            // exactly what this flow must never do.
+            const channelId = await this.resolveChannelId();
+            if (!channelId) {
+                return this.fail(
+                    'Shiprocket has no usable Shopify channel — orders would land under "Custom", which is disabled. ' +
+                    'Connect the Shopify channel in Shiprocket (Setup & Manage → Channels) or set SHIPROCKET_CHANNEL_ID.'
+                );
+            }
+
+            // --- Route 1: reuse the order Shiprocket synced from Shopify ---
+            const synced = await this.findSyncedOrder(headers, ctx.orderId, channelId);
+            if (synced) {
+                // Warn (not block) if the hub edited the address away from the Shopify one
+                const syncedPin = this.normalizePincode(synced.billing_pincode || synced.shipping_pincode);
+                if (syncedPin && syncedPin !== deliveryPin) {
+                    console.warn(`⚠️ Shiprocket: hub pincode ${deliveryPin} differs from synced order ${synced.channel_order_id} (${syncedPin}) — shipment will use the synced address`);
+                }
+
+                const srOrderId = String(synced.id);
+                const shipmentId = this.extractShipmentId(synced);
+
+                // Already carries an AWB (Shiprocket auto-allocation) — nothing to create
+                if (synced.awb_code) {
+                    console.log(`📦 Shiprocket: reusing synced Shopify-channel order ${synced.channel_order_id} (existing AWB ${synced.awb_code})`);
+                    return this.ok({
+                        awb: String(synced.awb_code),
+                        courierName: synced.courier_name || 'Shiprocket Courier',
+                        carrierShipmentId: shipmentId,
+                        carrierOrderId: srOrderId,
+                        trackingUrl: `https://shiprocket.co/tracking/${synced.awb_code}`,
+                        reusedSyncedOrder: true,
+                        requestPayload: { channel_order_id: synced.channel_order_id, channel_id: synced.channel_id }
+                    }, { order: synced });
+                }
+
+                const awbBody = {};
+                if (shipmentId) awbBody.shipment_id = Number(shipmentId);
+                else awbBody.order_ids = [Number(srOrderId)];
+                if (ctx.courierId && ctx.courierId !== 'auto') awbBody.courier_id = ctx.courierId;
+
+                let awbRes;
+                try {
+                    awbRes = await axios.post(`${this.baseURL}/courier/assign/awb`, awbBody, { headers, timeout: 30000 });
+                } catch (awbError) {
+                    return this.fail(
+                        `Synced Shopify-channel order ${synced.channel_order_id} found, but AWB assignment failed: ${this.describeAxiosError(awbError)}`,
+                        { order: synced, awbError: awbError.response?.data }
+                    );
+                }
+
+                const awbData = awbRes.data?.response?.data || awbRes.data?.data || {};
+                const awb = awbData.awb_code || awbRes.data?.awb_code;
+                if (!awb) {
+                    return this.fail(
+                        `Synced Shopify-channel order ${synced.channel_order_id} found, but no AWB returned: ${awbRes.data?.message || JSON.stringify(awbRes.data).substring(0, 200)}`,
+                        { order: synced, awb: awbRes.data }
+                    );
+                }
+
+                console.log(`📦 Shiprocket: shipped synced Shopify-channel order ${synced.channel_order_id} (AWB ${awb})`);
+                return this.ok({
+                    awb,
+                    courierName: awbData.courier_name || 'Shiprocket Courier',
+                    carrierShipmentId: shipmentId || String(awbRes.data?.shipment_id || ''),
+                    carrierOrderId: srOrderId,
+                    freightCharge: awbData.freight_charges || awbData.applied_weight_amount || null,
+                    trackingUrl: `https://shiprocket.co/tracking/${awb}`,
+                    reusedSyncedOrder: true,
+                    requestPayload: { channel_order_id: synced.channel_order_id, channel_id: synced.channel_id, awb: awbBody }
+                }, { order: synced, awb: awbRes.data });
+            }
+
+            // --- Route 2: not synced yet — create under the Shopify channel ---
             const isCod = ctx.payment.mode === 'COD';
             const nameParts = (ctx.consignee.name || 'Customer').trim().split(/\s+/);
             const firstName = nameParts[0];
@@ -192,7 +334,6 @@ class ShiprocketAdapter extends BaseCarrier {
                 }));
 
             const subTotal = orderItems.reduce((sum, i) => sum + (i.selling_price * i.units), 0) || Number(ctx.payment.declaredValue) || 0;
-            const channelId = await this.resolveChannelId();
 
             const orderPayload = {
                 order_id: ctx.orderId,
@@ -217,51 +358,23 @@ class ShiprocketAdapter extends BaseCarrier {
                 weight: (ctx.package.weightGrams || 500) / 1000 // kg
             };
 
-            // The adhoc endpoint ALWAYS files orders under the "Custom" channel, even
-            // when channel_id is passed. To file under Shopify we must use the
-            // channel-specific endpoint (/orders/create) with the resolved channel_id.
             let createRes;
-            if (channelId) {
-                try {
-                    createRes = await axios.post(`${this.baseURL}/orders/create`, { ...orderPayload, channel_id: channelId }, {
-                        headers,
-                        timeout: 30000
-                    });
-                } catch (channelError) {
-                    const httpStatus = channelError.response?.status;
-
-                    // No response (timeout/network) or a 5xx: Shiprocket may well have
-                    // created the order before failing. Retrying via adhoc would file a
-                    // SECOND order and burn a second AWB, so stop and let the admin check.
-                    if (!httpStatus || httpStatus >= 500) {
-                        return this.fail(
-                            `Shiprocket order create failed on channel ${channelId} (${this.describeAxiosError(channelError)}). ` +
-                            `Not retrying — the order may already exist at Shiprocket, check the panel before shipping again.`,
-                            channelError.response?.data
-                        );
-                    }
-
-                    // A 4xx is a validation rejection, so nothing was created and adhoc is
-                    // safe. Shiprocket answers with a generic "Oops! Invalid Data." and
-                    // buries the per-field detail in the body — log it raw, or this is
-                    // undiagnosable. Some channels (Shopify-integrated ones, where the
-                    // order already exists via sync) never accept API creates, so fall
-                    // back to adhoc (Custom) for this order only.
-                    console.warn(
-                        `⚠️ Shiprocket: channel ${channelId} rejected API order creation (HTTP ${httpStatus}: ${this.describeAxiosError(channelError)}); ` +
-                        `filing under the Custom channel for this order only. ` +
-                        `Raw response: ${JSON.stringify(channelError.response?.data || {}).substring(0, 500)}`
-                    );
-                    createRes = await axios.post(`${this.baseURL}/orders/create/adhoc`, orderPayload, {
-                        headers,
-                        timeout: 30000
-                    });
-                }
-            } else {
-                createRes = await axios.post(`${this.baseURL}/orders/create/adhoc`, orderPayload, {
+            try {
+                createRes = await axios.post(`${this.baseURL}/orders/create`, { ...orderPayload, channel_id: channelId }, {
                     headers,
                     timeout: 30000
                 });
+            } catch (channelError) {
+                const httpStatus = channelError.response?.status;
+                // Never fall back to /orders/create/adhoc — that endpoint ALWAYS files
+                // under the "Custom" channel. Fail loudly with the raw response so the
+                // rejection reason is diagnosable (if the order already exists at
+                // Shiprocket it will be found by the synced-order lookup next attempt).
+                return this.fail(
+                    `Shiprocket rejected channel ${channelId} order creation (HTTP ${httpStatus || 'n/a'}: ${this.describeAxiosError(channelError)}). ` +
+                    `Not retrying under another channel — check the Shiprocket panel before shipping again.`,
+                    channelError.response?.data
+                );
             }
 
             const shipmentId = createRes.data?.shipment_id;
