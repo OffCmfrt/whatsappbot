@@ -52,15 +52,9 @@
         document.head.appendChild(fontLink);
     }
 
-    // Load widget CSS (with cache-busting)
-    var cssLink = document.createElement('link');
-    cssLink.rel = 'stylesheet';
-    cssLink.href = baseUrl + '/widget/css/widget.css?v=' + Date.now();
-    document.head.appendChild(cssLink);
-
-    // Load widget JS
+    // Load widget JS (all CSS is inlined inside widget.js — no separate CSS file needed)
     var jsScript = document.createElement('script');
-    jsScript.src = baseUrl + '/widget/js/widget.js';
+    jsScript.src = baseUrl + '/widget/js/widget.js?v=' + Date.now();
     jsScript.defer = true;
     document.body.appendChild(jsScript);
 
