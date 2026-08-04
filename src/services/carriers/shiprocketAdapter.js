@@ -17,6 +17,9 @@
  *   Reuse synced   : GET  /orders?search=<id> (Shopify-integrated orders are
  *                    already synced under the Shopify channel — we only assign
  *                    an AWB to them, never create a duplicate)
+ *   Update order   : POST /orders/update/{order_id} (pins the fixed package
+ *                    weight/dimensions onto synced orders — Shopify sync sizes
+ *                    them from line items, so they'd drift with item count)
  *   Create order   : POST /orders/create (channel-specific, only for orders
  *                    not yet synced) — orders are NEVER filed under "Custom"
  *   Assign AWB     : POST /courier/assign/awb
@@ -180,6 +183,33 @@ class ShiprocketAdapter extends BaseCarrier {
         return (channel.base_channel_code || '').toUpperCase() === 'CS' || /custom/i.test(channel.name || '');
     }
 
+    // Shopify-synced orders carry weight/dimensions computed from the line
+    // items, so they drift with item count. The hub ships everything in one
+    // fixed package (the shipment draft's), so push it onto the synced order
+    // to keep the Shiprocket panel, rates and labels consistent.
+    // Best-effort: Shiprocket refuses edits once a shipment is far along —
+    // that must never block shipping.
+    async enforceFixedPackage(headers, synced, ctx) {
+        const desired = {
+            length: ctx.package.lengthCm || 30,
+            breadth: ctx.package.breadthCm || 40,
+            height: ctx.package.heightCm || 2,
+            weight: (ctx.package.weightGrams || 500) / 1000 // kg
+        };
+        const differs = Object.entries(desired).some(([key, value]) => {
+            const current = Number(synced[key]);
+            return !Number.isFinite(current) || Math.abs(current - Number(value)) > 0.01;
+        });
+        if (!differs) return;
+
+        try {
+            await axios.post(`${this.baseURL}/orders/update/${synced.id}`, desired, { headers, timeout: 20000 });
+            console.log(`📦 Shiprocket: normalized order ${synced.channel_order_id} package to ${desired.weight} kg / ${desired.length}×${desired.breadth}×${desired.height} cm`);
+        } catch (error) {
+            console.warn(`⚠️ Shiprocket: could not normalize order ${synced.channel_order_id} package (${this.describeAxiosError(error)}) — shipping with the synced values`);
+        }
+    }
+
     // Extract the Shiprocket shipment id from an order row (shape varies by endpoint)
     extractShipmentId(order) {
         const sid = order?.shipment_id || order?.shipments?.[0]?.shipment_id || order?.shipments?.[0]?.id;
@@ -258,6 +288,10 @@ class ShiprocketAdapter extends BaseCarrier {
             // --- Route 1: reuse the order Shiprocket synced from Shopify ---
             const synced = await this.findSyncedOrder(headers, ctx.orderId, channelId);
             if (synced) {
+                // Pin the fixed package before AWB assignment so the synced
+                // order keeps the same weight/dimensions whatever it contains
+                await this.enforceFixedPackage(headers, synced, ctx);
+
                 // Warn (not block) if the hub edited the address away from the Shopify one
                 const syncedPin = this.normalizePincode(synced.billing_pincode || synced.shipping_pincode);
                 if (syncedPin && syncedPin !== deliveryPin) {
