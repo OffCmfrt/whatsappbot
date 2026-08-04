@@ -261,6 +261,21 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
     await syncOrderRow(ctx, data, shopper);
     invalidateShoppersCache();
 
+    // Direct carriers have no Shopify channel, so Shopify never learns the
+    // order shipped — post the fulfillment + tracking there ourselves
+    if (carrier === 'ekart') {
+        require('./shopifyService').syncFulfillment(ctx.orderId, {
+            awb: data.awb,
+            courierName: data.courierName,
+            trackingUrl: data.trackingUrl
+        })
+            .then(res => {
+                if (res.success) console.log(`🛍️ ${res.action}`);
+                else if (res.warning) console.warn(`⚠️ Shopify fulfillment sync skipped for ${ctx.orderId}: ${res.warning}`);
+            })
+            .catch(err => console.warn(`⚠️ Shopify fulfillment sync failed (non-blocking): ${err.message}`));
+    }
+
     // Optional best-effort WhatsApp notification (never blocks the response)
     if (notifyCustomer) {
         notifyCustomerShipped(shopper, data, { isReship: Boolean(reshipOf), reason: reshipReason }).catch(err =>

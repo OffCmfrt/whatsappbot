@@ -737,6 +737,81 @@ class ShopifyService {
         }
     }
 
+    // ==========================================
+    // DIRECT-CARRIER FULFILLMENT → SHOPIFY
+    // Shiprocket/Delhivery ship under the Shopify channel, so fulfillments and
+    // tracking land back in Shopify automatically. Direct carriers (Ekart)
+    // have no such link — this posts the fulfillment + AWB to the Shopify
+    // order so it shows as fulfilled with tracking, like any channel order.
+    // Best-effort: never throws — returns { success, action, warning }.
+    // ==========================================
+    async syncFulfillment(orderId, { awb, courierName = null, trackingUrl = null, notifyCustomer = true } = {}) {
+        const result = { success: false, action: null, warning: null };
+        const cfg = this._restConfig();
+        if (!cfg) {
+            result.warning = 'Shopify credentials not configured';
+            return result;
+        }
+        if (!awb) {
+            result.warning = 'No AWB to sync';
+            return result;
+        }
+
+        try {
+            const order = await this.getOrderById(this._toLookupId(orderId));
+            if (!order) {
+                result.warning = `Order ${orderId} not found in Shopify`;
+                return result;
+            }
+
+            const trackingCompany = (courierName || 'Ekart').replace(/\s*\(.*\)$/, '').trim() || 'Ekart';
+
+            // Re-ship: an existing fulfillment may carry the old AWB — update
+            // its tracking instead of creating a duplicate fulfillment
+            const fulfillments = await axios.get(`${cfg.base}/orders/${order.id}/fulfillments.json`, {
+                headers: cfg.headers, timeout: 15000
+            });
+            const active = (fulfillments.data?.fulfillments || []).find(f =>
+                !['cancelled', 'failure'].includes(f.status)
+            );
+
+            if (active) {
+                if ((active.tracking_numbers || []).includes(awb)) {
+                    result.success = true;
+                    result.action = `Fulfillment ${active.id} already tracks AWB ${awb}`;
+                    return result;
+                }
+                await axios.put(`${cfg.base}/orders/${order.id}/fulfillments/${active.id}/tracking.json`,
+                    { tracking: { number: awb, company: trackingCompany, url: trackingUrl || undefined, notify_customer: false } },
+                    { headers: cfg.headers, timeout: 15000 });
+                result.success = true;
+                result.action = `Updated Shopify fulfillment ${active.id} tracking to AWB ${awb}`;
+                return result;
+            }
+
+            // Fulfill every line item on the order
+            const lineItems = (order.line_items || []).map(li => ({ id: li.id, quantity: li.quantity }));
+            await axios.post(`${cfg.base}/orders/${order.id}/fulfillments.json`, {
+                fulfillment: {
+                    tracking_number: awb,
+                    tracking_company: trackingCompany,
+                    tracking_urls: trackingUrl ? [trackingUrl] : [],
+                    notify_customer: Boolean(notifyCustomer),
+                    ...(lineItems.length ? { line_items: lineItems } : {})
+                }
+            }, { headers: cfg.headers, timeout: 20000 });
+
+            result.success = true;
+            result.action = `Marked Shopify order ${order.name || order.id} fulfilled with AWB ${awb}`;
+            return result;
+        } catch (error) {
+            const detail = error.response?.data?.errors ? JSON.stringify(error.response.data.errors) : error.message;
+            console.error(`❌ Shopify fulfillment sync failed for ${orderId}:`, detail);
+            result.warning = detail;
+            return result;
+        }
+    }
+
     // New: Sync all customers from Shopify Admin API
     async syncAllCustomers() {
         try {
