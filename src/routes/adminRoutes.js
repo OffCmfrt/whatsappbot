@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { verifyToken, requirePermission, permissionGate, logOperatorActivity } = require('../middleware/auth');
+const { verifyToken, requirePermission, permissionGate, logOperatorActivity, adminCredentialFingerprint } = require('../middleware/auth');
 const Customer = require('../models/Customer');
 const Order = require('../models/Order');
 const Settings = require('../models/Settings');
@@ -55,9 +55,10 @@ router.post('/login', async (req, res) => {
 
         // Check credentials (in production, hash password and store in DB)
         if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
-            // Generate JWT token
+            // Generate JWT token — credFp ties the session to the current
+            // ADMIN_PASSWORD so changing it on Render instantly logs everyone out
             const token = jwt.sign(
-                { username, role: 'admin' },
+                { username, role: 'admin', credFp: adminCredentialFingerprint() },
                 process.env.JWT_SECRET,
                 { expiresIn: '24h' }
             );

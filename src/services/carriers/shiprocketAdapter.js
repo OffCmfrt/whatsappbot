@@ -200,13 +200,32 @@ class ShiprocketAdapter extends BaseCarrier {
             const current = Number(synced[key]);
             return !Number.isFinite(current) || Math.abs(current - Number(value)) > 0.01;
         });
-        if (!differs) return;
+        if (!differs) return true;
 
         try {
             await axios.post(`${this.baseURL}/orders/update/${synced.id}`, desired, { headers, timeout: 20000 });
             console.log(`📦 Shiprocket: normalized order ${synced.channel_order_id} package to ${desired.weight} kg / ${desired.length}×${desired.breadth}×${desired.height} cm`);
+            return true;
         } catch (error) {
-            console.warn(`⚠️ Shiprocket: could not normalize order ${synced.channel_order_id} package (${this.describeAxiosError(error)}) — shipping with the synced values`);
+            const body = error.response?.data ? ` — ${JSON.stringify(error.response.data).substring(0, 300)}` : '';
+            console.warn(`⚠️ Shiprocket: could not normalize order ${synced.channel_order_id} package (${this.describeAxiosError(error)}${body}) — shipping with the synced values`);
+            return false;
+        }
+    }
+
+    // Shiprocket rejects AWB assignment on zero-weight orders ("Zero weight or
+    // no weight entered."), and Shopify products without a weight sync across
+    // as 0. Returns the order's current weight in kg, or null when it can't
+    // be determined.
+    async verifyOrderWeight(headers, srOrderId) {
+        try {
+            const detail = await axios.get(`${this.baseURL}/orders/show/${srOrderId}`, { headers, timeout: 20000 });
+            const order = detail.data?.data || detail.data || {};
+            const weight = Number(order.weight);
+            return Number.isFinite(weight) ? weight : 0;
+        } catch (error) {
+            console.warn(`⚠️ Shiprocket: could not verify weight for order ${srOrderId} (${this.describeAxiosError(error)})`);
+            return null;
         }
     }
 
@@ -301,6 +320,20 @@ class ShiprocketAdapter extends BaseCarrier {
                 const srOrderId = String(synced.id);
                 const shipmentId = this.extractShipmentId(synced);
 
+                // Shiprocket rejects AWB assignment on zero-weight orders. If
+                // the synced row carries no weight, confirm the fixed package
+                // really landed before asking for an AWB — otherwise fail with
+                // an actionable message instead of the cryptic API rejection.
+                if (!(Number(synced.weight) > 0)) {
+                    const weightNow = await this.verifyOrderWeight(headers, srOrderId);
+                    if (weightNow !== null && weightNow <= 0) {
+                        return this.fail(
+                            `Synced Shopify-channel order ${synced.channel_order_id} has zero weight at Shiprocket and the package update did not take. ` +
+                            `Add a weight to the order in the Shiprocket panel (or to the Shopify product), then retry shipping.`
+                        );
+                    }
+                }
+
                 // Already carries an AWB (Shiprocket auto-allocation) — nothing to create
                 if (synced.awb_code) {
                     console.log(`📦 Shiprocket: reusing synced Shopify-channel order ${synced.channel_order_id} (existing AWB ${synced.awb_code})`);
@@ -321,13 +354,33 @@ class ShiprocketAdapter extends BaseCarrier {
                 if (ctx.courierId && ctx.courierId !== 'auto') awbBody.courier_id = ctx.courierId;
 
                 let awbRes;
-                try {
-                    awbRes = await axios.post(`${this.baseURL}/courier/assign/awb`, awbBody, { headers, timeout: 30000 });
-                } catch (awbError) {
-                    return this.fail(
-                        `Synced Shopify-channel order ${synced.channel_order_id} found, but AWB assignment failed: ${this.describeAxiosError(awbError)}`,
-                        { order: synced, awbError: awbError.response?.data }
-                    );
+                let awbError = null;
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                    try {
+                        awbRes = await axios.post(`${this.baseURL}/courier/assign/awb`, awbBody, { headers, timeout: 30000 });
+                        awbError = null;
+                        break;
+                    } catch (error) {
+                        awbError = error;
+                        // "Zero weight or no weight entered." — the weight update
+                        // didn't land. Force the fixed package once more, confirm
+                        // Shiprocket now sees a weight, then retry the AWB once.
+                        const detail = JSON.stringify(error.response?.data || error.message || '').toLowerCase();
+                        if (attempt === 1 && /weight/.test(detail)) {
+                            await this.enforceFixedPackage(headers, { ...synced, weight: 0 }, ctx);
+                            const weightNow = await this.verifyOrderWeight(headers, srOrderId);
+                            if (weightNow && weightNow > 0) continue;
+                        }
+                        break;
+                    }
+                }
+                if (awbError) {
+                    const detail = JSON.stringify(awbError.response?.data || awbError.message || '').toLowerCase();
+                    const message = /weight/.test(detail)
+                        ? `Synced Shopify-channel order ${synced.channel_order_id} has zero weight at Shiprocket and it could not be updated via the API. ` +
+                          `Add a weight to the order in the Shiprocket panel (or to the Shopify product), then retry shipping.`
+                        : `Synced Shopify-channel order ${synced.channel_order_id} found, but AWB assignment failed: ${this.describeAxiosError(awbError)}`;
+                    return this.fail(message, { order: synced, awbError: awbError.response?.data });
                 }
 
                 const awbData = awbRes.data?.response?.data || awbRes.data?.data || {};

@@ -108,6 +108,12 @@
 
     // ── Init ──
     function initApp() {
+        // Logout — clears the shared admin session and returns to login
+        document.getElementById('copilotLogoutBtn')?.addEventListener('click', () => {
+            localStorage.removeItem('authToken');
+            CP.token = null;
+            window.location.reload();
+        });
         // Nav clicks
         document.querySelectorAll('.nav-btn[data-section]').forEach(btn => {
             btn.addEventListener('click', () => switchSection(btn.dataset.section));

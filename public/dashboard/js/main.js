@@ -33,8 +33,9 @@ function setupEventListeners() {
     // Login
     document.getElementById('loginForm')?.addEventListener('submit', handleLogin);
 
-    // Logout
+    // Logout — sidebar button and the always-visible header button
     document.getElementById('logoutBtn')?.addEventListener('click', handleLogout);
+    document.getElementById('headerLogoutBtn')?.addEventListener('click', handleLogout);
 
     // Navigation
     document.querySelectorAll('.nav-item').forEach(item => {

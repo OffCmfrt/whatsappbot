@@ -87,6 +87,17 @@ function applyRolePermissions() {
     const teamBtn = document.getElementById('teamBtn');
     if (teamBtn) teamBtn.style.display = isAdmin ? 'inline-flex' : 'none';
 
+    // Logout — clears the session for both admin and operator accounts
+    const logoutBtn = document.getElementById('hubLogoutBtn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', () => {
+            if (!confirm('Log out of Shoppers Hub?')) return;
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('hubIdentity');
+            window.location.reload();
+        });
+    }
+
     // CSS-level hiding of row/bulk actions the operator can't perform
     let css = '';
     if (!hubHasPerm('edit_orders')) {

@@ -174,8 +174,11 @@ router.post('/shoppers/auth', async (req, res) => {
         const expected = (expectedPassword || '').toString().trim();
 
         if (submitted === expected) {
+            // credFp ties the session to the current SHOPPERS_HUB_PASSWORD so
+            // changing it in the environment instantly invalidates old sessions
+            const { hubCredentialFingerprint } = require('../middleware/auth');
             const token = jwt.sign(
-                { username: 'shopper_admin', role: 'admin' },
+                { username: 'shopper_admin', role: 'admin', credFp: hubCredentialFingerprint() },
                 secret,
                 { expiresIn: '24h' }
             );

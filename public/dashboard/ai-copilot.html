@@ -56,6 +56,12 @@
         .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
         .sidebar-footer a { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; padding: 8px 12px; border-radius: var(--radius-sm); }
         .sidebar-footer a:hover { background: var(--bg-input); color: var(--text-primary); }
+        .sidebar-footer button {
+            display: flex; align-items: center; gap: 8px; width: 100%; color: var(--text-secondary);
+            font-size: 13px; padding: 8px 12px; border-radius: var(--radius-sm);
+            background: transparent; border: none; font-family: inherit; margin-top: 4px;
+        }
+        .sidebar-footer button:hover { background: rgba(239,68,68,.12); color: var(--danger); }
 
         /* ── Main area ── */
         .copilot-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -192,6 +198,10 @@
                 <div class="topbar-right">
                     <span class="topbar-badge" id="modelBadge">AI</span>
                     <span class="topbar-usage" id="usageBadge"></span>
+                    <button id="copilotLogoutBtn" title="Log out of AI Copilot Pro" style="display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--border);color:var(--text-muted);font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                        Logout
+                    </button>
                 </div>
             </div>
             <div class="copilot-content">

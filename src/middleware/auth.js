@@ -1,4 +1,38 @@
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+
+// ============================================================
+// CREDENTIAL FINGERPRINTS — changing ADMIN_PASSWORD or
+// SHOPPERS_HUB_PASSWORD in the environment instantly invalidates
+// every previously issued admin JWT (tokens embed the fingerprint
+// that was current at login time). No token blocklist needed.
+// ============================================================
+function adminCredentialFingerprint() {
+    return crypto.createHash('sha256')
+        .update(`admin-login|${process.env.ADMIN_USERNAME || ''}|${process.env.ADMIN_PASSWORD || ''}`)
+        .digest('hex').slice(0, 16);
+}
+
+function hubCredentialFingerprint() {
+    return crypto.createHash('sha256')
+        .update(`shoppers-hub|${process.env.SHOPPERS_HUB_PASSWORD || ''}`)
+        .digest('hex').slice(0, 16);
+}
+
+// Verify a JWT and enforce credential-fingerprint checks for admin tokens.
+// Throws on any failure so callers can return a single 401 path.
+function verifyJwtOrThrow(token) {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.role === 'admin') {
+        const current = [adminCredentialFingerprint(), hubCredentialFingerprint()];
+        if (!decoded.credFp || !current.includes(decoded.credFp)) {
+            const err = new Error('Credentials changed');
+            err.sessionExpired = true;
+            throw err;
+        }
+    }
+    return decoded;
+}
 
 // ============================================================
 // PERMISSION CATALOG — single source of truth for the smart
@@ -37,11 +71,13 @@ function verifyToken(req, res, next) {
     }
 
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.admin = decoded;
+        req.admin = verifyJwtOrThrow(token);
         next();
     } catch (error) {
-        return res.status(401).json({ error: 'Invalid token.' });
+        const message = error.sessionExpired
+            ? 'Session expired. Password was changed — please log in again.'
+            : 'Invalid token.';
+        return res.status(401).json({ error: message });
     }
 }
 
@@ -103,9 +139,12 @@ function permissionGate(req, res, next) {
         const token = req.headers['authorization']?.split(' ')[1];
         if (!token) return res.status(401).json({ error: 'Access denied. No token provided.' });
         try {
-            req.admin = jwt.verify(token, process.env.JWT_SECRET);
+            req.admin = verifyJwtOrThrow(token);
         } catch (error) {
-            return res.status(401).json({ error: 'Invalid token.' });
+            const message = error.sessionExpired
+                ? 'Session expired. Password was changed — please log in again.'
+                : 'Invalid token.';
+            return res.status(401).json({ error: message });
         }
     }
 
@@ -150,6 +189,8 @@ module.exports = {
     permissionGate,
     hasPermission,
     logOperatorActivity,
+    adminCredentialFingerprint,
+    hubCredentialFingerprint,
     PERMISSIONS,
     ALL_PERMISSION_KEYS
 };
