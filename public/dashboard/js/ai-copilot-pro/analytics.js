@@ -456,6 +456,8 @@
     }
 
     async function loadLiveData() {
+        // Skip refresh when the tab is hidden to save DB egress
+        if (document.hidden) return;
         try {
             const data = await CP.apiFetch('/ai/live');
             document.getElementById('liveOpenTickets').textContent = data.openTickets || 0;

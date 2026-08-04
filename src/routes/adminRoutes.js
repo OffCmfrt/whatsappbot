@@ -305,9 +305,9 @@ router.get('/customers/:phone/all-orders', verifyToken, async (req, res) => {
         
         console.log(`[ALL ORDERS] Fetching all-time orders from database for: ${phone}`);
         
-        // Fetch ALL orders from database (no limit)
+        // Capped at 50 most recent orders to bound DB egress (chat sidebar use)
         const orders = await dbAdapter.query(
-            'SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC',
+            'SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC LIMIT 50',
             [phone]
         );
         
@@ -355,7 +355,8 @@ router.get('/messages', verifyToken, async (req, res) => {
         let msgs = [];
         const safeLimit = Math.min(parseInt(limit) || 100, 500);
         const safeOffset = Math.max(0, parseInt(offset) || 0);
-        msgs = await dbAdapter.query('SELECT * FROM messages ORDER BY created_at DESC LIMIT ? OFFSET ?', [safeLimit, safeOffset]);
+        // Only select columns the dashboard table renders (drops status/wa_message_id to cut DB egress)
+        msgs = await dbAdapter.query('SELECT id, customer_phone, message_type, message_content, created_at FROM messages ORDER BY created_at DESC LIMIT ? OFFSET ?', [safeLimit, safeOffset]);
         res.json({ success: true, messages: msgs });
     } catch (error) {
         console.error('Messages error:', error);

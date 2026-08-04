@@ -475,9 +475,9 @@ router.get('/:slug/customers/:phone/all-orders', verifyPortalToken, async (req, 
         
         console.log(`[PORTAL ALL ORDERS] Fetching all-time orders from database for: ${phone}`);
         
-        // Fetch ALL orders from database (no limit)
+        // Capped at 50 most recent orders to bound DB egress (portal history use)
         const orders = await dbAdapter.query(
-            'SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC',
+            'SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC LIMIT 50',
             [phone]
         );
         

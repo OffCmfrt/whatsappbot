@@ -2896,6 +2896,8 @@ async function openSupportChat(ticketId, phone, name, status) {
     if (supportChatPollingInterval) clearInterval(supportChatPollingInterval);
     supportChatPollingInterval = setInterval(async () => {
         if (!currentSupportChatPhone) return;
+        // Skip polling when the tab is hidden to save DB egress
+        if (document.hidden) return;
         try {
             const data = await apiCall(`/chat/${currentSupportChatPhone}`);
             if (data && data.success) {
@@ -2904,7 +2906,7 @@ async function openSupportChat(ticketId, phone, name, status) {
         } catch (err) {
             // Silently fail on polling errors
         }
-    }, 15000); // Poll every 15 seconds (reduced from 8s to save DB reads)
+    }, 30000); // Poll every 30 seconds (reduced from 15s to save DB reads/egress)
     
     try {
         const data = await apiCall(`/chat/${phone}`);
