@@ -9,7 +9,10 @@
  *
  * Endpoints used:
  *   Serviceability : GET  /c/api/pin-codes/json/?filter_codes={pin}
- *   Create (CMU)   : POST /api/cmu/create.json  (body: format=json&data={...})
+ *   Reuse synced   : GET  /api/v1/packages/json/?ref_ids={order id}
+ *                    (Shopify-integrated orders are already synced to the
+ *                    Delhivery panel under the Shopify channel — we only
+ *                    reuse their waybill, never create a duplicate via CMU)
  *   Packing slip   : GET  /api/p/packing_slip?wbns={awb}&pdf=true
  *   Pickup request : POST /fm/request/new/
  *   Cancel         : POST /api/p/edit  ({ waybill, cancellation: 'true' })
@@ -96,76 +99,82 @@ class DelhiveryAdapter extends BaseCarrier {
         }
     }
 
-    // Create shipment via CMU API — returns waybill (AWB) directly
-    async createShipment(ctx) {
-        try {
-            const pin = this.normalizePincode(ctx.consignee.pincode);
-            if (!pin) return this.fail('Invalid delivery pincode (must be 6 digits)');
+    // Find the order Delhivery already synced from the Shopify channel.
+    // Best-effort lookup by client reference (= our order id); package list
+    // shape varies by account tier, so several field spellings are tried.
+    async findSyncedOrder(orderId) {
+        const bare = String(orderId).replace(/^#/, '').trim();
+        const normalize = v => String(v ?? '').replace(/^#/, '').trim().toLowerCase();
 
-            const isCod = ctx.payment.mode === 'COD';
-            const productsDesc = this.formatProductsDesc(ctx.items);
-            const totalQty = ctx.items.reduce((sum, i) => sum + (i.quantity || 1), 0) || 1;
+        for (const candidate of [...new Set([bare, `#${bare}`])]) {
+            try {
+                const response = await axios.get(`${this.baseURL}/api/v1/packages/json/`, {
+                    headers: this.authHeaders(),
+                    params: { ref_ids: candidate, size: 10 },
+                    timeout: 20000
+                });
 
-            const cmuPayload = {
-                shipments: [{
-                    name: ctx.consignee.name,
-                    add: ctx.consignee.address,
-                    city: ctx.consignee.city || '',
-                    state: ctx.consignee.state || '',
-                    country: ctx.consignee.country || 'India',
-                    pin: pin,
-                    phone: this.normalizePhone(ctx.consignee.phone),
-                    order: ctx.orderId,
-                    payment_mode: isCod ? 'COD' : 'Prepaid',
-                    cod_amount: isCod ? String(ctx.payment.codAmount || 0) : '0',
-                    total_amount: String(ctx.payment.declaredValue || 0),
-                    products_desc: productsDesc,
-                    quantity: String(totalQty),
-                    weight: String(ctx.package.weightGrams || 500),
-                    shipment_length: String(ctx.package.lengthCm || 30),
-                    shipment_width: String(ctx.package.breadthCm || 40),
-                    shipment_height: String(ctx.package.heightCm || 2)
-                }],
-                pickup_location: {
-                    name: process.env.DELHIVERY_PICKUP_LOCATION
-                }
-            };
+                const pkgs = response.data?.ShipmentData || response.data?.shipments || [];
+                const list = (Array.isArray(pkgs) ? pkgs : [pkgs]).filter(Boolean);
 
-            // Delhivery CMU expects a form-encoded body: format=json&data=<json>
-            // (URLSearchParams also escapes &/+/# inside addresses & product names)
-            const body = new URLSearchParams({
-                format: 'json',
-                data: JSON.stringify(cmuPayload)
-            });
+                // Skip closed packages (cancelled ones especially — a re-ship
+                // must never resurrect the old waybill)
+                const isClosed = p => /cancel/i.test(String(p?.status || p?.Shipment?.Status?.Status || ''));
+                const open = list.filter(p => !isClosed(p));
 
-            const response = await axios.post(`${this.baseURL}/api/cmu/create.json`, body.toString(), {
-                headers: {
-                    ...this.authHeaders(),
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                timeout: 30000
-            });
+                // Prefer an exact reference match; when the tier's payload
+                // carries no ref field, accept the hit (the search was
+                // already scoped to this reference)
+                const match = (open.length ? open : list).find(p => {
+                    const ref = p?.refnum || p?.RefNum || p?.client_reference_number ||
+                        p?.Shipment?.refnum || p?.Shipment?.RefNum;
+                    return !ref || normalize(ref) === normalize(bare);
+                });
+                if (!match) continue;
 
-            const pkg = response.data?.packages?.[0];
-            if (!pkg || (pkg.status && pkg.status.toLowerCase() !== 'success') || !pkg.waybill) {
-                const remarks = pkg?.remarks
-                    ? (Array.isArray(pkg.remarks) ? pkg.remarks.join('; ') : pkg.remarks)
-                    : (response.data?.rmk || 'Unknown Delhivery error');
-                return this.fail(`Delhivery shipment creation failed: ${remarks}`, response.data);
+                const awb = match.waybill || match.Waybill ||
+                    match.Shipment?.Waybill || match.Shipment?.waybill;
+                return { awb: awb ? String(awb) : null, raw: match };
+            } catch (error) {
+                console.warn(`⚠️ Delhivery: synced-order lookup for "${candidate}" failed (${this.describeAxiosError(error)})`);
             }
-
-            return this.ok({
-                awb: pkg.waybill,
-                courierName: 'Delhivery',
-                carrierShipmentId: pkg.waybill,
-                carrierOrderId: pkg.refnum || ctx.orderId,
-                freightCharge: null,
-                trackingUrl: `https://www.delhivery.com/track/package/${pkg.waybill}`,
-                requestPayload: cmuPayload
-            }, response.data);
-        } catch (error) {
-            return this.fail(`Delhivery shipment creation failed: ${this.describeAxiosError(error)}`, error.response?.data);
         }
+        return null;
+    }
+
+    // Ship orders ONLY via the Shopify channel — i.e. the order Delhivery
+    // already synced from the Shopify integration. Direct CMU creation is
+    // disabled: it files orders outside the Shopify channel and duplicates
+    // anything the integration has already synced.
+    async createShipment(ctx) {
+        // --- Route 1: reuse the order Delhivery synced from Shopify ---
+        const synced = await this.findSyncedOrder(ctx.orderId);
+
+        if (synced?.awb) {
+            console.log(`📦 Delhivery: reusing Shopify-synced order ${ctx.orderId} (existing waybill ${synced.awb})`);
+            return this.ok({
+                awb: synced.awb,
+                courierName: 'Delhivery',
+                carrierShipmentId: synced.awb,
+                carrierOrderId: ctx.orderId,
+                freightCharge: null,
+                trackingUrl: `https://www.delhivery.com/track/package/${synced.awb}`,
+                reusedSyncedOrder: true,
+                requestPayload: { orderId: ctx.orderId, source: 'shopify_synced_order' }
+            }, synced.raw);
+        }
+
+        if (synced) {
+            return this.fail(
+                `Order ${ctx.orderId} exists at Delhivery but has no waybill yet — generate the shipment in the Delhivery panel, then ship again.`
+            );
+        }
+
+        // --- Not synced: refuse instead of creating directly (CMU disabled) ---
+        return this.fail(
+            `Order ${ctx.orderId} was not found at Delhivery. Delhivery ships only under the Shopify channel — ` +
+            'the order must be synced via the Shopify–Delhivery integration first (direct CMU creation is disabled).'
+        );
     }
 
     // Packing slip / label PDF link (4R = 4x6 inch thermal label format)
