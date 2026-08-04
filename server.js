@@ -124,6 +124,10 @@ app.use('/portal/support', express.static(path.join(__dirname, 'public', 'portal
 // Admin API routes
 app.use('/api/admin', adminRoutes);
 
+// Smart login — operator/team management routes (admin only)
+const operatorRoutes = require('./src/routes/operatorRoutes');
+app.use('/api/admin', operatorRoutes);
+
 // Support Portal Public API routes
 const portalRoutes = require('./src/routes/portalRoutes');
 app.use('/api/portal', portalRoutes);

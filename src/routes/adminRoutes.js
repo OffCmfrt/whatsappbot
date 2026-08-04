@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, requirePermission, permissionGate, logOperatorActivity } = require('../middleware/auth');
 const Customer = require('../models/Customer');
 const Order = require('../models/Order');
 const Settings = require('../models/Settings');
@@ -75,6 +75,11 @@ router.post('/login', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
+
+// SMART LOGIN: route-level permission gate for operators.
+// Master admin passes everything; operators are checked against the
+// page/function permissions embedded in their JWT (see ROUTE_PERMISSIONS).
+router.use(permissionGate);
 
 // Get dashboard statistics
 router.get('/stats', verifyToken, async (req, res) => {
@@ -1957,10 +1962,11 @@ router.get('/shoppers', verifyToken, async (req, res) => {
 });
 
 // Update shopper details (Manual Edit)
-router.put('/shoppers/:id', verifyToken, async (req, res) => {
+router.put('/shoppers/:id', verifyToken, requirePermission('edit_orders'), async (req, res) => {
     try {
         const { id } = req.params;
         const { name, phone, order_id, address, city, province, zip, items_json, order_total, delivery_type, payment_method } = req.body;
+        logOperatorActivity(req, 'shopper_edit', `Edited shopper ${id}${name ? ` (name: ${name})` : ''}`);
 
         // Load the current row first so we can diff for the Shopify sync below
         const existingRows = await dbAdapter.select('store_shoppers', { id }, { limit: 1 });
@@ -2110,7 +2116,7 @@ router.get('/shopify/products', verifyToken, async (req, res) => {
 });
 
 // Update shopper status manually (Confirm/Reject)
-router.post('/shoppers/:id/status', verifyToken, async (req, res) => {
+router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'), async (req, res) => {
     try {
         const { id } = req.params;
         const { status } = req.body;
@@ -2118,6 +2124,7 @@ router.post('/shoppers/:id/status', verifyToken, async (req, res) => {
         if (!['pending', 'confirmed', 'cancelled', 'edit_details'].includes(status)) {
             return res.status(400).json({ error: 'Invalid status' });
         }
+        logOperatorActivity(req, 'status_update', `Shopper ${id} → ${status}`);
 
         const updateData = { 
             status, 
@@ -2169,12 +2176,13 @@ router.post('/shoppers/:id/status', verifyToken, async (req, res) => {
 });
 
 // Bulk delete shoppers
-router.delete('/shoppers/bulk', verifyToken, async (req, res) => {
+router.delete('/shoppers/bulk', verifyToken, requirePermission('edit_orders'), async (req, res) => {
     try {
         const { ids } = req.body;
         if (!ids || !Array.isArray(ids) || ids.length === 0) {
             return res.status(400).json({ error: 'No IDs provided' });
         }
+        logOperatorActivity(req, 'shopper_delete', `Bulk deleted ${ids.length} shoppers`);
 
         const placeholders = ids.map(() => '?').join(',');
         const sql = `DELETE FROM store_shoppers WHERE id IN (${placeholders})`;
@@ -2389,9 +2397,10 @@ router.get('/shoppers/multi-orders', verifyToken, async (req, res) => {
 });
 
 // Export shoppers to Excel
-router.get('/shoppers/export', verifyToken, async (req, res) => {
+router.get('/shoppers/export', verifyToken, requirePermission('export'), async (req, res) => {
     try {
         const { status, search, startDate, endDate, orderIdFrom, orderIdTo, format = 'xlsx', exportType } = req.query;
+        logOperatorActivity(req, 'export', `Shoppers export (status: ${status || 'all'}, format: ${format})`);
         
         let whereClause = 'WHERE 1=1';
         const params = [];
@@ -2545,9 +2554,10 @@ router.get('/shoppers/export', verifyToken, async (req, res) => {
 });
 
 // Inbox Export - export orders/messages from inbox with filters
-router.get('/inbox/export', verifyToken, async (req, res) => {
+router.get('/inbox/export', verifyToken, requirePermission('export'), async (req, res) => {
     try {
         const { tab = 'confirmed', startDate, endDate, confirmedBy, paymentMethod, deliveryType, search, format = 'xlsx', orderIds, dateField = 'updated_at' } = req.query;
+        logOperatorActivity(req, 'export', `Inbox export (tab: ${tab}, format: ${format})`);
 
         // Validate dateField
         const validDateFields = ['created_at', 'updated_at'];
@@ -2881,13 +2891,14 @@ router.get('/chat/:phone', verifyToken, async (req, res) => {
 });
 
 // Send manual reply to customer
-router.post('/chat/send', verifyToken, async (req, res) => {
+router.post('/chat/send', verifyToken, requirePermission('send_messages'), async (req, res) => {
     try {
         const { phone, message, type = 'text', suggestedText = null } = req.body;
         
         if (!phone || !message) {
             return res.status(400).json({ error: 'Phone and message are required' });
         }
+        logOperatorActivity(req, 'chat_message', `Sent ${type} message to ${phone}`);
         
         // Normalize phone number
         const cleanPhone = phone.replace(/\D/g, '');
@@ -3400,6 +3411,7 @@ router.post('/follow-up/campaigns/:id/send', verifyToken, async (req, res) => {
         if (isNaN(campaignId)) {
             return res.status(400).json({ error: 'Invalid campaign ID' });
         }
+        logOperatorActivity(req, 'followup_send', `Sent follow-up campaign ${campaignId}`);
         
         const result = await followUpService.sendCampaign(campaignId);
         
@@ -4671,10 +4683,11 @@ router.post('/shipping/serviceability', verifyToken, async (req, res) => {
 // Create shipment (idempotent — 409 if an active shipment exists).
 // Re-ship: reshipOfShipmentId + reshipReason link the new shipment to the one
 // it replaces (audit trail + replacement-worded WhatsApp notification).
-router.post('/shipping/ship', verifyToken, async (req, res) => {
+router.post('/shipping/ship', verifyToken, requirePermission('ship_orders'), async (req, res) => {
     try {
         const { shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer, reshipOfShipmentId, reshipReason } = req.body;
         if (!shopperId || !carrier) return res.status(400).json({ success: false, error: 'shopperId and carrier are required' });
+        logOperatorActivity(req, 'ship_order', `Shipped shopper ${shopperId} via ${carrier}`);
 
         const result = await shippingService.ship({
             shopperId,
@@ -4683,7 +4696,7 @@ router.post('/shipping/ship', verifyToken, async (req, res) => {
             packageOverrides,
             consigneeOverrides,
             notifyCustomer: Boolean(notifyCustomer),
-            shippedBy: req.user?.username || 'admin',
+            shippedBy: req.admin?.username || 'admin',
             reshipOfShipmentId: reshipOfShipmentId ? parseInt(reshipOfShipmentId) : null,
             reshipReason: reshipReason ? String(reshipReason).substring(0, 300) : null
         });
@@ -4774,8 +4787,9 @@ router.get('/shipping/shipments/:id/label', verifyToken, async (req, res) => {
 // force=true closes the shipment locally even when the carrier refuses (already
 // delivered/RTO/lost) so the order can be re-shipped — the reason is returned as
 // a warning and stored on the shipment row.
-router.post('/shipping/shipments/:id/cancel', verifyToken, async (req, res) => {
+router.post('/shipping/shipments/:id/cancel', verifyToken, requirePermission('ship_orders'), async (req, res) => {
     try {
+        logOperatorActivity(req, 'shipment_cancel', `Cancelled shipment ${req.params.id}${req.body?.force ? ' (forced)' : ''}`);
         const result = await shippingService.cancelShipment(req.params.id, { force: Boolean(req.body?.force) });
         if (result.error) {
             return res.status(result.status || 500).json({

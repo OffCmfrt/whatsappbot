@@ -225,6 +225,9 @@ async function initializeDatabase() {
     // Initialize Shipments Table (Shopper Hub shipping module)
     await initializeShipmentsTable();
     
+    // Initialize Hub Operators Table (smart login: operator accounts + permissions)
+    await initializeHubOperatorsTable();
+    
     // Initialize AI Copilot Tables (pending actions, chat history, usage log)
     await initializeAiTables();
     
@@ -578,6 +581,45 @@ async function initializeShipmentsTable() {
     console.log('✅ Shipments table initialized');
   } catch (error) {
     console.error('❌ Failed to initialize shipments table:', error.message);
+  }
+}
+
+async function initializeHubOperatorsTable() {
+  try {
+    // Operator accounts for Shoppers Hub smart login (admin-created, role-scoped)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hub_operators (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) UNIQUE NOT NULL,
+        name VARCHAR(255),
+        password_hash TEXT NOT NULL,
+        permissions JSONB NOT NULL DEFAULT '[]',
+        is_active BOOLEAN DEFAULT TRUE,
+        last_login_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_hub_operators_username ON hub_operators(username)');
+
+    // Activity log: every operator action the admin wants to audit
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hub_operator_activity (
+        id SERIAL PRIMARY KEY,
+        operator_id INTEGER,
+        username VARCHAR(100),
+        action VARCHAR(100) NOT NULL,
+        detail TEXT,
+        ip VARCHAR(64),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_hub_operator_activity_op_created ON hub_operator_activity(operator_id, created_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_hub_operator_activity_created ON hub_operator_activity(created_at DESC)');
+
+    console.log('✅ Hub operators tables initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize hub operators tables:', error.message);
   }
 }
 

@@ -16,6 +16,99 @@ if (tokenFromUrl) {
 
 const authToken = localStorage.getItem('authToken');
 
+// ============================================================
+// SMART LOGIN — identity & permissions
+// Identity is decoded from the JWT; admins have every permission,
+// operators only what the admin granted in Team & Permissions.
+// ============================================================
+function decodeJwtPayload(token) {
+    try {
+        const part = token.split('.')[1];
+        return JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
+    } catch (e) { return null; }
+}
+
+function getHubIdentity() {
+    const cached = localStorage.getItem('hubIdentity');
+    if (cached) { try { return JSON.parse(cached); } catch (e) { /* fall through */ } }
+    const payload = decodeJwtPayload(authToken || localStorage.getItem('authToken') || '');
+    if (!payload) return { role: 'admin', username: 'admin', permissions: [] };
+    const identity = {
+        role: payload.role || 'admin',
+        username: payload.username || 'operator',
+        name: payload.name || payload.username || 'operator',
+        permissions: Array.isArray(payload.permissions) ? payload.permissions : []
+    };
+    localStorage.setItem('hubIdentity', JSON.stringify(identity));
+    return identity;
+}
+
+const HUB_ALL_PERMS = ['shoppers', 'inbox', 'follow_up', 'multi_orders', 'shipped', 'analytics', 'export', 'edit_orders', 'send_messages', 'ship_orders', 'ai_copilot'];
+
+function hubHasPerm(key) {
+    const identity = getHubIdentity();
+    if (identity.role === 'admin') return true;
+    return (identity.permissions || []).includes(key);
+}
+
+function hubRequirePerm(key, label) {
+    if (hubHasPerm(key)) return true;
+    alert(`You don't have permission to ${label || 'perform this action'}. Contact the admin.`);
+    return false;
+}
+
+// Hide UI entry points the operator is not allowed to use (backend enforces too)
+function applyRolePermissions() {
+    const identity = getHubIdentity();
+    const isAdmin = identity.role === 'admin';
+
+    // User badge in the nav bar
+    const badge = document.getElementById('hubUserBadge');
+    if (badge) {
+        badge.textContent = `${isAdmin ? '👑 Admin' : '👤 ' + (identity.name || identity.username)}`;
+        badge.style.display = 'inline-block';
+    }
+
+    // Nav buttons ↔ page permissions
+    const navPermMap = {
+        inboxBtn: 'inbox',
+        followUpBtn: 'follow_up',
+        multiOrdersBtn: 'multi_orders',
+        shippedOrdersBtn: 'shipped',
+        analyticsBtn: 'analytics',
+        exportBtn: 'export'
+    };
+    Object.entries(navPermMap).forEach(([id, perm]) => {
+        const el = document.getElementById(id);
+        if (el && !hubHasPerm(perm)) el.style.display = 'none';
+    });
+
+    // Team button — master admin only
+    const teamBtn = document.getElementById('teamBtn');
+    if (teamBtn) teamBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+
+    // CSS-level hiding of row/bulk actions the operator can't perform
+    let css = '';
+    if (!hubHasPerm('edit_orders')) {
+        css += `.btn-text-edit, button[onclick^="openEditModal"], button[onclick^="bulkUpdateStatus"], #bulkDeleteBtn, .bulk-btn-delete { display: none !important; }`;
+    }
+    if (!hubHasPerm('send_messages')) {
+        css += `#sendChatBtn, .btn-chat[onclick^="openChat"] { display: none !important; }`;
+    }
+    if (!hubHasPerm('ship_orders')) {
+        css += `button[onclick^="openShipModal"], button[onclick^="openBulkShipModal"] { display: none !important; }`;
+    }
+    if (css) {
+        let styleEl = document.getElementById('permHideStyles');
+        if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = 'permHideStyles';
+            document.head.appendChild(styleEl);
+        }
+        styleEl.textContent = css;
+    }
+}
+
 // Pagination & State
 let currentStatus = 'all';
 let currentPageOffset = 0;
@@ -82,18 +175,22 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('followUpView').style.display = 'none';
             const soView = document.getElementById('shippedOrdersView');
             if (soView) soView.style.display = 'none';
+            const teamViewEl = document.getElementById('teamView');
+            if (teamViewEl) teamViewEl.style.display = 'none';
             setupLoginEvents();
             return;
         }
 
         document.getElementById('loginView').style.display = 'none';
         document.getElementById('dashboardView').style.display = 'block';
+        applyRolePermissions();
         setupEventListeners();
         setupModalEvents();
         setupChatEvents();
-        fetchShoppersData();
-        fetchAnalytics();
-        fetchInboxCounts();
+        // Smart login: only load data for pages this identity may access
+        if (hubHasPerm('shoppers')) fetchShoppersData();
+        if (hubHasPerm('analytics')) fetchAnalytics();
+        if (hubHasPerm('inbox')) fetchInboxCounts();
         console.log('✅ Dashboard Initialized Successfully');
     } catch (e) {
         console.error('❌ Dashboard Init Failed:', e);
@@ -107,6 +204,7 @@ function setupLoginEvents() {
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const input = document.getElementById('hubPassword');
+        const usernameInput = document.getElementById('hubUsername');
         const btn = document.querySelector('#shopperLoginForm .btn-primary span');
         const err = document.getElementById('errorMessage');
         
@@ -114,15 +212,25 @@ function setupLoginEvents() {
         err.style.display = 'none';
         
         try {
+            // Smart login: Operator ID + password, or blank ID + master access code
+            localStorage.removeItem('hubIdentity'); // never carry a stale identity
             const res = await fetch('https://whatsappbot-4l4b.onrender.com/api/internal/shoppers/auth', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password: input.value })
+                body: JSON.stringify({
+                    username: usernameInput ? usernameInput.value.trim() : '',
+                    password: input.value
+                })
             });
             const data = await res.json();
             
             if (data.success) {
                 localStorage.setItem('authToken', data.token);
+                // Cache identity so the UI can apply permissions instantly
+                const identity = data.role === 'operator'
+                    ? { role: 'operator', username: data.username, name: data.name, permissions: data.permissions || [] }
+                    : { role: 'admin', username: data.username || 'admin', name: 'Admin', permissions: HUB_ALL_PERMS };
+                localStorage.setItem('hubIdentity', JSON.stringify(identity));
                 window.location.reload();
             } else {
                 throw new Error(data.error || 'Invalid credentials');
@@ -715,10 +823,17 @@ async function apiCall(endpoint, method = 'GET', body = null) {
     const res = await fetch(`${API_BASE}${endpoint}`, options);
     console.log(`[API] Response status:`, res.status);
     
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
         console.error('[API] Auth failed, clearing token');
         localStorage.removeItem('authToken');
+        localStorage.removeItem('hubIdentity');
         window.location.reload();
+        return;
+    }
+    if (res.status === 403) {
+        // Smart login: permission denied — keep the session, notify only
+        console.warn('[API] Permission denied for', endpoint);
+        alert('You do not have permission to perform this action.');
         return;
     }
     return res.json();
@@ -2154,6 +2269,7 @@ async function selectAllMatching() {
 }
 
 async function bulkUpdateStatus(status) {
+    if (!hubRequirePerm('edit_orders', 'change shopper statuses')) return;
     if (selectedShoppers.size === 0) return;
     
     if (!confirm(`Are you sure you want to mark ${selectedShoppers.size} orders as ${status.toUpperCase()}?`)) {
@@ -2182,6 +2298,7 @@ async function bulkUpdateStatus(status) {
 }
 
 async function bulkDelete() {
+    if (!hubRequirePerm('edit_orders', 'delete shoppers')) return;
     if (selectedShoppers.size === 0) return;
     
     if (!confirm(`⚠️ WARNING: Are you sure you want to DELETE ${selectedShoppers.size} orders?\n\nThis action cannot be undone!`)) {
@@ -2450,6 +2567,7 @@ function renderCards(shoppers, total, append = false) {
 }
 
 function openEditModal(id, nameEnc, phone, orderId, addressEnc, itemsEnc, messageEnc, msgTime, paymentEnc, orderTotal) {
+    if (!hubRequirePerm('edit_orders', 'edit shopper details')) return;
     document.getElementById('editShopperId').value = id;
     document.getElementById('editName').value = nameEnc ? decodeURIComponent(nameEnc) : '';
     document.getElementById('editPhone').value = phone;
@@ -2784,6 +2902,7 @@ function renderChatMessages(messages) {
 }
 
 async function sendChatMessage() {
+    if (!hubRequirePerm('send_messages', 'send WhatsApp messages')) return;
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
     
@@ -3988,6 +4107,7 @@ function updateClearFiltersButton() {
 // Export Modal Functions
 // ==========================================
 function openExportModal() {
+    if (!hubRequirePerm('export', 'export data')) return;
     // Pre-fill with current filter values
     const exportModal = document.getElementById('exportModal');
     const exportDateRange = document.getElementById('exportDateRange');
@@ -4794,6 +4914,7 @@ async function loadShipCarriers(force = false) {
 // reshipCtx (optional) puts the wizard in re-ship mode:
 // { ofShipmentId, reason, prevCarrier, prevCourierName, prevAwb }
 async function openShipModal(shopperId, reshipCtx = null) {
+    if (!hubRequirePerm('ship_orders', 'ship orders')) return;
     shipState = {
         shopperId,
         step: 1,
@@ -5582,6 +5703,7 @@ async function reshipContinue(force = false) {
 let bulkShipRunning = false;
 
 async function openBulkShipModal() {
+    if (!hubRequirePerm('ship_orders', 'ship orders')) return;
     if (selectedShoppers.size === 0) { showShipToast('Select some orders first', true); return; }
 
     const eligible = allLoadedShoppers.filter(s =>
@@ -6174,3 +6296,317 @@ window.openSoNewShipModal = openSoNewShipModal;
 window.closeSoNewShipModal = closeSoNewShipModal;
 window.soShipFromLookup = soShipFromLookup;
 window.soViewShipmentsFromLookup = soViewShipmentsFromLookup;
+
+// ============================================================
+// SMART LOGIN — TEAM & PERMISSIONS (admin only)
+// Manage operator accounts, their permissions, and monitor
+// everything they do in the hub.
+// ============================================================
+let teamOperatorsCache = [];
+let teamPermCatalog = null;
+let teamEventsBound = false;
+
+function escapeHtml(str) {
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function teamApiFetch(path, method = 'GET', body = null) {
+    const token = localStorage.getItem('authToken');
+    const opts = {
+        method,
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(`${API_BASE}${path}`, opts);
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) { alert('Session expired — please log in again.'); location.reload(); throw new Error('unauthorized'); }
+    if (!res.ok || data.success === false) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+}
+
+function showTeamView() {
+    if (getHubIdentity().role !== 'admin') { alert('Team management is admin-only.'); return; }
+    document.getElementById('teamView').style.display = 'block';
+    loadTeamOperators();
+    loadTeamActivity();
+}
+
+function hideTeamView() {
+    document.getElementById('teamView').style.display = 'none';
+}
+
+function fmtTeamDate(ts) {
+    if (!ts) return 'never';
+    try { return new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }
+    catch (e) { return String(ts); }
+}
+
+function fmtRelative(ts) {
+    if (!ts) return '';
+    const diff = Date.now() - new Date(ts).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+}
+
+async function loadTeamOperators() {
+    const listEl = document.getElementById('operatorsList');
+    try {
+        const data = await teamApiFetch('/operators');
+        teamOperatorsCache = data.operators || [];
+        renderTeamOperators();
+        // Populate the activity filter dropdown
+        const sel = document.getElementById('activityOperatorFilter');
+        if (sel) {
+            const current = sel.value;
+            sel.innerHTML = '<option value="">All operators</option>' +
+                teamOperatorsCache.map(op => `<option value="${op.id}">${escapeHtml(op.name || op.username)}</option>`).join('');
+            sel.value = current;
+        }
+    } catch (err) {
+        listEl.innerHTML = `<div style="color:#ff4757; font-size:0.85rem;">Failed to load team: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function renderTeamOperators() {
+    const listEl = document.getElementById('operatorsList');
+    if (!listEl) return;
+    if (teamOperatorsCache.length === 0) {
+        listEl.innerHTML = `<div style="color:rgba(255,255,255,0.5); font-size:0.85rem; padding:1rem 0;">No operators yet. Click <strong>Add Operator</strong> to create the first login.</div>`;
+        return;
+    }
+    listEl.innerHTML = teamOperatorsCache.map(op => {
+        const initials = (op.name || op.username || '?').trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2);
+        const permChips = (op.permissions || []).map(p => `<span class="perm-chip">${escapeHtml(p.replace(/_/g, ' '))}</span>`).join('') || '<span style="font-size:0.68rem;color:rgba(255,255,255,0.35);">no permissions</span>';
+        return `
+        <div class="operator-row">
+            <div class="operator-avatar">${escapeHtml(initials)}</div>
+            <div class="operator-info">
+                <div class="operator-name">
+                    <span class="status-dot ${op.is_active ? 'active' : 'inactive'}"></span>
+                    ${escapeHtml(op.name || op.username)}
+                </div>
+                <div class="operator-meta">
+                    @${escapeHtml(op.username)} · ${op.actions_7d || 0} actions this week · last login: ${fmtTeamDate(op.last_login_at)}
+                </div>
+                <div class="operator-perms">${permChips}</div>
+            </div>
+            <div class="operator-actions">
+                <button class="op-btn" onclick="openTeamOperatorModal(${op.id})">Edit</button>
+                <button class="op-btn" onclick="openTeamResetPassword(${op.id})">Password</button>
+                <button class="op-btn" onclick="toggleTeamOperatorActive(${op.id}, ${!op.is_active})">${op.is_active ? 'Deactivate' : 'Activate'}</button>
+                <button class="op-btn" onclick="filterTeamActivity(${op.id})">Activity</button>
+                <button class="op-btn danger" onclick="deleteTeamOperator(${op.id})">Delete</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// Expose handlers for inline onclick buttons
+window.openTeamOperatorModal = openTeamOperatorModal;
+window.openTeamResetPassword = openTeamResetPassword;
+window.toggleTeamOperatorActive = toggleTeamOperatorActive;
+window.filterTeamActivity = filterTeamActivity;
+window.deleteTeamOperator = deleteTeamOperator;
+
+async function ensureTeamPermCatalog() {
+    if (teamPermCatalog) return teamPermCatalog;
+    const data = await teamApiFetch('/operators/permissions');
+    teamPermCatalog = data.permissions;
+    return teamPermCatalog;
+}
+
+function renderTeamPermCheckboxes(selected = []) {
+    const renderGroup = (items) => items.map(p => `
+        <label class="perm-check ${selected.includes(p.key) ? 'checked' : ''}">
+            <input type="checkbox" value="${p.key}" ${selected.includes(p.key) ? 'checked' : ''}
+                onchange="this.closest('.perm-check').classList.toggle('checked', this.checked)">
+            <span>
+                <span class="perm-label">${escapeHtml(p.label)}</span>
+                <div class="perm-desc">${escapeHtml(p.description)}</div>
+            </span>
+        </label>`).join('');
+    document.getElementById('opPagePerms').innerHTML = renderGroup(teamPermCatalog.pages);
+    document.getElementById('opFunctionPerms').innerHTML = renderGroup(teamPermCatalog.functions);
+}
+
+function getSelectedTeamPerms() {
+    return [...document.querySelectorAll('#opPagePerms input:checked, #opFunctionPerms input:checked')].map(i => i.value);
+}
+
+function setTeamModalMsg(text, type) {
+    const el = document.getElementById('operatorModalMsg');
+    el.textContent = text || '';
+    el.className = 'op-msg' + (text ? ` ${type}` : '');
+}
+
+async function openTeamOperatorModal(operatorId = null) {
+    try {
+        const catalog = await ensureTeamPermCatalog();
+        const op = operatorId ? teamOperatorsCache.find(o => o.id === operatorId) : null;
+
+        document.getElementById('operatorModalTitle').textContent = op ? `Edit @${op.username}` : 'Add Operator';
+        document.getElementById('opEditId').value = op ? op.id : '';
+        document.getElementById('opUsername').value = op ? op.username : '';
+        document.getElementById('opUsername').disabled = !!op; // IDs are immutable
+        document.getElementById('opName').value = op ? (op.name || '') : '';
+        document.getElementById('opPassword').value = '';
+        document.getElementById('opPasswordGroup').style.display = op ? 'none' : 'block';
+        document.getElementById('opPassword').required = !op;
+        renderTeamPermCheckboxes(op ? (op.permissions || []) : []);
+        setTeamModalMsg('', '');
+        document.getElementById('operatorModal').classList.add('open');
+        void catalog;
+    } catch (err) {
+        alert('Could not open operator form: ' + err.message);
+    }
+}
+
+function closeTeamOperatorModal() {
+    document.getElementById('operatorModal').classList.remove('open');
+}
+
+async function handleTeamOperatorSubmit(e) {
+    e.preventDefault();
+    const editId = document.getElementById('opEditId').value;
+    const username = document.getElementById('opUsername').value.trim();
+    const name = document.getElementById('opName').value.trim();
+    const password = document.getElementById('opPassword').value;
+    const permissions = getSelectedTeamPerms();
+
+    try {
+        if (editId) {
+            await teamApiFetch(`/operators/${editId}`, 'PUT', { name, permissions });
+            setTeamModalMsg('Operator updated successfully.', 'success');
+        } else {
+            await teamApiFetch('/operators', 'POST', { username, name, password, permissions });
+            setTeamModalMsg('Operator created — share the ID & password with them.', 'success');
+        }
+        setTimeout(() => { closeTeamOperatorModal(); loadTeamOperators(); loadTeamActivity(); }, 900);
+    } catch (err) {
+        setTeamModalMsg(err.message, 'error');
+    }
+}
+
+async function toggleTeamOperatorActive(operatorId, newActive) {
+    try {
+        await teamApiFetch(`/operators/${operatorId}`, 'PUT', { is_active: newActive });
+        loadTeamOperators();
+    } catch (err) { alert(err.message); }
+}
+
+async function deleteTeamOperator(operatorId) {
+    const op = teamOperatorsCache.find(o => o.id === operatorId);
+    if (!op) return;
+    if (!confirm(`Delete operator @${op.username}? They will lose access immediately. Their activity history is kept.`)) return;
+    try {
+        await teamApiFetch(`/operators/${operatorId}`, 'DELETE');
+        loadTeamOperators();
+        loadTeamActivity();
+    } catch (err) { alert(err.message); }
+}
+
+// Reset password modal
+let teamResetPasswordId = null;
+function openTeamResetPassword(operatorId) {
+    const op = teamOperatorsCache.find(o => o.id === operatorId);
+    if (!op) return;
+    teamResetPasswordId = operatorId;
+    document.getElementById('resetPasswordFor').textContent = `@${op.username}`;
+    document.getElementById('resetPasswordInput').value = '';
+    const msg = document.getElementById('resetPasswordMsg');
+    msg.textContent = ''; msg.className = 'op-msg';
+    const modal = document.getElementById('resetPasswordModal');
+    modal.style.display = 'flex';
+}
+
+function closeTeamResetPassword() {
+    document.getElementById('resetPasswordModal').style.display = 'none';
+    teamResetPasswordId = null;
+}
+
+async function confirmTeamResetPassword() {
+    const pw = document.getElementById('resetPasswordInput').value;
+    const msg = document.getElementById('resetPasswordMsg');
+    if (!pw || pw.length < 6) { msg.textContent = 'Password must be at least 6 characters.'; msg.className = 'op-msg error'; return; }
+    try {
+        await teamApiFetch(`/operators/${teamResetPasswordId}/reset-password`, 'POST', { password: pw });
+        msg.textContent = '✅ Password updated — share it with the operator now, it will not be shown again.';
+        msg.className = 'op-msg success';
+        setTimeout(closeTeamResetPassword, 2500);
+    } catch (err) {
+        msg.textContent = err.message; msg.className = 'op-msg error';
+    }
+}
+
+// Activity monitoring
+const TEAM_ACTION_LABELS = {
+    login: 'Logged in',
+    login_failed: 'Failed login attempt',
+    shopper_edit: 'Edited shopper',
+    status_update: 'Changed status',
+    shopper_delete: 'Deleted shoppers',
+    chat_message: 'Sent WhatsApp message',
+    export: 'Exported data',
+    ship_order: 'Shipped order',
+    shipment_cancel: 'Cancelled shipment',
+    followup_send: 'Sent follow-up campaign'
+};
+
+async function loadTeamActivity(operatorId = null) {
+    const feedEl = document.getElementById('activityFeed');
+    if (!feedEl) return;
+    try {
+        const qs = operatorId ? `?operatorId=${operatorId}&limit=150` : '?limit=150';
+        const data = await teamApiFetch(`/operators/activity${qs}`);
+        const rows = data.activity || [];
+        if (rows.length === 0) {
+            feedEl.innerHTML = '<div style="color:rgba(255,255,255,0.5); font-size:0.85rem; padding:1rem 0;">No activity recorded yet.</div>';
+            return;
+        }
+        feedEl.innerHTML = rows.map(a => `
+            <div class="activity-item">
+                <span class="activity-who">@${escapeHtml(a.username)}</span>
+                <span class="activity-action"> — ${escapeHtml(TEAM_ACTION_LABELS[a.action] || a.action)}</span>
+                ${a.detail ? `<div class="activity-detail">${escapeHtml(a.detail)}</div>` : ''}
+                <div class="activity-time">${fmtRelative(a.created_at)} · ${fmtTeamDate(a.created_at)}${a.ip ? ` · ${escapeHtml(a.ip)}` : ''}</div>
+            </div>`).join('');
+    } catch (err) {
+        feedEl.innerHTML = `<div style="color:#ff4757; font-size:0.85rem;">Failed to load activity: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function filterTeamActivity(operatorId) {
+    const sel = document.getElementById('activityOperatorFilter');
+    if (sel) sel.value = operatorId;
+    loadTeamActivity(operatorId);
+}
+
+function setupTeamEvents() {
+    if (teamEventsBound) return;
+    teamEventsBound = true;
+
+    document.getElementById('teamBtn')?.addEventListener('click', showTeamView);
+    document.getElementById('backToShoppersFromTeam')?.addEventListener('click', hideTeamView);
+    document.getElementById('createOperatorBtn')?.addEventListener('click', () => openTeamOperatorModal(null));
+    document.getElementById('cancelOperatorModal')?.addEventListener('click', closeTeamOperatorModal);
+    document.getElementById('operatorForm')?.addEventListener('submit', handleTeamOperatorSubmit);
+    document.getElementById('cancelResetPassword')?.addEventListener('click', closeTeamResetPassword);
+    document.getElementById('confirmResetPassword')?.addEventListener('click', confirmTeamResetPassword);
+    document.getElementById('activityOperatorFilter')?.addEventListener('change', (e) => {
+        loadTeamActivity(e.target.value ? parseInt(e.target.value) : null);
+    });
+    // Close modals on backdrop click
+    document.getElementById('operatorModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'operatorModal') closeTeamOperatorModal();
+    });
+    document.getElementById('resetPasswordModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'resetPasswordModal') closeTeamResetPassword();
+    });
+}
+setupTeamEvents();
