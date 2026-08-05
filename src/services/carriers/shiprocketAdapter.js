@@ -275,6 +275,53 @@ class ShiprocketAdapter extends BaseCarrier {
         return sid ? String(sid) : null;
     }
 
+    // Extract an AWB + courier from any order/detail payload (top-level
+    // awb_code from listings, or the newest non-cancelled shipment's awb)
+    extractAwbFromOrder(order) {
+        if (order?.awb_code) {
+            return { awb: String(order.awb_code), courierName: order.courier_name || null };
+        }
+        const shipments = Array.isArray(order?.shipments) ? order.shipments : (order?.shipments ? [order.shipments] : []);
+        const usable = shipments
+            .filter(sh => sh && (sh.awb || sh.awb_code) && !/CANCEL/i.test(String(sh.status || '')))
+            .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+        const hit = usable[0];
+        if (hit) return { awb: String(hit.awb || hit.awb_code), courierName: hit.courier_name || hit.courier_company_name || null };
+        return null;
+    }
+
+    // /courier/assign/awb often answers HTTP 200 with awb_assign_status: 0 —
+    // the request was queued and the AWB lands asynchronously a few seconds
+    // later. Parse the immediate response first; when it carries no AWB,
+    // poll the order detail until one appears (or the budget runs out).
+    async assignAwbAndAwait(headers, awbBody, srOrderId, channelOrderId) {
+        const awbRes = await axios.post(`${this.baseURL}/courier/assign/awb`, awbBody, { headers, timeout: 30000 });
+
+        const awbData = awbRes.data?.response?.data || awbRes.data?.data || {};
+        const immediate = awbData.awb_code || awbRes.data?.awb_code;
+        if (immediate) {
+            return { awb: String(immediate), courierName: awbData.courier_name || null, raw: awbRes.data };
+        }
+
+        const assignStatus = awbRes.data?.response?.awb_assign_status ?? awbRes.data?.awb_assign_status;
+        console.log(`⏳ Shiprocket: AWB for order ${channelOrderId} not in assign response (awb_assign_status=${assignStatus}) — polling order detail`);
+        for (let attempt = 0; attempt < 3; attempt++) {
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+                const detail = await axios.get(`${this.baseURL}/orders/show/${srOrderId}`, { headers, timeout: 20000 });
+                const order = detail.data?.data || detail.data || {};
+                const found = this.extractAwbFromOrder(order);
+                if (found) {
+                    console.log(`📦 Shiprocket: AWB ${found.awb} appeared on order ${channelOrderId} after async assignment`);
+                    return { ...found, raw: awbRes.data };
+                }
+            } catch (error) {
+                console.warn(`⚠️ Shiprocket: AWB poll for order ${channelOrderId} failed (${this.describeAxiosError(error)})`);
+            }
+        }
+        return { awb: null, raw: awbRes.data };
+    }
+
     // Live courier list with rates/ETA/rating for admin to choose from
     async checkServiceability(ctx) {
         try {
@@ -406,11 +453,11 @@ class ShiprocketAdapter extends BaseCarrier {
                 else awbBody.order_id = Number(srOrderId);
                 if (ctx.courierId && ctx.courierId !== 'auto') awbBody.courier_id = ctx.courierId;
 
-                let awbRes;
+                let awbAssigned = null;
                 let awbError = null;
                 for (let attempt = 1; attempt <= 2; attempt++) {
                     try {
-                        awbRes = await axios.post(`${this.baseURL}/courier/assign/awb`, awbBody, { headers, timeout: 30000 });
+                        awbAssigned = await this.assignAwbAndAwait(headers, awbBody, srOrderId, synced.channel_order_id);
                         awbError = null;
                         break;
                     } catch (error) {
@@ -436,26 +483,24 @@ class ShiprocketAdapter extends BaseCarrier {
                     return this.fail(message, { order: synced, awbError: awbError.response?.data });
                 }
 
-                const awbData = awbRes.data?.response?.data || awbRes.data?.data || {};
-                const awb = awbData.awb_code || awbRes.data?.awb_code;
-                if (!awb) {
+                if (!awbAssigned?.awb) {
                     return this.fail(
-                        `Synced Shopify-channel order ${synced.channel_order_id} found, but no AWB returned: ${awbRes.data?.message || JSON.stringify(awbRes.data).substring(0, 200)}`,
-                        { order: synced, awb: awbRes.data }
+                        `Synced Shopify-channel order ${synced.channel_order_id} found, but no AWB returned (assignment may still be pending at Shiprocket): ${awbAssigned?.raw?.message || JSON.stringify(awbAssigned?.raw).substring(0, 200)}`,
+                        { order: synced, awb: awbAssigned?.raw }
                     );
                 }
 
-                console.log(`📦 Shiprocket: shipped synced Shopify-channel order ${synced.channel_order_id} (AWB ${awb})`);
+                console.log(`📦 Shiprocket: shipped synced Shopify-channel order ${synced.channel_order_id} (AWB ${awbAssigned.awb})`);
                 return this.ok({
-                    awb,
-                    courierName: awbData.courier_name || 'Shiprocket Courier',
-                    carrierShipmentId: shipmentId || String(awbRes.data?.shipment_id || ''),
+                    awb: awbAssigned.awb,
+                    courierName: awbAssigned.courierName || 'Shiprocket Courier',
+                    carrierShipmentId: shipmentId || String(awbAssigned.raw?.shipment_id || ''),
                     carrierOrderId: srOrderId,
-                    freightCharge: awbData.freight_charges || awbData.applied_weight_amount || null,
-                    trackingUrl: `https://shiprocket.co/tracking/${awb}`,
+                    freightCharge: awbAssigned.raw?.response?.data?.freight_charges || awbAssigned.raw?.response?.data?.applied_weight_amount || null,
+                    trackingUrl: `https://shiprocket.co/tracking/${awbAssigned.awb}`,
                     reusedSyncedOrder: true,
                     requestPayload: { channel_order_id: synced.channel_order_id, channel_id: synced.channel_id, awb: awbBody }
-                }, { order: synced, awb: awbRes.data });
+                }, { order: synced, awb: awbAssigned.raw });
             }
 
             // --- Route 2: not synced yet — create under the Shopify channel ---
@@ -529,12 +574,9 @@ class ShiprocketAdapter extends BaseCarrier {
                 awbBody.courier_id = ctx.courierId;
             }
 
-            let awbRes;
+            let awbAssigned;
             try {
-                awbRes = await axios.post(`${this.baseURL}/courier/assign/awb`, awbBody, {
-                    headers,
-                    timeout: 30000
-                });
+                awbAssigned = await this.assignAwbAndAwait(headers, awbBody, String(srOrderId), ctx.orderId);
             } catch (awbError) {
                 // Order exists but AWB failed — surface both facts so admin can retry from Shiprocket panel
                 return this.fail(
@@ -543,24 +585,22 @@ class ShiprocketAdapter extends BaseCarrier {
                 );
             }
 
-            const awbData = awbRes.data?.response?.data || awbRes.data?.data || {};
-            const awb = awbData.awb_code || awbRes.data?.awb_code;
-            if (!awb) {
+            if (!awbAssigned.awb) {
                 return this.fail(
-                    `Shiprocket order #${srOrderId} created, but no AWB returned: ${awbRes.data?.message || JSON.stringify(awbRes.data).substring(0, 200)}`,
-                    { order: createRes.data, awb: awbRes.data }
+                    `Shiprocket order #${srOrderId} created, but no AWB returned (assignment may still be pending at Shiprocket): ${awbAssigned.raw?.message || JSON.stringify(awbAssigned.raw).substring(0, 200)}`,
+                    { order: createRes.data, awb: awbAssigned.raw }
                 );
             }
 
             return this.ok({
-                awb,
-                courierName: awbData.courier_name || 'Shiprocket Courier',
+                awb: awbAssigned.awb,
+                courierName: awbAssigned.courierName || 'Shiprocket Courier',
                 carrierShipmentId: String(shipmentId),
                 carrierOrderId: String(srOrderId),
-                freightCharge: awbData.freight_charges || awbData.applied_weight_amount || null,
-                trackingUrl: `https://shiprocket.co/tracking/${awb}`,
+                freightCharge: awbAssigned.raw?.response?.data?.freight_charges || awbAssigned.raw?.response?.data?.applied_weight_amount || null,
+                trackingUrl: `https://shiprocket.co/tracking/${awbAssigned.awb}`,
                 requestPayload: orderPayload
-            }, { order: createRes.data, awb: awbRes.data });
+            }, { order: createRes.data, awb: awbAssigned.raw });
         } catch (error) {
             return this.fail(`Shiprocket shipment creation failed: ${this.describeAxiosError(error)}`, error.response?.data);
         }
