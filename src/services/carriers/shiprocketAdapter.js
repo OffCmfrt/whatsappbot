@@ -183,6 +183,24 @@ class ShiprocketAdapter extends BaseCarrier {
         return (channel.base_channel_code || '').toUpperCase() === 'CS' || /custom/i.test(channel.name || '');
     }
 
+    // Extract the package weight (kg) from an order payload. Shiprocket's API
+    // shape changed: rows no longer carry a top-level `weight` — it now lives
+    // under `others.weight` (listing & detail) and `shipments[].weight`
+    // (detail). Returns null when no weight field is present at all.
+    extractWeightKg(order) {
+        const candidates = [
+            order?.weight,
+            order?.others?.weight,
+            order?.shipments?.weight,
+            ...(Array.isArray(order?.shipments) ? order.shipments.map(s => s?.weight) : [])
+        ];
+        for (const raw of candidates) {
+            const value = Number(raw);
+            if (Number.isFinite(value)) return value;
+        }
+        return null;
+    }
+
     // Shopify-synced orders carry weight/dimensions computed from the line
     // items, so they drift with item count. The hub ships everything in one
     // fixed package (the shipment draft's), so push it onto the synced order
@@ -196,8 +214,16 @@ class ShiprocketAdapter extends BaseCarrier {
             height: ctx.package.heightCm || 2,
             weight: (ctx.package.weightGrams || 500) / 1000 // kg
         };
+        const currentWeight = this.extractWeightKg(synced);
+        // Dims may live only in a "LxBxH" string (e.g. others.dimensions "30x40x2")
+        const dimsStr = String(synced.others?.dimensions || '');
+        const [dimL, dimB, dimH] = dimsStr.split(/[x×*]/i).map(v => Number(v));
+        const dimsFromStr = dimsStr && [dimL, dimB, dimH].every(Number.isFinite);
         const differs = Object.entries(desired).some(([key, value]) => {
-            const current = Number(synced[key]);
+            let current;
+            if (key === 'weight') current = currentWeight;
+            else if (dimsFromStr) current = { length: dimL, breadth: dimB, height: dimH }[key];
+            else current = Number(synced[key] ?? synced.others?.[key]);
             return !Number.isFinite(current) || Math.abs(current - Number(value)) > 0.01;
         });
         if (!differs) return true;
@@ -221,8 +247,8 @@ class ShiprocketAdapter extends BaseCarrier {
         try {
             const detail = await axios.get(`${this.baseURL}/orders/show/${srOrderId}`, { headers, timeout: 20000 });
             const order = detail.data?.data || detail.data || {};
-            const weight = Number(order.weight);
-            return Number.isFinite(weight) ? weight : 0;
+            // null = no weight field anywhere → can't determine, don't block on it
+            return this.extractWeightKg(order);
         } catch (error) {
             console.warn(`⚠️ Shiprocket: could not verify weight for order ${srOrderId} (${this.describeAxiosError(error)})`);
             return null;
@@ -324,7 +350,7 @@ class ShiprocketAdapter extends BaseCarrier {
                 // the synced row carries no weight, confirm the fixed package
                 // really landed before asking for an AWB — otherwise fail with
                 // an actionable message instead of the cryptic API rejection.
-                if (!(Number(synced.weight) > 0)) {
+                if (!(this.extractWeightKg(synced) > 0)) {
                     const weightNow = await this.verifyOrderWeight(headers, srOrderId);
                     if (weightNow !== null && weightNow <= 0) {
                         return this.fail(
