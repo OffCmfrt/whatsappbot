@@ -781,12 +781,20 @@ class ShopifyService {
                     result.action = `Fulfillment ${active.id} already tracks AWB ${awb}`;
                     return result;
                 }
-                await axios.put(`${cfg.base}/orders/${order.id}/fulfillments/${active.id}/tracking.json`,
-                    { tracking: { number: awb, company: trackingCompany, url: trackingUrl || undefined, notify_customer: false } },
-                    { headers: cfg.headers, timeout: 15000 });
-                result.success = true;
-                result.action = `Updated Shopify fulfillment ${active.id} tracking to AWB ${awb}`;
-                return result;
+                try {
+                    await axios.put(`${cfg.base}/orders/${order.id}/fulfillments/${active.id}/tracking.json`,
+                        { tracking: { number: awb, company: trackingCompany, url: trackingUrl || undefined, notify_customer: false } },
+                        { headers: cfg.headers, timeout: 15000 });
+                    result.success = true;
+                    result.action = `Updated Shopify fulfillment ${active.id} tracking to AWB ${awb}`;
+                    return result;
+                } catch (trackingError) {
+                    if (trackingError.response?.status !== 406) throw trackingError;
+                    // Legacy tracking update rejected — the fulfillment sits on a
+                    // FulfillmentOrder, so replace it there instead (no customer email)
+                    await this._updateTrackingViaFulfillmentOrders(cfg, order, { awb, trackingCompany, trackingUrl, result });
+                    return result;
+                }
             }
 
             // Fulfill every line item on the order. Shopify routes newer
@@ -865,6 +873,70 @@ class ShopifyService {
 
         result.success = true;
         result.action = `Marked Shopify order ${order.name || order.id} fulfilled with AWB ${awb} (FulfillmentOrders)`;
+    }
+
+    // Re-ship tracking update via FulfillmentOrders — used when the legacy
+    // PUT .../tracking.json answers 406. Finds the live fulfillment on the
+    // order's fulfillment orders and swaps its tracking info (no customer email).
+    async _updateTrackingViaFulfillmentOrders(cfg, order, { awb, trackingCompany, trackingUrl, result }) {
+        let fulfillmentOrders;
+        try {
+            const foRes = await axios.get(`${cfg.base}/orders/${order.id}/fulfillment_orders.json`, {
+                headers: cfg.headers, timeout: 15000
+            });
+            fulfillmentOrders = foRes.data?.fulfillment_orders || [];
+        } catch (error) {
+            if (error.response?.status === 403) {
+                result.warning = 'Shopify requires the FulfillmentOrders API for this order — add the ' +
+                    'read/write "merchant managed fulfillment orders" scopes to the custom app ' +
+                    '(Settings → Apps and sales channels → Develop apps → API access scopes), ' +
+                    'regenerate the Admin API token and update SHOPIFY_ACCESS_TOKEN.';
+            } else {
+                result.warning = `FulfillmentOrders lookup failed (${error.response?.status || error.message})`;
+            }
+            return;
+        }
+
+        const candidates = fulfillmentOrders
+            .flatMap(fo => fo.fulfillments || [])
+            .filter(f => !/cancel/i.test(String(f.status || '')));
+        let target = candidates[0];
+
+        if (!target?.id) {
+            // The listing omits embedded fulfillments — walk the FOs (pending
+            // re-ships first, then fulfilled/closed) and ask each for its live
+            // fulfillment until one answers
+            const ranked = [...fulfillmentOrders].sort((a, b) =>
+                (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1));
+            for (const fo of ranked) {
+                try {
+                    const foRes = await axios.get(`${cfg.base}/fulfillment_orders/${fo.id}/fulfillments.json`, {
+                        headers: cfg.headers, timeout: 15000
+                    });
+                    const live = (foRes.data?.fulfillments || []).find(f => !/cancel/i.test(String(f.status || '')));
+                    if (live?.id) { target = live; break; }
+                } catch (error) {
+                    // Some FO states refuse the lookup — try the next one
+                }
+            }
+        }
+        if (!target?.id) {
+            result.warning = `Order ${order.name || order.id} has no active fulfillment on its fulfillment orders`;
+            return;
+        }
+
+        await axios.post(`${cfg.base}/fulfillments/${target.id}/update_tracking.json`, {
+            fulfillment: {
+                tracking_info: {
+                    number: awb,
+                    company: trackingCompany,
+                    ...(trackingUrl ? { url: trackingUrl } : {})
+                }
+            }
+        }, { headers: cfg.headers, timeout: 20000 });
+
+        result.success = true;
+        result.action = `Updated Shopify fulfillment ${target.id} tracking to AWB ${awb} (FulfillmentOrders)`;
     }
 
     // New: Sync all customers from Shopify Admin API
