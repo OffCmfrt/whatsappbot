@@ -184,16 +184,23 @@ class ShiprocketAdapter extends BaseCarrier {
     }
 
     // Extract the package weight (kg) from an order payload. Shiprocket's API
-    // shape changed: rows no longer carry a top-level `weight` — it now lives
-    // under `others.weight` (listing & detail) and `shipments[].weight`
-    // (detail). Returns null when no weight field is present at all.
+    // shape changed: the AWB check reads the SHIPMENT-level weight, which the
+    // Shopify sync pre-populates — while `others.weight` can stay 0 forever.
+    // So shipment weights are checked first. Returns null when no weight
+    // field is present at all.
     extractWeightKg(order) {
         const candidates = [
-            order?.weight,
-            order?.others?.weight,
+            ...(Array.isArray(order?.shipments) ? order.shipments.map(s => s?.weight) : []),
             order?.shipments?.weight,
-            ...(Array.isArray(order?.shipments) ? order.shipments.map(s => s?.weight) : [])
+            order?.weight,
+            order?.others?.weight
         ];
+        for (const raw of candidates) {
+            const value = Number(raw);
+            if (Number.isFinite(value) && value > 0) return value;
+        }
+        // All zero/blank — return the first finite value (0) so callers can
+        // distinguish "zero" from "unknown"
         for (const raw of candidates) {
             const value = Number(raw);
             if (Number.isFinite(value)) return value;
@@ -206,7 +213,10 @@ class ShiprocketAdapter extends BaseCarrier {
     // fixed package (the shipment draft's), so push it onto the synced order
     // to keep the Shiprocket panel, rates and labels consistent.
     // Best-effort: Shiprocket refuses edits once a shipment is far along —
-    // that must never block shipping.
+    // that must never block shipping. NOTE: Shiprocket retired the
+    // /orders/update endpoint (now 404); the Shopify sync pre-populates the
+    // shipment-level weight that AWB assignment actually checks, so this is
+    // cosmetic and must not block when it can't run.
     async enforceFixedPackage(headers, synced, ctx) {
         const desired = {
             length: ctx.package.lengthCm || 30,
@@ -233,8 +243,12 @@ class ShiprocketAdapter extends BaseCarrier {
             console.log(`📦 Shiprocket: normalized order ${synced.channel_order_id} package to ${desired.weight} kg / ${desired.length}×${desired.breadth}×${desired.height} cm`);
             return true;
         } catch (error) {
-            const body = error.response?.data ? ` — ${JSON.stringify(error.response.data).substring(0, 300)}` : '';
-            console.warn(`⚠️ Shiprocket: could not normalize order ${synced.channel_order_id} package (${this.describeAxiosError(error)}${body}) — shipping with the synced values`);
+            // 404 = endpoint retired — expected now; weight comes from the
+            // Shopify sync. Only warn for anything else.
+            if (error.response?.status !== 404) {
+                const body = error.response?.data ? ` — ${JSON.stringify(error.response.data).substring(0, 300)}` : '';
+                console.warn(`⚠️ Shiprocket: could not normalize order ${synced.channel_order_id} package (${this.describeAxiosError(error)}${body}) — shipping with the synced values`);
+            }
             return false;
         }
     }
@@ -344,7 +358,7 @@ class ShiprocketAdapter extends BaseCarrier {
                 }
 
                 const srOrderId = String(synced.id);
-                const shipmentId = this.extractShipmentId(synced);
+                let shipmentId = this.extractShipmentId(synced);
 
                 // Shiprocket rejects AWB assignment on zero-weight orders. If
                 // the synced row carries no weight, confirm the fixed package
@@ -357,6 +371,19 @@ class ShiprocketAdapter extends BaseCarrier {
                             `Synced Shopify-channel order ${synced.channel_order_id} has zero weight at Shiprocket and the package update did not take. ` +
                             `Add a weight to the order in the Shiprocket panel (or to the Shopify product), then retry shipping.`
                         );
+                    }
+                }
+
+                // Listing rows often omit the shipment id, but the AWB endpoint
+                // works most reliably with it (and rejects the old `order_ids`
+                // array shape) — fetch it from the detail endpoint when missing.
+                if (!shipmentId) {
+                    try {
+                        const detail = await axios.get(`${this.baseURL}/orders/show/${srOrderId}`, { headers, timeout: 20000 });
+                        const d = detail.data?.data || detail.data || {};
+                        shipmentId = this.extractShipmentId(d);
+                    } catch (error) {
+                        console.warn(`⚠️ Shiprocket: shipment-id lookup for order ${synced.channel_order_id} failed (${this.describeAxiosError(error)})`);
                     }
                 }
 
@@ -376,7 +403,7 @@ class ShiprocketAdapter extends BaseCarrier {
 
                 const awbBody = {};
                 if (shipmentId) awbBody.shipment_id = Number(shipmentId);
-                else awbBody.order_ids = [Number(srOrderId)];
+                else awbBody.order_id = Number(srOrderId);
                 if (ctx.courierId && ctx.courierId !== 'auto') awbBody.courier_id = ctx.courierId;
 
                 let awbRes;

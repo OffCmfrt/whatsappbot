@@ -1,6 +1,11 @@
 /**
  * Backfill zero-weight Shiprocket orders with a fixed weight.
  *
+ * ⚠️ OBSOLETE (Aug 2026): Shiprocket retired the /orders/update endpoint
+ * (now 404), and AWB assignment checks the shipment-level weight, which the
+ * Shopify sync pre-populates — zero `others.weight` no longer blocks shipping.
+ * Kept for reference only.
+ *
  * Shopify products without a weight sync across to Shiprocket as 0, and
  * Shiprocket then refuses AWB assignment ("Zero weight or no weight
  * entered."). This script scans Shiprocket orders and stamps a fixed
