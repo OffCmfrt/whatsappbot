@@ -789,20 +789,30 @@ class ShopifyService {
                 return result;
             }
 
-            // Fulfill every line item on the order
+            // Fulfill every line item on the order. Shopify routes newer
+            // orders through FulfillmentOrders — the legacy endpoint below
+            // then answers 406, so fall back to the FulfillmentOrders flow.
             const lineItems = (order.line_items || []).map(li => ({ id: li.id, quantity: li.quantity }));
-            await axios.post(`${cfg.base}/orders/${order.id}/fulfillments.json`, {
-                fulfillment: {
-                    tracking_number: awb,
-                    tracking_company: trackingCompany,
-                    tracking_urls: trackingUrl ? [trackingUrl] : [],
-                    notify_customer: Boolean(notifyCustomer),
-                    ...(lineItems.length ? { line_items: lineItems } : {})
-                }
-            }, { headers: cfg.headers, timeout: 20000 });
+            try {
+                await axios.post(`${cfg.base}/orders/${order.id}/fulfillments.json`, {
+                    fulfillment: {
+                        tracking_number: awb,
+                        tracking_company: trackingCompany,
+                        tracking_urls: trackingUrl ? [trackingUrl] : [],
+                        notify_customer: Boolean(notifyCustomer),
+                        ...(lineItems.length ? { line_items: lineItems } : {})
+                    }
+                }, { headers: cfg.headers, timeout: 20000 });
+            } catch (legacyError) {
+                if (legacyError.response?.status !== 406) throw legacyError;
+                await this._fulfillViaFulfillmentOrders(cfg, order, {
+                    awb, trackingCompany, trackingUrl, notifyCustomer, result
+                });
+                if (!result.success) return result;
+            }
 
             result.success = true;
-            result.action = `Marked Shopify order ${order.name || order.id} fulfilled with AWB ${awb}`;
+            result.action = result.action || `Marked Shopify order ${order.name || order.id} fulfilled with AWB ${awb}`;
             return result;
         } catch (error) {
             const detail = error.response?.data?.errors ? JSON.stringify(error.response.data.errors) : error.message;
@@ -810,6 +820,51 @@ class ShopifyService {
             result.warning = detail;
             return result;
         }
+    }
+
+    // FulfillmentOrders flow — required when the legacy create answers 406.
+    // Lists the order's open fulfillment orders and fulfils them in one go.
+    // Needs the merchant-managed fulfillment-order scopes on the API token;
+    // a 403 here means they must be added to the custom app configuration.
+    async _fulfillViaFulfillmentOrders(cfg, order, { awb, trackingCompany, trackingUrl, notifyCustomer, result }) {
+        let fulfillmentOrders;
+        try {
+            const foRes = await axios.get(`${cfg.base}/orders/${order.id}/fulfillment_orders.json`, {
+                headers: cfg.headers, timeout: 15000
+            });
+            fulfillmentOrders = foRes.data?.fulfillment_orders || [];
+        } catch (error) {
+            if (error.response?.status === 403) {
+                result.warning = 'Shopify requires the FulfillmentOrders API for this order — add the ' +
+                    'read/write "merchant managed fulfillment orders" scopes to the custom app ' +
+                    '(Settings → Apps and sales channels → Develop apps → API access scopes), ' +
+                    'regenerate the Admin API token and update SHOPIFY_ACCESS_TOKEN.';
+            } else {
+                result.warning = `FulfillmentOrders lookup failed (${error.response?.status || error.message})`;
+            }
+            return;
+        }
+
+        const open = fulfillmentOrders.filter(fo => ['open', 'in_progress', 'scheduled'].includes(fo.status));
+        if (open.length === 0) {
+            result.warning = `Order ${order.name || order.id} has no open fulfillment orders at Shopify`;
+            return;
+        }
+
+        await axios.post(`${cfg.base}/fulfillments.json`, {
+            fulfillment: {
+                line_items_by_fulfillment_order: open.map(fo => ({ fulfillment_order_id: fo.id })),
+                tracking_info: {
+                    number: awb,
+                    company: trackingCompany,
+                    ...(trackingUrl ? { url: trackingUrl } : {})
+                },
+                notify_customer: Boolean(notifyCustomer)
+            }
+        }, { headers: cfg.headers, timeout: 20000 });
+
+        result.success = true;
+        result.action = `Marked Shopify order ${order.name || order.id} fulfilled with AWB ${awb} (FulfillmentOrders)`;
     }
 
     // New: Sync all customers from Shopify Admin API
