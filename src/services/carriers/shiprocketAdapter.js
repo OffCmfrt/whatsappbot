@@ -290,6 +290,20 @@ class ShiprocketAdapter extends BaseCarrier {
         return null;
     }
 
+    // awb_assign_status: 0 means either "queued (async)" or "courier rejected
+    // the waybill". The rejection hides in response.data.packages[].status —
+    // e.g. Delhivery's "Shipment restricted based on historical delivery
+    // outcomes" RTO-risk block. Surface it so the hub sees the real reason.
+    describeAwbFailure(raw) {
+        const packages = raw?.response?.data?.packages || [];
+        const failed = packages.filter(p => p && /fail/i.test(String(p.status || '')));
+        if (failed.length > 0) {
+            const remarks = failed.flatMap(p => (Array.isArray(p.remarks) ? p.remarks : [])).join(' | ');
+            return `courier rejected the shipment — ${remarks || 'no remarks given'}. Retrying won't help; ship prepaid or contact the courier.`;
+        }
+        return 'assignment may still be pending at Shiprocket';
+    }
+
     // /courier/assign/awb often answers HTTP 200 with awb_assign_status: 0 —
     // the request was queued and the AWB lands asynchronously a few seconds
     // later. Parse the immediate response first; when it carries no AWB,
@@ -301,6 +315,14 @@ class ShiprocketAdapter extends BaseCarrier {
         const immediate = awbData.awb_code || awbRes.data?.awb_code;
         if (immediate) {
             return { awb: String(immediate), courierName: awbData.courier_name || null, raw: awbRes.data };
+        }
+
+        // A failed package means the courier already rejected the waybill —
+        // the AWB will never land, so skip polling and fail fast.
+        const rejected = (awbData.packages || []).some(p => p && /fail/i.test(String(p.status || '')));
+        if (rejected) {
+            console.warn(`❌ Shiprocket: courier rejected AWB for order ${channelOrderId}: ${this.describeAwbFailure(awbRes.data)}`);
+            return { awb: null, raw: awbRes.data };
         }
 
         const assignStatus = awbRes.data?.response?.awb_assign_status ?? awbRes.data?.awb_assign_status;
@@ -485,7 +507,7 @@ class ShiprocketAdapter extends BaseCarrier {
 
                 if (!awbAssigned?.awb) {
                     return this.fail(
-                        `Synced Shopify-channel order ${synced.channel_order_id} found, but no AWB returned (assignment may still be pending at Shiprocket): ${awbAssigned?.raw?.message || JSON.stringify(awbAssigned?.raw).substring(0, 200)}`,
+                        `Synced Shopify-channel order ${synced.channel_order_id} found, but no AWB returned (${this.describeAwbFailure(awbAssigned?.raw)}): ${awbAssigned?.raw?.message || JSON.stringify(awbAssigned?.raw).substring(0, 200)}`,
                         { order: synced, awb: awbAssigned?.raw }
                     );
                 }
@@ -587,7 +609,7 @@ class ShiprocketAdapter extends BaseCarrier {
 
             if (!awbAssigned.awb) {
                 return this.fail(
-                    `Shiprocket order #${srOrderId} created, but no AWB returned (assignment may still be pending at Shiprocket): ${awbAssigned.raw?.message || JSON.stringify(awbAssigned.raw).substring(0, 200)}`,
+                    `Shiprocket order #${srOrderId} created, but no AWB returned (${this.describeAwbFailure(awbAssigned.raw)}): ${awbAssigned.raw?.message || JSON.stringify(awbAssigned.raw).substring(0, 200)}`,
                     { order: createRes.data, awb: awbAssigned.raw }
                 );
             }
