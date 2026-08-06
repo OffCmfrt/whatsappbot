@@ -10,9 +10,11 @@
  * Endpoints used:
  *   Serviceability : GET  /c/api/pin-codes/json/?filter_codes={pin}
  *   Reuse synced   : GET  /api/v1/packages/json/?ref_ids={order id}
- *                    (Shopify-integrated orders are already synced to the
- *                    Delhivery panel under the Shopify channel — we only
- *                    reuse their waybill, never create a duplicate via CMU)
+ *                    (orders that already have a Delhivery waybill are
+ *                    reused — their AWB is adopted, never duplicated)
+ *   Direct create  : POST /api/cmu/create.json
+ *                    (fallback when no waybill exists yet — e.g. Shopify
+ *                    channel orders sitting at "Pending AWB" in the panel)
  *   Packing slip   : GET  /api/p/packing_slip?wbns={awb}&pdf=true
  *   Pickup request : POST /fm/request/new/
  *   Cancel         : POST /api/p/edit  ({ waybill, cancellation: 'true' })
@@ -99,15 +101,21 @@ class DelhiveryAdapter extends BaseCarrier {
         }
     }
 
-    // Find the order Delhivery already synced from the Shopify channel.
-    // Best-effort lookup by client reference (= our order id); package list
-    // shape varies by account tier, so several field spellings are tried.
+    // Find an existing Delhivery package for this order.
+    // Returns:
+    //   { awb }           — a live (non-closed) waybill was found
+    //   null              — lookup succeeded, no adoptable package exists
+    //   { lookupError }   — the lookup itself failed; callers MUST fail closed
+    //                       (creating on an errored lookup risks a duplicate
+    //                       consignment for an order that already has an AWB)
     async findSyncedOrder(orderId) {
         const bare = String(orderId).replace(/^#/, '').trim();
         const normalize = v => String(v ?? '').replace(/^#/, '').trim().toLowerCase();
+        let lastError = null;
 
         for (const candidate of [...new Set([bare, `#${bare}`])]) {
             try {
+                lastError = null; // a successful request clears prior failures
                 const response = await axios.get(`${this.baseURL}/api/v1/packages/json/`, {
                     headers: this.authHeaders(),
                     params: { ref_ids: candidate, size: 10 },
@@ -117,41 +125,67 @@ class DelhiveryAdapter extends BaseCarrier {
                 const pkgs = response.data?.ShipmentData || response.data?.shipments || [];
                 const list = (Array.isArray(pkgs) ? pkgs : [pkgs]).filter(Boolean);
 
-                // Skip closed packages (cancelled ones especially — a re-ship
-                // must never resurrect the old waybill)
-                const isClosed = p => /cancel/i.test(String(p?.status || p?.Shipment?.Status?.Status || ''));
+                // Only live packages are adoptable — a cancelled / delivered /
+                // RTO waybill must never be resurrected (re-ships need a fresh
+                // AWB, so those orders fall through to direct creation)
+                const isClosed = p => /cancel|deliver|rto|return/i.test(String(p?.status || p?.Shipment?.Status?.Status || ''));
                 const open = list.filter(p => !isClosed(p));
+                if (!open.length) continue;
 
                 // Prefer an exact reference match; when the tier's payload
                 // carries no ref field, accept the hit (the search was
                 // already scoped to this reference)
-                const match = (open.length ? open : list).find(p => {
+                const match = open.find(p => {
                     const ref = p?.refnum || p?.RefNum || p?.client_reference_number ||
-                        p?.Shipment?.refnum || p?.Shipment?.RefNum;
+                        p?.Shipment?.refnum || p?.Shipment?.RefNum || p?.Shipment?.ReferenceNo;
                     return !ref || normalize(ref) === normalize(bare);
                 });
                 if (!match) continue;
 
                 const awb = match.waybill || match.Waybill ||
-                    match.Shipment?.Waybill || match.Shipment?.waybill;
+                    match.Shipment?.AWB || match.Shipment?.Waybill || match.Shipment?.waybill;
                 return { awb: awb ? String(awb) : null, raw: match };
             } catch (error) {
-                console.warn(`⚠️ Delhivery: synced-order lookup for "${candidate}" failed (${this.describeAxiosError(error)})`);
+                lastError = this.describeAxiosError(error);
+                console.warn(`⚠️ Delhivery: synced-order lookup for "${candidate}" failed (${lastError})`);
             }
         }
+        // All candidates errored → we cannot rule out an existing waybill;
+        // signal the failure instead of pretending the slot is empty
+        if (lastError) return { lookupError: lastError };
         return null;
     }
 
-    // Ship orders ONLY via the Shopify channel — i.e. the order Delhivery
-    // already synced from the Shopify integration. Direct CMU creation is
-    // disabled: it files orders outside the Shopify channel and duplicates
-    // anything the integration has already synced.
+    // Ship the order at Delhivery:
+    //   Route 1 — adopt the waybill when the order already has one (panel or
+    //             any other channel); never create a duplicate in that case.
+    //   Route 2 — create the consignment directly via CMU. Shopify-channel
+    //             imports land at "Pending AWB" in the panel without a
+    //             waybill, so this is the path that actually gets AWBs for
+    //             them (equivalent of the panel's "Get AWB Number" button).
     async createShipment(ctx) {
-        // --- Route 1: reuse the order Delhivery synced from Shopify ---
+        // --- Route 1: reuse an existing Delhivery waybill for this order ---
         const synced = await this.findSyncedOrder(ctx.orderId);
 
+        // Fail closed: if we couldn't verify whether a waybill already exists,
+        // creating risks a duplicate consignment (double freight / double COD)
+        if (synced?.lookupError) {
+            return this.fail(
+                `Could not verify existing Delhivery waybills for order ${ctx.orderId} (${synced.lookupError}). ` +
+                'Refusing to create to avoid a duplicate — please retry.'
+            );
+        }
+
         if (synced?.awb) {
-            console.log(`📦 Delhivery: reusing Shopify-synced order ${ctx.orderId} (existing waybill ${synced.awb})`);
+            // Never adopt an AWB we already closed locally — Delhivery's
+            // tracking feed can still report it as live (stale status)
+            const closedAwbs = ctx.meta?.closedAwbs || [];
+            if (closedAwbs.includes(String(synced.awb))) {
+                console.log(`📦 Delhivery: skipping locally-closed AWB ${synced.awb} for order ${ctx.orderId} — creating a fresh consignment`);
+                return this.createDirectShipment(ctx, synced);
+            }
+
+            console.log(`📦 Delhivery: reusing existing waybill ${synced.awb} for order ${ctx.orderId}`);
             return this.ok({
                 awb: synced.awb,
                 courierName: 'Delhivery',
@@ -160,21 +194,103 @@ class DelhiveryAdapter extends BaseCarrier {
                 freightCharge: null,
                 trackingUrl: `https://www.delhivery.com/track/package/${synced.awb}`,
                 reusedSyncedOrder: true,
-                requestPayload: { orderId: ctx.orderId, source: 'shopify_synced_order' }
+                requestPayload: { orderId: ctx.orderId, source: 'existing_waybill' }
             }, synced.raw);
         }
 
-        if (synced) {
-            return this.fail(
-                `Order ${ctx.orderId} exists at Delhivery but has no waybill yet — generate the shipment in the Delhivery panel, then ship again.`
-            );
+        // --- Route 2: no waybill anywhere — create the consignment directly ---
+        return this.createDirectShipment(ctx, synced);
+    }
+
+    // CMU consignment creation (form-encoded: format=json&data={...}).
+    // Delhivery assigns the AWB synchronously in the response.
+    async createDirectShipment(ctx, existingPanelOrder = null) {
+        const isCod = ctx.payment.mode === 'COD';
+        const codAmount = Number(ctx.payment.codAmount) || 0;
+        const declared = Number(ctx.payment.declaredValue) || codAmount || 0;
+
+        if (isCod && !(codAmount > 0)) {
+            return this.fail('COD amount must be greater than 0 for COD shipments');
         }
 
-        // --- Not synced: refuse instead of creating directly (CMU disabled) ---
-        return this.fail(
-            `Order ${ctx.orderId} was not found at Delhivery. Delhivery ships only under the Shopify channel — ` +
-            'the order must be synced via the Shopify–Delhivery integration first (direct CMU creation is disabled).'
-        );
+        const pin = this.normalizePincode(ctx.consignee.pincode);
+        const phone = this.normalizePhone(ctx.consignee.phone);
+        const weightKg = Math.max(0.1, Math.round((Number(ctx.package.weightGrams) || 500) / 100) / 10);
+        const totalQty = (ctx.items || []).reduce((n, i) => n + (i.quantity || 1), 0) || 1;
+        const orderId = String(ctx.orderId).replace(/^#/, '');
+
+        const consignment = {
+            name: ctx.consignee.name,
+            add: ctx.consignee.address,
+            pin,
+            city: ctx.consignee.city,
+            state: ctx.consignee.state,
+            country: ctx.consignee.country || 'India',
+            phone,
+            order: orderId,
+            payment_mode: isCod ? 'COD' : 'Prepaid',
+            shipping_mode: 'Pickup',
+            // Return leg = registered warehouse (same as the panel default)
+            return_name: process.env.DELHIVERY_RETURN_NAME || process.env.EKART_SELLER_NAME || 'Offcomfrt',
+            return_add: process.env.DELHIVERY_RETURN_ADDRESS || process.env.EKART_SELLER_ADDRESS || '',
+            return_pin: process.env.DELHIVERY_RETURN_PIN || '123001',
+            return_city: process.env.DELHIVERY_RETURN_CITY || 'Narnaul',
+            return_state: process.env.DELHIVERY_RETURN_STATE || 'Haryana',
+            return_country: 'India',
+            return_phone: process.env.DELHIVERY_RETURN_PHONE || phone,
+            // GSTIN is mandatory on the label per GST compliance
+            seller_tin_gst: process.env.DELHIVERY_SELLER_GSTIN || process.env.EKART_SELLER_GST_TIN,
+            seller_gst_cst_tin: process.env.DELHIVERY_SELLER_GSTIN || process.env.EKART_SELLER_GST_TIN,
+            total_amount: isCod ? codAmount : declared,
+            collectable_amount: isCod ? codAmount : 0,
+            cod_amount: isCod ? codAmount : 0,
+            weight: weightKg,
+            quantity: totalQty,
+            height: ctx.package.heightCm || 2,
+            breadth: ctx.package.breadthCm || 30,
+            length: ctx.package.lengthCm || 40,
+            products: (ctx.items && ctx.items.length ? ctx.items : [{ name: 'Apparel', sku: 'SKU', price: declared, quantity: 1 }]).map(item => ({
+                sku: item.sku || 'SKU',
+                name: `${item.name}${item.size ? ` (${item.size})` : ''}`.substring(0, 100),
+                order: orderId,
+                price: Number(item.price) || 0,
+                quantity: item.quantity || 1,
+                hsn: '6109' // apparel default
+            }))
+        };
+
+        const requestPayload = `format=json&data=${encodeURIComponent(JSON.stringify({ shipments: [consignment] }))}`;
+
+        try {
+            const response = await axios.post(`${this.baseURL}/api/cmu/create.json`, requestPayload, {
+                headers: { ...this.authHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' },
+                timeout: 30000
+            });
+
+            // HTTP 200 can still be a per-package failure — inspect the package
+            const pkg = response.data?.packages?.[0];
+            const awb = pkg?.waybill ? String(pkg.waybill) : '';
+
+            if (!response.data?.success || !awb || /fail/i.test(String(pkg?.status || ''))) {
+                const reason = this.extractReason(response.data);
+                console.error(`❌ Delhivery CMU create rejected for order ${orderId}:`, JSON.stringify(response.data || {}).substring(0, 600));
+                return this.fail(`Delhivery rejected the shipment: ${reason}`, response.data);
+            }
+
+            console.log(`📦 Delhivery: created consignment for order ${orderId} (AWB ${awb}${existingPanelOrder ? ', panel order without waybill existed' : ''})`);
+            return this.ok({
+                awb,
+                courierName: 'Delhivery',
+                carrierShipmentId: awb,
+                carrierOrderId: orderId,
+                freightCharge: null,
+                trackingUrl: `https://www.delhivery.com/track/package/${awb}`,
+                reusedSyncedOrder: false,
+                requestPayload: { orderId, source: 'direct_cmu_create', consignment }
+            }, response.data);
+        } catch (error) {
+            return this.fail(`Delhivery shipment creation failed: ${this.describeAxiosError(error)}`, error.response?.data);
+        }
     }
 
     // Packing slip / label PDF link (4R = 4x6 inch thermal label format)

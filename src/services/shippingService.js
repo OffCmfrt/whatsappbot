@@ -116,6 +116,19 @@ async function buildShipmentContext(shopperId, overrides = {}) {
         }
     };
 
+    // AWBs from closed local shipments (cancelled/failed/delivered/RTO).
+    // Delhivery's tracking feed can report a stale live status for cancelled
+    // waybills, so carriers use this list to refuse re-adopting them
+    try {
+        const closedRows = await dbAdapter.query(
+            `SELECT awb FROM shipments WHERE order_id = ? AND awb IS NOT NULL AND status IN ('cancelled', 'failed', 'delivered', 'rto')`,
+            [shopper.order_id]
+        );
+        ctx.meta.closedAwbs = [...new Set(closedRows.map(r => String(r.awb)).filter(Boolean))];
+    } catch (e) {
+        ctx.meta.closedAwbs = [];
+    }
+
     ctx.validationErrors = validateContext(ctx);
     return { ctx, shopper };
 }
@@ -262,8 +275,10 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
     invalidateShoppersCache();
 
     // Direct carriers have no Shopify channel, so Shopify never learns the
-    // order shipped — post the fulfillment + tracking there ourselves
-    if (carrier === 'ekart') {
+    // order shipped — post the fulfillment + tracking there ourselves.
+    // Delhivery needs it too when the consignment was created via the API
+    // (adopted waybills were already fulfilled through the panel channel)
+    if (carrier === 'ekart' || (carrier === 'delhivery' && data.reusedSyncedOrder === false)) {
         require('./shopifyService').syncFulfillment(ctx.orderId, {
             awb: data.awb,
             courierName: data.courierName,
