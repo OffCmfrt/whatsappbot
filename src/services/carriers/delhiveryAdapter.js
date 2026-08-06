@@ -215,7 +215,7 @@ class DelhiveryAdapter extends BaseCarrier {
 
         const pin = this.normalizePincode(ctx.consignee.pincode);
         const phone = this.normalizePhone(ctx.consignee.phone);
-        const weightKg = Math.max(0.1, Math.round((Number(ctx.package.weightGrams) || 500) / 100) / 10);
+        const weightGrams = Math.max(50, Number(ctx.package.weightGrams) || 500);
         const totalQty = (ctx.items || []).reduce((n, i) => n + (i.quantity || 1), 0) || 1;
         const orderId = String(ctx.orderId).replace(/^#/, '');
 
@@ -246,9 +246,10 @@ class DelhiveryAdapter extends BaseCarrier {
             total_amount: String(isCod ? codAmount : declared),
             collectable_amount: String(isCod ? codAmount : 0),
             cod_amount: String(isCod ? codAmount : 0),
-            // CMU wants strings; weight in kg, dimensions in cm under the
-            // shipment_* keys (plain height/breadth/length are ignored)
-            weight: String(weightKg),
+            // CMU wants strings; weight in WHOLE GRAMS (kg strings are ignored
+            // by Delhivery One — verified: '500' shows 500 gm, '0.5' shows 0),
+            // dimensions in cm under the shipment_* keys
+            weight: String(weightGrams),
             quantity: String(totalQty),
             shipment_length: String(ctx.package.lengthCm || 30),
             shipment_width: String(ctx.package.breadthCm || 40),
@@ -259,6 +260,7 @@ class DelhiveryAdapter extends BaseCarrier {
                 order: orderId,
                 price: Number(item.price) || 0,
                 quantity: item.quantity || 1,
+                weight: String(weightGrams), // grams, mirrors the package weight
                 hsn: '6109' // apparel default
             }))
         };
