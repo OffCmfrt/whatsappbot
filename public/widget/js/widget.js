@@ -122,6 +122,13 @@
             '.offcomfrt-tracking-row span:last-child{font-size:13px;font-weight:500;color:#1a1a1a;text-align:right}',
             '.offcomfrt-tracking-link{display:block;text-align:center;margin-top:16px;padding:12px;background:#f8f9fa;border-radius:12px;color:#1a1a1a;text-decoration:none;font-size:13px;font-weight:600;transition:all 0.2s ease;border:1px solid #e5e5e5}',
             '.offcomfrt-tracking-link:hover{background:#000;color:#fff;border-color:#000}',
+            '.offcomfrt-timeline-title{font-size:11px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:0.8px;margin-top:16px}',
+            '.offcomfrt-timeline{margin-top:10px}',
+            '.offcomfrt-timeline-item{display:flex;gap:10px;padding:6px 0;border-bottom:1px solid #f7f7f7}',
+            '.offcomfrt-timeline-item:last-child{border-bottom:none}',
+            '.offcomfrt-timeline-dot{width:8px;height:8px;border-radius:50%;background:#1a1a1a;margin-top:4px;flex-shrink:0}',
+            '.offcomfrt-timeline-activity{font-size:13px;font-weight:500;color:#1a1a1a}',
+            '.offcomfrt-timeline-meta{font-size:11px;color:#999;margin-top:2px}',
 
             /* Ticket Form */
             '.offcomfrt-ticket-form{background:#fff;border:1px solid #e0e0e0;border-radius:16px;padding:20px;margin:4px 0;box-shadow:0 4px 16px rgba(0,0,0,0.06);animation:offcomfrt-slideUp 0.35s cubic-bezier(0.16,1,0.3,1);width:100%}',
@@ -500,7 +507,7 @@
 
     function trackOrder(query) {
         showTyping();
-        var body = {};
+        var body = { sessionId: sessionId };
         var cleaned = query.replace(/\s/g, '');
         if (/^#?\d{4,9}$/.test(cleaned)) {
             // Order ID (4-5 digit OFFCOMFRT order numbers) — AWB resolved internally
@@ -526,6 +533,9 @@
                     showQuickActions();
                 } else {
                     addTrackingCard(data);
+                    // Let the AI know tracking just happened so follow-up
+                    // questions ("is it out for delivery?") share the context.
+                    notifyAIOfTracking(data);
                 }
             })
             .catch(function (err) {
@@ -533,6 +543,27 @@
                 console.error('[offcomfrt] tracking error:', err);
                 addBotMessage('Unable to fetch tracking info right now. Please try again later.');
             });
+    }
+
+    /**
+     * Silently record the direct-tracking exchange into the AI session so
+     * follow-up questions ("when will it arrive?") know the order + status
+     * without asking the customer for the order number again.
+     */
+    function notifyAIOfTracking(data) {
+        var orderId = String(data.orderId || '').replace(/^#/, '').trim();
+        var summary = 'Tracking shown for order ' + (orderId || 'the customer\'s order')
+            + ': ' + (data.status || 'Unknown') + ' via ' + (data.carrierName || 'carrier') + '.';
+        fetch(API_URL + '/api/widget/context', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sessionId: sessionId,
+                userMessage: orderId ? 'Track order ' + orderId : 'Track my order',
+                botMessage: summary,
+                entities: /^\d{3,6}$/.test(orderId) ? { orderId: orderId } : {}
+            })
+        }).catch(function () { /* non-critical — never block the UI on this */ });
     }
 
     function addTrackingCard(data, save) {
@@ -558,6 +589,9 @@
         html += '<span class="offcomfrt-tracking-status ' + statusClass + '">' + escapeHtml(statusText) + '</span>';
         html += '</div>';
 
+        if (data.orderId) {
+            html += '<div class="offcomfrt-tracking-row"><span>Order Number</span><span>' + escapeHtml(data.orderId) + '</span></div>';
+        }
         if (data.awb) {
             html += '<div class="offcomfrt-tracking-row"><span>AWB Number</span><span>' + escapeHtml(data.awb) + '</span></div>';
         }
@@ -576,6 +610,27 @@
         if (data.note) {
             html += '<div class="offcomfrt-tracking-row"><span></span><span style="color:#666;font-style:italic;font-size:12px;">' + escapeHtml(data.note) + '</span></div>';
         }
+
+        // Shipment timeline (most recent scans first)
+        if (data.timeline && data.timeline.length) {
+            html += '<div class="offcomfrt-timeline-title">Shipment Timeline</div>';
+            html += '<div class="offcomfrt-timeline">';
+            var items = data.timeline.slice();
+            items.sort(function (a, b) { return (Date.parse(b.date || '') || 0) - (Date.parse(a.date || '') || 0); });
+            items = items.slice(0, 8);
+            items.forEach(function (t) {
+                var label = t.activity || t.status || 'Update';
+                var meta = [t.date, t.location].filter(Boolean).join(' &middot; ');
+                html += '<div class="offcomfrt-timeline-item">';
+                html += '<div class="offcomfrt-timeline-dot"></div>';
+                html += '<div class="offcomfrt-timeline-text">';
+                html += '<div class="offcomfrt-timeline-activity">' + escapeHtml(label) + '</div>';
+                if (meta) html += '<div class="offcomfrt-timeline-meta">' + escapeHtml(meta) + '</div>';
+                html += '</div></div>';
+            });
+            html += '</div>';
+        }
+
         if (data.trackingUrl) {
             html += '<a href="' + escapeHtml(data.trackingUrl) + '" target="_blank" class="offcomfrt-tracking-link">Track Live &rarr;</a>';
         }

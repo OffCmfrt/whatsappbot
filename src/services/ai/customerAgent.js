@@ -115,6 +115,8 @@ RULES:
 - If the customer previously shared an order number, use it for follow-up questions without asking again.
 - To track, you only need the order number (a 4-5 digit number, "#" prefix optional). Treat any standalone 4-5 digit number the customer sends as their order ID and track it directly.
 - NEVER ask the customer for an AWB / courier tracking number — the system resolves tracking internally from the order ID. Use track_order_by_id, not track_awb.
+- If an order ID appears in the CONVERSATION CONTEXT above, NEVER ask for the order number again — use that order ID directly with the tools.
+- When you need to show an example order number, always use 42000 — never invent other examples.
 - If you cannot resolve the issue after 2-3 attempts, offer to create a support ticket.
 - Never invent order numbers, tracking data, or policies. If unsure, say so.
 - Amounts are in INR. Times are in IST (UTC+5:30).
@@ -142,6 +144,32 @@ function getCustomerToolSchemas() {
             type: 'function',
             function: { name: t.name, description: t.description, parameters: t.parameters }
         }));
+}
+
+/**
+ * Record an entity (e.g. order ID typed into the direct tracking flow)
+ * into the AI session context so follow-up questions like "where is my
+ * order" already know which order the customer means.
+ */
+function noteSessionContext({ sessionId, entities }) {
+    if (!sessionId || !entities) return;
+    const session = getSession(sessionId);
+    const context = { ...session.context, ...entities };
+    saveSession(sessionId, session.history, context);
+}
+
+/**
+ * Append a synthetic exchange to the session history (used when the widget
+ * handles something outside the AI chat, e.g. the direct tracking card) so
+ * subsequent AI turns see it as prior conversation. No LLM call is made.
+ */
+function appendSessionExchange({ sessionId, userMessage, botMessage, entities }) {
+    if (!sessionId) return;
+    const session = getSession(sessionId);
+    if (userMessage) session.history.push({ role: 'user', content: String(userMessage).slice(0, 500) });
+    if (botMessage) session.history.push({ role: 'assistant', content: String(botMessage).slice(0, 500) });
+    const context = entities ? { ...session.context, ...entities } : session.context;
+    saveSession(sessionId, session.history, context);
 }
 
 // ---------- Main chat function ----------
@@ -173,10 +201,17 @@ async function runCustomerAgent({ sessionId, message }) {
 
     const systemPrompt = buildSystemPrompt(context, language);
 
+    // If the customer asks about an order without repeating the number,
+    // remind the model of the order ID we already have so it never asks again.
+    let userContent = message;
+    if (context.orderId && !newEntities.orderId && /track|status|where|order|deliver|ship|kaha|kya/i.test(message)) {
+        userContent = `${message}\n\n[System note: the customer's order ID from earlier in this conversation is ${context.orderId}. Use track_order_by_id with this order ID — do NOT ask for the order number again.]`;
+    }
+
     const messages = [
         { role: 'system', content: systemPrompt },
         ...session.history,
-        { role: 'user', content: message }
+        { role: 'user', content: userContent }
     ];
 
     let reply = null;
@@ -283,4 +318,4 @@ async function createWidgetTicket({ name, phone, email, message, orderId }) {
     return { ticketNumber, whatsappLink };
 }
 
-module.exports = { runCustomerAgent, createWidgetTicket };
+module.exports = { runCustomerAgent, createWidgetTicket, noteSessionContext, appendSessionExchange };

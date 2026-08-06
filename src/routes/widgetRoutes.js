@@ -2,6 +2,7 @@
  * Widget API routes — customer-facing support widget endpoints.
  *
  * POST /api/widget/chat        — AI-powered conversation
+ * POST /api/widget/context     — Record non-AI exchanges into the AI session
  * POST /api/widget/track-order — Multi-carrier order tracking
  * POST /api/widget/ticket      — Create support ticket (escalation)
  * GET  /api/widget/session     — Initialize session, return brand config
@@ -9,7 +10,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { runCustomerAgent, createWidgetTicket } = require('../services/ai/customerAgent');
+const { runCustomerAgent, createWidgetTicket, noteSessionContext, appendSessionExchange } = require('../services/ai/customerAgent');
 const { getAdapter, getConfiguredCarriers } = require('../services/carriers');
 
 // ---------- Rate limiter for widget endpoints ----------
@@ -81,19 +82,50 @@ router.post('/chat', async (req, res) => {
     }
 });
 
+// ---------- POST /api/widget/context ----------
+// Silently records an exchange handled outside the AI chat (e.g. the direct
+// tracking card) into the AI session, so follow-up AI turns keep context.
+
+router.post('/context', (req, res) => {
+    try {
+        const { sessionId, userMessage, botMessage, entities } = req.body;
+
+        if (!sessionId) {
+            return res.status(400).json({ error: 'sessionId is required' });
+        }
+
+        appendSessionExchange({ sessionId, userMessage, botMessage, entities });
+        res.json({ ok: true });
+    } catch (error) {
+        console.error('[widget] context error:', error.message);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // ---------- POST /api/widget/track-order ----------
 // Multi-carrier order tracking (Delhivery -> Ekart -> Shiprocket)
 
 router.post('/track-order', async (req, res) => {
     try {
-        const { orderId, awb, phone } = req.body;
+        const { orderId, awb, phone, sessionId } = req.body;
 
         if (!orderId && !awb && !phone) {
             return res.status(400).json({ error: 'Provide an order ID or phone number' });
         }
 
+        // Remember the order ID in the AI session even though this request
+        // bypasses the AI chat — so follow-ups like "where is my order"
+        // already know which order the customer means.
+        if (sessionId && orderId) {
+            const cleanOrderId = String(orderId).replace(/^#/, '').trim();
+            if (/^\d{3,6}$/.test(cleanOrderId)) {
+                noteSessionContext({ sessionId, entities: { orderId: cleanOrderId } });
+            }
+        }
+
         let trackingResult = null;
         let carrierUsed = null;
+        let resolvedAwb = awb || null;
 
         // Case 1: AWB provided — try all carriers in sequence
         if (awb) {
@@ -152,6 +184,7 @@ router.post('/track-order', async (req, res) => {
                 }
 
                 if (shipmentAwb) {
+                    resolvedAwb = shipmentAwb;
                     const carriers = getConfiguredCarriers().map(c => c.key);
                     const orderedCarriers = shipmentCarrier && carriers.includes(shipmentCarrier)
                         ? [shipmentCarrier, ...carriers.filter(c => c !== shipmentCarrier)]
@@ -225,6 +258,7 @@ router.post('/track-order', async (req, res) => {
                         const orderAwb = trackingInfo?.number || trackingInfo?.tracking_number;
 
                         if (orderAwb) {
+                            resolvedAwb = orderAwb;
                             // Now track this AWB across carriers
                             const carriers = getConfiguredCarriers().map(c => c.key);
                             const preferredOrder = ['delhivery', 'ekart', 'shiprocket'];
@@ -285,21 +319,52 @@ router.post('/track-order', async (req, res) => {
             });
         }
 
-        // Format the response for the widget UI
+        // Format the response for the widget UI.
+        // Carrier adapters return the normalized shape
+        //   { currentStatus, expectedDelivery, timeline: [{date, location, activity, status}] }
+        // while raw Shiprocket payloads use shipment_track[0] with snake_case keys —
+        // support both so the card never renders empty.
         const trackData = trackingResult.shipment_track?.[0] || trackingResult;
+
+        const rawTimeline = trackingResult.timeline
+            || trackData.timeline
+            || trackData.track_status
+            || trackingResult.shipment_track_activities
+            || trackData.shipment_track_activities
+            || null;
+
+        const timeline = Array.isArray(rawTimeline)
+            ? rawTimeline.map(t => ({
+                date: t.date || t.ScanDateTime || null,
+                location: t.location || t.ScannedLocation || '',
+                activity: t.activity || t.description || t.Instructions || t.status || '',
+                status: t.status || ''
+            }))
+            : null;
+
+        // Most recent scan (by date) gives us the current location
+        let latestScan = null;
+        if (timeline && timeline.length) {
+            latestScan = timeline.reduce((a, b) => {
+                const da = Date.parse(a?.date || '') || 0;
+                const db = Date.parse(b?.date || '') || 0;
+                return db > da ? b : a;
+            });
+        }
+
         res.json({
             carrier: carrierUsed,
             carrierName: carrierUsed === 'shopify' ? 'Shopify' : (getConfiguredCarriers().find(c => c.key === carrierUsed)?.name || carrierUsed),
-            awb: trackData.awb_code || trackData.awb || awb,
-            orderId: orderId || null,
-            status: trackData.current_status || trackData.fulfillmentStatus || 'Unknown',
-            location: trackData.current_location || null,
+            awb: trackData.awb_code || trackData.awb || resolvedAwb || null,
+            orderId: orderId ? String(orderId).replace(/^#/, '').trim() : null,
+            status: trackData.currentStatus || trackData.current_status || trackData.fulfillmentStatus || 'Unknown',
+            location: trackData.current_location || latestScan?.location || null,
             shippedDate: trackData.shipped_date || null,
-            expectedDelivery: trackData.edd || null,
+            expectedDelivery: trackData.expectedDelivery || trackData.edd || trackData.etd || null,
             deliveredDate: trackData.delivered_date || null,
             trackingUrl: trackData.tracking_url || null,
             note: trackData.note || null,
-            timeline: trackData.track_status || trackData.shipment_track_activities || null
+            timeline: timeline
         });
 
     } catch (error) {

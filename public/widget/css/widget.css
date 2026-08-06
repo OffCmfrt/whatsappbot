@@ -555,6 +555,52 @@
     border-color: #000;
 }
 
+/* ---------- Tracking Timeline ---------- */
+.offcomfrt-timeline-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-top: 16px;
+}
+
+.offcomfrt-timeline {
+    margin-top: 10px;
+}
+
+.offcomfrt-timeline-item {
+    display: flex;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid #f7f7f7;
+}
+
+.offcomfrt-timeline-item:last-child {
+    border-bottom: none;
+}
+
+.offcomfrt-timeline-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #1a1a1a;
+    margin-top: 4px;
+    flex-shrink: 0;
+}
+
+.offcomfrt-timeline-activity {
+    font-size: 13px;
+    font-weight: 500;
+    color: #1a1a1a;
+}
+
+.offcomfrt-timeline-meta {
+    font-size: 11px;
+    color: #999;
+    margin-top: 2px;
+}
+
 /* ---------- Ticket Form ---------- */
 .offcomfrt-ticket-form {
     background: #fff;
