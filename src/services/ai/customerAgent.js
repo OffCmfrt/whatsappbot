@@ -55,10 +55,12 @@ setInterval(() => {
 
 function extractEntities(text) {
     const entities = {};
-    // Order IDs: #1234 or ORD-1234 or plain 7+ digit numbers
-    const orderMatch = text.match(/#(\d{3,})/) || text.match(/\b(?:ORD|ORDER)[-_ ]?(\d{3,})\b/i);
+    // Order IDs: #1234, ORD-1234, or a standalone 4-5 digit order number (e.g. "42000")
+    const orderMatch = text.match(/#(\d{3,})/)
+        || text.match(/\b(?:ORD|ORDER)[-_ ]?(\d{3,})\b/i)
+        || text.match(/\b(\d{4,5})\b/);
     if (orderMatch) entities.orderId = orderMatch[1];
-    // AWB: 8-16 digit numbers (not matching order pattern)
+    // AWB: 10-16 digit numbers (order IDs are only 4-5 digits, so no clash)
     const awbMatch = text.match(/\b(\d{10,16})\b/);
     if (awbMatch && !entities.orderId) entities.awb = awbMatch[1];
     // Pin code: 6-digit number
@@ -88,7 +90,8 @@ function buildSystemPrompt(context, language) {
 ${langInstruction}
 
 YOUR CAPABILITIES:
-- Track orders by order number (e.g. #1234) or AWB tracking number
+- Track orders using just the order number (a 4-5 digit number, e.g. 42000 or #42000)
+- Tracking is resolved automatically from Shoppers Hub data — the customer never needs an AWB
 - Check delivery status across carriers (Delhivery, Ekart, Shiprocket)
 - Answer questions about OFFCOMFRT's return/exchange policy, shipping times, sizing
 - Check if an order is eligible for return
@@ -110,7 +113,8 @@ ${contextStr ? `CONVERSATION CONTEXT (from earlier messages):${contextStr}` : ''
 RULES:
 - Be warm, concise, and helpful. Use short paragraphs.
 - If the customer previously shared an order number, use it for follow-up questions without asking again.
-- Always ask for the order number or AWB before tracking (unless already provided in context).
+- To track, you only need the order number (a 4-5 digit number, "#" prefix optional). Treat any standalone 4-5 digit number the customer sends as their order ID and track it directly.
+- NEVER ask the customer for an AWB / courier tracking number — the system resolves tracking internally from the order ID. Use track_order_by_id, not track_awb.
 - If you cannot resolve the issue after 2-3 attempts, offer to create a support ticket.
 - Never invent order numbers, tracking data, or policies. If unsure, say so.
 - Amounts are in INR. Times are in IST (UTC+5:30).
@@ -122,6 +126,7 @@ RULES:
 
 const CUSTOMER_TOOLS = [
     'shopify_search_orders',
+    'track_order_by_id',
     'track_awb',
     'check_serviceability',
     'search_orders_by_phone',

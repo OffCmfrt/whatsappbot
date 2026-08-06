@@ -122,9 +122,7 @@ const errorMessages = {
     invalidOrderId: (lang = 'en') => {
         if (lang === 'en') return `⚠️ *That does not appear to be a valid order ID.*
 
-▫️ Please send:
-▫️ Your order number (e.g. 12345)
-▫️ Or your AWB tracking number
+▫️ Please send your order number (e.g. 42000).
 
 💡 Type *help* for more options.`.trim();
         return `⚠️ ${translate('error', lang)}`;
@@ -151,7 +149,7 @@ const errorMessages = {
 const helpMessage = () => `🎧 *OFFCOMFRT SUPPORT*
 
 📦 *Check Order Status*
-▫️ Send your order ID or AWB tracking number.
+▫️ Send your order ID (e.g. 42000).
 
 🕰️ *View Order History*
 ▫️ Type "orders" or "history".

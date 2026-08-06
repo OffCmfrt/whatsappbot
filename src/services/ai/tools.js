@@ -269,6 +269,104 @@ const tools = [
         }
     },
     {
+        name: 'track_order_by_id',
+        description: 'Track a shipment using ONLY the OFFCOMFRT order ID (the 4-5 digit order number, e.g. "42000" or "#42000"). Resolves the AWB internally from Shoppers Hub shipment data and returns live carrier tracking. Customers never need to provide an AWB — always prefer this tool over track_awb for customer queries.',
+        parameters: {
+            type: 'object',
+            properties: {
+                orderId: { type: 'string', description: 'Order ID / order number (e.g. "42000" or "#42000")' }
+            },
+            required: ['orderId']
+        },
+        requiresConfirmation: false,
+        async execute({ orderId }) {
+            const name = String(orderId || '').replace(/^#/, '').trim();
+            if (!name) return { error: 'Order ID is required' };
+
+            // 1. Shoppers Hub shipment record — carries the AWB + carrier we booked with
+            let shipment = null;
+            try {
+                const rows = await dbAdapter.query(
+                    `SELECT order_id, carrier, awb, courier_name, status, tracking_url, created_at
+                     FROM shipments
+                     WHERE order_id = ? AND awb IS NOT NULL
+                     ORDER BY CASE WHEN status NOT IN ('cancelled', 'failed') THEN 0 ELSE 1 END, id DESC
+                     LIMIT 1`,
+                    [name]
+                );
+                shipment = rows[0] || null;
+            } catch (e) { /* shipments table may not exist yet */ }
+
+            // 2. Fallback: cached orders table
+            let orderRow = null;
+            try {
+                const rows = await dbAdapter.query(
+                    `SELECT order_id, status, awb, courier_name, expected_delivery, created_at
+                     FROM orders WHERE order_id = ? LIMIT 1`,
+                    [name]
+                );
+                orderRow = rows[0] || null;
+            } catch (e) { /* ignore */ }
+
+            const awb = shipment?.awb || orderRow?.awb || null;
+
+            // 3. Live carrier tracking — try the booking carrier first, then the rest
+            if (awb) {
+                const { getAdapter, getConfiguredCarriers } = require('../carriers');
+                const preferred = shipment?.carrier ? [shipment.carrier] : [];
+                const carrierOrder = [
+                    ...preferred,
+                    ...getConfiguredCarriers().map(c => c.key).filter(k => !preferred.includes(k))
+                ];
+                const errors = [];
+                for (const key of carrierOrder) {
+                    try {
+                        const adapter = getAdapter(key);
+                        if (!adapter || !adapter.isConfigured()) continue;
+                        const result = await adapter.track(awb);
+                        if (result && result.success !== false) {
+                            return { carrier: key, orderId: name, awb, tracking: result.data || result };
+                        }
+                        errors.push(`${key}: ${result?.error || 'no data'}`);
+                    } catch (e) {
+                        errors.push(`${key}: ${e.message}`);
+                    }
+                }
+                return {
+                    orderId: name,
+                    awb,
+                    shipmentStatus: shipment?.status || orderRow?.status || null,
+                    note: 'Shipment found but live tracking is not available yet. Please check back later.',
+                    attempts: errors
+                };
+            }
+
+            // 4. No AWB yet — report what Shoppers Hub knows about the order
+            let shopper = null;
+            try {
+                const rows = await dbAdapter.query(
+                    `SELECT order_id, status, product_name, delivery_type
+                     FROM store_shoppers WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`,
+                    [name]
+                );
+                shopper = rows[0] || null;
+            } catch (e) { /* ignore */ }
+
+            if (shipment || shopper || orderRow) {
+                return {
+                    orderId: name,
+                    awb: null,
+                    shipmentStatus: shipment?.status || null,
+                    shopperStatus: shopper?.status || null,
+                    orderStatus: orderRow?.status || null,
+                    note: 'This order has not been handed to a courier yet, so live tracking is not available. Tracking will appear here as soon as it ships.'
+                };
+            }
+
+            return { error: `No order found with ID ${name}` };
+        }
+    },
+    {
         name: 'check_serviceability',
         description: 'Check whether a delivery pincode is serviceable (COD / prepaid availability) with the configured carriers.',
         parameters: {
@@ -739,6 +837,7 @@ const TOOL_TRIGGERS = {
     get_abandoned_carts: /\b(carts?|abandon\w*|checkouts?|recover\w*)\b/i,
     shopify_search_orders: /\b(orders?|shopify|purchases?|bought|payments?|refunds?|fulfill?\w*|cod|prepaid)\b|#\d+/i,
     track_awb: /\b(track\w*|awb|waybill|shipments?|couriers?|deliver\w*|transit|shipping)\b/i,
+    track_order_by_id: /\b(track\w*|orders?|status|where|deliver\w*|ship\w*)\b|#?\d{4,5}/i,
     check_serviceability: /\b(pin ?codes?|serviceab\w*|deliverable|cod|prepaid)\b/i,
     list_shipments: /\b(shipments?|shipped|awb|couriers?|labels?|manifest|shipping)\b/i,
     book_shipment: /\b(book\w*|ship\b|shipment|couriers?)\b/i,

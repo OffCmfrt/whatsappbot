@@ -10,7 +10,7 @@ const translations = {
 
         languageSet: (lang) => `Language updated to *${lang}*.`,
 
-        help: "We can help you with the following:\n\n*Track Order* — Send your order ID or AWB number\n*Order History* — Type \"orders\"\n*Returns* — Type \"return\" (within 2 days of delivery)\n*Exchanges* — Type \"exchange\" (within 2 days of delivery)\n*Change Language* — Type \"language\"",
+        help: "We can help you with the following:\n\n*Track Order* — Send your order ID (e.g. 42000)\n*Order History* — Type \"orders\"\n*Returns* — Type \"return\" (within 2 days of delivery)\n*Exchanges* — Type \"exchange\" (within 2 days of delivery)\n*Change Language* — Type \"language\"",
 
         orderNotFound: "Order not found. Please verify your order ID and try again.",
         orderStatus: "*Order Status*",

@@ -117,9 +117,7 @@ class FAQHandler {
                 question: 'How can I track my order?',
                 answer: `⚫ *OFFCOMFRT — TRACK YOUR ORDER*
 
-▫️ Send us one of the following:
-▫️ Your Order ID (e.g. ORD-2024-001)
-▫️ Your AWB tracking number
+▫️ Send us your Order ID (e.g. 42000).
 
 ▫️ We will show you:
 ▫️ Current status

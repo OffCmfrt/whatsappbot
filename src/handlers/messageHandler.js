@@ -312,8 +312,8 @@ class MessageHandler {
 
             case 'status': {
                 const statusPrompt = lang === 'en'
-                    ? '📱 *OffComfrt*\n\n▫️ Please send your *Order ID* or AWB number to check status.\n\n▫️ Or select an option below.'
-                    : '📱 *OffComfrt*\n\n' + LanguageService.translate('orderStatus', lang) + '\n\n▫️ Please send your Order ID or AWB number.';
+                    ? '📱 *OffComfrt*\n\n▫️ Please send your *Order ID* (e.g. 42000) to check status.\n\n▫️ Or select an option below.'
+                    : '📱 *OffComfrt*\n\n' + LanguageService.translate('orderStatus', lang) + '\n\n▫️ Please send your Order ID.';
                 await whatsappService.sendListMessage(
                     phone,
                     statusPrompt,

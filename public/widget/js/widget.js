@@ -328,8 +328,8 @@
     function handleQuickAction(action) {
         hideQuickActions();
         if (action === 'track') {
-            addBotMessage('Sure! Please enter your order number (e.g. #1234) or AWB tracking number.');
-            setInputPlaceholder('Enter order # or AWB...');
+            addBotMessage('Sure! Please enter your order number (e.g. 42000).');
+            setInputPlaceholder('Enter your order number...');
         } else if (action === 'return_policy') {
             addUserMessage('What is your return policy?');
             sendToAI('What is your return policy?');
@@ -363,7 +363,7 @@
         hideQuickActions();
         setInputPlaceholder('Type a message...');
 
-        if (/^#\d+$/i.test(text) || /^\d{10,}$/.test(text.replace(/\s/g, ''))) {
+        if (/^#?\d{4,}$/.test(text.replace(/\s/g, ''))) {
             trackOrder(text);
         } else {
             sendToAI(text);
@@ -501,11 +501,13 @@
     function trackOrder(query) {
         showTyping();
         var body = {};
-        if (/^#\d+$/i.test(query)) {
-            body.orderId = query.replace(/^#/, '');
-        } else if (/^\d{10,}$/.test(query.replace(/\s/g, ''))) {
-            body.awb = query.replace(/\s/g, '');
-            body.orderId = query.replace(/^#/, '');
+        var cleaned = query.replace(/\s/g, '');
+        if (/^#?\d{4,9}$/.test(cleaned)) {
+            // Order ID (4-5 digit OFFCOMFRT order numbers) — AWB resolved internally
+            body.orderId = cleaned.replace(/^#/, '');
+        } else if (/^\d{10,}$/.test(cleaned)) {
+            body.awb = cleaned;
+            body.orderId = cleaned;
         } else {
             body.orderId = query;
         }
@@ -520,7 +522,7 @@
                 hideTyping();
                 if (data.error) {
                     addBotMessage(data.error);
-                    addBotMessage('You can also try entering a different order number or AWB, or talk to our support team.');
+                    addBotMessage('You can also try a different order number, or talk to our support team.');
                     showQuickActions();
                 } else {
                     addTrackingCard(data);

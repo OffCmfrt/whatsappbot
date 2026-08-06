@@ -89,7 +89,7 @@ router.post('/track-order', async (req, res) => {
         const { orderId, awb, phone } = req.body;
 
         if (!orderId && !awb && !phone) {
-            return res.status(400).json({ error: 'Provide orderId, awb, or phone' });
+            return res.status(400).json({ error: 'Provide an order ID or phone number' });
         }
 
         let trackingResult = null;
@@ -121,8 +121,89 @@ router.post('/track-order', async (req, res) => {
             }
         }
 
-        // Case 2: Order ID provided — look up in Shopify to get AWB
+        // Case 2: Order ID provided — resolve AWB internally (customer never needs one)
         if (!trackingResult && orderId) {
+            const orderName = String(orderId).replace(/^#/, '').trim();
+
+            // 2a. Shoppers Hub shipment data — shipments/orders tables carry the booked AWB
+            try {
+                const { dbAdapter } = require('../database/db');
+                let shipmentAwb = null;
+                let shipmentCarrier = null;
+
+                const shipRows = await dbAdapter.query(
+                    `SELECT carrier, awb FROM shipments
+                     WHERE order_id = ? AND awb IS NOT NULL
+                     ORDER BY CASE WHEN status NOT IN ('cancelled', 'failed') THEN 0 ELSE 1 END, id DESC
+                     LIMIT 1`,
+                    [orderName]
+                );
+                if (shipRows && shipRows.length > 0) {
+                    shipmentAwb = shipRows[0].awb;
+                    shipmentCarrier = shipRows[0].carrier;
+                }
+
+                if (!shipmentAwb) {
+                    const orderRows = await dbAdapter.query(
+                        'SELECT awb, courier_name FROM orders WHERE order_id = ? LIMIT 1',
+                        [orderName]
+                    );
+                    shipmentAwb = orderRows?.[0]?.awb || null;
+                }
+
+                if (shipmentAwb) {
+                    const carriers = getConfiguredCarriers().map(c => c.key);
+                    const orderedCarriers = shipmentCarrier && carriers.includes(shipmentCarrier)
+                        ? [shipmentCarrier, ...carriers.filter(c => c !== shipmentCarrier)]
+                        : carriers;
+
+                    for (const carrierKey of orderedCarriers) {
+                        try {
+                            const adapter = getAdapter(carrierKey);
+                            if (!adapter || !adapter.isConfigured()) continue;
+                            const result = await adapter.track(shipmentAwb);
+                            if (result && result.success !== false && result.data) {
+                                trackingResult = result.data;
+                                carrierUsed = carrierKey;
+                                break;
+                            }
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+
+                    // AWB exists but no live tracking yet — still report the order
+                    if (!trackingResult) {
+                        trackingResult = {
+                            awb: shipmentAwb,
+                            orderId: orderName,
+                            note: 'Your order has been shipped. Live tracking updates will appear here shortly.'
+                        };
+                        carrierUsed = shipmentCarrier || 'shopify';
+                    }
+                } else {
+                    // No AWB yet — check if the order exists in Shoppers Hub and report its stage
+                    const shopperRows = await dbAdapter.query(
+                        'SELECT status FROM store_shoppers WHERE order_id = ? ORDER BY created_at DESC LIMIT 1',
+                        [orderName]
+                    );
+                    if (shopperRows && shopperRows.length > 0) {
+                        trackingResult = {
+                            orderId: orderName,
+                            fulfillmentStatus: shopperRows[0].status,
+                            note: shopperRows[0].status === 'delivered'
+                                ? 'Your order has been delivered.'
+                                : 'Your order is being processed and will ship soon. Tracking will appear here once it ships.'
+                        };
+                        carrierUsed = 'shopify';
+                    }
+                }
+            } catch (hubErr) {
+                console.warn('[widget] Shoppers Hub lookup failed:', hubErr.message);
+            }
+
+            // 2b. Fallback: Shopify fulfillment lookup
+            if (!trackingResult) {
             try {
                 const axios = require('axios');
                 const shop = process.env.SHOPIFY_STORE;
@@ -194,11 +275,12 @@ router.post('/track-order', async (req, res) => {
             } catch (shopifyErr) {
                 console.warn('[widget] Shopify lookup failed:', shopifyErr.message);
             }
+            }
         }
 
         if (!trackingResult) {
             return res.status(404).json({
-                error: 'No tracking data found. Please verify your order ID or AWB and try again.',
+                error: 'No tracking data found. Please verify your order number and try again.',
                 triedCarriers: getConfiguredCarriers().map(c => c.name)
             });
         }
