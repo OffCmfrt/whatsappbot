@@ -805,6 +805,94 @@ const tools = [
                 portalUrl: 'offcomfrt.in → Support → Return/Exchange'
             };
         }
+    },
+    {
+        name: 'check_return_exchange_status',
+        description: 'Look up the customer\'s actual return and exchange requests (live status from the returns system). Use when a customer asks about the status of a return, exchange, refund, or pickup — e.g. "has my return been approved", "when is the pickup", "where is my refund". Accepts a request ID with REQ- prefix (e.g. "REQ-12345"), an order ID (preferred), or a phone number.',
+        parameters: {
+            type: 'object',
+            properties: {
+                requestId: { type: 'string', description: 'Return/exchange request ID with REQ- prefix (e.g. "REQ-12345")' },
+                orderId: { type: 'string', description: 'Order ID the return/exchange was filed for (e.g. "42000")' },
+                phone: { type: 'string', description: 'Customer phone number — fallback lookup if no order ID is known' }
+            }
+        },
+        requiresConfirmation: false,
+        async execute({ requestId, orderId, phone }) {
+            const reqId = String(requestId || '').trim().toUpperCase();
+            const name = String(orderId || '').replace(/^#/, '').trim();
+            const digits = String(phone || '').replace(/\D/g, '');
+
+            // Direct request-ID match first (REQ- prefix IDs from the returns portal)
+            if (reqId) {
+                const bareId = reqId.replace(/^REQ-/, '');
+                const returnRows = await dbAdapter.query(
+                    `SELECT return_id, order_id, reason, status, pickup_scheduled_date,
+                            refund_amount, refund_status, created_at, updated_at
+                     FROM returns WHERE return_id = ? OR return_id = ? ORDER BY created_at DESC LIMIT 3`,
+                    [reqId, bareId]
+                );
+                const exchangeRows = await dbAdapter.query(
+                    `SELECT exchange_id, order_id, old_items, new_items, reason, status,
+                            price_difference, payment_status, pickup_scheduled_date, created_at, updated_at
+                     FROM exchanges WHERE exchange_id = ? OR exchange_id = ? ORDER BY created_at DESC LIMIT 3`,
+                    [reqId, bareId]
+                );
+                if (returnRows.length || exchangeRows.length) {
+                    const safeParse = (v) => {
+                        if (!v || typeof v !== 'string') return v;
+                        try { return JSON.parse(v); } catch { return v; }
+                    };
+                    return {
+                        found: true,
+                        returns: returnRows.map(r => ({ ...r, items: safeParse(r.items) })),
+                        exchanges: exchangeRows.map(e => ({ ...e, old_items: safeParse(e.old_items), new_items: safeParse(e.new_items) }))
+                    };
+                }
+                // Fall through to order/phone lookup in case the customer mixed up IDs
+            }
+
+            const clauses = [];
+            const params = [];
+            if (name) { clauses.push('order_id = ?'); params.push(name); }
+            if (digits.length >= 10) { clauses.push('customer_phone LIKE ?'); params.push(`%${digits.slice(-10)}`); }
+            if (!clauses.length) {
+                return { error: 'Provide a REQ- request ID, orderId, or phone number to look up return/exchange requests' };
+            }
+            const where = `(${clauses.join(' OR ')})`;
+
+            const returnRows = await dbAdapter.query(
+                `SELECT return_id, order_id, reason, status, pickup_scheduled_date,
+                        refund_amount, refund_status, created_at, updated_at
+                 FROM returns WHERE ${where} ORDER BY created_at DESC LIMIT 3`,
+                params
+            );
+
+            const exchangeRows = await dbAdapter.query(
+                `SELECT exchange_id, order_id, old_items, new_items, reason, status,
+                        price_difference, payment_status, pickup_scheduled_date, created_at, updated_at
+                 FROM exchanges WHERE ${where} ORDER BY created_at DESC LIMIT 3`,
+                params
+            );
+
+            // items / old_items / new_items are stored as JSON strings
+            const safeParse = (v) => {
+                if (!v || typeof v !== 'string') return v;
+                try { return JSON.parse(v); } catch { return v; }
+            };
+            const returns = returnRows.map(r => ({ ...r, items: safeParse(r.items) }));
+            const exchanges = exchangeRows.map(e => ({ ...e, old_items: safeParse(e.old_items), new_items: safeParse(e.new_items) }));
+
+            if (!returns.length && !exchanges.length) {
+                return {
+                    found: false,
+                    message: 'No return or exchange request found for this order/phone',
+                    hint: 'Requests must be submitted via the returns page at offcomfrt.in/pages/return within 2 days of delivery'
+                };
+            }
+
+            return { found: true, returns, exchanges };
+        }
     }
 ];
 
@@ -846,6 +934,7 @@ const TOOL_TRIGGERS = {
     create_broadcast_draft: /\b(broadcasts?|campaigns?|blast|announce\w*)\b/i,
     run_sql_read: /\b(sql|query|database|db|tables?|select)\b/i,
     query_returns_system: /\b(returns?|exchanges?|influencers?|refunds?)\b/i,
+    check_return_exchange_status: /\b(returns?|exchanges?|refunds?|pickups?)\b|req-\d+/i,
     batch_update_tickets: /\b(batch|bulk|mass|all tickets|resolve all|close all)\b/i,
     bulk_send_whatsapp: /\b(bulk\s*send|broadcast\s*whatsapp|mass\s*message|send\s*to\s*all)\b/i,
     batch_book_shipments: /\b(batch\s*ship|bulk\s*ship|ship\s*all|book\s*all)\b/i,

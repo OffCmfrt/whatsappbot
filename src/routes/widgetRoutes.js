@@ -62,7 +62,9 @@ router.post('/chat', async (req, res) => {
 
         res.json({
             reply: result.reply,
-            suggestedAction: result.suggestedAction
+            suggestedAction: result.suggestedAction,
+            cardType: result.cardType || null,
+            cardData: result.cardData || null
         });
     } catch (error) {
         console.error('[widget] chat error:', error.message);

@@ -505,11 +505,74 @@ class MessageHandler {
         // Match REQ- followed by 4-6 digits
         const requestIdPattern = /REQ-(\d{4,6})/i;
         const match = message.match(requestIdPattern);
-        
+
         if (!match) return false;
 
-        const requestId = match[0]; // Full match: REQ-XXXX
-        
+        const requestId = match[0].toUpperCase(); // Full match: REQ-XXXX
+
+        // Live status from the returns system (Supabase returns/exchanges tables)
+        let statusLines = null;
+        try {
+            const returnRows = await dbAdapter.query(
+                `SELECT order_id, status, pickup_scheduled_date, refund_amount, refund_status
+                 FROM returns WHERE return_id = ? ORDER BY created_at DESC LIMIT 1`,
+                [requestId]
+            );
+            const exchangeRows = await dbAdapter.query(
+                `SELECT order_id, status, price_difference, payment_status, pickup_scheduled_date
+                 FROM exchanges WHERE exchange_id = ? ORDER BY created_at DESC LIMIT 1`,
+                [requestId]
+            );
+
+            const humanStatus = (s) => ({
+                'pending_approval': 'Under Review',
+                'approved': 'Approved',
+                'pickup_scheduled': 'Pickup Scheduled',
+                'rejected': 'Rejected',
+                'completed': 'Completed',
+                'initiated': 'Initiated'
+            }[String(s).toLowerCase()] || String(s || 'Pending'));
+
+            if (returnRows && returnRows.length > 0) {
+                const r = returnRows[0];
+                statusLines = [
+                    `▫️ *Type:* Return`,
+                    `▫️ *Order:* ${r.order_id || '—'}`,
+                    `▫️ *Status:* ${humanStatus(r.status)}`,
+                    r.pickup_scheduled_date ? `▫️ *Pickup:* ${String(r.pickup_scheduled_date).slice(0, 10)}` : null,
+                    r.refund_amount != null ? `▫️ *Refund:* ₹${Number(r.refund_amount).toLocaleString('en-IN')} (${r.refund_status || 'pending'})` : null
+                ].filter(Boolean);
+            } else if (exchangeRows && exchangeRows.length > 0) {
+                const e = exchangeRows[0];
+                statusLines = [
+                    `▫️ *Type:* Exchange`,
+                    `▫️ *Order:* ${e.order_id || '—'}`,
+                    `▫️ *Status:* ${humanStatus(e.status)}`,
+                    e.pickup_scheduled_date ? `▫️ *Pickup:* ${String(e.pickup_scheduled_date).slice(0, 10)}` : null,
+                    e.price_difference > 0 ? `▫️ *Extra Payment:* ₹${Number(e.price_difference).toLocaleString('en-IN')} (${e.payment_status || 'pending'})` : null,
+                    e.price_difference < 0 ? `▫️ *Refund Due:* ₹${Math.abs(Number(e.price_difference)).toLocaleString('en-IN')}` : null
+                ].filter(Boolean);
+            }
+        } catch (dbErr) {
+            console.error(`[REQ TRACK] DB lookup failed for ${requestId}:`, dbErr.message);
+        }
+
+        if (statusLines) {
+            const statusMsg = [
+                `📦 *OFFCOMFRT — REQUEST STATUS*`,
+                ``,
+                `▫️ *Request ID:* ${requestId}`,
+                ``,
+                ...statusLines,
+                ``,
+                `▫️ Our team processes all requests within *24-48 hours*.`
+            ].join('\n');
+            await whatsappService.sendMessage(phone, statusMsg);
+            console.log(`[REQ TRACK] Sent live status for ${requestId} to ${phone}`);
+            return true;
+        }
+
+        // Not found in our records — send the self-serve tracking link
         const trackingMsg = [
             `📦 *OFFCOMFRT — TRACK YOUR REQUEST*`,
             ``,

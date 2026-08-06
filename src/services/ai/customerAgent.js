@@ -55,6 +55,9 @@ setInterval(() => {
 
 function extractEntities(text) {
     const entities = {};
+    // Return/exchange request IDs: REQ-1234 to REQ-123456 (issued by the returns portal)
+    const reqMatch = text.match(/\b(REQ-\d{4,6})\b/i);
+    if (reqMatch) entities.requestId = reqMatch[1].toUpperCase();
     // Order IDs: #1234, ORD-1234, or a standalone 4-5 digit order number (e.g. "42000")
     const orderMatch = text.match(/#(\d{3,})/)
         || text.match(/\b(?:ORD|ORDER)[-_ ]?(\d{3,})\b/i)
@@ -81,6 +84,7 @@ function buildSystemPrompt(context, language) {
 
     let contextStr = '';
     if (context.orderId) contextStr += `\n- Customer's order ID (from earlier in conversation): #${context.orderId}`;
+    if (context.requestId) contextStr += `\n- Return/exchange request ID (from earlier): ${context.requestId}`;
     if (context.awb) contextStr += `\n- AWB tracking number (from earlier): ${context.awb}`;
     if (context.pincode) contextStr += `\n- Pincode mentioned: ${context.pincode}`;
     if (context.lastScenario) contextStr += `\n- Previous topic: ${context.lastScenario}`;
@@ -95,13 +99,17 @@ YOUR CAPABILITIES:
 - Check delivery status across carriers (Delhivery, Ekart, Shiprocket)
 - Answer questions about OFFCOMFRT's return/exchange policy, shipping times, sizing
 - Check if an order is eligible for return
+- Look up the LIVE status of a customer's return or exchange request (approval, pickup date, refund) from the returns system
 - Search customer's recent orders by phone
 - Look up FAQ answers from the knowledge base
 - Create a support ticket when you cannot resolve the issue
 
 OFFCOMFRT POLICIES (use these to answer FAQ):
-- Returns: Accepted within 2 days of delivery via the support portal at offcomfrt.in
-- Exchanges: Size exchanges available via the support portal within 2 days of delivery
+- Returns: Accepted within 2 days of delivery. Customers submit requests at offcomfrt.in/pages/return
+- Exchanges: Size exchanges available within 2 days of delivery, submitted at offcomfrt.in/pages/exchange. Subject to stock availability
+- Items must be unused, with original tags and packaging intact
+- Return/exchange requests are reviewed by the team within 24-48 hours
+- Return statuses: pending_approval (under review), approved (pickup being scheduled), pickup_scheduled, rejected, and completion/refund stages
 - Shipping: Orders are shipped via Delhivery, Ekart, or Shiprocket depending on the location
 - COD: Cash on delivery available for select pin codes
 - Refunds: Processed to original payment method within 5-7 business days for eligible cases
@@ -115,6 +123,8 @@ RULES:
 - If the customer previously shared an order number, use it for follow-up questions without asking again.
 - To track, you only need the order number (a 4-5 digit number, "#" prefix optional). Treat any standalone 4-5 digit number the customer sends as their order ID and track it directly.
 - NEVER ask the customer for an AWB / courier tracking number — the system resolves tracking internally from the order ID. Use track_order_by_id, not track_awb.
+- When the customer asks about a return, exchange, refund, or pickup they already submitted, use check_return_exchange_status (with the order ID from context if available) to fetch the LIVE status — never guess or invent a status. If no request is found, tell them how to submit one at offcomfrt.in/pages/return (within 2 days of delivery).
+- Return/exchange request IDs use the REQ- prefix format (e.g. REQ-12345). Treat any REQ-XXXXXXXX code the customer sends as their return/exchange request ID and look it up directly with check_return_exchange_status using the requestId parameter.
 - If an order ID appears in the CONVERSATION CONTEXT above, NEVER ask for the order number again — use that order ID directly with the tools.
 - When you need to show an example order number, always use 42000 — never invent other examples.
 - If you cannot resolve the issue after 2-3 attempts, offer to create a support ticket.
@@ -133,7 +143,8 @@ const CUSTOMER_TOOLS = [
     'check_serviceability',
     'search_orders_by_phone',
     'faq_lookup',
-    'check_return_eligibility'
+    'check_return_eligibility',
+    'check_return_exchange_status'
 ];
 
 function getCustomerToolSchemas() {
@@ -201,11 +212,16 @@ async function runCustomerAgent({ sessionId, message }) {
 
     const systemPrompt = buildSystemPrompt(context, language);
 
-    // If the customer asks about an order without repeating the number,
-    // remind the model of the order ID we already have so it never asks again.
+    // If the customer asks about an order/return without repeating the number,
+    // remind the model of the IDs we already have so it never asks again.
     let userContent = message;
-    if (context.orderId && !newEntities.orderId && /track|status|where|order|deliver|ship|kaha|kya/i.test(message)) {
-        userContent = `${message}\n\n[System note: the customer's order ID from earlier in this conversation is ${context.orderId}. Use track_order_by_id with this order ID — do NOT ask for the order number again.]`;
+    const hasKnownId = context.orderId || context.requestId;
+    if (hasKnownId && !newEntities.orderId && !newEntities.requestId && /track|status|where|order|deliver|ship|return|exchange|refund|pickup|kaha|kya/i.test(message)) {
+        const idNote = [
+            context.orderId ? `order ID ${context.orderId}` : null,
+            context.requestId ? `return/exchange request ID ${context.requestId}` : null
+        ].filter(Boolean).join(' and ');
+        userContent = `${message}\n\n[System note: the customer's ${idNote} from earlier in this conversation is known. Use it directly with the tools (track_order_by_id, check_return_exchange_status, check_return_eligibility) — do NOT ask for the order/request number again.]`;
     }
 
     const messages = [
@@ -215,6 +231,7 @@ async function runCustomerAgent({ sessionId, message }) {
     ];
 
     let reply = null;
+    let returnCard = null;
     const MAX_ROUNDS = 3;
 
     for (let round = 0; round <= MAX_ROUNDS; round++) {
@@ -261,6 +278,11 @@ async function runCustomerAgent({ sessionId, message }) {
             if (json.length > 3000) json = json.substring(0, 3000) + '...';
 
             messages.push({ role: 'tool', tool_call_id: call.id, content: json });
+
+            // Surface the newest return/exchange request as a rich status card
+            if (name === 'check_return_exchange_status' && result && result.found) {
+                returnCard = buildReturnCard(result);
+            }
         }
     }
 
@@ -285,7 +307,76 @@ async function runCustomerAgent({ sessionId, message }) {
     session.history.push({ role: 'assistant', content: reply });
     saveSession(sessionId, session.history, context);
 
-    return { reply, suggestedAction };
+    return {
+        reply,
+        suggestedAction,
+        cardType: returnCard ? 'return' : null,
+        cardData: returnCard
+    };
+}
+
+// ---------- Return/Exchange status card ----------
+
+/** Human-friendly label for a stored return/exchange status. */
+function humanizeReturnStatus(status) {
+    const s = String(status || '').toLowerCase();
+    if (s === 'pending_approval') return 'Under Review';
+    if (s === 'approved') return 'Approved';
+    if (s === 'pickup_scheduled') return 'Pickup Scheduled';
+    if (s === 'rejected') return 'Rejected';
+    if (s === 'completed' || s === 'refunded') return 'Completed';
+    if (!s) return 'Pending';
+    return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ');
+}
+
+/**
+ * Build the widget return/exchange status card payload from a
+ * check_return_exchange_status tool result (newest request wins).
+ */
+function buildReturnCard(result) {
+    const latestReturn = (result.returns || [])[0];
+    const latestExchange = (result.exchanges || [])[0];
+
+    const newest = (() => {
+        if (latestReturn && latestExchange) {
+            return new Date(latestExchange.created_at) > new Date(latestReturn.created_at)
+                ? { kind: 'exchange', row: latestExchange }
+                : { kind: 'return', row: latestReturn };
+        }
+        return latestReturn ? { kind: 'return', row: latestReturn } : { kind: 'exchange', row: latestExchange };
+    })();
+
+    const { kind, row } = newest;
+    const card = {
+        type: kind === 'return' ? 'Return' : 'Exchange',
+        status: humanizeReturnStatus(row.status),
+        orderId: row.order_id || null,
+        reason: row.reason || null,
+        eta: row.pickup_scheduled_date ? `Pickup on ${String(row.pickup_scheduled_date).slice(0, 10)}` : null
+    };
+
+    if (kind === 'return') {
+        card.returnId = row.return_id;
+        if (row.refund_amount != null) {
+            const refundState = String(row.refund_status || 'pending').toLowerCase();
+            card.refundAmount = `₹${Number(row.refund_amount).toLocaleString('en-IN')}${refundState === 'completed' ? ' (refunded)' : ''}`;
+        }
+        if (String(row.status).toLowerCase() === 'pending_approval') {
+            card.note = 'Our team reviews return requests within 24-48 hours.';
+        }
+    } else {
+        card.returnId = row.exchange_id;
+        if (row.price_difference > 0) {
+            card.note = `₹${Number(row.price_difference).toLocaleString('en-IN')} extra payment ${String(row.payment_status || '').toLowerCase() === 'completed' ? 'completed' : 'required'}.`;
+        } else if (row.price_difference < 0) {
+            card.refundAmount = `₹${Math.abs(Number(row.price_difference)).toLocaleString('en-IN')} refund due`;
+        }
+        if (String(row.status).toLowerCase() === 'pending_approval') {
+            card.note = card.note || 'Our team reviews exchange requests within 24-48 hours.';
+        }
+    }
+
+    return card;
 }
 
 // ---------- Ticket creation ----------
