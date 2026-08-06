@@ -808,7 +808,7 @@ const tools = [
     },
     {
         name: 'check_return_exchange_status',
-        description: 'Look up the customer\'s actual return and exchange requests (live status from the returns system). Use when a customer asks about the status of a return, exchange, refund, or pickup — e.g. "has my return been approved", "when is the pickup", "where is my refund". Accepts a request ID with REQ- prefix (e.g. "REQ-12345"), an order ID (preferred), or a phone number.',
+        description: 'Look up the customer\'s actual return and exchange requests (live status from the returns system). Use when a customer asks about the status of a return, exchange, refund, or pickup — e.g. "has my return been approved", "when is the pickup", "where is my refund". Works with JUST the order ID (no REQ- request ID needed) — also accepts a REQ- request ID or phone number.',
         parameters: {
             type: 'object',
             properties: {
@@ -854,7 +854,13 @@ const tools = [
 
             const clauses = [];
             const params = [];
-            if (name) { clauses.push('order_id = ?'); params.push(name); }
+            if (name) {
+                // Exact match plus "#42000" and suffixed forms (returns system may
+                // store channel-prefixed order IDs) — order numbers are 4-6 digits,
+                // so a trailing-match LIKE stays precise.
+                clauses.push('(order_id = ? OR order_id = ? OR order_id LIKE ?)');
+                params.push(name, `#${name}`, `%${name}`);
+            }
             if (digits.length >= 10) { clauses.push('customer_phone LIKE ?'); params.push(`%${digits.slice(-10)}`); }
             if (!clauses.length) {
                 return { error: 'Provide a REQ- request ID, orderId, or phone number to look up return/exchange requests' };
