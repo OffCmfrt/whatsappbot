@@ -230,6 +230,8 @@ class DelhiveryAdapter extends BaseCarrier {
             order: orderId,
             payment_mode: isCod ? 'COD' : 'Prepaid',
             shipping_mode: 'Pickup',
+            // What the label + panel show — names with sizes ("WAFFLE - 001 (M) x1")
+            products_desc: this.formatProductsDesc(ctx.items),
             // Return leg = registered warehouse (same as the panel default)
             return_name: process.env.DELHIVERY_RETURN_NAME || process.env.EKART_SELLER_NAME || 'Offcomfrt',
             return_add: process.env.DELHIVERY_RETURN_ADDRESS || process.env.EKART_SELLER_ADDRESS || '',
@@ -241,14 +243,16 @@ class DelhiveryAdapter extends BaseCarrier {
             // GSTIN is mandatory on the label per GST compliance
             seller_tin_gst: process.env.DELHIVERY_SELLER_GSTIN || process.env.EKART_SELLER_GST_TIN,
             seller_gst_cst_tin: process.env.DELHIVERY_SELLER_GSTIN || process.env.EKART_SELLER_GST_TIN,
-            total_amount: isCod ? codAmount : declared,
-            collectable_amount: isCod ? codAmount : 0,
-            cod_amount: isCod ? codAmount : 0,
-            weight: weightKg,
-            quantity: totalQty,
-            height: ctx.package.heightCm || 2,
-            breadth: ctx.package.breadthCm || 30,
-            length: ctx.package.lengthCm || 40,
+            total_amount: String(isCod ? codAmount : declared),
+            collectable_amount: String(isCod ? codAmount : 0),
+            cod_amount: String(isCod ? codAmount : 0),
+            // CMU wants strings; weight in kg, dimensions in cm under the
+            // shipment_* keys (plain height/breadth/length are ignored)
+            weight: String(weightKg),
+            quantity: String(totalQty),
+            shipment_length: String(ctx.package.lengthCm || 30),
+            shipment_width: String(ctx.package.breadthCm || 40),
+            shipment_height: String(ctx.package.heightCm || 2),
             products: (ctx.items && ctx.items.length ? ctx.items : [{ name: 'Apparel', sku: 'SKU', price: declared, quantity: 1 }]).map(item => ({
                 sku: item.sku || 'SKU',
                 name: `${item.name}${item.size ? ` (${item.size})` : ''}`.substring(0, 100),
@@ -259,10 +263,20 @@ class DelhiveryAdapter extends BaseCarrier {
             }))
         };
 
-        const requestPayload = `format=json&data=${encodeURIComponent(JSON.stringify({ shipments: [consignment] }))}`;
+        const cmuPayload = {
+            shipments: [consignment],
+            // Registers the pickup against the warehouse — without it the
+            // panel shows "Pickup address: null"
+            pickup_location: { name: process.env.DELHIVERY_PICKUP_LOCATION }
+        };
+
+        const requestPayload = new URLSearchParams({
+            format: 'json',
+            data: JSON.stringify(cmuPayload)
+        });
 
         try {
-            const response = await axios.post(`${this.baseURL}/api/cmu/create.json`, requestPayload, {
+            const response = await axios.post(`${this.baseURL}/api/cmu/create.json`, requestPayload.toString(), {
                 headers: { ...this.authHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' },
                 timeout: 30000
             });
