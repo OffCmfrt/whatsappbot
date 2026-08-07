@@ -612,9 +612,9 @@ class ReturnService {    /**
                 };
             }
 
-            // Check if within 7-day window
-            const deliveredDate = new Date(order.order_date); // Using order_date as proxy if delivered_at missing
-            // Ideally we should have a delivered_at column, checking if it exists or using updated_at
+            // Check if within 7-day window — measure from the real delivery
+            // timestamp; only fall back to order_date when it's missing
+            const deliveredDate = new Date(order.delivered_at || order.updated_at || order.order_date);
             const today = new Date();
             const daysSinceDelivery = Math.floor((today - deliveredDate) / (1000 * 60 * 60 * 24));
 

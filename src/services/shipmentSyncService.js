@@ -74,13 +74,30 @@ function resolveTransition(currentStatus, mappedStatus) {
     return to > from ? mappedStatus : null;
 }
 
+/**
+ * Pull the actual delivery timestamp out of a carrier tracking result.
+ * Prefers the scan that says "Delivered"; falls back to the newest scan
+ * (the carrier only reports delivered after the POD scan exists).
+ */
+function extractDeliveredAt(result) {
+    const timeline = result?.data?.timeline || [];
+    const isDeliverScan = e => {
+        const text = `${e.activity || ''} ${e.status || ''}`.toLowerCase();
+        return text.includes('deliver') && !text.includes('out for delivery') && !text.includes('undeliver');
+    };
+    const scan = timeline.find(isDeliverScan) || timeline[0];
+    const date = scan?.date ? new Date(scan.date) : null;
+    if (date && !isNaN(date.getTime())) return date.toISOString();
+    return new Date().toISOString();
+}
+
 // Mirror meaningful transitions onto the orders row (hub-wide visibility)
-async function syncOrderRowStatus(shipment, newStatus, expectedDelivery) {
+async function syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliveredAt) {
     try {
         if (newStatus === 'delivered') {
             await dbAdapter.query(
-                `UPDATE orders SET status = 'delivered', updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
-                [shipment.order_id, shipment.awb]
+                `UPDATE orders SET status = 'delivered', delivered_at = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
+                [deliveredAt || new Date().toISOString(), shipment.order_id, shipment.awb]
             );
         } else if (newStatus === 'rto') {
             await dbAdapter.query(
@@ -139,12 +156,15 @@ async function syncShipment(shipment) {
         return false;
     }
 
+    const deliveredAt = newStatus === 'delivered' ? extractDeliveredAt(result) : null;
+
     await dbAdapter.update('shipments', {
         status: newStatus,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        ...(deliveredAt ? { delivered_at: deliveredAt } : {})
     }, { id: shipment.id });
 
-    await syncOrderRowStatus(shipment, newStatus, expectedDelivery);
+    await syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliveredAt);
     console.log(`📦 Shipment #${shipment.id} (${shipment.order_id}, AWB ${shipment.awb}): ${shipment.status} → ${newStatus} [carrier: "${carrierStatus}"]`);
     return true;
 }
@@ -199,5 +219,6 @@ module.exports = {
     syncActiveShipments,
     mapCarrierStatus,
     resolveTransition,
+    extractDeliveredAt,
     getLastRunAt
 };

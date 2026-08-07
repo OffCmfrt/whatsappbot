@@ -782,24 +782,40 @@ const tools = [
         requiresConfirmation: false,
         async execute({ orderId }) {
             const name = String(orderId || '').replace(/^#/, '');
-            const rows = await dbAdapter.query(
-                `SELECT order_id, status, created_at, expected_delivery
-                 FROM orders WHERE order_id = ? LIMIT 1`,
-                [name]
-            );
+            let rows = [];
+            try {
+                rows = await dbAdapter.query(
+                    `SELECT order_id, status, created_at, updated_at, delivered_at
+                     FROM orders WHERE order_id = ? LIMIT 1`,
+                    [name]
+                );
+            } catch (e) {
+                // delivered_at column may not exist yet on un-migrated databases
+                rows = await dbAdapter.query(
+                    `SELECT order_id, status, created_at, updated_at
+                     FROM orders WHERE order_id = ? LIMIT 1`,
+                    [name]
+                );
+            }
             if (!rows.length) return { eligible: false, reason: 'Order not found' };
             const order = rows[0];
-            // Check if order is delivered and within 2-day return window
+            // Check if order is delivered and within 2-day return window.
+            // Measure from the REAL delivery timestamp (stamped by shipment
+            // status sync), never the order placement date — an order placed
+            // 5 days ago but delivered today is still inside the window.
             const deliveredDate = order.status?.toLowerCase().includes('delivered')
-                ? new Date(order.created_at)
+                ? new Date(order.delivered_at || order.updated_at || order.created_at)
                 : null;
-            if (!deliveredDate) return { eligible: false, reason: 'Order not yet delivered', status: order.status };
+            if (!deliveredDate || isNaN(deliveredDate.getTime())) {
+                return { eligible: false, reason: 'Order not yet delivered', status: order.status };
+            }
             const daysSinceDelivery = (Date.now() - deliveredDate.getTime()) / (1000 * 60 * 60 * 24);
             const eligible = daysSinceDelivery <= 2;
             return {
                 eligible,
                 orderId: order.order_id,
                 status: order.status,
+                deliveredAt: deliveredDate.toISOString(),
                 daysSinceDelivery: Math.round(daysSinceDelivery * 10) / 10,
                 reason: eligible ? 'Within 2-day return window' : 'Return window expired (more than 2 days since delivery)',
                 portalUrl: 'offcomfrt.in → Support → Return/Exchange'

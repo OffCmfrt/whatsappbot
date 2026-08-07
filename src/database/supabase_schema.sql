@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS orders (
     product_name TEXT,
     order_date TIMESTAMP,
     expected_delivery TIMESTAMP,
+    delivered_at TIMESTAMP,
     total DECIMAL(10, 2),
     payment_method VARCHAR(50),
     tracking_url TEXT,

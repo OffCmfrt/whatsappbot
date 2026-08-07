@@ -564,6 +564,13 @@ async function initializeShipmentsTable() {
     await pool.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS reship_of_shipment_id INTEGER');
     await pool.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS reship_reason TEXT');
 
+    // Delivery timestamp — stamped when status sync marks a shipment/order
+    // delivered (return/exchange window is measured from this, not order date)
+    await pool.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP');
+    try {
+      await pool.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP');
+    } catch (e) { /* orders table provisioned by external schema — ignore */ }
+
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_order_id ON shipments(order_id)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_awb ON shipments(awb)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status)');
