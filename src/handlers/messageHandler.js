@@ -393,7 +393,7 @@ class MessageHandler {
                 
                 // Echo the order ID so the customer knows exactly which order was confirmed
                 const confirmedLabel = target.order_id ? `*Order ID:* ${target.order_id}\n` : '';
-                await whatsappService.sendMessage(phone, `✅ *Order Confirmed*\n\n▫️ ${confirmedLabel}*Thank you for confirming your order.*\n▫️ We are processing it and will notify you once it has been shipped.\n▫️ If you have another pending order, please tap the button on that order's confirmation message.`);
+                await whatsappService.sendMessage(phone, `✅ *Order Confirmed*\n\n▫️ ${confirmedLabel}*Thank you for confirming your order.*\n▫️ We are processing it and will notify you once it has been shipped.`);
                 break;
             }
 
