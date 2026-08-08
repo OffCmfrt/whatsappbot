@@ -15,6 +15,11 @@
  *   Direct create  : POST /api/cmu/create.json
  *                    (fallback when no waybill exists yet — e.g. Shopify
  *                    channel orders sitting at "Pending AWB" in the panel)
+ *
+ * Seller/GST fields follow the official order-creation spec: seller_gst_tin
+ * is the field Delhivery stores (seller_tin_gst / seller_gst_cst_tin are
+ * silently ignored), seller_name + seller_add carry the seller details shown
+ * in the panel and printed on the label.
  *   Packing slip   : GET  /api/p/packing_slip?wbns={awb}&pdf=true
  *   Pickup request : POST /fm/request/new/
  *   Cancel         : POST /api/p/edit  ({ waybill, cancellation: 'true' })
@@ -44,6 +49,24 @@ class DelhiveryAdapter extends BaseCarrier {
 
     get apiToken() {
         return process.env.DELHIVERY_API_TOKEN || process.env.DELHIVERY_API_KEY;
+    }
+
+    // Seller identity printed on the label + shown in the panel. Mirrors the
+    // return/RTO block so the two never disagree; DELHIVERY_SELLER_* env vars
+    // can override individually, otherwise the shared EKART_SELLER_* values
+    // (already set for the Ekart integration) are reused.
+    get sellerGstin() {
+        return process.env.DELHIVERY_SELLER_GSTIN || process.env.EKART_SELLER_GST_TIN || '';
+    }
+
+    get sellerName() {
+        return process.env.DELHIVERY_SELLER_NAME || process.env.EKART_SELLER_NAME ||
+            process.env.DELHIVERY_RETURN_NAME || 'Offcomfrt';
+    }
+
+    get sellerAddress() {
+        return process.env.DELHIVERY_SELLER_ADDRESS || process.env.EKART_SELLER_ADDRESS ||
+            process.env.DELHIVERY_RETURN_ADDRESS || '';
     }
 
     isConfigured() {
@@ -233,16 +256,23 @@ class DelhiveryAdapter extends BaseCarrier {
             // What the label + panel show — names with sizes ("WAFFLE - 001 (M) x1")
             products_desc: this.formatProductsDesc(ctx.items),
             // Return leg = registered warehouse (same as the panel default)
-            return_name: process.env.DELHIVERY_RETURN_NAME || process.env.EKART_SELLER_NAME || 'Offcomfrt',
-            return_add: process.env.DELHIVERY_RETURN_ADDRESS || process.env.EKART_SELLER_ADDRESS || '',
+            return_name: process.env.DELHIVERY_RETURN_NAME || this.sellerName,
+            return_add: process.env.DELHIVERY_RETURN_ADDRESS || this.sellerAddress,
             return_pin: process.env.DELHIVERY_RETURN_PIN || '123001',
             return_city: process.env.DELHIVERY_RETURN_CITY || 'Narnaul',
             return_state: process.env.DELHIVERY_RETURN_STATE || 'Haryana',
             return_country: 'India',
             return_phone: process.env.DELHIVERY_RETURN_PHONE || phone,
-            // GSTIN is mandatory on the label per GST compliance
-            seller_tin_gst: process.env.DELHIVERY_SELLER_GSTIN || process.env.EKART_SELLER_GST_TIN,
-            seller_gst_cst_tin: process.env.DELHIVERY_SELLER_GSTIN || process.env.EKART_SELLER_GST_TIN,
+            // Seller details + GSTIN (mandatory on the label per GST
+            // compliance). Field names per Delhivery's order-creation spec:
+            // seller_gst_tin / seller_name / seller_add / seller_inv — the
+            // legacy seller_tin_gst / seller_gst_cst_tin spellings are NOT
+            // stored by Delhivery (panel GST line stayed null with them).
+            seller_gst_tin: this.sellerGstin,
+            seller_name: this.sellerName,
+            seller_add: this.sellerAddress,
+            seller_inv: orderId,
+            hsn_code: '6109', // apparel default; per-package HSN per the spec
             total_amount: String(isCod ? codAmount : declared),
             collectable_amount: String(isCod ? codAmount : 0),
             cod_amount: String(isCod ? codAmount : 0),
