@@ -360,20 +360,20 @@ class MessageHandler {
                 const confirmMsg = "Customer confirmed order via WhatsApp";
                 const now = new Date().toISOString();
                 
-                // First, find the most recent PENDING order for this customer
-                const pendingOrders = await dbAdapter.query(
-                    'SELECT id, order_id FROM store_shoppers WHERE phone = ? AND status = \'pending\' ORDER BY created_at DESC LIMIT 1',
-                    [phone]
-                );
+                // Resolve the ONE order this click belongs to — the order whose
+                // confirmation message was most recently sent to this phone.
+                // Never blanket-confirm by phone: customers with multiple orders
+                // must confirm each order from its own message.
+                const target = await this.resolveShopperForButtonClick(phone, 'pending');
                 
-                if (!pendingOrders || pendingOrders.length === 0) {
+                if (!target) {
                     console.log(`[WARN] No pending order found for ${phone} to confirm`);
                     await whatsappService.sendMessage(phone, "⚠️ *No Pending Orders*\n\n▫️ You don't have any pending orders to confirm.\n▫️ If you have multiple orders, please confirm each one separately.");
                     break;
                 }
                 
-                const targetOrderId = pendingOrders[0].id;
-                console.log(`[CONFIRM] Confirming order ${targetOrderId} for ${phone}`);
+                const targetOrderId = target.id;
+                console.log(`[CONFIRM] Confirming order ${target.order_id} (row ${targetOrderId}) for ${phone}`);
                 
                 // Update only that specific order
                 await dbAdapter.query(
@@ -391,7 +391,9 @@ class MessageHandler {
                 // Update follow-up recipients if this was from a follow-up campaign
                 await this.updateFollowUpResponse(phone, 'confirmed');
                 
-                await whatsappService.sendMessage(phone, "✅ *Order Confirmed*\n\n▫️ *Thank you for confirming your order.*\n▫️ We are processing it and will notify you once it has been shipped.");
+                // Echo the order ID so the customer knows exactly which order was confirmed
+                const confirmedLabel = target.order_id ? `*Order ID:* ${target.order_id}\n` : '';
+                await whatsappService.sendMessage(phone, `✅ *Order Confirmed*\n\n▫️ ${confirmedLabel}*Thank you for confirming your order.*\n▫️ We are processing it and will notify you once it has been shipped.\n▫️ If you have another pending order, please tap the button on that order's confirmation message.`);
                 break;
             }
 
@@ -399,20 +401,18 @@ class MessageHandler {
                 const cancelMsg = "Customer requested cancellation via WhatsApp";
                 const now = new Date().toISOString();
                 
-                // First, find the most recent PENDING order for this customer
-                const pendingOrders = await dbAdapter.query(
-                    'SELECT id, order_id FROM store_shoppers WHERE phone = ? AND status = \'pending\' ORDER BY created_at DESC LIMIT 1',
-                    [phone]
-                );
+                // Resolve the ONE order this click belongs to — same rule as confirm:
+                // match the order whose confirmation message was most recently sent.
+                const target = await this.resolveShopperForButtonClick(phone, 'pending');
                 
-                if (!pendingOrders || pendingOrders.length === 0) {
+                if (!target) {
                     console.log(`[WARN] No pending order found for ${phone} to cancel`);
                     await whatsappService.sendMessage(phone, "⚠️ *No Pending Orders*\n\n▫️ You don't have any pending orders to cancel.\n▫️ If you need help with an existing order, please contact support.");
                     break;
                 }
                 
-                const targetOrderId = pendingOrders[0].id;
-                console.log(`[CANCEL] Cancelling order ${targetOrderId} for ${phone}`);
+                const targetOrderId = target.id;
+                console.log(`[CANCEL] Cancelling order ${target.order_id} (row ${targetOrderId}) for ${phone}`);
                 
                 // Update only that specific order
                 await dbAdapter.query(
@@ -430,18 +430,15 @@ class MessageHandler {
                 // Update follow-up recipients if this was from a follow-up campaign
                 await this.updateFollowUpResponse(phone, 'cancelled');
                 
-                await whatsappService.sendMessage(phone, "❌ *Order Cancellation*\n\n▫️ *Order Cancellation Request Received.*\n▫️ Our team will process the cancellation.\n▫️ If the order has not been shipped yet, it will be cancelled shortly.");
+                await whatsappService.sendMessage(phone, `❌ *Order Cancellation*\n\n${target.order_id ? `▫️ *Order ID:* ${target.order_id}\n` : ''}▫️ *Order Cancellation Request Received.*\n▫️ Our team will process the cancellation.\n▫️ If the order has not been shipped yet, it will be cancelled shortly.`);
                 break;
             }
 
             case 'shop_edit': {
-                // Find the most recent order for this customer to edit
-                const recentShopper = await dbAdapter.query(
-                    'SELECT id, order_id FROM store_shoppers WHERE phone = ? ORDER BY created_at DESC LIMIT 1',
-                    [phone]
-                );
-                const targetOrderId = recentShopper?.[0]?.order_id || null;
-                const targetShopperId = recentShopper?.[0]?.id || null;
+                // Resolve the order this click belongs to (any status for edits)
+                const recentShopper = await this.resolveShopperForButtonClick(phone, null);
+                const targetOrderId = recentShopper?.order_id || null;
+                const targetShopperId = recentShopper?.id || null;
                 
                 if (targetShopperId) {
                     await dbAdapter.update('store_shoppers', { status: 'edit_details', updated_at: new Date().toISOString(), confirmed_by: 'whatsapp' }, { id: targetShopperId });
@@ -710,6 +707,50 @@ class MessageHandler {
             );
         } catch (error) {
             // Silent fail - cleanup is best effort
+        }
+    }
+
+    /**
+     * Resolve which order a shopper template-button click belongs to.
+     *
+     * Quick-reply buttons ("Confirm Order" / "Cancel Order" / "Edit Details")
+     * carry no order payload — the webhook only receives the button text.
+     * So we match the click to the order whose confirmation message was most
+     * recently SENT to this phone (shopper_confirmations.sent_at). That is the
+     * message the customer is looking at and replying to, which guarantees a
+     * click only ever acts on ONE order, never on the customer's other orders.
+     *
+     * Falls back to the most recent matching order when no confirmation is
+     * tracked (e.g. legacy rows created before shopper_confirmations existed).
+     *
+     * @param {string} phone  - Customer phone
+     * @param {string|null} status - Optional status filter ('pending' etc.)
+     * @returns {Promise<{id: string, order_id: string}|null>}
+     */
+    async resolveShopperForButtonClick(phone, status = null) {
+        const statusClause = status ? 'AND s.status = ?' : '';
+        const params = status ? [phone, status] : [phone];
+        try {
+            const rows = await dbAdapter.query(
+                `SELECT s.id, s.order_id, c.sent_at AS confirmation_sent_at
+                 FROM store_shoppers s
+                 LEFT JOIN shopper_confirmations c
+                        ON c.phone = s.phone AND c.order_id = s.order_id
+                 WHERE s.phone = ? ${statusClause}
+                 ORDER BY c.sent_at DESC NULLS LAST, s.created_at DESC
+                 LIMIT 1`,
+                params
+            );
+            if (rows && rows.length > 0) return rows[0];
+            return null;
+        } catch (err) {
+            // shopper_confirmations may be missing — fall back to legacy lookup
+            console.warn('[BUTTON] Confirmation-aware lookup failed, falling back:', err.message);
+            const fallbackRows = await dbAdapter.query(
+                `SELECT id, order_id FROM store_shoppers WHERE phone = ? ${status ? "AND status = ?" : ''} ORDER BY created_at DESC LIMIT 1`,
+                params
+            );
+            return fallbackRows?.[0] || null;
         }
     }
 
