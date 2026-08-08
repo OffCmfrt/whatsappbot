@@ -439,7 +439,15 @@ class MessageHandler {
                 const recentShopper = await this.resolveShopperForButtonClick(phone, null);
                 const targetOrderId = recentShopper?.order_id || null;
                 const targetShopperId = recentShopper?.id || null;
-                
+
+                // Block edits on orders that are already shipped — a late "Edit Details"
+                // click must never flip a shipped order back out of the shipped bucket.
+                if (targetOrderId && await this.isOrderShipped(targetOrderId)) {
+                    console.log(`[EDIT] Blocked edit on shipped order ${targetOrderId} for ${phone}`);
+                    await whatsappService.sendMessage(phone, `📦 *Order Already Shipped*\n\n▫️ *Order ID:* ${targetOrderId}\n▫️ Your order has already been shipped, so it can no longer be edited.`);
+                    break;
+                }
+
                 if (targetShopperId) {
                     await dbAdapter.update('store_shoppers', { status: 'edit_details', updated_at: new Date().toISOString(), confirmed_by: 'whatsapp' }, { id: targetShopperId });
                 }
@@ -707,6 +715,22 @@ class MessageHandler {
             );
         } catch (error) {
             // Silent fail - cleanup is best effort
+        }
+    }
+
+    // Check whether an order is already shipped (has an AWB or shipped status).
+    // Same derived-shipped semantics as the admin dashboard's shippedExpr.
+    async isOrderShipped(orderId) {
+        try {
+            const rows = await dbAdapter.query(
+                `SELECT 1 FROM orders WHERE order_id = ? AND (awb IS NOT NULL OR status = 'shipped') LIMIT 1`,
+                [orderId]
+            );
+            return !!(rows && rows.length > 0);
+        } catch (err) {
+            console.error('[EDIT] Failed to check shipped status:', err.message);
+            // Fail closed: treat as shipped so a DB hiccup never flips a shipped order
+            return true;
         }
     }
 

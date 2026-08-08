@@ -421,6 +421,30 @@ async function startServer() {
         console.log('🔄 Initializing database...');
         await initializeDatabase();
 
+        // One-time repair: shoppers stuck in 'edit_details' even though their order
+        // was already shipped (late "Edit Details" clicks flipped them out of the
+        // shipped bucket). Restore them to 'confirmed' so they show as shipped again.
+        // The shop_edit / follow-up handlers now guard against this going forward.
+        try {
+            const { dbAdapter } = require('./src/database/db');
+            const repair = await dbAdapter.run(
+                `UPDATE store_shoppers s
+                 SET status = 'confirmed', updated_at = ?
+                 WHERE s.status = 'edit_details'
+                   AND EXISTS (
+                       SELECT 1 FROM orders o
+                       WHERE o.order_id = s.order_id
+                         AND (o.awb IS NOT NULL OR o.status = 'shipped')
+                   )`,
+                [new Date().toISOString()]
+            );
+            if (repair.changes > 0) {
+                console.log(`🔧 Repaired ${repair.changes} shipped order(s) stuck in edit_details → restored to confirmed/shipped`);
+            }
+        } catch (err) {
+            console.warn('⚠️ edit_details shipped-repair skipped (non-critical):', err.message);
+        }
+
         // Cache statistics logging — disabled in production to avoid unnecessary allocations
         if (process.env.NODE_ENV !== 'production') {
             startCacheStatsLogging(5 * 60 * 1000);

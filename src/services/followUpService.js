@@ -596,11 +596,27 @@ class FollowUpService {
                 [recipient.campaign_id]
             );
             
-            // Update shopper status
-            await dbAdapter.query(
-                'UPDATE store_shoppers SET status = ?, updated_at = ? WHERE id = ?',
-                [responseType, new Date().toISOString(), recipient.shopper_id]
-            );
+            // Update shopper status — but never flip a shipped order to edit_details:
+            // a late "Edit Details" click on an already-shipped order must keep it shipped.
+            // Guard applies to edits only; confirm/cancel retain existing behavior.
+            if (responseType === 'edit_details') {
+                await dbAdapter.query(
+                    `UPDATE store_shoppers s
+                     SET status = ?, updated_at = ?
+                     WHERE s.id = ?
+                       AND NOT EXISTS (
+                           SELECT 1 FROM orders o
+                           WHERE o.order_id = s.order_id
+                             AND (o.awb IS NOT NULL OR o.status = 'shipped')
+                       )`,
+                    [responseType, new Date().toISOString(), recipient.shopper_id]
+                );
+            } else {
+                await dbAdapter.query(
+                    'UPDATE store_shoppers SET status = ?, updated_at = ? WHERE id = ?',
+                    [responseType, new Date().toISOString(), recipient.shopper_id]
+                );
+            }
             
             console.log(`[FollowUpService] Customer ${phone} responded with ${responseType} for order ${recipient.order_id}`);
             
