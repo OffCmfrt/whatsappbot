@@ -61,7 +61,7 @@ class DelhiveryAdapter extends BaseCarrier {
 
     get sellerName() {
         return process.env.DELHIVERY_SELLER_NAME || process.env.EKART_SELLER_NAME ||
-            process.env.DELHIVERY_RETURN_NAME || 'Offcomfrt';
+            process.env.DELHIVERY_RETURN_NAME || 'Offcomfrt Apparels Llp';
     }
 
     get sellerAddress() {
