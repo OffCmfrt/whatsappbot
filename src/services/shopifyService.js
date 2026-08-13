@@ -1030,6 +1030,151 @@ class ShopifyService {
             throw error;
         }
     }
+
+    // ==========================================
+    // SHOPIFY CANCEL & REFUND
+    // Powers the Shoppers Hub "Cancel in Shopify & Refund" bulk action:
+    // fully refunds prepaid (captured) orders, then cancels the Shopify order.
+    // COD / unpaid orders have no captured money, so they are cancelled only.
+    // Best-effort structured result — never throws.
+    // ==========================================
+
+    async cancelAndRefundOrder(orderId, { refundPrepaid = true } = {}) {
+        const result = {
+            orderId,
+            cancelled: false,
+            alreadyCancelled: false,
+            refunded: false,
+            refundAmount: null,
+            refundSkipped: null,
+            financialStatus: null,
+            error: null
+        };
+
+        const cfg = this._restConfig();
+        if (!cfg) {
+            result.error = 'Shopify credentials not configured';
+            return result;
+        }
+
+        // Resolve the hub order reference ("#1234" name or numeric ID) to the real Shopify order
+        const order = await this.getOrderById(this._toLookupId(orderId));
+        if (!order) {
+            result.error = 'Order not found in Shopify';
+            return result;
+        }
+
+        result.shopifyOrderId = order.id;
+        result.orderName = order.name;
+        result.financialStatus = order.financial_status;
+
+        // 1) Refund first — Shopify only refunds open (non-cancelled) orders
+        const isPaid = ['paid', 'partially_paid'].includes(order.financial_status);
+        if (refundPrepaid && isPaid) {
+            const hasCapturedMoney = (order.transactions || []).some(t =>
+                ['sale', 'capture'].includes(t.kind) && t.status === 'success'
+            );
+            if (!hasCapturedMoney) {
+                result.refundSkipped = 'No captured transactions to refund';
+            } else {
+                try {
+                    result.refundAmount = await this._createFullRefund(cfg, order);
+                    result.refunded = true;
+                } catch (refundError) {
+                    // Never cancel a prepaid order we failed to give the money back for
+                    result.error = `Refund failed: ${this._shopifyErrorMsg(refundError)}`;
+                    return result;
+                }
+            }
+        } else if (isPaid && !refundPrepaid) {
+            result.refundSkipped = 'Refunds disabled for this run';
+        } else if (['refunded', 'partially_refunded'].includes(order.financial_status)) {
+            result.refundSkipped = 'Already refunded';
+        } else if (!isPaid) {
+            result.refundSkipped = 'Not prepaid — no payment captured';
+        }
+
+        // 2) Cancel the order (idempotent — already-cancelled orders pass through)
+        if (order.cancelled_at) {
+            result.alreadyCancelled = true;
+            result.cancelled = true;
+            return result;
+        }
+        try {
+            const note = await this._cancelShopifyOrder(cfg, order);
+            result.cancelled = true;
+            if (note) result.cancelNote = note;
+            console.log(`✅ Shopify order ${order.name || order.id} cancelled${result.refunded ? ` (refunded ₹${result.refundAmount})` : ''}`);
+        } catch (cancelError) {
+            result.error = (result.refunded ? 'Refund succeeded but cancel failed: ' : '') + this._shopifyErrorMsg(cancelError);
+        }
+        return result;
+    }
+
+    // Full refund via the REST calculate → create two-step flow
+    async _createFullRefund(cfg, order) {
+        const refundLineItems = (order.line_items || [])
+            .map(li => ({
+                line_item_id: li.id,
+                quantity: (li.refundable_quantity != null ? li.refundable_quantity : li.quantity),
+                restock_type: 'cancel'
+            }))
+            .filter(li => li.quantity > 0);
+
+        const calcRes = await axios.post(
+            `${cfg.base}/orders/${order.id}/refunds/calculate.json`,
+            {
+                refund: {
+                    currency: order.currency || 'INR',
+                    shipping: { full_refund: true },
+                    refund_line_items: refundLineItems
+                }
+            },
+            { headers: cfg.headers, timeout: 20000 }
+        );
+        const calculated = calcRes.data?.refund;
+        if (!calculated) throw new Error('Shopify returned no refund calculation');
+
+        const createRes = await axios.post(
+            `${cfg.base}/orders/${order.id}/refunds.json`,
+            { refund: calculated, notify: true },
+            { headers: cfg.headers, timeout: 20000 }
+        );
+        const created = createRes.data?.refund;
+        const amount = (created?.transactions || []).reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+        return amount || parseFloat(order.total_price) || null;
+    }
+
+    // Cancel via the GraphQL orderCancel mutation, with a legacy REST fallback
+    async _cancelShopifyOrder(cfg, order) {
+        try {
+            const data = await this.graphql(`
+                mutation orderCancel($id: ID!) {
+                    orderCancel(orderId: $id) {
+                        order { id displayFinancialStatus displayFulfillmentStatus }
+                        userErrors { field message }
+                    }
+                }
+            `, { id: `gid://shopify/Order/${order.id}` });
+            const userErrors = data?.orderCancel?.userErrors || [];
+            if (userErrors.length) throw new Error(userErrors.map(e => e.message).join('; '));
+            return null;
+        } catch (gqlError) {
+            await axios.post(`${cfg.base}/orders/${order.id}/cancel.json`, {}, { headers: cfg.headers, timeout: 20000 });
+            return 'cancelled via REST fallback';
+        }
+    }
+
+    _shopifyErrorMsg(err) {
+        const data = err.response?.data;
+        if (!data) return err.message || 'Request failed';
+        if (typeof data.errors === 'string') return data.errors;
+        if (Array.isArray(data.errors)) return data.errors.map(e => e.message || e).join('; ');
+        if (data.errors && typeof data.errors === 'object') {
+            return Object.entries(data.errors).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join('; ');
+        }
+        return data.error_description || data.error || err.message || 'Request failed';
+    }
 }
 
 module.exports = new ShopifyService();

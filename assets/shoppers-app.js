@@ -101,7 +101,7 @@ function applyRolePermissions() {
     // CSS-level hiding of row/bulk actions the operator can't perform
     let css = '';
     if (!hubHasPerm('edit_orders')) {
-        css += `.btn-text-edit, button[onclick^="openEditModal"], button[onclick^="bulkUpdateStatus"], #bulkDeleteBtn, .bulk-btn-delete { display: none !important; }`;
+        css += `.btn-text-edit, button[onclick^="openEditModal"], button[onclick^="bulkUpdateStatus"], #bulkDeleteBtn, .bulk-btn-delete, button[onclick^="openShopifyCancelModal"] { display: none !important; }`;
     }
     if (!hubHasPerm('send_messages')) {
         css += `#sendChatBtn, .btn-chat[onclick^="openChat"] { display: none !important; }`;
@@ -5816,6 +5816,109 @@ window.closeShipmentsDrawer = closeShipmentsDrawer;
 window.openBulkShipModal = openBulkShipModal;
 window.closeBulkShipModal = closeBulkShipModal;
 window.startBulkShip = startBulkShip;
+
+// ==========================================
+// PREMIUM: SHOPIFY CANCEL & REFUND (bulk)
+// Cancels selected cancelled orders in Shopify and refunds prepaid ones.
+// ==========================================
+let shopifyCancelRunning = false;
+
+function isPrepaidShopper(s) {
+    const pm = String(s.payment_method || '').trim().toLowerCase();
+    if (!pm) return false;
+    return !/cod|cash on delivery/.test(pm);
+}
+
+async function openShopifyCancelModal() {
+    if (!hubRequirePerm('edit_orders', 'cancel orders in Shopify')) return;
+    if (selectedShoppers.size === 0) { showShipToast('Select some orders first', true); return; }
+
+    const eligible = allLoadedShoppers.filter(s =>
+        selectedShoppers.has(s.id) && s.status === 'cancelled'
+    );
+    if (eligible.length === 0) {
+        showShipToast('No cancelled orders selected — open the Cancelled tab and select the orders to cancel in Shopify', true);
+        return;
+    }
+
+    const prepaid = eligible.filter(isPrepaidShopper);
+    const refundTotal = prepaid.reduce((sum, s) => sum + (parseFloat(s.order_total) || 0), 0);
+
+    document.getElementById('scCancelCount').textContent = `${eligible.length} orders`;
+    document.getElementById('scSummary').innerHTML = `
+        <div class="sc-stat"><div class="sc-num">${eligible.length}</div><div class="sc-lbl">Orders</div></div>
+        <div class="sc-stat"><div class="sc-num gold">${prepaid.length}</div><div class="sc-lbl">Prepaid → Refund</div></div>
+        <div class="sc-stat"><div class="sc-num">${eligible.length - prepaid.length}</div><div class="sc-lbl">COD → Cancel Only</div></div>
+        <div class="sc-stat"><div class="sc-num gold">₹${refundTotal.toLocaleString('en-IN')}</div><div class="sc-lbl">Refund Value</div></div>`;
+    document.getElementById('scRefundToggle').checked = true;
+    document.getElementById('scProgress').innerHTML = eligible.map(s => {
+        const prepaidFlag = isPrepaidShopper(s);
+        return `
+        <div class="bulk-ship-line" id="sc-line-${s.id}">
+            <span class="bs-order">#${s.order_id} · ${escapeHtml(s.name || 'Customer')}<span class="sc-pay ${prepaidFlag ? 'prepaid' : 'cod'}">${prepaidFlag ? 'PREPAID' : 'COD'}</span></span>
+            <span class="bs-result" id="sc-result-${s.id}">Queued</span>
+        </div>`;
+    }).join('');
+
+    const startBtn = document.getElementById('scStartBtn');
+    startBtn.disabled = false;
+    startBtn.textContent = 'Start Cancellation';
+    document.getElementById('shopifyCancelModal').dataset.ids = JSON.stringify(eligible.map(s => s.id));
+    document.getElementById('shopifyCancelModal').classList.add('active');
+}
+
+function closeShopifyCancelModal() {
+    if (shopifyCancelRunning) { showShipToast('Cancellation in progress — wait for it to finish', true); return; }
+    document.getElementById('shopifyCancelModal').classList.remove('active');
+}
+
+async function startShopifyCancel() {
+    if (shopifyCancelRunning) return;
+    const ids = JSON.parse(document.getElementById('shopifyCancelModal').dataset.ids || '[]');
+    if (ids.length === 0) return;
+    const refundPrepaid = document.getElementById('scRefundToggle').checked;
+
+    shopifyCancelRunning = true;
+    const startBtn = document.getElementById('scStartBtn');
+    startBtn.disabled = true;
+    startBtn.textContent = 'Cancelling...';
+
+    let okCount = 0, failCount = 0, refundedCount = 0;
+    for (const id of ids) {
+        const resultEl = document.getElementById(`sc-result-${id}`);
+        if (resultEl) { resultEl.textContent = 'Cancelling...'; resultEl.className = 'bs-result run'; }
+        try {
+            // Sequential on purpose: keeps Shopify API rate limits happy
+            const data = await apiCall(`/shoppers/${id}/shopify-cancel`, 'POST', { refundPrepaid });
+            if (data && data.success) {
+                okCount++;
+                const r = data.result || {};
+                if (r.refunded) refundedCount++;
+                const parts = [];
+                if (r.refunded) parts.push(`Refunded ₹${Number(r.refundAmount || 0).toLocaleString('en-IN')}`);
+                else if (r.refundSkipped) parts.push(r.refundSkipped);
+                parts.push(r.alreadyCancelled ? 'Already cancelled in Shopify' : 'Cancelled in Shopify');
+                if (resultEl) { resultEl.textContent = `✅ ${parts.join(' · ')}`; resultEl.className = 'bs-result ok'; }
+            } else {
+                failCount++;
+                if (resultEl) { resultEl.textContent = `❌ ${data?.error || 'Failed'}`; resultEl.className = 'bs-result err'; }
+            }
+        } catch (err) {
+            failCount++;
+            if (resultEl) { resultEl.textContent = '❌ Network error'; resultEl.className = 'bs-result err'; }
+        }
+    }
+
+    shopifyCancelRunning = false;
+    startBtn.textContent = 'Done';
+    showShipToast(`Shopify cancel finished: ${okCount} cancelled${refundedCount ? `, ${refundedCount} refunded` : ''}${failCount ? `, ${failCount} failed` : ''}`, failCount > 0);
+    fetchShoppersData();
+    fetchInboxCounts();
+}
+
+window.openShopifyCancelModal = openShopifyCancelModal;
+window.closeShopifyCancelModal = closeShopifyCancelModal;
+window.startShopifyCancel = startShopifyCancel;
 
 // ==========================================
 // SHIPPED ORDERS VIEW - Full shipment history

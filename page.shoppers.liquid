@@ -1157,8 +1157,8 @@
         .awb-chip-mini { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.3rem 0.6rem; background: rgba(37, 211, 102, 0.08); border: 1px solid rgba(37, 211, 102, 0.3); border-radius: 14px; color: #25d366; font-size: 0.68rem; cursor: pointer; white-space: nowrap; }
 
         /* Ship Modal */
-        #shipModal, #bulkShipModal, #shipmentsDrawer, #soNewShipModal, #reshipModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); backdrop-filter: blur(12px); z-index: 2600; justify-content: center; align-items: center; }
-        #shipModal.active, #bulkShipModal.active, #soNewShipModal.active, #reshipModal.active { display: flex; }
+        #shipModal, #bulkShipModal, #shopifyCancelModal, #shipmentsDrawer, #soNewShipModal, #reshipModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); backdrop-filter: blur(12px); z-index: 2600; justify-content: center; align-items: center; }
+        #shipModal.active, #bulkShipModal.active, #shopifyCancelModal.active, #soNewShipModal.active, #reshipModal.active { display: flex; }
         #shipmentsDrawer.active { display: flex; justify-content: flex-end; }
         .ship-modal-content { background: #0a0a0a; border: 1px solid rgba(255,255,255,0.15); border-radius: 14px; width: 94%; max-width: 720px; max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.9); overflow: hidden; }
         .ship-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1.4rem 1.8rem; border-bottom: 1px solid rgba(255,255,255,0.08); }
@@ -1263,6 +1263,27 @@
         .bulk-ship-line .bs-result.ok { color: #25d366; }
         .bulk-ship-line .bs-result.err { color: #ff6b7a; }
         .bulk-ship-line .bs-result.run { color: #ffa502; }
+        
+        /* Premium: Shopify Cancel & Refund */
+        .bulk-btn-shopify-cancel {
+            border-color: rgba(255, 209, 102, 0.55) !important;
+            color: #ffd166 !important;
+            background: linear-gradient(135deg, rgba(255,209,102,0.08), rgba(255,165,2,0.05));
+        }
+        .bulk-btn-shopify-cancel:hover {
+            background: rgba(255, 209, 102, 0.18);
+            box-shadow: 0 0 14px rgba(255, 209, 102, 0.25);
+        }
+        .sc-summary { display: flex; gap: 0.7rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .sc-stat { flex: 1; min-width: 110px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 0.6rem 0.7rem; text-align: center; }
+        .sc-stat .sc-num { font-size: 1.05rem; font-weight: 700; color: #fff; }
+        .sc-stat .sc-num.gold { color: #ffd166; }
+        .sc-stat .sc-lbl { font-size: 0.62rem; color: #999; text-transform: uppercase; letter-spacing: 1px; margin-top: 0.2rem; }
+        .sc-refund-toggle { display: flex; align-items: center; gap: 0.55rem; margin: 0.4rem 0 0.7rem; font-size: 0.85rem; color: #eee; cursor: pointer; }
+        .sc-refund-toggle input { accent-color: #ffd166; width: 16px; height: 16px; cursor: pointer; }
+        .sc-pay { display: inline-block; margin-left: 0.4rem; padding: 0.12rem 0.5rem; border-radius: 10px; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.5px; vertical-align: middle; }
+        .sc-pay.prepaid { background: rgba(37, 211, 102, 0.12); color: #25d366; border: 1px solid rgba(37, 211, 102, 0.35); }
+        .sc-pay.cod { background: rgba(255,255,255,0.06); color: #aaa; border: 1px solid rgba(255,255,255,0.15); }
 
         /* Ship toast */
         .ship-toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); background: #111; border: 1px solid rgba(37,211,102,0.5); color: #fff; padding: 0.9rem 1.6rem; border-radius: 10px; z-index: 5000; font-size: 0.85rem; box-shadow: 0 10px 30px rgba(0,0,0,0.7); animation: fadeIn 0.25s ease; max-width: 90vw; }
@@ -3979,6 +4000,7 @@
                     <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('confirmed')">Mark Confirmed</button>
                     <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('pending')">Mark Pending</button>
                     <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('cancelled')">Mark Cancelled</button>
+                    <button class="bulk-btn bulk-btn-shopify-cancel" onclick="openShopifyCancelModal()">✨ Cancel in Shopify &amp; Refund</button>
                     <button class="bulk-btn bulk-btn-status" style="border-color: rgba(37,211,102,0.5); color: #25d366;" onclick="openBulkShipModal()">Ship Selected</button>
                     <button class="bulk-btn bulk-btn-delete" onclick="bulkDelete()">Delete Selected</button>
                     <button class="bulk-btn-close" onclick="clearSelection()">&times;</button>
@@ -5394,6 +5416,29 @@
         </div>
     </div>
 
+    <!-- Shopify Cancel & Refund Modal (premium bulk action for cancelled orders) -->
+    <div id="shopifyCancelModal">
+        <div class="bulk-ship-content" style="max-width: 640px;">
+            <div class="ship-modal-header">
+                <h3>✨ Shopify Cancel &amp; Refund <span class="ship-order-label" id="scCancelCount"></span></h3>
+                <button class="ship-close" onclick="closeShopifyCancelModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div class="sc-summary" id="scSummary"></div>
+                <label class="sc-refund-toggle">
+                    <input type="checkbox" id="scRefundToggle" checked>
+                    <span>Refund prepaid orders automatically (full refund incl. shipping)</span>
+                </label>
+                <div style="font-size: 0.75rem; color: #888;">Prepaid orders are fully refunded in Shopify before the order is cancelled; COD orders are cancelled only. Already-cancelled orders in Shopify are skipped safely.</div>
+                <div class="bulk-ship-progress" id="scProgress"></div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" onclick="closeShopifyCancelModal()">Close</button>
+                <button class="btn btn-primary" id="scStartBtn" onclick="startShopifyCancel()" style="background: linear-gradient(135deg, #ffd166, #ffa502); color: #000; font-weight: 700;">Start Cancellation</button>
+            </div>
+        </div>
+    </div>
+
     <!-- New Forward Shipment Modal (ship any order by its Order ID) -->
     <div id="soNewShipModal" onclick="if(event.target === this) closeSoNewShipModal()">
         <div class="ship-modal-content" style="max-width: 660px;">
@@ -5438,7 +5483,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="{{ 'shoppers-app.js' | asset_url }}?v=1754200000"></script>
+    <script src="{{ 'shoppers-app.js' | asset_url }}?v=1755100000"></script>
     <script src="{{ 'shoppers-ai-copilot-pro.js' | asset_url }}?v=1"></script>
 </body>
 </html>

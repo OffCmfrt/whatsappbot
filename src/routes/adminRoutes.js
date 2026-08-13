@@ -2198,6 +2198,34 @@ router.delete('/shoppers/bulk', verifyToken, requirePermission('edit_orders'), a
     }
 });
 
+// Cancel a shopper's order in Shopify (optionally refunding prepaid orders).
+// Powers the Shoppers Hub "Cancel in Shopify & Refund" premium bulk action —
+// the hub loops over selected cancelled orders and calls this once per order.
+router.post('/shoppers/:id/shopify-cancel', verifyToken, requirePermission('edit_orders'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const refundPrepaid = req.body?.refundPrepaid !== false;
+
+        const rows = await dbAdapter.select('store_shoppers', { id }, { limit: 1 });
+        const shopper = rows[0];
+        if (!shopper) return res.status(404).json({ success: false, error: 'Shopper not found' });
+        if (!shopper.order_id) return res.status(400).json({ success: false, error: 'Shopper has no order ID' });
+
+        logOperatorActivity(req, 'shopify_cancel', `Shopper ${id} (order ${shopper.order_id}) → Shopify cancel${refundPrepaid ? ' + prepaid refund' : ''}`);
+
+        const shopifyService = require('../services/shopifyService');
+        const result = await shopifyService.cancelAndRefundOrder(shopper.order_id, { refundPrepaid });
+
+        if (!result.cancelled) {
+            return res.status(502).json({ success: false, error: result.error || 'Shopify cancellation failed', result });
+        }
+        res.json({ success: true, result });
+    } catch (error) {
+        console.error('Shopify cancel error:', error);
+        res.status(500).json({ success: false, error: 'Failed to cancel order in Shopify' });
+    }
+});
+
 // Get customers with 2+ orders within 24 hours
 router.get('/shoppers/multi-orders', verifyToken, async (req, res) => {
     try {
