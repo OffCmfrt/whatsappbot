@@ -124,6 +124,12 @@ function applyRolePermissions() {
 let currentStatus = 'all';
 let currentPageOffset = 0;
 const limitPerPage = 50;
+// Safety cap for one bulk-ship run — protects carrier APIs (rate limits /
+// freight spend) and the browser from runaway batches. Raise cautiously.
+const MAX_BULK_SHIP = 200;
+// Abort the rest of a bulk run after this many consecutive booking failures
+// (carrier API down / quota exhausted — no point burning the whole batch)
+const BULK_SHIP_FAIL_BREAK = 5;
 let searchTimeout = null;
 let filterTimeout = null;
 let currentChatPhone = null;
@@ -144,6 +150,10 @@ const shopperEditCache = {};
 let selectedShoppers = new Set();
 let isBulkMode = false;
 let allMatchingShoppers = []; // Store all shoppers matching current filters
+// Full records fetched by "Select All Matching Filters" — lets bulk actions
+// (bulk ship etc.) reach orders beyond the 50 rendered on the current page.
+// Rebuilt on every select-all-matching call; server re-validates at ship time.
+let bulkMatchingShoppers = [];
 let currentTotalCount = 0;
 
 // Multi Orders Filter State
@@ -2255,6 +2265,10 @@ async function selectAllMatching() {
             data.shoppers.forEach(shopper => {
                 selectedShoppers.add(shopper.id);
             });
+
+            // Keep the records so bulk actions can resolve orders that were
+            // never rendered (only ~limitPerPage cards are on the page)
+            bulkMatchingShoppers = data.shoppers;
             
             // Update UI for visible cards
             document.querySelectorAll('.shopper-card').forEach(card => {
@@ -5717,11 +5731,21 @@ async function openBulkShipModal() {
     if (!hubRequirePerm('ship_orders', 'ship orders')) return;
     if (selectedShoppers.size === 0) { showShipToast('Select some orders first', true); return; }
 
-    const eligible = allLoadedShoppers.filter(s =>
+    // Pool = records rendered on the page + records fetched by "Select All
+    // Matching Filters" — so bulk ship is no longer limited to one 50-row page
+    const pool = new Map();
+    allLoadedShoppers.forEach(s => pool.set(s.id, s));
+    bulkMatchingShoppers.forEach(s => { if (!pool.has(s.id)) pool.set(s.id, s); });
+
+    const eligible = [...pool.values()].filter(s =>
         selectedShoppers.has(s.id) && s.status === 'confirmed' && !s.awb
     );
     if (eligible.length === 0) {
         showShipToast('No eligible orders selected — only confirmed, un-shipped orders can be bulk shipped', true);
+        return;
+    }
+    if (eligible.length > MAX_BULK_SHIP) {
+        showShipToast(`Bulk ship is capped at ${MAX_BULK_SHIP} orders per run — narrow the filters and split the batch`, true);
         return;
     }
 
@@ -5766,9 +5790,20 @@ async function startBulkShip() {
     startBtn.disabled = true;
     startBtn.textContent = 'Shipping...';
 
-    let okCount = 0, failCount = 0;
+    let okCount = 0, failCount = 0, skippedCount = 0;
+    let consecutiveFails = 0;
+    let done = 0;
     for (const id of ids) {
+        done++;
+        startBtn.textContent = `Shipping ${done}/${ids.length}...`;
         const resultEl = document.getElementById(`bs-result-${id}`);
+        // Circuit breaker: carrier keeps refusing → skip the rest instead of
+        // burning the whole batch against a down/quota-exhausted API
+        if (consecutiveFails >= BULK_SHIP_FAIL_BREAK) {
+            skippedCount++;
+            if (resultEl) { resultEl.textContent = '⏸ Skipped (carrier failing)'; resultEl.className = 'bs-result err'; }
+            continue;
+        }
         if (resultEl) { resultEl.textContent = 'Shipping...'; resultEl.className = 'bs-result run'; }
         try {
             // Sequential on purpose: avoids carrier rate limits and DB races
@@ -5781,20 +5816,26 @@ async function startBulkShip() {
             });
             if (data && data.success) {
                 okCount++;
+                consecutiveFails = 0;
                 if (resultEl) { resultEl.textContent = `✅ AWB ${data.awb}`; resultEl.className = 'bs-result ok'; }
             } else {
                 failCount++;
+                consecutiveFails++;
                 if (resultEl) { resultEl.textContent = `❌ ${data?.error || 'Failed'}`; resultEl.className = 'bs-result err'; }
             }
         } catch (err) {
             failCount++;
+            consecutiveFails++;
             if (resultEl) { resultEl.textContent = '❌ Network error'; resultEl.className = 'bs-result err'; }
         }
     }
 
     bulkShipRunning = false;
     startBtn.textContent = 'Done';
-    showShipToast(`Bulk ship finished: ${okCount} shipped${failCount ? `, ${failCount} failed` : ''}`, failCount > 0);
+    const parts = [`${okCount} shipped`];
+    if (failCount) parts.push(`${failCount} failed`);
+    if (skippedCount) parts.push(`${skippedCount} skipped`);
+    showShipToast(`Bulk ship finished: ${parts.join(', ')}`, failCount > 0 || skippedCount > 0);
     clearSelection();
     fetchShoppersData();
 }
