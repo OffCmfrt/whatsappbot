@@ -1071,15 +1071,26 @@ class ShopifyService {
         // 1) Refund first — Shopify only refunds open (non-cancelled) orders
         const isPaid = ['paid', 'partially_paid'].includes(order.financial_status);
         if (refundPrepaid && isPaid) {
-            const hasCapturedMoney = (order.transactions || []).some(t =>
+            // REST GET /orders/{id}.json does NOT include transactions — fetch them separately
+            let transactions = order.transactions || [];
+            if (transactions.length === 0) {
+                try {
+                    transactions = await this._fetchTransactions(cfg, order.id);
+                } catch (txErr) {
+                    console.warn(`⚠️ Could not fetch transactions for order ${order.id}:`, txErr.message);
+                }
+            }
+            const hasCapturedMoney = transactions.some(t =>
                 ['sale', 'capture'].includes(t.kind) && t.status === 'success'
             );
             if (!hasCapturedMoney) {
                 result.refundSkipped = 'No captured transactions to refund';
+                console.warn(`⚠️ Order ${order.name || order.id}: financial_status=${order.financial_status} but no captured transactions found (${transactions.length} transactions fetched)`);
             } else {
                 try {
                     result.refundAmount = await this._createFullRefund(cfg, order);
                     result.refunded = true;
+                    console.log(`💰 Refunded ₹${result.refundAmount} for order ${order.name || order.id}`);
                 } catch (refundError) {
                     // Never cancel a prepaid order we failed to give the money back for
                     result.error = `Refund failed: ${this._shopifyErrorMsg(refundError)}`;
@@ -1109,6 +1120,15 @@ class ShopifyService {
             result.error = (result.refunded ? 'Refund succeeded but cancel failed: ' : '') + this._shopifyErrorMsg(cancelError);
         }
         return result;
+    }
+
+    // Fetch transactions separately — REST GET /orders/{id}.json does NOT include them
+    async _fetchTransactions(cfg, orderId) {
+        const res = await axios.get(
+            `${cfg.base}/orders/${orderId}/transactions.json`,
+            { headers: cfg.headers, timeout: 15000 }
+        );
+        return res.data?.transactions || [];
     }
 
     // Full refund via the REST calculate → create two-step flow
