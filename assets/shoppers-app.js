@@ -2190,6 +2190,24 @@ function updateBulkActionsBar() {
         isBulkMode = false;
         bulkBar?.classList.remove('active');
     }
+
+    // "Cancel in Shopify & Refund" is only relevant when every selected order
+    // is already cancelled in the hub — hide it otherwise to avoid confusion.
+    const scBtn = document.querySelector('.bulk-btn-shopify-cancel');
+    if (scBtn) {
+        if (selectedShoppers.size === 0) {
+            scBtn.style.display = 'none';
+        } else {
+            const pool = new Map();
+            allLoadedShoppers.forEach(s => pool.set(s.id, s));
+            bulkMatchingShoppers.forEach(s => { if (!pool.has(s.id)) pool.set(s.id, s); });
+            const allCancelled = [...selectedShoppers].every(id => {
+                const s = pool.get(id);
+                return s && s.status === 'cancelled';
+            });
+            scBtn.style.display = allCancelled ? '' : 'none';
+        }
+    }
 }
 
 function clearSelection() {
