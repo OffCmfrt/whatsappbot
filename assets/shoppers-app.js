@@ -5782,6 +5782,8 @@ async function openBulkShipModal() {
     startBtn.disabled = false;
     startBtn.textContent = 'Start Shipping';
     document.getElementById('bulkShipModal').dataset.ids = JSON.stringify(eligible.map(s => s.id));
+    // Store all carrier keys so bulk ship can auto-fallback when primary fails
+    document.getElementById('bulkShipModal').dataset.allCarriers = JSON.stringify(carriers.map(c => c.key));
     document.getElementById('bulkShipModal').classList.add('active');
 }
 
@@ -5792,10 +5794,14 @@ function closeBulkShipModal() {
 
 async function startBulkShip() {
     if (bulkShipRunning) return;
-    const ids = JSON.parse(document.getElementById('bulkShipModal').dataset.ids || '[]');
+    const modal = document.getElementById('bulkShipModal');
+    const ids = JSON.parse(modal.dataset.ids || '[]');
     if (ids.length === 0) return;
 
-    const carrier = document.getElementById('bulkShipCarrier').value;
+    const primaryCarrier = document.getElementById('bulkShipCarrier').value;
+    const allCarriers = JSON.parse(modal.dataset.allCarriers || '[]');
+    // Fallback carriers = all others besides the primary
+    const fallbackCarriers = allCarriers.filter(c => c !== primaryCarrier);
     const packageOverrides = {
         weightGrams: parseInt(document.getElementById('bulkShipWeight').value) || 500,
         lengthCm: parseFloat(document.getElementById('bulkShipLength').value) || 30,
@@ -5808,7 +5814,7 @@ async function startBulkShip() {
     startBtn.disabled = true;
     startBtn.textContent = 'Shipping...';
 
-    let okCount = 0, failCount = 0, skippedCount = 0;
+    let okCount = 0, failCount = 0, skippedCount = 0, fallbackCount = 0;
     let consecutiveFails = 0;
     let done = 0;
     for (const id of ids) {
@@ -5823,39 +5829,67 @@ async function startBulkShip() {
             continue;
         }
         if (resultEl) { resultEl.textContent = 'Shipping...'; resultEl.className = 'bs-result run'; }
-        try {
-            // Sequential on purpose: avoids carrier rate limits and DB races
-            const data = await apiCall('/shipping/ship', 'POST', {
-                shopperId: id,
-                carrier,
-                courierId: 'auto',
-                packageOverrides,
-                notifyCustomer: false
-            });
-            if (data && data.success) {
-                okCount++;
-                consecutiveFails = 0;
-                if (resultEl) { resultEl.textContent = `✅ AWB ${data.awb}`; resultEl.className = 'bs-result ok'; }
-            } else {
-                failCount++;
-                // Only count carrier/system errors (502, 500, network) toward the
-                // circuit breaker — order-specific issues (400 validation, 409 existing
-                // shipment) should NOT skip the remaining good orders
-                const isCarrierFail = !data?.status || data.status >= 500;
-                if (isCarrierFail) consecutiveFails++;
-                else consecutiveFails = 0;
-                if (resultEl) { resultEl.textContent = `❌ ${data?.error || 'Failed'}`; resultEl.className = 'bs-result err'; }
+
+        // Try primary carrier first, then fallback carriers in order
+        const carrierAttempts = [primaryCarrier, ...fallbackCarriers];
+        let shipped = false;
+        let lastError = null;
+        for (let ci = 0; ci < carrierAttempts.length; ci++) {
+            const carrier = carrierAttempts[ci];
+            try {
+                // Sequential on purpose: avoids carrier rate limits and DB races
+                const data = await apiCall('/shipping/ship', 'POST', {
+                    shopperId: id,
+                    carrier,
+                    courierId: 'auto',
+                    packageOverrides,
+                    notifyCustomer: false
+                });
+                if (data && data.success) {
+                    okCount++;
+                    consecutiveFails = 0;
+                    shipped = true;
+                    const carrierLabel = ci === 0 ? '' : ` (via ${carrier})`;
+                    if (ci > 0) fallbackCount++;
+                    if (resultEl) { resultEl.textContent = `✅ AWB ${data.awb}${carrierLabel}`; resultEl.className = 'bs-result ok'; }
+                    break;
+                } else {
+                    lastError = data?.error || 'Failed';
+                    // Only count carrier/system errors (502, 500, network) toward the
+                    // circuit breaker — order-specific issues (400 validation, 409 existing
+                    // shipment) should NOT skip the remaining good orders
+                    const isCarrierFail = !data?.status || data.status >= 500;
+                    if (isCarrierFail) {
+                        // Carrier-level fail: try next fallback carrier before giving up
+                        if (ci < carrierAttempts.length - 1) {
+                            if (resultEl) { resultEl.textContent = `Trying fallback...`; resultEl.className = 'bs-result run'; }
+                            continue;
+                        }
+                        consecutiveFails++;
+                    } else {
+                        consecutiveFails = 0;
+                    }
+                }
+            } catch (err) {
+                lastError = 'Network error';
+                // Try next fallback carrier
+                if (ci < carrierAttempts.length - 1) {
+                    if (resultEl) { resultEl.textContent = `Trying fallback...`; resultEl.className = 'bs-result run'; }
+                    continue;
+                }
+                consecutiveFails++;
             }
-        } catch (err) {
+        }
+        if (!shipped) {
             failCount++;
-            consecutiveFails++;
-            if (resultEl) { resultEl.textContent = '❌ Network error'; resultEl.className = 'bs-result err'; }
+            if (resultEl) { resultEl.textContent = `❌ ${lastError}`; resultEl.className = 'bs-result err'; }
         }
     }
 
     bulkShipRunning = false;
     startBtn.textContent = 'Done';
     const parts = [`${okCount} shipped`];
+    if (fallbackCount) parts.push(`${fallbackCount} via fallback carrier`);
     if (failCount) parts.push(`${failCount} failed`);
     if (skippedCount) parts.push(`${skippedCount} skipped`);
     showShipToast(`Bulk ship finished: ${parts.join(', ')}`, failCount > 0 || skippedCount > 0);
