@@ -5838,7 +5838,12 @@ async function startBulkShip() {
                 if (resultEl) { resultEl.textContent = `✅ AWB ${data.awb}`; resultEl.className = 'bs-result ok'; }
             } else {
                 failCount++;
-                consecutiveFails++;
+                // Only count carrier/system errors (502, 500, network) toward the
+                // circuit breaker — order-specific issues (400 validation, 409 existing
+                // shipment) should NOT skip the remaining good orders
+                const isCarrierFail = !data?.status || data.status >= 500;
+                if (isCarrierFail) consecutiveFails++;
+                else consecutiveFails = 0;
                 if (resultEl) { resultEl.textContent = `❌ ${data?.error || 'Failed'}`; resultEl.className = 'bs-result err'; }
             }
         } catch (err) {

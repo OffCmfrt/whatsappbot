@@ -4730,7 +4730,7 @@ router.post('/shipping/ship', verifyToken, requirePermission('ship_orders'), asy
             reshipReason: reshipReason ? String(reshipReason).substring(0, 300) : null
         });
         if (result.error) {
-            return res.status(result.status || 500).json({ success: false, error: result.error, shipment: result.shipment || null });
+            return res.status(result.status || 500).json({ success: false, error: result.error, status: result.status || 500, shipment: result.shipment || null });
         }
 
         // Best-effort: mirror consignee edits to the Shopify order's shipping
