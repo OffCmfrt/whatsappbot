@@ -1068,6 +1068,8 @@ class ShopifyService {
         result.orderName = order.name;
         result.financialStatus = order.financial_status;
 
+        console.log(`🔍 [cancel+refund] Order ${order.name || order.id}: financial_status=${order.financial_status}, gateway=${order.gateway}, total_price=${order.total_price}, cancelled_at=${order.cancelled_at}, line_items=${(order.line_items || []).length}`);
+
         // 1) Refund first — Shopify only refunds open (non-cancelled) orders
         const isPaid = ['paid', 'partially_paid'].includes(order.financial_status);
         if (refundPrepaid && isPaid) {
@@ -1076,24 +1078,30 @@ class ShopifyService {
             if (transactions.length === 0) {
                 try {
                     transactions = await this._fetchTransactions(cfg, order.id);
+                    console.log(`🔍 [cancel+refund] Fetched ${transactions.length} transactions:`, transactions.map(t => ({ kind: t.kind, status: t.status, amount: t.amount, gateway: t.gateway })));
                 } catch (txErr) {
-                    console.warn(`⚠️ Could not fetch transactions for order ${order.id}:`, txErr.message);
+                    console.warn(`⚠️ [cancel+refund] Could not fetch transactions for order ${order.id}:`, txErr.message);
                 }
+            } else {
+                console.log(`🔍 [cancel+refund] Order already had ${transactions.length} transactions inline:`, transactions.map(t => ({ kind: t.kind, status: t.status, amount: t.amount })));
             }
             const hasCapturedMoney = transactions.some(t =>
                 ['sale', 'capture'].includes(t.kind) && t.status === 'success'
             );
             if (!hasCapturedMoney) {
                 result.refundSkipped = 'No captured transactions to refund';
-                console.warn(`⚠️ Order ${order.name || order.id}: financial_status=${order.financial_status} but no captured transactions found (${transactions.length} transactions fetched)`);
+                console.warn(`⚠️ [cancel+refund] Order ${order.name || order.id}: financial_status=${order.financial_status} but no captured transactions found (${transactions.length} transactions fetched). Transaction kinds: [${transactions.map(t => `${t.kind}/${t.status}`).join(', ')}]`);
             } else {
                 try {
+                    console.log(`🔍 [cancel+refund] Starting refund for order ${order.name || order.id} (₹${order.total_price})...`);
                     result.refundAmount = await this._createFullRefund(cfg, order);
                     result.refunded = true;
-                    console.log(`💰 Refunded ₹${result.refundAmount} for order ${order.name || order.id}`);
+                    console.log(`💰 [cancel+refund] Refunded ₹${result.refundAmount} for order ${order.name || order.id}`);
                 } catch (refundError) {
                     // Never cancel a prepaid order we failed to give the money back for
-                    result.error = `Refund failed: ${this._shopifyErrorMsg(refundError)}`;
+                    const errMsg = this._shopifyErrorMsg(refundError);
+                    console.error(`❌ [cancel+refund] Refund FAILED for order ${order.name || order.id}:`, errMsg, refundError.response?.data || '');
+                    result.error = `Refund failed: ${errMsg}`;
                     return result;
                 }
             }
@@ -1141,6 +1149,8 @@ class ShopifyService {
             }))
             .filter(li => li.quantity > 0);
 
+        console.log(`🔍 [refund] Calculating refund for order ${order.name || order.id}: ${refundLineItems.length} line items, currency=${order.currency || 'INR'}`);
+
         const calcRes = await axios.post(
             `${cfg.base}/orders/${order.id}/refunds/calculate.json`,
             {
@@ -1154,6 +1164,7 @@ class ShopifyService {
         );
         const calculated = calcRes.data?.refund;
         if (!calculated) throw new Error('Shopify returned no refund calculation');
+        console.log(`🔍 [refund] Calculated refund amount: ${calculated.refund?.amount || calculated.amount || 'unknown'}, transactions: ${(calculated.transactions || []).length}`);
 
         const createRes = await axios.post(
             `${cfg.base}/orders/${order.id}/refunds.json`,
@@ -1161,6 +1172,7 @@ class ShopifyService {
             { headers: cfg.headers, timeout: 20000 }
         );
         const created = createRes.data?.refund;
+        console.log(`🔍 [refund] Created refund response: id=${created?.id}, status=${created?.status}, transactions=${(created?.transactions || []).map(t => `${t.kind}/${t.status}/₹${t.amount}`).join(', ') || 'none'}`);
         const amount = (created?.transactions || []).reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
         return amount || parseFloat(order.total_price) || null;
     }

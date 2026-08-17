@@ -2216,6 +2216,8 @@ router.post('/shoppers/:id/shopify-cancel', verifyToken, requirePermission('edit
         const shopifyService = require('../services/shopifyService');
         const result = await shopifyService.cancelAndRefundOrder(shopper.order_id, { refundPrepaid });
 
+        console.log(`🔍 [shopify-cancel] Shopper ${id}, order ${shopper.order_id}: cancelled=${result.cancelled}, refunded=${result.refunded}, refundAmount=${result.refundAmount}, refundSkipped=${result.refundSkipped}, error=${result.error}`);
+
         if (!result.cancelled) {
             return res.status(502).json({ success: false, error: result.error || 'Shopify cancellation failed', result });
         }
