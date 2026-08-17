@@ -552,6 +552,65 @@ class WhatsAppService {
     }
 
     /**
+     * Send "Out for Delivery" notification with mandatory unboxing video instructions.
+     * Uses Meta-approved template: out_for_delivery_v1
+     * @param {string} to       - Customer phone number
+     * @param {string} name     - Customer name (unused in template but kept for future personalization)
+     * @param {string} orderId  - Order number ({{1}})
+     * @param {string} awb      - AWB / tracking number ({{2}})
+     */
+    async sendOutOfDeliveryNotification(to, name, orderId, awb) {
+        try {
+            const cleanPhone = this.formatPhoneNumber(to);
+            console.log(`[OFD] Sending out-for-delivery template to ${cleanPhone} for order ${orderId}`);
+
+            const templateData = {
+                name: 'out_for_delivery_v1',
+                language: { code: 'en' },
+                components: [
+                    {
+                        type: 'body',
+                        parameters: [
+                            { type: 'text', text: orderId || 'N/A' },
+                            { type: 'text', text: awb || 'N/A' }
+                        ]
+                    }
+                ]
+            };
+
+            return await this.sendTemplate(to, templateData);
+        } catch (error) {
+            console.error('[OFD] Error sending out-for-delivery template:', error.message);
+            // Fallback: send as a plain text message if template fails
+            try {
+                const message =
+                    `\ud83d\ude9a *OUT FOR DELIVERY \u2013 MANDATORY STEPS*\n\n` +
+                    `Hi! Your order is *Out for Delivery* and is expected to be delivered today.\n\n` +
+                    `\ud83d\udce6 *Order Number:* ${orderId || 'N/A'}\n` +
+                    `\ud83d\ude9a *AWB:* ${awb || 'N/A'}\n\n` +
+                    `*Before opening the package, please record a continuous unboxing video showing:*\n\n` +
+                    `\u2022 The sealed package from all sides before opening.\n` +
+                    `\u2022 The AWB/shipping label clearly visible.\n` +
+                    `\u2022 The complete unboxing process without any cuts or pauses.\n` +
+                    `\u2022 All the product(s) received inside the package.\n\n` +
+                    `\u26a0\ufe0f *Important:* This unboxing video is *mandatory* and will be required in case of any future disputes, such as:\n` +
+                    `\u2022 Wrong product received\n` +
+                    `\u2022 Missing item(s)\n` +
+                    `\u2022 Damaged or defective product\n` +
+                    `\u2022 Transit-related issues\n\n` +
+                    `*Without a valid unboxing video, we may be unable to process such claims.*\n\n` +
+                    `Thank you for your cooperation! \ud83d\udc99`;
+                await this.sendMessage(to, message, 'out_for_delivery');
+                console.log(`[OFD] Fallback plain message sent to ${to}`);
+                return true;
+            } catch (fallbackErr) {
+                console.error(`[OFD] Fallback also failed for ${to}:`, fallbackErr.message);
+                return false;
+            }
+        }
+    }
+
+    /**
      * sendRichNotification — Central helper for ALL transactional messages.
      *
      * Sends a rich interactive CTA message that looks like the order

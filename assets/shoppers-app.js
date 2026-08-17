@@ -6217,7 +6217,7 @@ function renderSoActiveFilters() {
     const wrap = document.getElementById('soActiveFilters');
     if (!wrap) return;
     const tags = [];
-    const statusLabels = { ready: 'Ready', pickup_scheduled: 'Pickup Scheduled', in_transit: 'In Transit', delivered: 'Delivered', cancelled: 'Cancelled', rto: 'RTO' };
+    const statusLabels = { ready: 'Ready', pickup_scheduled: 'Pickup Scheduled', in_transit: 'In Transit', out_for_delivery: 'Out for Delivery', delivered: 'Delivered', cancelled: 'Cancelled', rto: 'RTO' };
     if (soStatus) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('status')">${statusLabels[soStatus] || soStatus} <span class="tag-close">×</span></span>`);
     if (soCarrier) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('carrier')">${escapeHtml(soCarrier)} <span class="tag-close">×</span></span>`);
     if (soPayment) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('payment')">${escapeHtml(soPayment)} <span class="tag-close">×</span></span>`);

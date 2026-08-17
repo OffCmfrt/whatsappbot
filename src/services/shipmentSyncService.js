@@ -21,10 +21,10 @@ const { caches } = require('../utils/cache');
 const { getAdapter } = require('./carriers');
 
 // Statuses still worth polling the carrier for
-const ACTIVE_STATUSES = ['created', 'awb_assigned', 'pickup_scheduled', 'shipped', 'in_transit'];
+const ACTIVE_STATUSES = ['created', 'awb_assigned', 'pickup_scheduled', 'shipped', 'in_transit', 'out_for_delivery'];
 
 // Forward-only pipeline ranks (higher = further along, never move backwards)
-const STATUS_RANK = { created: 0, awb_assigned: 1, pickup_scheduled: 2, shipped: 3, in_transit: 3, delivered: 4 };
+const STATUS_RANK = { created: 0, awb_assigned: 1, pickup_scheduled: 2, shipped: 3, in_transit: 3, out_for_delivery: 4, delivered: 5 };
 
 // Delay between carrier calls so a big batch never hammers their API
 const PER_CALL_DELAY_MS = 300;
@@ -50,7 +50,7 @@ function mapCarrierStatus(rawStatus) {
     if (s.includes('cancellation requested')) return null; // not cancelled yet
     if (s.includes('cancel')) return 'cancelled';
     if (s.includes('undeliver') || s.includes('not deliver') || s.includes('failed deliver')) return 'in_transit'; // NDR — still with courier
-    if (s.includes('out for delivery')) return 'in_transit';
+    if (s.includes('out for delivery')) return 'out_for_delivery';
     if (s.includes('deliver')) return 'delivered';
     if (s.includes('transit') || s.includes('shipped') || s.includes('picked') ||
         s.includes('dispatch') || s.includes('reached') || s.includes('arrived') ||
@@ -166,6 +166,30 @@ async function syncShipment(shipment) {
 
     await syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliveredAt);
     console.log(`📦 Shipment #${shipment.id} (${shipment.order_id}, AWB ${shipment.awb}): ${shipment.status} → ${newStatus} [carrier: "${carrierStatus}"]`);
+
+    // Send "Out for Delivery" WhatsApp template notification to the customer
+    if (newStatus === 'out_for_delivery' && shipment.status !== 'out_for_delivery') {
+        try {
+            const shopperRows = await dbAdapter.query(
+                `SELECT phone, name, order_id FROM store_shoppers WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`,
+                [shipment.order_id]
+            );
+            const shopper = shopperRows[0];
+            if (shopper && shopper.phone) {
+                const whatsappService = require('./whatsappService');
+                await whatsappService.sendOutOfDeliveryNotification(
+                    shopper.phone,
+                    shopper.name || 'Customer',
+                    shipment.order_id,
+                    shipment.awb
+                );
+                console.log(`🚚 Out-for-delivery notification sent to ${shopper.phone} for order ${shipment.order_id}`);
+            }
+        } catch (notifyErr) {
+            console.warn(`⚠️ Failed to send OFD notification for ${shipment.order_id}:`, notifyErr.message);
+        }
+    }
+
     return true;
 }
 

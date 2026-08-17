@@ -4884,7 +4884,7 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
         if (carrier) { where += ' AND s.carrier = ?'; params.push(carrier); }
         if (status) {
             // Grouped filter: 'in_transit' covers shipped + in_transit, 'cancelled' covers cancelled + failed + rto
-            if (status === 'in_transit') where += ` AND s.status IN ('shipped', 'in_transit')`;
+            if (status === 'in_transit') where += ` AND s.status IN ('shipped', 'in_transit', 'out_for_delivery')`;
             else if (status === 'cancelled') where += ` AND s.status IN ('cancelled', 'failed', 'rto')`;
             else if (status === 'ready') where += ` AND s.status IN ('created', 'awb_assigned')`;
             else { where += ' AND s.status = ?'; params.push(status); }
@@ -4928,7 +4928,7 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
                 SELECT COUNT(*)::int AS total,
                        COUNT(*) FILTER (WHERE s.status IN ('created', 'awb_assigned'))::int AS ready_to_ship,
                        COUNT(*) FILTER (WHERE s.status = 'pickup_scheduled')::int AS pickup_scheduled,
-                       COUNT(*) FILTER (WHERE s.status IN ('shipped', 'in_transit'))::int AS in_transit,
+                       COUNT(*) FILTER (WHERE s.status IN ('shipped', 'in_transit', 'out_for_delivery'))::int AS in_transit,
                        COUNT(*) FILTER (WHERE s.status = 'delivered')::int AS delivered,
                        COUNT(*) FILTER (WHERE s.status IN ('cancelled', 'failed', 'rto'))::int AS cancelled,
                        COUNT(*) FILTER (WHERE s.payment_mode = 'COD')::int AS cod_count,
