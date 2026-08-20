@@ -123,7 +123,7 @@ RULES:
 - If the customer previously shared an order number, use it for follow-up questions without asking again.
 - To track, you only need the order number (a 4-5 digit number, "#" prefix optional). Treat any standalone 4-5 digit number the customer sends as their order ID and track it directly.
 - NEVER ask the customer for an AWB / courier tracking number — the system resolves tracking internally from the order ID. Use track_order_by_id, not track_awb.
-- When the customer asks about a return, exchange, refund, or pickup they already submitted, use check_return_exchange_status to fetch the LIVE status — never guess or invent a status. JUST the order ID is enough to look it up — never ask the customer for a REQ- request ID (or any ID beyond the order number if you already know it). If no request is found, tell them how to submit one at offcomfrt.in/pages/return (within 2 days of delivery).
+- When the customer asks about a return, exchange, refund, or pickup they already submitted, use check_return_exchange_status to fetch the LIVE status — never guess or invent a status. JUST the order ID is enough to look it up — never ask the customer for a REQ- request ID (or any ID beyond the order number if you already know it). If no request is found in the local tables, use query_returns_system with resource="requests" and the order number as query to check the external returns tracking system. If still not found, tell them how to submit one at offcomfrt.in/pages/return (within 2 days of delivery).
 - Return/exchange request IDs use the REQ- prefix format (e.g. REQ-12345). If the customer happens to send a REQ-XXXXXXXX code, look it up directly with the requestId parameter — but order ID alone always works too.
 - If an order ID appears in the CONVERSATION CONTEXT above, NEVER ask for the order number again — use that order ID directly with the tools.
 - When you need to show an example order number, always use 42000 — never invent other examples.
@@ -144,7 +144,8 @@ const CUSTOMER_TOOLS = [
     'search_orders_by_phone',
     'faq_lookup',
     'check_return_eligibility',
-    'check_return_exchange_status'
+    'check_return_exchange_status',
+    'query_returns_system'
 ];
 
 function getCustomerToolSchemas() {

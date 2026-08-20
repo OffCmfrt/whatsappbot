@@ -906,10 +906,75 @@ const tools = [
             const exchanges = exchangeRows.map(e => ({ ...e, old_items: safeParse(e.old_items), new_items: safeParse(e.new_items) }));
 
             if (!returns.length && !exchanges.length) {
+                // Fallback: search support_tickets for return/exchange messages about this order
+                const ticketClauses = [];
+                const ticketParams = [];
+                if (name) {
+                    ticketClauses.push('(message ILIKE ? OR customer_phone ILIKE ?)');
+                    ticketParams.push(`%${name}%`, `%${name}%`);
+                }
+                if (digits.length >= 10) {
+                    ticketClauses.push('customer_phone LIKE ?');
+                    ticketParams.push(`%${digits.slice(-10)}`);
+                }
+                let supportTickets = [];
+                if (ticketClauses.length) {
+                    const ticketWhere = `(${ticketClauses.join(' OR ')}) AND (message ILIKE '%return%' OR message ILIKE '%exchange%' OR message ILIKE '%refund%')`;
+                    try {
+                        supportTickets = await dbAdapter.query(
+                            `SELECT ticket_number, customer_phone, customer_name, message, status, created_at
+                             FROM support_tickets WHERE ${ticketWhere} ORDER BY created_at DESC LIMIT 5`,
+                            ticketParams
+                        );
+                    } catch (e) {
+                        console.warn('[check_return_exchange_status] support_tickets fallback query failed:', e.message);
+                    }
+                }
+
+                // Fallback: search store_shoppers for return-related status on this order
+                let shopperRecords = [];
+                if (name) {
+                    try {
+                        shopperRecords = await dbAdapter.query(
+                            `SELECT order_id, phone, name, status, customer_message, updated_at
+                             FROM store_shoppers WHERE (order_id ILIKE ? OR order_id ILIKE ? OR order_id ILIKE ?)
+                             ORDER BY updated_at DESC LIMIT 5`,
+                            [name, `#${name}`, `%${name}`]
+                        );
+                    } catch (e) {
+                        console.warn('[check_return_exchange_status] store_shoppers fallback query failed:', e.message);
+                    }
+                }
+
+                if (!supportTickets.length && !shopperRecords.length) {
+                    return {
+                        found: false,
+                        message: 'No return or exchange request found for this order/phone',
+                        hint: 'Requests must be submitted via the returns page at offcomfrt.in/pages/return within 2 days of delivery'
+                    };
+                }
+
                 return {
-                    found: false,
-                    message: 'No return or exchange request found for this order/phone',
-                    hint: 'Requests must be submitted via the returns page at offcomfrt.in/pages/return within 2 days of delivery'
+                    found: true,
+                    returns,
+                    exchanges,
+                    supportTickets: supportTickets.map(t => ({
+                        ticketNumber: t.ticket_number,
+                        phone: t.customer_phone,
+                        name: t.customer_name,
+                        message: t.message,
+                        status: t.status,
+                        createdAt: t.created_at
+                    })),
+                    shopperRecords: shopperRecords.map(s => ({
+                        orderId: s.order_id,
+                        phone: s.phone,
+                        name: s.name,
+                        status: s.status,
+                        customerMessage: s.customer_message,
+                        updatedAt: s.updated_at
+                    })),
+                    note: 'Return/exchange not found in dedicated returns tables — showing related support tickets and shopper records instead'
                 };
             }
 
