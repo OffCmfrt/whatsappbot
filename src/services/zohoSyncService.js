@@ -90,25 +90,67 @@ async function syncOrderToZoho(shopifyOrder) {
             zohoCustomer = null;
         }
 
+        // Step 2.5: Resolve line items to real Zoho items (by SKU, then exact
+        // name) so invoices link to items and Zoho auto-deducts stock when the
+        // invoice is marked sent — this covers broken-bundle singles too.
+        const itemCache = new Map();
+        const resolveItem = async (key) => {
+            if (!key) return null;
+            if (itemCache.has(key)) return itemCache.get(key);
+            let item = null;
+            try {
+                const bySku = await zohoService.searchItem({ sku: key });
+                item = bySku[0] || null;
+                if (!item) item = await zohoService.getItemByName(key);
+            } catch (e) { /* leave unlinked */ }
+            itemCache.set(key, item);
+            return item;
+        };
+        for (const li of invoice.line_items) {
+            const item = await resolveItem(li.item_id || li.name);
+            li.resolved_item_id = item?.item_id || null;
+        }
+
         // Step 3: Build the final Zoho invoice payload
         const invoicePayload = {
             customer_id: zohoCustomer?.contact_id,
             date: invoice.date,
             payment_terms: 0,
-            line_items: invoice.line_items.map(li => ({
-                name: li.name,
-                description: li.description,
-                quantity: li.quantity,
-                rate: li.rate,
-                discount: 0
-            })),
+            line_items: invoice.line_items.map(li => {
+                const line = {
+                    name: li.name,
+                    description: li.description,
+                    quantity: li.quantity,
+                    rate: li.rate,
+                    discount: 0
+                };
+                if (li.resolved_item_id) line.item_id = li.resolved_item_id;
+                // GST split computed by correctTax() — must reach Zoho or
+                // the invoice is created with zero tax
+                if ((li.cgst_rate || 0) > 0 || (li.sgst_rate || 0) > 0) {
+                    line.cgst_rate = li.cgst_rate;
+                    line.sgst_rate = li.sgst_rate;
+                    line.tax_percentage = (li.cgst_rate || 0) + (li.sgst_rate || 0);
+                } else if ((li.igst_rate || 0) > 0) {
+                    line.igst_rate = li.igst_rate;
+                    line.tax_percentage = li.igst_rate;
+                }
+                return line;
+            }),
             notes: invoice.notes,
+            reference_number: invoice.reference_number,
             is_inclusive_tax: false
         };
 
-        // Add shipping address if available
+        // Add shipping address if available.
+        // Zoho rejects empty-string fields (misleading "address < 100 chars"
+        // error) and caps each field at 100 chars — drop empties, truncate rest.
         if (invoice.shipping_address) {
-            invoicePayload.address = invoice.shipping_address;
+            const clean = {};
+            for (const [k, v] of Object.entries(invoice.shipping_address)) {
+                if (v !== null && v !== undefined && String(v).trim() !== '') clean[k] = String(v).slice(0, 100);
+            }
+            if (Object.keys(clean).length > 0) invoicePayload.address = clean;
         }
 
         // Step 4: Create invoice in Zoho Books
@@ -116,7 +158,28 @@ async function syncOrderToZoho(shopifyOrder) {
         try {
             zohoInvoice = await zohoService.createInvoice(invoicePayload);
         } catch (invoiceErr) {
-            throw new Error(`Invoice creation failed: ${invoiceErr.message}`);
+            // Purchase-only items cannot appear on invoices — retry once with
+            // those lines unlinked (name suffixed so Zoho doesn't auto-match)
+            if (/purchase information/i.test(invoiceErr.message)) {
+                console.warn(`⚠️ Zoho sync #${orderId}: purchase-only item matched, retrying with unlinked lines`);
+                invoicePayload.line_items = invoicePayload.line_items.map(l => l.item_id
+                    ? { ...l, item_id: undefined, name: `${l.name} *` }
+                    : l);
+                try {
+                    zohoInvoice = await zohoService.createInvoice(invoicePayload);
+                } catch (retryErr) {
+                    throw new Error(`Invoice creation failed: ${retryErr.message}`);
+                }
+            } else {
+                throw new Error(`Invoice creation failed: ${invoiceErr.message}`);
+            }
+        }
+
+        // Step 4.5: Mark sent — activates stock deduction and allows payments
+        try {
+            await zohoService.markInvoiceSent(zohoInvoice.invoice_id);
+        } catch (sentErr) {
+            console.warn(`⚠️ Zoho sync #${orderId}: mark-sent failed (${sentErr.message}) — invoice left as draft`);
         }
 
         // Step 5: Log tax corrections to the tax_corrections table
@@ -145,16 +208,6 @@ async function syncOrderToZoho(shopifyOrder) {
             ]
         );
 
-        // Step 7: Deduct individual component stock for broken bundles
-        if (transformations.bundle_breaks && transformations.bundle_breaks.length > 0) {
-            try {
-                await applyBundleStockAdjustments(orderId, transformations.bundle_breaks);
-            } catch (stockErr) {
-                // Non-fatal: invoice is already synced, stock can be retried manually
-                console.warn(`⚠️ Zoho stock adjustment failed for #${orderId}: ${stockErr.message}`);
-            }
-        }
-
         console.log(`✅ Zoho sync: order #${orderId} → invoice ${zohoInvoice?.invoice_id || 'created'}`);
         return {
             success: true,
@@ -176,53 +229,6 @@ async function syncOrderToZoho(shopifyOrder) {
     } finally {
         inFlightSyncs.delete(orderId);
     }
-}
-
-/**
- * Deduct individual component stock in Zoho Inventory when a bundle sells.
- * Stock is maintained as singles (Heneley), so selling 1 Triple bundle
- * must remove 3 singles via an inventory adjustment.
- */
-async function applyBundleStockAdjustments(orderId, bundleBreaks) {
-    // Aggregate component deductions across all broken bundles in the order
-    const deductions = {};
-    for (const brk of bundleBreaks) {
-        for (const exp of (brk.expanded || [])) {
-            if (exp.sku && exp.qty) deductions[exp.sku] = (deductions[exp.sku] || 0) + exp.qty;
-        }
-    }
-
-    const skus = Object.keys(deductions);
-    if (skus.length === 0) return;
-
-    // Resolve Zoho Inventory item IDs by SKU, then by name
-    const adjustmentItems = [];
-    for (const sku of skus) {
-        let items = await zohoService.searchItem({ sku });
-        let item = items[0] || null;
-        if (!item) item = await zohoService.getItemByName(sku);
-
-        if (!item || !item.item_id) {
-            console.warn(`⚠️ Zoho stock: no Zoho item found for SKU "${sku}" — skipping deduction`);
-            continue;
-        }
-        adjustmentItems.push({
-            item_id: item.item_id,
-            quantity: deductions[sku],
-            adjustment_type: 'decrease'
-        });
-    }
-
-    if (adjustmentItems.length === 0) return;
-
-    const adjustment = await zohoService.adjustInventory({
-        adjustment_date: new Date().toISOString().split('T')[0],
-        adjustment_type: 'quantity',
-        items: adjustmentItems,
-        notes: `Auto-deduction: bundle sale (Shopify order #${orderId})`
-    });
-
-    console.log(`📉 Zoho stock: deducted ${adjustmentItems.map(i => i.quantity + '× ' + i.item_id).join(', ')} for order #${orderId} (adjustment ${adjustment?.inventory_adjustment_id || 'created'})`);
 }
 
 /**

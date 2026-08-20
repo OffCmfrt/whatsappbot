@@ -287,6 +287,7 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         payment_terms_label: 'Due on receipt',
         line_items: zohoLineItems,
         notes: `Shopify Order #${shopifyOrder.order_number || shopifyOrder.id}`,
+        reference_number: shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString() || '',
         terms: '',
         is_inclusive_tax: false,
         taxDecision,
@@ -313,7 +314,11 @@ function buildCreditNotePayload(shopifyOrder, returnItems, returnType = 'return'
         name: item.title || item.sku || 'Returned Item',
         description: returnType === 'rto' ? 'RTO Return' : 'Customer Return',
         quantity: item.quantity || 1,
-        rate: parseFloat(item.price || 0)
+        rate: parseFloat(item.price || 0),
+        // GST 5% split on the credited amount (intra-state default)
+        cgst_rate: 2.5,
+        sgst_rate: 2.5,
+        tax_percentage: 5
     }));
 
     return {
@@ -332,15 +337,20 @@ function buildCreditNotePayload(shopifyOrder, returnItems, returnType = 'return'
 // Build COD Payment Payload
 // ============================================================
 
-function buildCodPaymentPayload(zohoInvoiceId, amount, paymentDate) {
-    return {
-        invoice_id: zohoInvoiceId,
+function buildCodPaymentPayload(zohoInvoiceId, amount, paymentDate, customerId) {
+    const payload = {
+        // Without the invoices array Zoho books the payment as an unused
+        // advance and the invoice is never marked paid
+        invoices: [{ invoice_id: zohoInvoiceId, amount_applied: amount }],
         amount: amount,
         date: paymentDate || new Date().toISOString().split('T')[0],
         payment_mode: 'cash',
-        description: 'COD Payment received via carrier',
-        reference_number: ''
+        description: 'COD Payment received via carrier'
     };
+    // Zoho rejects payments without a customer ("Customer field can neither
+    // be blank") — taken from the invoice being paid
+    if (customerId) payload.customer_id = customerId;
+    return payload;
 }
 
 module.exports = {

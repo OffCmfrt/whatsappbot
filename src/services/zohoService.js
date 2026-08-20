@@ -6,9 +6,10 @@ const { dbAdapter } = require('../database/db');
 // Handles token refresh, rate limiting, and retry logic.
 // ============================================================
 
-const BOOKS_BASE = () => `https://books.${process.env.ZOHO_BOOKS_DOMAIN || 'zoho.in'}/api/v3`;
-// Inventory API only accepts the www.zohoapis.* domain (inventory.zoho.in returns "Use the zohoapis domain")
+// Books AND Inventory transactional APIs only accept the www.zohoapis.* domain
+// (books.zoho.in / inventory.zoho.in return 400 "Use the zohoapis domain")
 const tldOf = (d) => (d || '').split('.').slice(1).join('.') || 'in';
+const BOOKS_BASE = () => `https://www.zohoapis.${tldOf(process.env.ZOHO_BOOKS_DOMAIN || 'zoho.in')}/books/v3`;
 const INVENTORY_BASE = () => `https://www.zohoapis.${tldOf(process.env.ZOHO_INVENTORY_DOMAIN || 'zoho.in')}/inventory/v1`;
 const ACCOUNTS_BASE = () => `https://accounts.${process.env.ZOHO_BOOKS_DOMAIN || 'zoho.in'}/oauth/v2/token`;
 
@@ -152,6 +153,26 @@ async function voidInvoice(invoiceId) {
     return result;
 }
 
+async function deleteInvoice(invoiceId) {
+    const url = `${BOOKS_BASE()}/invoices/${invoiceId}`;
+    return zohoRequest('delete', url);
+}
+
+async function markInvoiceSent(invoiceId) {
+    const url = `${BOOKS_BASE()}/invoices/${invoiceId}/status/sent`;
+    return zohoRequest('post', url);
+}
+
+async function deleteCreditNote(creditNoteId) {
+    const url = `${BOOKS_BASE()}/creditnotes/${creditNoteId}`;
+    return zohoRequest('delete', url);
+}
+
+async function deletePayment(paymentId) {
+    const url = `${BOOKS_BASE()}/customerpayments/${paymentId}`;
+    return zohoRequest('delete', url);
+}
+
 // ============================================================
 // Zoho Books — Credit Notes (for returns/RTO)
 // ============================================================
@@ -178,10 +199,17 @@ async function recordPayment(paymentPayload) {
     return result.payment;
 }
 
-async function getPayments(invoiceId) {
+async function getPayments(invoiceId, invoiceNumber = null) {
     const url = `${BOOKS_BASE()}/customerpayments`;
-    const result = await zohoRequest('get', url, null, { invoice_id: invoiceId });
-    return result.payments || [];
+    // NOTE: Books silently ignores the invoice_id filter here, so filter by
+    // invoice_number and re-check client-side to be safe
+    const params = invoiceNumber ? { invoice_number: invoiceNumber } : {};
+    const result = await zohoRequest('get', url, null, params);
+    let payments = result.customerpayments || result.payments || [];
+    if (invoiceNumber) {
+        payments = payments.filter(p => (p.invoice_numbers || '').includes(invoiceNumber));
+    }
+    return payments;
 }
 
 // ============================================================
@@ -396,6 +424,10 @@ module.exports = {
     getInvoice,
     searchInvoice,
     voidInvoice,
+    deleteInvoice,
+    markInvoiceSent,
+    deleteCreditNote,
+    deletePayment,
 
     // Credit Notes
     createCreditNote,

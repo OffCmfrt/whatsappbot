@@ -58,10 +58,15 @@ async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate, 
 
         const zohoInvoice = invoices[0];
         const invoiceId = zohoInvoice.invoice_id;
-        const invoiceAmount = parseFloat(zohoInvoice.amount || amount || 0);
+        // 'total' is the invoice grand total; 'amount' in the list API is
+        // the remaining balance, which can be 0 → never record a ₹0 payment
+        const invoiceAmount = parseFloat(zohoInvoice.total || zohoInvoice.amount || amount || 0);
+        if (invoiceAmount <= 0) {
+            throw new Error(`Invoice ${invoiceId} has no payable amount (total=${invoiceAmount}) — nothing to reconcile`);
+        }
 
         // Step 2: Check if payment already recorded in Zoho
-        const existingPayments = await zohoService.getPayments(invoiceId);
+        const existingPayments = await zohoService.getPayments(invoiceId, zohoInvoice.invoice_number);
         if (existingPayments.length > 0) {
             console.log(`ℹ️ Zoho COD: invoice ${invoiceId} already has payments, skipping`);
             await dbAdapter.run(
@@ -71,8 +76,8 @@ async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate, 
             return { success: true, alreadyPaid: true };
         }
 
-        // Step 3: Record payment in Zoho
-        const paymentPayload = buildCodPaymentPayload(invoiceId, invoiceAmount, deliveryDate);
+        // Step 3: Record payment in Zoho (customer_id required by Books)
+        const paymentPayload = buildCodPaymentPayload(invoiceId, invoiceAmount, deliveryDate, zohoInvoice.customer_id);
         const payment = await zohoService.recordPayment(paymentPayload);
 
         // Step 4: Update COD log

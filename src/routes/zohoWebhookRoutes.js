@@ -12,23 +12,30 @@ const zohoCodService = require('../services/zohoCodService');
 // ============================================================
 
 function verifyShopifyWebhook(req, res, next) {
-    const secret = process.env.SHOPIFY_ACCESS_TOKEN || '';
     const hmac = req.headers['x-shopify-hmac-sha256'];
 
-    if (!hmac) {
-        // If no HMAC header, allow through (may be test/internal)
-        return next();
-    }
+    if (hmac) {
+        // Shopify signs each notification webhook with that webhook's signing
+        // secret (shown in Shopify admin when the webhook is created). Accept
+        // any configured secret: ZOHO_SHOPIFY_WEBHOOK_SECRET (comma-separated
+        // list for the Zoho webhooks) plus the app-wide secret as fallback.
+        const candidates = [
+            ...(process.env.ZOHO_SHOPIFY_WEBHOOK_SECRET || '').split(','),
+            process.env.SHOPIFY_WEBHOOK_SECRET || ''
+        ].map(s => s.trim()).filter(Boolean);
 
-    if (!secret) {
-        console.warn('⚠️ Zoho webhook: SHOPIFY_ACCESS_TOKEN not set, skipping HMAC verification');
-        return next();
-    }
-
-    const hash = crypto.createHmac('sha256', secret).update(req.body).digest('base64');
-    if (hash !== hmac) {
-        console.error('❌ Zoho webhook: HMAC verification failed');
-        return res.status(401).json({ error: 'HMAC verification failed' });
+        if (candidates.length === 0) {
+            console.warn('⚠️ Zoho webhook: no webhook secret configured, skipping HMAC verification');
+        } else {
+            const valid = candidates.some(secret => {
+                const hash = crypto.createHmac('sha256', secret).update(req.body).digest('base64');
+                return hash === hmac;
+            });
+            if (!valid) {
+                console.error('❌ Zoho webhook: HMAC verification failed');
+                return res.status(401).json({ error: 'HMAC verification failed' });
+            }
+        }
     }
 
     // Parse the body for downstream handlers

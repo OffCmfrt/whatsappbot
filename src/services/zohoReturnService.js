@@ -74,10 +74,17 @@ async function handleShopifyRefund(shopifyOrder, refundData) {
             });
             if (invoices.length > 0) {
                 originalInvoiceId = invoices[0].invoice_id;
-                creditNotePayload.reference_number = originalInvoiceId;
+                // Books requires the credit note to be associated with an
+                // invoice via invoice_id (not reference_number)
+                creditNotePayload.invoice_id = originalInvoiceId;
             }
         } catch (searchErr) {
             console.warn(`⚠️ Could not find original invoice for credit note: ${searchErr.message}`);
+        }
+        if (!originalInvoiceId) {
+            // No invoice found — create a standalone credit note (Books
+            // requires either invoice_id or creditnote_type)
+            creditNotePayload.creditnote_type = 'sales_return';
         }
 
         // Create credit note in Zoho
@@ -165,6 +172,22 @@ async function handleRTO(shopifyOrder, carrierInfo = {}) {
             creditNotePayload.customer_id = zohoCustomer?.contact_id;
         } catch (custErr) {
             console.warn(`⚠️ Zoho customer lookup failed for RTO: ${custErr.message}`);
+        }
+
+        // Link the credit note to the original invoice (Books requires
+        // either invoice_id or creditnote_type)
+        let originalInvoiceId = null;
+        try {
+            const invoices = await zohoService.searchInvoice({ reference_number: orderId });
+            if (invoices.length > 0) {
+                originalInvoiceId = invoices[0].invoice_id;
+                creditNotePayload.invoice_id = originalInvoiceId;
+            }
+        } catch (searchErr) {
+            console.warn(`⚠️ Could not find original invoice for RTO credit note: ${searchErr.message}`);
+        }
+        if (!originalInvoiceId) {
+            creditNotePayload.creditnote_type = 'sales_return';
         }
 
         // Create credit note

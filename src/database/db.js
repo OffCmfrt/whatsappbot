@@ -94,7 +94,22 @@ class DatabaseAdapter {
   async run(sql, params = []) {
     const pgSql = convertPlaceholders(sql);
     const values = params.map(v => v === undefined ? null : v);
-    const result = await pool.query(pgSql, values);
+    // Postgres only exposes the inserted id via RETURNING — append it for
+    // INSERTs so callers relying on lastInsertRowid (status updates,
+    // idempotency flags) actually get the row id
+    const trimmed = pgSql.trim();
+    const needsReturning = /^INSERT/i.test(trimmed) && !/RETURNING/i.test(trimmed);
+    let result;
+    try {
+      result = await pool.query(needsReturning ? `${trimmed} RETURNING id` : pgSql, values);
+    } catch (err) {
+      // Table has no `id` column — retry the INSERT without RETURNING
+      if (needsReturning && /column "id" does not exist/i.test(err.message)) {
+        result = await pool.query(pgSql, values);
+      } else {
+        throw err;
+      }
+    }
     return {
       changes: result.rowCount,
       lastInsertRowid: result.rows?.[0]?.id || null
