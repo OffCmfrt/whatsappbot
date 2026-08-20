@@ -86,11 +86,14 @@ function stateCodeOf(stateStr) {
     return STATE_CODES[stateStr.trim().toLowerCase()] || '';
 }
 
-// Shopify can send legacy GST codes for merged union territories — Zoho only
-// accepts the current ones (else "Please provide a valid state code")
+// Zoho Books still uses the PRE-MERGER GST state codes for the merged UT
+// "Dadra and Nagar Haveli and Daman and Diu": it accepts 'DN'/'DD' (and '26')
+// but rejects 'DH' with "Please provide a valid state code" (verified live).
+// Map both legacy Shopify codes to 'DN' so the merged UT always resolves.
 const LEGACY_STATE_CODES = {
-    'DN': 'DH', // Dadra and Nagar Haveli → merged UT (Dadra and Nagar Haveli and Daman and Diu)
-    'DD': 'DH'  // Daman and Diu → same merged UT
+    'DN': 'DN', // Dadra and Nagar Haveli → keep as-is (valid in Zoho)
+    'DD': 'DN', // Daman and Diu → same merged UT
+    'DH': 'DN'  // merged-UT code not accepted by Zoho Books
 };
 
 function normalizeStateCode(code) {
@@ -343,7 +346,8 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         // the invoice. Books derives POS from the contact's billing address
         // ONLY if it was set at contact creation; backfilled addresses are
         // ignored, so we override explicitly (verified live, order #45923).
-        // Legacy Shopify codes (DN/DD) are normalised to current GST codes.
+        // Legacy Shopify codes for the merged DN+DD UT are normalised to the
+        // pre-merger code 'DN' — the only form Zoho Books accepts.
         place_of_supply: normalizeStateCode(shopifyOrder.shipping_address?.province_code) || stateCodeOf(customerState)
     };
 
