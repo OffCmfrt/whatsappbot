@@ -266,14 +266,19 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         name: `${shopifyOrder.customer?.first_name || ''} ${shopifyOrder.customer?.last_name || ''}`.trim() || shopifyOrder.shipping_address?.name || 'Customer',
         email: shopifyOrder.email || shopifyOrder.customer?.email || '',
         phone: shopifyOrder.phone || shopifyOrder.customer?.phone || '',
-        shipping_address: shopifyOrder.shipping_address ? {
-            address: shopifyOrder.shipping_address.address1 || '',
-            address2: shopifyOrder.shipping_address.address2 || '',
-            city: shopifyOrder.shipping_address.city || '',
-            state: customerState,
-            zip: shopifyOrder.shipping_address.zip || '',
-            country: 'India'
-        } : null
+        shipping_address: shopifyOrder.shipping_address ? (() => {
+            // Drop empty/null fields entirely — Zoho rejects empty-string
+            // address fields with a misleading "address has less than 100
+            // characters" error (hit on real orders with no address2)
+            const addr = {};
+            if (shopifyOrder.shipping_address.address1) addr.address = String(shopifyOrder.shipping_address.address1).trim();
+            if (shopifyOrder.shipping_address.address2) addr.address2 = String(shopifyOrder.shipping_address.address2).trim();
+            if (shopifyOrder.shipping_address.city) addr.city = String(shopifyOrder.shipping_address.city).trim();
+            if (customerState) addr.state = customerState;
+            if (shopifyOrder.shipping_address.zip) addr.zip = String(shopifyOrder.shipping_address.zip).trim();
+            addr.country = 'India';
+            return addr;
+        })() : null
     };
 
     const invoice = {
