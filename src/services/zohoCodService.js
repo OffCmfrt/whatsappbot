@@ -11,7 +11,7 @@ const { dbAdapter } = require('../database/db');
  * Handle a COD delivery confirmation from a carrier webhook.
  * Called when Delhivery/Shiprocket confirms delivery + COD collection.
  */
-async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate } = {}) {
+async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate, force = false } = {}) {
     if (!orderId) {
         return { success: false, error: 'No order identifier' };
     }
@@ -24,6 +24,19 @@ async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate }
     if (existing.length > 0) {
         console.log(`✅ Zoho COD: order #${orderId} already reconciled`);
         return { success: true, alreadyReconciled: true };
+    }
+
+    // Concurrency guard: a recent pending row means another process is
+    // already reconciling this order (cron + webhook overlap)
+    if (!force) {
+        const recentPending = await dbAdapter.query(
+            `SELECT id FROM zoho_cod_payments WHERE shopify_order_id = ? AND payment_status = 'pending' AND created_at > NOW() - INTERVAL '10 minutes'`,
+            [orderId]
+        );
+        if (recentPending.length > 0) {
+            console.log(`⏳ Zoho COD: order #${orderId} reconciliation already in progress, skipping`);
+            return { success: true, inProgress: true };
+        }
     }
 
     // Log the COD payment
@@ -104,7 +117,8 @@ async function manualReconcile(codPaymentId) {
     return handleCodDelivery(row.shopify_order_id, {
         amount: parseFloat(row.amount || 0),
         carrier: row.carrier,
-        awb: row.awb
+        awb: row.awb,
+        force: true
     });
 }
 

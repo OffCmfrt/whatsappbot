@@ -10,6 +10,10 @@ const { dbAdapter } = require('../database/db');
 const MAX_RETRIES = 3;
 const SELLER_STATE = () => process.env.ZOHO_SELLER_STATE || 'Haryana';
 
+// In-process guard: prevents duplicate invoices when Shopify redelivers a
+// webhook while the first processing is still running
+const inFlightSyncs = new Set();
+
 /**
  * Main entry point — called from the Shopify webhook handler
  * when an order is created or updated.
@@ -38,6 +42,28 @@ async function syncOrderToZoho(shopifyOrder) {
         console.log(`✅ Zoho sync: order #${orderId} already synced (id=${existing[0].id})`);
         return { success: true, alreadySynced: true, logId: existing[0].id };
     }
+
+    // Concurrency guard: another webhook delivery for this order is in progress
+    if (inFlightSyncs.has(orderId)) {
+        console.log(`⏳ Zoho sync: order #${orderId} is already being processed, skipping duplicate`);
+        return { success: true, skipped: 'in_progress' };
+    }
+
+    // Zoho-side dedupe: if an invoice with this reference already exists in
+    // Zoho (log lost, manual sync ran twice, retry after partial failure),
+    // never create a second one
+    try {
+        const existingInvoices = await zohoService.searchInvoice({ reference_number: orderId });
+        if (existingInvoices.length > 0) {
+            console.log(`✅ Zoho sync: invoice for order #${orderId} already exists in Zoho (${existingInvoices[0].invoice_id})`);
+            await logSync(orderId, shopifyOrder, existingInvoices[0].invoice_id, 'synced');
+            return { success: true, alreadySynced: true, zohoInvoiceId: existingInvoices[0].invoice_id };
+        }
+    } catch (dedupeErr) {
+        console.warn(`⚠️ Zoho dedupe check failed for #${orderId}: ${dedupeErr.message}`);
+    }
+
+    inFlightSyncs.add(orderId);
 
     // Log as pending
     const logResult = await logSync(orderId, shopifyOrder, null, 'pending');
@@ -147,6 +173,8 @@ async function syncOrderToZoho(shopifyOrder) {
 
         console.error(`❌ Zoho sync failed for order #${orderId}: ${err.message}`);
         return { success: false, error: err.message, logId };
+    } finally {
+        inFlightSyncs.delete(orderId);
     }
 }
 

@@ -19,6 +19,19 @@ async function handleShopifyRefund(shopifyOrder, refundData) {
     }
 
     const refundId = refundData?.id?.toString() || '';
+
+    // Idempotency: same Shopify refund delivered twice → one credit note only
+    if (refundId) {
+        const dup = await dbAdapter.query(
+            `SELECT id FROM zoho_returns WHERE shopify_return_id = ? AND return_type = 'return' AND status IN ('pending', 'synced')`,
+            [refundId]
+        );
+        if (dup.length > 0) {
+            console.log(`✅ Zoho return: refund ${refundId} already processed, skipping duplicate`);
+            return { success: true, alreadyProcessed: true, logId: dup[0].id };
+        }
+    }
+
     const returnItems = (refundData?.line_items || refundData?.refund_line_items || []).map(item => ({
         title: item.title || '',
         sku: item.sku || '',
@@ -105,6 +118,16 @@ async function handleRTO(shopifyOrder, carrierInfo = {}) {
         return { success: false, error: 'No order identifier' };
     }
 
+    // Idempotency: one active RTO credit note per order
+    const dup = await dbAdapter.query(
+        `SELECT id FROM zoho_returns WHERE shopify_order_id = ? AND return_type = 'rto' AND status IN ('pending', 'synced')`,
+        [orderId]
+    );
+    if (dup.length > 0) {
+        console.log(`✅ Zoho RTO: order #${orderId} already has an RTO credit note, skipping duplicate`);
+        return { success: true, alreadyProcessed: true, logId: dup[0].id };
+    }
+
     // Get original order items for the credit note
     const returnItems = (shopifyOrder.line_items || []).map(item => ({
         title: item.title || '',
@@ -179,6 +202,16 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
 
     if (!orderId) {
         return { success: false, error: 'No order identifier' };
+    }
+
+    // Idempotency: one active exchange record per order
+    const dupEx = await dbAdapter.query(
+        `SELECT id FROM zoho_returns WHERE shopify_order_id = ? AND return_type = 'exchange' AND status IN ('pending', 'synced')`,
+        [orderId]
+    );
+    if (dupEx.length > 0) {
+        console.log(`✅ Zoho exchange: order #${orderId} already processed, skipping duplicate`);
+        return { success: true, alreadyProcessed: true, logId: dupEx[0].id };
     }
 
     // Log the exchange with both original and exchanged items
