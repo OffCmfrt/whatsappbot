@@ -86,6 +86,18 @@ function stateCodeOf(stateStr) {
     return STATE_CODES[stateStr.trim().toLowerCase()] || '';
 }
 
+// Shopify can send legacy GST codes for merged union territories — Zoho only
+// accepts the current ones (else "Please provide a valid state code")
+const LEGACY_STATE_CODES = {
+    'DN': 'DH', // Dadra and Nagar Haveli → merged UT (Dadra and Nagar Haveli and Daman and Diu)
+    'DD': 'DH'  // Daman and Diu → same merged UT
+};
+
+function normalizeStateCode(code) {
+    const c = String(code || '').trim().toUpperCase();
+    return LEGACY_STATE_CODES[c] || c;
+}
+
 // ============================================================
 // Bundle Breaking
 // ============================================================
@@ -301,7 +313,7 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
             if (customerState) addr.state = customerState;
             // Zoho needs the GST state CODE to pick the right place of
             // supply — prefer Shopify's province_code, fall back to the map
-            const code = String(shopifyOrder.shipping_address.province_code || '').trim().toUpperCase();
+            const code = normalizeStateCode(shopifyOrder.shipping_address.province_code);
             addr.state_code = code || stateCodeOf(customerState);
             if (shopifyOrder.shipping_address.zip) addr.zip = String(shopifyOrder.shipping_address.zip).trim().slice(0, 20);
             addr.country = 'India';
@@ -331,7 +343,8 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         // the invoice. Books derives POS from the contact's billing address
         // ONLY if it was set at contact creation; backfilled addresses are
         // ignored, so we override explicitly (verified live, order #45923).
-        place_of_supply: stateCodeOf(customerState)
+        // Legacy Shopify codes (DN/DD) are normalised to current GST codes.
+        place_of_supply: normalizeStateCode(shopifyOrder.shipping_address?.province_code) || stateCodeOf(customerState)
     };
 
     return {
