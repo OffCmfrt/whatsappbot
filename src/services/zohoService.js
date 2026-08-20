@@ -47,9 +47,9 @@ async function waitForSlot() {
 // OAuth2 Token Management
 // ============================================================
 
-async function getAccessToken() {
+async function getAccessToken(force = false) {
     // Return cached token if still valid (with 60s buffer)
-    if (tokenCache.access_token && Date.now() < tokenCache.expires_at - 60000) {
+    if (!force && tokenCache.access_token && Date.now() < tokenCache.expires_at - 60000) {
         return tokenCache.access_token;
     }
 
@@ -88,37 +88,51 @@ async function getAccessToken() {
 async function zohoRequest(method, url, data = null, params = {}) {
     await waitForSlot();
 
-    const token = await getAccessToken();
-    const config = {
-        method,
-        url,
-        headers: {
-            'Authorization': `Zoho-oauthtoken ${token}`,
-            'X-composer-orgid': ORG_ID(),
-            'Content-Type': 'application/json'
-        },
-        params,
-        timeout: 30000,
-        maxRetries: 2
-    };
-
-    if (data && (method === 'post' || method === 'put' || method === 'patch')) {
-        config.data = data;
-    }
+    const maxRetries = 2;
+    let forceRefresh = false;
+    let authRetried = false;
 
     // Retry with exponential backoff
-    for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        // Fetched each iteration so an auth retry picks up the fresh token
+        const token = await getAccessToken(forceRefresh);
+        forceRefresh = false;
+        const config = {
+            method,
+            url,
+            headers: {
+                'Authorization': `Zoho-oauthtoken ${token}`,
+                'X-composer-orgid': ORG_ID(),
+                'Content-Type': 'application/json'
+            },
+            params,
+            timeout: 30000
+        };
+
+        if (data && (method === 'post' || method === 'put' || method === 'patch')) {
+            config.data = data;
+        }
+
         try {
             const res = await axios(config);
             return res.data;
         } catch (err) {
             const status = err.response?.status;
+            // Cached token was revoked server-side (Zoho caps active access
+            // tokens per app — another process refreshing can invalidate
+            // ours). Force a refresh and retry once.
+            if (status === 401 && !authRetried) {
+                authRetried = true;
+                forceRefresh = true;
+                console.warn('⚠️ Zoho API 401 — forcing token refresh and retrying');
+                continue;
+            }
             // Zoho signals rate limiting with a 400 "Access Denied / too many
             // requests" body (not 429) — treat it as retryable too
             const rateLimited = err.response?.data && /too many requests/i.test(
                 `${err.response.data.error_description || ''} ${err.response.data.message || ''}`
             );
-            if (status === 429 || rateLimited || (status >= 500 && attempt < config.maxRetries)) {
+            if (status === 429 || rateLimited || (status >= 500 && attempt < maxRetries)) {
                 const delay = Math.pow(2, attempt) * 2000;
                 console.warn(`⚠️ Zoho API ${status}${rateLimited ? ' (rate limited)' : ''}, retrying in ${delay}ms (attempt ${attempt + 1})`);
                 await new Promise(r => setTimeout(r, delay));
