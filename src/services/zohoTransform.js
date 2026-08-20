@@ -269,14 +269,21 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         shipping_address: shopifyOrder.shipping_address ? (() => {
             // Drop empty/null fields entirely — Zoho rejects empty-string
             // address fields with a misleading "address has less than 100
-            // characters" error (hit on real orders with no address2)
+            // characters" error (hit on real orders with no address2).
+            // Also never send `state` or `country`: Books rejects them on
+            // invoice addresses with the same misleading error (verified live
+            // for order #45923 — org is India-only so neither is needed).
+            // GST split is computed explicitly per line, so keep the state
+            // visible by appending it to the address line instead.
             const addr = {};
-            if (shopifyOrder.shipping_address.address1) addr.address = String(shopifyOrder.shipping_address.address1).trim();
+            const addr1 = String(shopifyOrder.shipping_address.address1 || '').trim();
+            if (addr1) addr.address = addr1;
             if (shopifyOrder.shipping_address.address2) addr.address2 = String(shopifyOrder.shipping_address.address2).trim();
             if (shopifyOrder.shipping_address.city) addr.city = String(shopifyOrder.shipping_address.city).trim();
-            if (customerState) addr.state = customerState;
             if (shopifyOrder.shipping_address.zip) addr.zip = String(shopifyOrder.shipping_address.zip).trim();
-            addr.country = 'India';
+            if (customerState && addr.address && (addr.address + ', ' + customerState).length <= 100) {
+                addr.address += ', ' + customerState;
+            }
             return addr;
         })() : null
     };
