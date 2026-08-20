@@ -14,6 +14,16 @@ const zohoCodService = require('../services/zohoCodService');
 function verifyShopifyWebhook(req, res, next) {
     const hmac = req.headers['x-shopify-hmac-sha256'];
 
+    // Raw bytes exactly as Shopify sent them — required for an exact HMAC
+    // match. server.js mounts express.raw() for /webhooks/zoho BEFORE the
+    // global JSON parser; the string/object fallbacks keep this middleware
+    // from ever crashing (ERR_INVALID_ARG_TYPE) if another parser ran first.
+    const rawBody = Buffer.isBuffer(req.body)
+        ? req.body
+        : typeof req.body === 'string'
+            ? Buffer.from(req.body)
+            : null;
+
     if (hmac) {
         // Shopify signs each notification webhook with that webhook's signing
         // secret (shown in Shopify admin when the webhook is created). Accept
@@ -27,8 +37,9 @@ function verifyShopifyWebhook(req, res, next) {
         if (candidates.length === 0) {
             console.warn('⚠️ Zoho webhook: no webhook secret configured, skipping HMAC verification');
         } else {
+            const payload = rawBody || Buffer.from(JSON.stringify(req.body));
             const valid = candidates.some(secret => {
-                const hash = crypto.createHmac('sha256', secret).update(req.body).digest('base64');
+                const hash = crypto.createHmac('sha256', secret).update(payload).digest('base64');
                 return hash === hmac;
             });
             if (!valid) {
@@ -39,9 +50,13 @@ function verifyShopifyWebhook(req, res, next) {
     }
 
     // Parse the body for downstream handlers
-    try {
-        req.body = JSON.parse(req.body.toString());
-    } catch (e) {
+    if (rawBody) {
+        try {
+            req.body = JSON.parse(rawBody.toString());
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid JSON body' });
+        }
+    } else if (typeof req.body !== 'object' || req.body === null) {
         return res.status(400).json({ error: 'Invalid JSON body' });
     }
 

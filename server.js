@@ -111,6 +111,11 @@ app.use('/webhooks/shopify', express.raw({ type: '*/*' }));
 // Raw body for GoKwik webhook HMAC verification (parsed after signature check)
 app.use('/webhooks/gokwik', express.raw({ type: '*/*' }));
 
+// Raw body for Zoho middleware webhook HMAC verification — must run BEFORE
+// the global JSON parser, otherwise req.body is already an Object and the
+// HMAC check crashes with ERR_INVALID_ARG_TYPE
+app.use('/webhooks/zoho', express.raw({ type: '*/*' }));
+
 // Regular JSON parsing for all other routes
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -167,7 +172,6 @@ app.use('/webhooks/gokwik', gokwikWebhookRoutes);
 // Zoho Middleware — Shopify → Zoho sync (orders, returns, COD)
 // Webhook routes receive raw body for HMAC verification
 const zohoWebhookRoutes = require('./src/routes/zohoWebhookRoutes');
-app.use('/webhooks/zoho', express.raw({ type: 'application/json' }));
 app.use('/webhooks/zoho', zohoWebhookRoutes);
 
 // Zoho admin API routes (dashboard data, config, manual actions)
