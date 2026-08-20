@@ -234,6 +234,14 @@ async function initializeDatabase() {
     // Initialize Performance Indexes
     await initializePerformanceIndexes();
     
+    // Initialize Zoho Sync Tables
+    try {
+        const { initializeZohoTables } = require('../services/zohoService');
+        await initializeZohoTables();
+    } catch (e) {
+        console.warn('⚠️ Zoho tables init skipped:', e.message);
+    }
+    
     console.log('ℹ️ Supabase database initialized');
     return true;
   } catch (error) {

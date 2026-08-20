@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoho Sync Dashboard</title>
+    <link rel="stylesheet" href="/dashboard/css/zoho-dashboard.css?v=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="zoho-dashboard">
+        <!-- Section Tabs -->
+        <div class="section-tabs">
+            <button class="section-tab active" data-section="overview">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                Overview
+            </button>
+            <button class="section-tab" data-section="sync">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                Order Sync
+            </button>
+            <button class="section-tab" data-section="tax">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                Tax Corrections
+            </button>
+            <button class="section-tab" data-section="returns">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                Returns & RTO
+            </button>
+            <button class="section-tab" data-section="cod">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                COD Payments
+            </button>
+            <button class="section-tab" data-section="config">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                Config
+            </button>
+        </div>
+
+        <!-- Section: Overview -->
+        <div id="section-overview" class="section-content active">
+            <div class="stats-grid" id="overviewStats">
+                <div class="stat-card stat-green">
+                    <div class="stat-value" id="statSyncedToday">0</div>
+                    <div class="stat-label">Synced Today</div>
+                </div>
+                <div class="stat-card stat-blue">
+                    <div class="stat-value" id="statSuccessRate">0%</div>
+                    <div class="stat-label">Success Rate</div>
+                </div>
+                <div class="stat-card stat-red">
+                    <div class="stat-value" id="statFailed">0</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+                <div class="stat-card stat-orange">
+                    <div class="stat-value" id="statPendingRetry">0</div>
+                    <div class="stat-label">Pending Retry</div>
+                </div>
+                <div class="stat-card stat-purple">
+                    <div class="stat-value" id="statReturnsToday">0</div>
+                    <div class="stat-label">Returns Today</div>
+                </div>
+                <div class="stat-card stat-teal">
+                    <div class="stat-value" id="statCodPending">0</div>
+                    <div class="stat-label">COD Pending</div>
+                </div>
+            </div>
+            <div class="section-header">
+                <h3>Recent Sync Activity</h3>
+                <button class="btn btn-sm btn-outline" onclick="loadOverview()">Refresh</button>
+            </div>
+            <div class="table-container">
+                <table class="data-table" id="recentSyncTable">
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Zoho Invoice</th>
+                            <th>Status</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recentSyncBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Section: Order Sync -->
+        <div id="section-sync" class="section-content">
+            <div class="filters-bar">
+                <input type="text" id="syncSearch" placeholder="Search order ID or invoice..." class="filter-input">
+                <select id="syncStatusFilter" class="filter-select">
+                    <option value="">All Status</option>
+                    <option value="synced">Synced</option>
+                    <option value="failed">Failed</option>
+                    <option value="pending">Pending</option>
+                    <option value="retry">Retry</option>
+                </select>
+                <button class="btn btn-sm btn-primary" onclick="loadSyncLog()">Search</button>
+                <button class="btn btn-sm btn-warning" onclick="retryAllFailed()">Retry All Failed</button>
+            </div>
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Zoho Invoice</th>
+                            <th>Status</th>
+                            <th>Transformations</th>
+                            <th>Error</th>
+                            <th>Time</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="syncLogBody"></tbody>
+                </table>
+            </div>
+            <div class="pagination" id="syncPagination"></div>
+        </div>
+
+        <!-- Section: Tax Corrections -->
+        <div id="section-tax" class="section-content">
+            <div class="stats-grid stats-grid-3">
+                <div class="stat-card stat-blue">
+                    <div class="stat-value" id="statTaxCorrected">0</div>
+                    <div class="stat-label">Corrections Today</div>
+                </div>
+                <div class="stat-card stat-green">
+                    <div class="stat-value" id="statRateFixes">0</div>
+                    <div class="stat-label">Rate Fixes</div>
+                </div>
+                <div class="stat-card stat-purple">
+                    <div class="stat-value" id="statStateFixes">0</div>
+                    <div class="stat-label">State Fixes (CGST+SGST/IGST)</div>
+                </div>
+            </div>
+            <div class="filters-bar">
+                <select id="taxTypeFilter" class="filter-select">
+                    <option value="">All Types</option>
+                    <option value="rate_fix">Rate Fix</option>
+                    <option value="state_fix">State Fix</option>
+                    <option value="intra_state">Intra-state (CGST+SGST)</option>
+                    <option value="inter_state">Inter-state (IGST)</option>
+                </select>
+                <button class="btn btn-sm btn-primary" onclick="loadTaxCorrections()">Filter</button>
+            </div>
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Type</th>
+                            <th>Original Tax</th>
+                            <th>Corrected Tax</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="taxCorrectionsBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Section: Returns & RTO -->
+        <div id="section-returns" class="section-content">
+            <div class="stats-grid stats-grid-4">
+                <div class="stat-card stat-purple">
+                    <div class="stat-value" id="statReturns">0</div>
+                    <div class="stat-label">Returns Today</div>
+                </div>
+                <div class="stat-card stat-red">
+                    <div class="stat-value" id="statRTOs">0</div>
+                    <div class="stat-label">RTOs Today</div>
+                </div>
+                <div class="stat-card stat-green">
+                    <div class="stat-value" id="statCreditNotes">0</div>
+                    <div class="stat-label">Credit Notes Created</div>
+                </div>
+                <div class="stat-card stat-orange">
+                    <div class="stat-value" id="statFailedReturns">0</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+            </div>
+            <div class="filters-bar">
+                <select id="returnTypeFilter" class="filter-select">
+                    <option value="">All Types</option>
+                    <option value="return">Returns</option>
+                    <option value="rto">RTO</option>
+                    <option value="exchange">Exchange</option>
+                </select>
+                <select id="returnStatusFilter" class="filter-select">
+                    <option value="">All Status</option>
+                    <option value="synced">Synced</option>
+                    <option value="failed">Failed</option>
+                    <option value="pending">Pending</option>
+                </select>
+                <button class="btn btn-sm btn-primary" onclick="loadReturns()">Filter</button>
+            </div>
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Type</th>
+                            <th>Credit Note</th>
+                            <th>Items</th>
+                            <th>Status</th>
+                            <th>Time</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="returnsBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Section: COD Payments -->
+        <div id="section-cod" class="section-content">
+            <div class="stats-grid stats-grid-3">
+                <div class="stat-card stat-orange">
+                    <div class="stat-value" id="statCodPending">0</div>
+                    <div class="stat-label">Pending Reconciliation</div>
+                </div>
+                <div class="stat-card stat-green">
+                    <div class="stat-value" id="statCodReconciled">0</div>
+                    <div class="stat-label">Reconciled Today</div>
+                </div>
+                <div class="stat-card stat-blue">
+                    <div class="stat-value" id="statCodAmount">₹0</div>
+                    <div class="stat-label">Amount Today</div>
+                </div>
+            </div>
+            <div class="filters-bar">
+                <input type="text" id="codSearch" placeholder="Search order ID, AWB, carrier..." class="filter-input">
+                <select id="codStatusFilter" class="filter-select">
+                    <option value="">All Status</option>
+                    <option value="reconciled">Reconciled</option>
+                    <option value="pending">Pending</option>
+                    <option value="failed">Failed</option>
+                </select>
+                <button class="btn btn-sm btn-primary" onclick="loadCodLog()">Search</button>
+            </div>
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>AWB</th>
+                            <th>Carrier</th>
+                            <th>Amount</th>
+                            <th>Status</th>
+                            <th>Reconciled</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="codBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Section: Configuration -->
+        <div id="section-config" class="section-content">
+            <div class="config-grid">
+                <!-- Connection Status -->
+                <div class="config-card">
+                    <h3>Zoho Connection</h3>
+                    <div id="connectionStatus" class="connection-status">
+                        <span class="status-dot status-unknown"></span>
+                        <span>Checking...</span>
+                    </div>
+                    <button class="btn btn-sm btn-primary" onclick="testConnection()" style="margin-top:12px">Test Connection</button>
+                    <div class="config-info" id="configInfo"></div>
+                </div>
+
+                <!-- Bundle Mapping -->
+                <div class="config-card config-card-wide">
+                    <h3>Bundle Mappings</h3>
+                    <p class="config-desc">Map bundle SKUs to individual components. When a bundle is sold, it's automatically broken into individual line items.</p>
+                    <div class="table-container">
+                        <table class="data-table data-table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Bundle SKU</th>
+                                    <th>Component SKU</th>
+                                    <th>Qty</th>
+                                    <th>GST %</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bundleMapBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="add-bundle-form">
+                        <input type="text" id="newBundleSku" placeholder="Bundle SKU" class="filter-input">
+                        <input type="text" id="newComponentSku" placeholder="Component SKU" class="filter-input">
+                        <input type="number" id="newComponentQty" placeholder="Qty" value="1" class="filter-input filter-input-sm">
+                        <input type="number" id="newGstRate" placeholder="GST %" value="5" class="filter-input filter-input-sm">
+                        <button class="btn btn-sm btn-primary" onclick="addBundleMapping()">Add</button>
+                    </div>
+                </div>
+
+                <!-- Settings -->
+                <div class="config-card">
+                    <h3>Settings</h3>
+                    <div class="setting-row">
+                        <label>Auto Sync</label>
+                        <div class="toggle-switch" id="autoSyncToggle" onclick="toggleAutoSync()">
+                            <div class="toggle-knob"></div>
+                        </div>
+                        <span id="autoSyncLabel">Enabled</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>Seller State</label>
+                        <span id="sellerStateDisplay" class="config-value">Haryana</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>Books Domain</label>
+                        <span id="booksDomainDisplay" class="config-value">zoho.in</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transformation Detail Modal -->
+    <div class="modal-overlay" id="transformModal" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Transformation Details</h3>
+                <button class="modal-close" onclick="closeModal('transformModal')">&times;</button>
+            </div>
+            <div class="modal-body" id="transformModalBody"></div>
+        </div>
+    </div>
+
+    <script src="/dashboard/js/zoho-dashboard.js?v=1"></script>
+</body>
+</html>

@@ -128,7 +128,8 @@ const ROUTE_PERMISSIONS = [
     { prefix: '/shiprocket', key: null },
     { prefix: '/shopify', key: null },
     { prefix: '/sync', key: null },
-    { prefix: '/offers', key: null }
+    { prefix: '/offers', key: null },
+    { prefix: '/zoho', key: null }
 ];
 
 // Router-level gate mounted once in adminRoutes (after /login).

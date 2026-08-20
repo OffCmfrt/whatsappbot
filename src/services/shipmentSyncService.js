@@ -167,6 +167,16 @@ async function syncShipment(shipment) {
     await syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliveredAt);
     console.log(`📦 Shipment #${shipment.id} (${shipment.order_id}, AWB ${shipment.awb}): ${shipment.status} → ${newStatus} [carrier: "${carrierStatus}"]`);
 
+    // Zoho middleware hook — auto COD reconciliation + RTO credit notes
+    if (newStatus === 'delivered' || newStatus === 'rto') {
+        try {
+            require('./zohoShipmentHook').onShipmentTerminal(shipment, newStatus, deliveredAt)
+                .catch(e => console.warn(`⚠️ Zoho shipment hook failed for ${shipment.order_id}:`, e.message));
+        } catch (hookErr) {
+            console.warn(`⚠️ Zoho shipment hook unavailable:`, hookErr.message);
+        }
+    }
+
     // Send "Out for Delivery" WhatsApp template notification to the customer
     if (newStatus === 'out_for_delivery' && shipment.status !== 'out_for_delivery') {
         try {
