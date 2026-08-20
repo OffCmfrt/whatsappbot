@@ -76,13 +76,17 @@ async function syncOrderToZoho(shopifyOrder) {
             SELLER_STATE()
         );
 
-        // Step 2: Resolve or create the customer in Zoho
+        // Step 2: Resolve or create the customer in Zoho. The shipping
+        // address (incl. state) is passed so the contact gets a billing
+        // address state + gst_treatment 'consumer' — Books derives the
+        // invoice place of supply (IGST vs CGST+SGST) from the contact.
         let zohoCustomer;
         try {
             zohoCustomer = await zohoService.getOrCreateCustomer(
                 customer.name,
                 customer.email,
-                customer.phone
+                customer.phone,
+                invoice.shipping_address
             );
         } catch (custErr) {
             console.warn(`⚠️ Zoho customer create failed for #${orderId}: ${custErr.message}`);
@@ -142,16 +146,23 @@ async function syncOrderToZoho(shopifyOrder) {
             is_inclusive_tax: false
         };
 
-        // Add shipping address if available.
+        // Ship-to address with state — together with the contact's billing
+        // state this is what Zoho Books uses for the place of supply.
         // Zoho rejects empty-string fields (misleading "address < 100 chars"
-        // error) and caps each field at 100 chars — drop empties, truncate rest.
+        // error) and caps each field at 100 chars — drop empties, truncate.
         if (invoice.shipping_address) {
             const clean = {};
             for (const [k, v] of Object.entries(invoice.shipping_address)) {
                 if (v !== null && v !== undefined && String(v).trim() !== '') clean[k] = String(v).slice(0, 100);
             }
-            if (Object.keys(clean).length > 0) invoicePayload.address = clean;
+            if (Object.keys(clean).length > 0) invoicePayload.shipping_address = clean;
         }
+        // B2C: gst_treatment consumer lets Books honour the inter-state IGST
+        // we computed (the native integration does the same)
+        invoicePayload.gst_treatment = 'consumer';
+        // Place of supply = customer's GST state code. This (not the address
+        // fields) decides IGST vs CGST+SGST in Books.
+        if (invoice.place_of_supply) invoicePayload.place_of_supply = invoice.place_of_supply;
 
         // Step 4: Create invoice in Zoho Books
         let zohoInvoice;

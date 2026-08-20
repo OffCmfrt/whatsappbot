@@ -113,9 +113,14 @@ async function zohoRequest(method, url, data = null, params = {}) {
             return res.data;
         } catch (err) {
             const status = err.response?.status;
-            if (status === 429 || (status >= 500 && attempt < config.maxRetries)) {
-                const delay = Math.pow(2, attempt) * 1000;
-                console.warn(`⚠️ Zoho API ${status}, retrying in ${delay}ms (attempt ${attempt + 1})`);
+            // Zoho signals rate limiting with a 400 "Access Denied / too many
+            // requests" body (not 429) — treat it as retryable too
+            const rateLimited = err.response?.data && /too many requests/i.test(
+                `${err.response.data.error_description || ''} ${err.response.data.message || ''}`
+            );
+            if (status === 429 || rateLimited || (status >= 500 && attempt < config.maxRetries)) {
+                const delay = Math.pow(2, attempt) * 2000;
+                console.warn(`⚠️ Zoho API ${status}${rateLimited ? ' (rate limited)' : ''}, retrying in ${delay}ms (attempt ${attempt + 1})`);
                 await new Promise(r => setTimeout(r, delay));
                 continue;
             }
@@ -228,7 +233,7 @@ async function searchCustomer(filters = {}) {
     return result.contacts || [];
 }
 
-async function getOrCreateCustomer(contactName, email = '', phone = '') {
+async function getOrCreateCustomer(contactName, email = '', phone = '', address = null) {
     // Search by email or phone first
     const searchFilters = {};
     if (email) searchFilters.email = email;
@@ -236,13 +241,42 @@ async function getOrCreateCustomer(contactName, email = '', phone = '') {
 
     if (Object.keys(searchFilters).length > 0) {
         const existing = await searchCustomer(searchFilters);
-        if (existing.length > 0) return existing[0];
+        if (existing.length > 0) {
+            const customer = existing[0];
+            // GST correctness: Books derives the invoice place of supply from
+            // the CONTACT's billing address. Customers created without one
+            // (old middleware runs, or skipped by the native integration)
+            // force every invoice to intra-state CGST+SGST. Backfill it once.
+            try {
+                const full = await zohoRequest('get', `${BOOKS_BASE()}/contacts/${customer.contact_id}`);
+                const billing = full?.contact?.billing_address || {};
+                // Missing state OR missing state_code breaks place of supply
+                const needsState = address && address.state && !billing.state && !billing.state_code;
+                const needsCode = address && address.state_code && !billing.state_code;
+                const needsTreatment = address && full?.contact?.gst_treatment === 'business_none';
+                if (needsState || needsCode || needsTreatment) {
+                    await zohoRequest('put', `${BOOKS_BASE()}/contacts/${customer.contact_id}`, {
+                        contact_name: full?.contact?.contact_name || customer.contact_name,
+                        gst_treatment: 'consumer',
+                        billing_address: address,
+                        shipping_address: address
+                    });
+                    console.log(`✅ Zoho customer ${customer.contact_id}: backfilled address state ${address.state} + gst_treatment consumer`);
+                }
+            } catch (e) {
+                console.warn(`⚠️ Zoho customer address backfill failed: ${e.message}`);
+            }
+            return customer;
+        }
     }
 
-    // Create new customer
+    // Create new customer. gst_treatment 'consumer' + billing address state
+    // are required for Books to pick the correct place of supply (IGST for
+    // inter-state, CGST+SGST for intra-state).
     const payload = {
         contact_name: contactName,
         contact_type: 'customer',
+        gst_treatment: 'consumer',
         payment_terms: 0,
         contact_persons: []
     };
@@ -252,6 +286,10 @@ async function getOrCreateCustomer(contactName, email = '', phone = '') {
             payload.contact_persons.push({});
         }
         payload.contact_persons[0].mobile = phone;
+    }
+    if (address && address.state) {
+        payload.billing_address = address;
+        payload.shipping_address = address;
     }
 
     return await createCustomer(payload);

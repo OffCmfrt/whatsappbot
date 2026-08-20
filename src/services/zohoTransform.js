@@ -66,6 +66,26 @@ function normalizeState(stateStr) {
     return stateStr.trim();
 }
 
+// GST state codes — Zoho Books needs the code (not just the name) on the
+// contact's billing address to derive the invoice place of supply correctly
+const STATE_CODES = {
+    'andhra pradesh': 'AP', 'arunachal pradesh': 'AR', 'assam': 'AS', 'bihar': 'BR',
+    'chhattisgarh': 'CG', 'goa': 'GA', 'gujarat': 'GJ', 'haryana': 'HR',
+    'himachal pradesh': 'HP', 'jarkhand': 'JH', 'jharkhand': 'JH', 'karnataka': 'KA',
+    'kerala': 'KL', 'madhya pradesh': 'MP', 'maharashtra': 'MH', 'manipur': 'MN',
+    'meghalaya': 'ML', 'mizoram': 'MZ', 'nagaland': 'NL', 'odisha': 'OR',
+    'punjab': 'PB', 'rajasthan': 'RJ', 'sikkim': 'SK', 'tamil nadu': 'TN',
+    'telangana': 'TS', 'tripura': 'TR', 'uttar pradesh': 'UP', 'uttarakhand': 'UK',
+    'west bengal': 'WB', 'delhi': 'DL', 'jammu and kashmir': 'JK', 'ladakh': 'LA',
+    'puducherry': 'PY', 'chandigarh': 'CH', 'andaman and nicobar islands': 'AN',
+    'dadra and nagar haveli and daman and diu': 'DH', 'lakshadweep': 'LD'
+};
+
+function stateCodeOf(stateStr) {
+    if (!stateStr) return '';
+    return STATE_CODES[stateStr.trim().toLowerCase()] || '';
+}
+
 // ============================================================
 // Bundle Breaking
 // ============================================================
@@ -267,23 +287,26 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         email: shopifyOrder.email || shopifyOrder.customer?.email || '',
         phone: shopifyOrder.phone || shopifyOrder.customer?.phone || '',
         shipping_address: shopifyOrder.shipping_address ? (() => {
-            // Drop empty/null fields entirely — Zoho rejects empty-string
-            // address fields with a misleading "address has less than 100
-            // characters" error (hit on real orders with no address2).
-            // Also never send `state` or `country`: Books rejects them on
-            // invoice addresses with the same misleading error (verified live
-            // for order #45923 — org is India-only so neither is needed).
-            // GST split is computed explicitly per line, so keep the state
-            // visible by appending it to the address line instead.
+            // Zoho Books GST recipe (verified live, mirrors the native
+            // integration): the customer contact must carry
+            // gst_treatment='consumer' + billing address state, and the
+            // invoice passes a shipping_address incl. state + country_code
+            // 'IN'. Empty fields are dropped — Zoho rejects empty strings
+            // with a misleading "address has less than 100 characters" error.
             const addr = {};
             const addr1 = String(shopifyOrder.shipping_address.address1 || '').trim();
-            if (addr1) addr.address = addr1;
-            if (shopifyOrder.shipping_address.address2) addr.address2 = String(shopifyOrder.shipping_address.address2).trim();
-            if (shopifyOrder.shipping_address.city) addr.city = String(shopifyOrder.shipping_address.city).trim();
-            if (shopifyOrder.shipping_address.zip) addr.zip = String(shopifyOrder.shipping_address.zip).trim();
-            if (customerState && addr.address && (addr.address + ', ' + customerState).length <= 100) {
-                addr.address += ', ' + customerState;
-            }
+            if (addr1) addr.address = addr1.slice(0, 100);
+            if (shopifyOrder.shipping_address.address2) addr.street2 = String(shopifyOrder.shipping_address.address2).trim().slice(0, 100);
+            if (shopifyOrder.shipping_address.city) addr.city = String(shopifyOrder.shipping_address.city).trim().slice(0, 100);
+            if (customerState) addr.state = customerState;
+            // Zoho needs the GST state CODE to pick the right place of
+            // supply — prefer Shopify's province_code, fall back to the map
+            const code = String(shopifyOrder.shipping_address.province_code || '').trim().toUpperCase();
+            addr.state_code = code || stateCodeOf(customerState);
+            if (shopifyOrder.shipping_address.zip) addr.zip = String(shopifyOrder.shipping_address.zip).trim().slice(0, 20);
+            addr.country = 'India';
+            addr.country_code = 'IN';
+            if (shopifyOrder.shipping_address.name) addr.attention = String(shopifyOrder.shipping_address.name).trim().slice(0, 100);
             return addr;
         })() : null
     };
@@ -303,7 +326,12 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         terms: '',
         is_inclusive_tax: false,
         taxDecision,
-        shipping_address: customer.shipping_address
+        shipping_address: customer.shipping_address,
+        // GST state code of the customer state — sent as place_of_supply on
+        // the invoice. Books derives POS from the contact's billing address
+        // ONLY if it was set at contact creation; backfilled addresses are
+        // ignored, so we override explicitly (verified live, order #45923).
+        place_of_supply: stateCodeOf(customerState)
     };
 
     return {
