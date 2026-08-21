@@ -411,13 +411,26 @@ function buildCreditNotePayload(shopifyOrder, returnItems, returnType = 'return'
 // Build COD Payment Payload
 // ============================================================
 
+/**
+ * Normalise any incoming date (full ISO timestamp, carrier string, Date)
+ * to the yyyy-mm-dd format Zoho Books requires — a full ISO string makes
+ * the API reject the request with "Invalid value passed for Invoice Date".
+ */
+function toZohoDate(value) {
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const d = value instanceof Date ? value : new Date(value || undefined);
+    return isNaN(d.getTime())
+        ? new Date().toISOString().split('T')[0]
+        : d.toISOString().split('T')[0];
+}
+
 function buildCodPaymentPayload(zohoInvoiceId, amount, paymentDate, customerId) {
     const payload = {
         // Without the invoices array Zoho books the payment as an unused
         // advance and the invoice is never marked paid
         invoices: [{ invoice_id: zohoInvoiceId, amount_applied: amount }],
         amount: amount,
-        date: paymentDate || new Date().toISOString().split('T')[0],
+        date: toZohoDate(paymentDate),
         payment_mode: 'cash',
         description: 'COD Payment received via carrier'
     };

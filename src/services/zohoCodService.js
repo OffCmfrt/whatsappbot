@@ -1,3 +1,4 @@
+const axios = require('axios');
 const zohoService = require('./zohoService');
 const { buildCodPaymentPayload } = require('./zohoTransform');
 const { dbAdapter } = require('../database/db');
@@ -47,10 +48,9 @@ async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate, 
     );
 
     try {
-        // Step 1: Find the Zoho invoice for this order
-        const invoices = await zohoService.searchInvoice({
-            reference_number: orderId
-        });
+        // Step 1: Find the Zoho invoice for this order (auto-syncs the
+        // order from Shopify first if the original sync never ran)
+        const invoices = await ensureInvoiceExists(orderId);
 
         if (invoices.length === 0) {
             throw new Error(`No Zoho invoice found for order #${orderId}. Sync the order first.`);
@@ -102,6 +102,55 @@ async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate, 
 
         console.error(`❌ Zoho COD reconciliation failed for order #${orderId}: ${err.message}`);
         return { success: false, error: err.message, logId: logResult.lastInsertRowid };
+    }
+}
+
+/**
+ * Find the Zoho invoice for an order; if it doesn't exist (original
+ * webhook sync failed or was skipped), pull the order from Shopify,
+ * run the full sync, and retry once.
+ */
+async function ensureInvoiceExists(orderId) {
+    let invoices = await zohoService.searchInvoice({ reference_number: orderId });
+    if (invoices.length > 0) return invoices;
+
+    const shopifyOrder = await fetchShopifyOrderByNumber(orderId);
+    if (!shopifyOrder) return invoices;
+
+    console.log(`🔄 Zoho COD: no invoice for order #${orderId} — syncing from Shopify first`);
+    try {
+        // Lazy require to avoid a circular dependency with the sync service
+        const zohoSyncService = require('./zohoSyncService');
+        const syncResult = await zohoSyncService.syncOrderToZoho(shopifyOrder);
+        if (syncResult.success) {
+            invoices = await zohoService.searchInvoice({ reference_number: orderId });
+        }
+    } catch (syncErr) {
+        console.warn(`⚠️ Zoho COD: on-demand sync failed for order #${orderId}: ${syncErr.message}`);
+    }
+    return invoices;
+}
+
+/**
+ * Fetch a single order from Shopify by its display number (#45272).
+ * Returns null when Shopify is unconfigured or the order doesn't exist.
+ */
+async function fetchShopifyOrderByNumber(orderId) {
+    const shop = process.env.SHOPIFY_STORE;
+    const token = process.env.SHOPIFY_ACCESS_TOKEN;
+    if (!shop || !token) return null;
+
+    try {
+        const name = String(orderId).replace(/^#/, '');
+        const url = `https://${shop}/admin/api/2024-01/orders.json?name=${encodeURIComponent(name)}&status=any`;
+        const res = await axios.get(url, {
+            headers: { 'X-Shopify-Access-Token': token },
+            timeout: 15000
+        });
+        return (res.data?.orders || [])[0] || null;
+    } catch (err) {
+        console.warn(`⚠️ Zoho COD: Shopify order lookup failed for #${orderId}: ${err.message}`);
+        return null;
     }
 }
 
