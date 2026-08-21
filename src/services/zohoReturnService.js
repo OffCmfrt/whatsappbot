@@ -245,8 +245,14 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
     );
 
     try {
-        // Credit note for the original returned items
-        const creditNotePayload = buildCreditNotePayload(shopifyOrder, originalItems, 'exchange');
+        // Credit note for the original returned items; the replacement
+        // products the customer actually received are stamped in the notes so
+        // Zoho reflects the real exchange, not just the original selection.
+        const exchangedSummary = (exchangedItems || [])
+            .map(i => `${i.quantity || 1}x ${i.title || i.sku || 'item'}${i.variant ? ' (' + i.variant + ')' : ''}`)
+            .join(', ');
+        const creditNotePayload = buildCreditNotePayload(shopifyOrder, originalItems, 'exchange',
+            exchangedSummary ? `Exchanged for: ${exchangedSummary}` : '');
 
         const customerName = creditNotePayload.customer_name;
         let zohoCustomer = null;

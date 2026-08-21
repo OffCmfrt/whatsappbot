@@ -442,13 +442,17 @@ async function initializeZohoTables() {
         await pool.query(`
             CREATE TABLE IF NOT EXISTS zoho_bundle_map (
                 id SERIAL PRIMARY KEY,
-                bundle_sku TEXT NOT NULL UNIQUE,
+                bundle_sku TEXT NOT NULL,
                 component_sku TEXT NOT NULL,
                 component_qty INT NOT NULL DEFAULT 1,
                 gst_rate DECIMAL(5,2) NOT NULL DEFAULT 5.0,
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         `);
+        // A bundle has SEVERAL component rows — the original UNIQUE on
+        // bundle_sku alone blocked multi-component mappings.
+        await pool.query('ALTER TABLE zoho_bundle_map DROP CONSTRAINT IF EXISTS zoho_bundle_map_bundle_sku_key');
+        await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS zoho_bundle_map_pair ON zoho_bundle_map(bundle_sku, component_sku)');
 
         // Indexes
         await pool.query('CREATE INDEX IF NOT EXISTS idx_zoho_sync_order ON zoho_sync_log(shopify_order_id)');

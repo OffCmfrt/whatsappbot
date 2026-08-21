@@ -98,6 +98,9 @@ async function syncOrderToZoho(shopifyOrder) {
         // name) so invoices link to items and Zoho auto-deducts stock when the
         // invoice is marked sent — this covers broken-bundle singles too.
         const itemCache = new Map();
+        // Zoho catalog names are inconsistent ("( B ) - M" vs "(G)-M") —
+        // normalise whitespace so bundle components still link to stock.
+        const normName = (s) => String(s || '').replace(/\s+/g, '').toUpperCase();
         const resolveItem = async (key) => {
             if (!key) return null;
             if (itemCache.has(key)) return itemCache.get(key);
@@ -106,6 +109,17 @@ async function syncOrderToZoho(shopifyOrder) {
                 const bySku = await zohoService.searchItem({ sku: key });
                 item = bySku[0] || null;
                 if (!item) item = await zohoService.getItemByName(key);
+                if (!item) {
+                    // Fuzzy fallback: style-prefix search + whitespace-insensitive
+                    // match (Zoho stores some variants without spaces, e.g.
+                    // "RAGLAN 001 (G)-M" vs "RAGLAN 001 ( G ) - M")
+                    const prefix = String(key)
+                        .replace(/\s*[-]\s*\w+$/, '')  // drop trailing size
+                        .replace(/\(.*$/, '')          // drop colourway paren
+                        .trim();
+                    const cands = await zohoService.searchItem({ name_contains: prefix, per_page: 200 });
+                    item = cands.find(c => normName(c.name) === normName(key)) || null;
+                }
             } catch (e) { /* leave unlinked */ }
             itemCache.set(key, item);
             return item;

@@ -145,11 +145,25 @@ router.post('/refunds/create', verifyShopifyWebhook, async (req, res) => {
 });
 
 // ============================================================
+// INTERNAL INTEGRATION GUARD
+// /carrier/delivery and /exchange are called by our own services (returns
+// server, carrier handlers). If WHATSAPP_INTERNAL_TOKEN is configured,
+// require it — same convention as the returns server's /api/internal/ai-data.
+// ============================================================
+
+function requireInternalToken(req, res, next) {
+    const expected = process.env.WHATSAPP_INTERNAL_TOKEN || '';
+    if (!expected) return next();
+    if (req.headers['x-internal-token'] === expected) return next();
+    return res.status(401).json({ error: 'Unauthorized' });
+}
+
+// ============================================================
 // CARRIER DELIVERY WEBHOOK — COD reconciliation + RTO
 // Called by existing carrier webhook handlers or Delhivery/Shiprocket
 // ============================================================
 
-router.post('/carrier/delivery', async (req, res) => {
+router.post('/carrier/delivery', requireInternalToken, async (req, res) => {
     res.status(200).json({ received: true });
 
     try {
@@ -201,7 +215,7 @@ router.post('/carrier/delivery', async (req, res) => {
 // Ensures Zoho reflects the REAL returned/exchanged product, not the original.
 // ============================================================
 
-router.post('/exchange', async (req, res) => {
+router.post('/exchange', requireInternalToken, async (req, res) => {
     res.status(200).json({ received: true });
 
     try {

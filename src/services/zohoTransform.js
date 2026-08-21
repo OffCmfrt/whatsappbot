@@ -131,11 +131,25 @@ function breakBundleLineItems(lineItems, bundleMap) {
     const result = [];
     const transformations = [];
 
+    // Shopify bundle variants carry no SKU — the mapping key is usually the
+    // product TITLE ("HENLEY - 001 ( TRIPLE )"). Try sku, exact title, then a
+    // whitespace-normalised title.
+    const normTitle = (s) => String(s || '').toUpperCase()
+        .replace(/\s*([()])\s*/g, '$1')
+        .replace(/\s*-\s*/g, '-')
+        .replace(/\s+/g, ' ').trim();
+    const byTitle = {};
+    for (const [k, v] of Object.entries(bundleMap)) byTitle[normTitle(k)] = v;
+
     for (const item of lineItems) {
         const sku = item.sku || '';
-        if (bundleMap[sku]) {
+        const components = bundleMap[sku] || bundleMap[item.title || ''] || byTitle[normTitle(item.title)];
+        if (components) {
+            // Zoho stock lives per size ("... ( ACID WASH ) - M") — append the
+            // bundle's size variant unless the component already ends with it.
+            const size = String(item.variant || '').trim();
+
             // This is a bundle — expand into components
-            const components = bundleMap[sku];
             const bundlePrice = parseFloat(item.price || 0);
             const bundleQty = parseInt(item.quantity || 1);
             const pricePerUnit = bundlePrice / components.reduce((sum, c) => sum + c.component_qty, 0);
@@ -143,9 +157,11 @@ function breakBundleLineItems(lineItems, bundleMap) {
             for (const comp of components) {
                 const qty = comp.component_qty * bundleQty;
                 const lineTotal = pricePerUnit * qty;
+                let compName = comp.component_sku;
+                if (size && !compName.endsWith(size)) compName += ' - ' + size;
                 result.push({
-                    name: comp.component_sku,
-                    sku: comp.component_sku,
+                    name: compName,
+                    sku: compName,
                     quantity: qty,
                     rate: pricePerUnit,
                     amount: lineTotal,
@@ -275,6 +291,7 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         sku: li.sku || '',
         quantity: li.quantity,
         price: parseFloat(li.price || 0),
+        variant: li.variant_title || '',
         tax_rate: li.tax_lines?.[0]?.rate ? li.tax_lines[0].rate * 100 : null,
         gst_rate: li.tax_lines?.[0]?.rate ? li.tax_lines[0].rate * 100 : 5
     }));
@@ -366,7 +383,7 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
 // Build Credit Note Payload (for returns/RTO)
 // ============================================================
 
-function buildCreditNotePayload(shopifyOrder, returnItems, returnType = 'return') {
+function buildCreditNotePayload(shopifyOrder, returnItems, returnType = 'return', extraNotes = '') {
     const lineItems = returnItems.map(item => ({
         name: item.title || item.sku || 'Returned Item',
         description: returnType === 'rto' ? 'RTO Return' : 'Customer Return',
@@ -383,7 +400,7 @@ function buildCreditNotePayload(shopifyOrder, returnItems, returnType = 'return'
         customer_name: `${shopifyOrder.customer?.first_name || ''} ${shopifyOrder.customer?.last_name || ''}`.trim(),
         date: new Date().toISOString().split('T')[0],
         line_items: lineItems,
-        notes: `${returnType.toUpperCase()} — Shopify Order #${shopifyOrder.order_number || shopifyOrder.id}`,
+        notes: `${returnType.toUpperCase()} — Shopify Order #${shopifyOrder.order_number || shopifyOrder.id}${extraNotes ? ' | ' + extraNotes : ''}`,
         reference_number: shopifyOrder.order_number?.toString() || '',
         is_inclusive_tax: false,
         return_type: returnType
