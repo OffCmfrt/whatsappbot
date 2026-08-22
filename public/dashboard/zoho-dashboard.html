@@ -66,7 +66,7 @@
             </div>
             <div class="section-header">
                 <h3>Recent Sync Activity</h3>
-                <button class="btn btn-sm btn-outline" onclick="loadOverview()">Refresh</button>
+                <button class="btn btn-sm btn-outline" data-action="refresh-overview">Refresh</button>
             </div>
             <div class="table-container">
                 <table class="data-table" id="recentSyncTable">
@@ -94,8 +94,8 @@
                     <option value="pending">Pending</option>
                     <option value="retry">Retry</option>
                 </select>
-                <button class="btn btn-sm btn-primary" onclick="loadSyncLog()">Search</button>
-                <button class="btn btn-sm btn-outline" onclick="retryAllFailed()">Retry All Failed</button>
+                <button class="btn btn-sm btn-primary" data-action="search-sync">Search</button>
+                <button class="btn btn-sm btn-outline" data-action="retry-all-failed">Retry All Failed</button>
             </div>
             <div class="table-container">
                 <table class="data-table">
@@ -140,7 +140,7 @@
                     <option value="intra_state">Intra-state (CGST+SGST)</option>
                     <option value="inter_state">Inter-state (IGST)</option>
                 </select>
-                <button class="btn btn-sm btn-primary" onclick="loadTaxCorrections()">Filter</button>
+                <button class="btn btn-sm btn-primary" data-action="filter-tax">Filter</button>
             </div>
             <div class="table-container">
                 <table class="data-table">
@@ -191,7 +191,7 @@
                     <option value="failed">Failed</option>
                     <option value="pending">Pending</option>
                 </select>
-                <button class="btn btn-sm btn-primary" onclick="loadReturns()">Filter</button>
+                <button class="btn btn-sm btn-primary" data-action="filter-returns">Filter</button>
             </div>
             <div class="table-container">
                 <table class="data-table">
@@ -235,7 +235,7 @@
                     <option value="pending">Pending</option>
                     <option value="failed">Failed</option>
                 </select>
-                <button class="btn btn-sm btn-primary" onclick="loadCodLog()">Search</button>
+                <button class="btn btn-sm btn-primary" data-action="search-cod">Search</button>
             </div>
             <div class="table-container">
                 <table class="data-table">
@@ -264,7 +264,7 @@
                     <span class="config-strip-value" id="connectionStatus">
                         <span class="status-dot status-unknown"></span> Checking...
                     </span>
-                    <button class="btn btn-xs btn-outline" onclick="testConnection()">Test</button>
+                    <button class="btn btn-xs btn-outline" data-action="test-connection">Test</button>
                 </div>
                 <div class="config-strip-item">
                     <span class="micro-label">Seller State</span>
@@ -292,7 +292,7 @@
                         <span class="wizard-progress-num" id="wizardProgress">0 / 0</span>
                         <span class="micro-label">Bundles configured</span>
                     </div>
-                    <button class="btn btn-primary" id="applyAllReadyBtn" onclick="applyAllReady()" style="display:none">
+                    <button class="btn btn-primary" id="applyAllReadyBtn" data-action="apply-all-ready" style="display:none">
                         Apply All Ready Suggestions
                     </button>
                 </div>
@@ -300,10 +300,10 @@
 
             <!-- Filter chips -->
             <div class="wizard-chips">
-                <button class="chip active" data-filter="all" onclick="filterWizard('all')">All</button>
-                <button class="chip" data-filter="ready" onclick="filterWizard('ready')">Ready — one click</button>
-                <button class="chip" data-filter="manual" onclick="filterWizard('manual')">Needs picking</button>
-                <button class="chip" data-filter="configured" onclick="filterWizard('configured')">Configured</button>
+                <button class="chip active" data-filter="all" data-action="wizard-filter">All</button>
+                <button class="chip" data-filter="ready" data-action="wizard-filter">Ready — one click</button>
+                <button class="chip" data-filter="manual" data-action="wizard-filter">Needs picking</button>
+                <button class="chip" data-filter="configured" data-action="wizard-filter">Configured</button>
             </div>
 
             <div id="wizardGrid" class="wizard-grid">
@@ -318,7 +318,7 @@
                     <input type="text" id="newComponentSku" placeholder="Component name (Zoho, without size)" class="filter-input">
                     <input type="number" id="newComponentQty" placeholder="Qty" value="1" class="filter-input filter-input-sm">
                     <input type="number" id="newGstRate" placeholder="GST %" value="5" class="filter-input filter-input-sm">
-                    <button class="btn btn-sm btn-primary" onclick="addBundleMapping()">Add Row</button>
+                    <button class="btn btn-sm btn-primary" data-action="add-bundle-row">Add Row</button>
                 </div>
                 <div class="table-container">
                     <table class="data-table data-table-sm">
@@ -343,7 +343,7 @@
         <div class="modal">
             <div class="modal-header">
                 <h3>Transformation Details</h3>
-                <button class="modal-close" onclick="closeModal('transformModal')">&times;</button>
+                <button class="modal-close" data-action="close-modal" data-modal="transformModal">&times;</button>
             </div>
             <div class="modal-body" id="transformModalBody"></div>
         </div>

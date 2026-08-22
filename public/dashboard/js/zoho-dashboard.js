@@ -128,14 +128,14 @@ function renderSyncRows(rows, tbodyId, showActions) {
         const hasTransforms = (transform.bundle_breaks?.length || 0) + (transform.tax_corrections?.length || 0) > 0;
         const time = new Date(row.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' });
 
-        return `<tr class="clickable-row" onclick="showTransformDetail(${row.id})">
+        return `<tr class="clickable-row" data-action="show-transform" data-id="${row.id}">
             <td><strong>#${escHtml(row.shopify_order_id)}</strong></td>
             <td>${row.zoho_invoice_id ? escHtml(row.zoho_invoice_id) : '—'}</td>
             <td><span class="badge badge-${row.status}">${row.status}</span></td>
             ${showActions ? `<td>${hasTransforms ? `${transform.bundle_breaks?.length || 0} bundles, ${transform.tax_corrections?.length || 0} tax` : 'None'}</td>` : ''}
             ${showActions ? `<td class="truncate" title="${escHtml(row.error_message || '')}">${row.error_message ? escHtml(row.error_message.substring(0, 50)) : '—'}</td>` : ''}
             <td>${time}</td>
-            ${showActions ? `<td>${row.status === 'failed' ? `<button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); retrySync(${row.id})">Retry</button>` : ''}</td>` : ''}
+            ${showActions ? `<td>${row.status === 'failed' ? `<button class="btn btn-sm btn-outline" data-action="retry-sync" data-id="${row.id}">Retry</button>` : ''}</td>` : ''}
         </tr>`;
     }).join('');
 }
@@ -244,7 +244,7 @@ async function loadReturns() {
                 <td class="truncate" title="${escHtml(items)}">${escHtml(items)}</td>
                 <td><span class="badge badge-${row.status}">${row.status}</span></td>
                 <td>${time}</td>
-                <td>${row.status === 'failed' ? `<button class="btn btn-sm btn-outline" onclick="retryReturn(${row.id})">Retry</button>` : ''}</td>
+                <td>${row.status === 'failed' ? `<button class="btn btn-sm btn-outline" data-action="retry-return" data-id="${row.id}">Retry</button>` : ''}</td>
             </tr>`;
         }).join('');
     } catch (err) {
@@ -301,7 +301,7 @@ async function loadCodLog() {
                 <td>₹${parseFloat(row.amount || 0).toLocaleString('en-IN')}</td>
                 <td><span class="badge badge-${row.payment_status === 'reconciled' ? 'reconciled' : row.payment_status}">${row.payment_status}</span></td>
                 <td>${time}</td>
-                <td>${row.payment_status === 'pending' || row.payment_status === 'failed' ? `<button class="btn btn-sm btn-primary" onclick="reconcileCod(${row.id})">Reconcile</button>` : ''}</td>
+                <td>${row.payment_status === 'pending' || row.payment_status === 'failed' ? `<button class="btn btn-sm btn-primary" data-action="reconcile-cod" data-id="${row.id}">Reconcile</button>` : ''}</td>
             </tr>`;
         }).join('');
     } catch (err) {
@@ -475,7 +475,7 @@ function renderBundleCard(s) {
             <div class="bundle-card-reason">${escHtml(s.reason)}</div>
             <div class="colorway-picker">
                 ${s.candidates.map(c => `
-                    <label class="colorway-opt ${sel.has(c.baseName) ? 'selected' : ''}" onclick="toggleColorway('${escAttr(s.title)}', '${escAttr(c.baseName)}')">
+                    <label class="colorway-opt ${sel.has(c.baseName) ? 'selected' : ''}" data-action="toggle-colorway" data-title="${escAttr(s.title)}" data-base="${escAttr(c.baseName)}">
                         <span class="cw-check">✓</span>
                         ${escHtml(c.colorway)}
                         <span class="cw-sizes">${c.sizeCount} sizes</span>
@@ -488,14 +488,14 @@ function renderBundleCard(s) {
     }
 
     const actions = st === 'configured'
-        ? `<button class="btn btn-sm btn-outline" onclick="editBundle('${escAttr(s.title)}')">Edit</button>
+        ? `<button class="btn btn-sm btn-outline" data-action="edit-bundle" data-title="${escAttr(s.title)}">Edit</button>
            <span class="bundle-card-action-spacer"></span>
-           <button class="btn btn-sm btn-danger" onclick="removeBundle('${escAttr(s.title)}')">Remove</button>`
+           <button class="btn btn-sm btn-danger" data-action="remove-bundle" data-title="${escAttr(s.title)}">Remove</button>`
         : (st === 'ready' || st === 'manual')
-            ? `<button class="btn btn-sm btn-primary" onclick="applyBundle('${escAttr(s.title)}')" ${sel.size === 0 ? 'disabled' : ''}>
+            ? `<button class="btn btn-sm btn-primary" data-action="apply-bundle" data-title="${escAttr(s.title)}" ${sel.size === 0 ? 'disabled' : ''}>
                    ${configured.length > 0 ? 'Save Changes' : st === 'ready' ? 'Apply — One Click' : 'Apply Selection'}
                </button>
-               ${wizardEditing[s.title] || configured.length > 0 ? `<button class="btn btn-sm btn-ghost" onclick="cancelEdit('${escAttr(s.title)}')">Cancel</button>` : ''}`
+               ${wizardEditing[s.title] || configured.length > 0 ? `<button class="btn btn-sm btn-ghost" data-action="cancel-edit" data-title="${escAttr(s.title)}">Cancel</button>` : ''}`
             : '';
 
     return `
@@ -608,7 +608,7 @@ function renderBundleMap(bundles) {
         <td>${escHtml(b.component_sku)}</td>
         <td>${b.component_qty}</td>
         <td>${b.gst_rate}%</td>
-        <td><button class="btn btn-sm btn-danger" onclick="deleteBundle(${b.id})">Delete</button></td>
+        <td><button class="btn btn-sm btn-danger" data-action="delete-bundle" data-id="${b.id}">Delete</button></td>
     </tr>`).join('');
 }
 
@@ -741,8 +741,45 @@ function escHtml(str) {
 }
 
 function escAttr(str) {
-    return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
+
+// ============================================================
+// Delegated click handling (CSP blocks inline event handlers)
+// ============================================================
+
+let paginationHandler = null;
+
+document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const id = parseInt(el.dataset.id || '0', 10);
+    const title = el.dataset.title || '';
+    switch (el.dataset.action) {
+        case 'refresh-overview': loadOverview(); break;
+        case 'search-sync': loadSyncLog(); break;
+        case 'retry-all-failed': retryAllFailed(); break;
+        case 'filter-tax': loadTaxCorrections(); break;
+        case 'filter-returns': loadReturns(); break;
+        case 'search-cod': loadCodLog(); break;
+        case 'test-connection': testConnection(); break;
+        case 'apply-all-ready': applyAllReady(); break;
+        case 'wizard-filter': filterWizard(el.dataset.filter); break;
+        case 'add-bundle-row': addBundleMapping(); break;
+        case 'close-modal': closeModal(el.dataset.modal); break;
+        case 'show-transform': showTransformDetail(id); break;
+        case 'retry-sync': retrySync(id); break;
+        case 'retry-return': retryReturn(id); break;
+        case 'reconcile-cod': reconcileCod(id); break;
+        case 'toggle-colorway': toggleColorway(title, el.dataset.base); break;
+        case 'edit-bundle': editBundle(title); break;
+        case 'remove-bundle': removeBundle(title); break;
+        case 'apply-bundle': applyBundle(title); break;
+        case 'cancel-edit': cancelEdit(title); break;
+        case 'delete-bundle': deleteBundle(id); break;
+        case 'page': if (paginationHandler) paginationHandler(parseInt(el.dataset.page, 10)); break;
+    }
+});
 
 function renderPagination(containerId, data, loadFn) {
     const container = document.getElementById(containerId);
@@ -753,11 +790,11 @@ function renderPagination(containerId, data, loadFn) {
 
     let html = '';
     for (let i = 1; i <= data.totalPages; i++) {
-        html += `<button class="${i === data.page ? 'active' : ''}" onclick="loadFnArg(${i})">${i}</button>`;
+        html += `<button class="${i === data.page ? 'active' : ''}" data-action="page" data-page="${i}">${i}</button>`;
     }
     container.innerHTML = html;
 
-    window.loadFnArg = loadFn;
+    paginationHandler = loadFn;
 }
 
 // ============================================================
