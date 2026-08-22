@@ -1,4 +1,5 @@
 const zohoService = require('./zohoService');
+const zohoCodService = require('./zohoCodService');
 const { buildCreditNotePayload } = require('./zohoTransform');
 const { dbAdapter } = require('../database/db');
 
@@ -8,11 +9,47 @@ const { dbAdapter } = require('../database/db');
 // ============================================================
 
 /**
+ * Shopify refund webhooks deliver the INTERNAL order id (7048440381684),
+ * but the sync log + Zoho reference numbers use the display order number
+ * (#46015). Resolve the display number from the sync log (matches both).
+ */
+async function resolveOrderNumber(orderId) {
+    const key = String(orderId || '').replace(/^#/, '');
+    if (!key) return key;
+    try {
+        const rows = await dbAdapter.query(
+            `SELECT shopify_order_id FROM zoho_sync_log
+             WHERE shopify_order_id = ? OR original_payload->>'id' = ?
+             ORDER BY created_at DESC LIMIT 1`,
+            [key, key]
+        );
+        if (rows.length > 0) return rows[0].shopify_order_id;
+    } catch (e) { /* keep the incoming key */ }
+    return key;
+}
+
+/**
+ * Find the Zoho invoice for an order; auto-syncs the order from Shopify
+ * first when it was never invoiced (reuses the COD self-heal helper).
+ * Prefers a non-void invoice — some legacy orders have a duplicate from
+ * the old native integration.
+ */
+async function findInvoiceForOrder(orderId) {
+    const invoices = await zohoCodService.ensureInvoiceExists(orderId);
+    if (!invoices || invoices.length === 0) return null;
+    return invoices.find(i => i.status !== 'void' && i.status !== 'deleted') || invoices[0];
+}
+
+/**
  * Handle a Shopify refund event (customer return).
  * Called from the Shopify webhook when refunds/create fires.
  */
 async function handleShopifyRefund(shopifyOrder, refundData) {
-    const orderId = shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString();
+    // Refund webhooks carry Shopify's INTERNAL order id — resolve the
+    // display number used in the sync log and Zoho reference numbers.
+    const rawOrderId = shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString();
+    const orderId = await resolveOrderNumber(rawOrderId);
+    if (orderId !== rawOrderId && shopifyOrder) shopifyOrder.order_number = orderId;
 
     if (!orderId) {
         return { success: false, error: 'No order identifier' };
@@ -32,12 +69,17 @@ async function handleShopifyRefund(shopifyOrder, refundData) {
         }
     }
 
-    const returnItems = (refundData?.line_items || refundData?.refund_line_items || []).map(item => ({
-        title: item.title || '',
-        sku: item.sku || '',
-        quantity: item.quantity || item.restock_quantity || 1,
-        price: parseFloat(item.price || 0)
-    }));
+    // refunds/create delivers refund_line_items where the product details
+    // live on the nested line_item object
+    const returnItems = (refundData?.refund_line_items || refundData?.line_items || []).map(entry => {
+        const item = entry.line_item || entry;
+        return {
+            title: item.title || entry.title || '',
+            sku: item.sku || entry.sku || '',
+            quantity: entry.quantity || item.quantity || entry.restock_quantity || 1,
+            price: parseFloat(item.price || entry.price || 0)
+        };
+    });
 
     if (returnItems.length === 0) {
         console.log(`ℹ️ Zoho return: order #${orderId} refund has no line items, skipping`);
@@ -66,26 +108,14 @@ async function handleShopifyRefund(shopifyOrder, refundData) {
             console.warn(`⚠️ Zoho customer lookup failed for return: ${custErr.message}`);
         }
 
-        // Find the original invoice in Zoho (to link the credit note)
-        let originalInvoiceId = null;
-        try {
-            const invoices = await zohoService.searchInvoice({
-                reference_number: orderId
-            });
-            if (invoices.length > 0) {
-                originalInvoiceId = invoices[0].invoice_id;
-                // Books requires the credit note to be associated with an
-                // invoice via invoice_id (not reference_number)
-                creditNotePayload.invoice_id = originalInvoiceId;
-            }
-        } catch (searchErr) {
-            console.warn(`⚠️ Could not find original invoice for credit note: ${searchErr.message}`);
+        // Find the original invoice in Zoho (auto-syncs the order first if
+        // it was never invoiced). Books links credit notes ONLY via the
+        // invoice_id query parameter — see zohoService.createCreditNote.
+        const originalInvoice = await findInvoiceForOrder(orderId);
+        if (!originalInvoice) {
+            throw new Error(`No Zoho invoice found for order #${orderId} even after on-demand sync — cannot create credit note`);
         }
-        if (!originalInvoiceId) {
-            // No invoice found — create a standalone credit note (Books
-            // requires either invoice_id or creditnote_type)
-            creditNotePayload.creditnote_type = 'sales_return';
-        }
+        creditNotePayload.invoice_id = originalInvoice.invoice_id;
 
         // Create credit note in Zoho
         const creditNote = await zohoService.createCreditNote(creditNotePayload);
@@ -119,7 +149,9 @@ async function handleShopifyRefund(shopifyOrder, refundData) {
  * Called from carrier webhooks (Delhivery/Shiprocket) when status = RTO.
  */
 async function handleRTO(shopifyOrder, carrierInfo = {}) {
-    const orderId = shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString();
+    const rawOrderId = shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString();
+    const orderId = await resolveOrderNumber(rawOrderId);
+    if (orderId !== rawOrderId && shopifyOrder) shopifyOrder.order_number = orderId;
 
     if (!orderId) {
         return { success: false, error: 'No order identifier' };
@@ -174,21 +206,14 @@ async function handleRTO(shopifyOrder, carrierInfo = {}) {
             console.warn(`⚠️ Zoho customer lookup failed for RTO: ${custErr.message}`);
         }
 
-        // Link the credit note to the original invoice (Books requires
-        // either invoice_id or creditnote_type)
-        let originalInvoiceId = null;
-        try {
-            const invoices = await zohoService.searchInvoice({ reference_number: orderId });
-            if (invoices.length > 0) {
-                originalInvoiceId = invoices[0].invoice_id;
-                creditNotePayload.invoice_id = originalInvoiceId;
-            }
-        } catch (searchErr) {
-            console.warn(`⚠️ Could not find original invoice for RTO credit note: ${searchErr.message}`);
+        // Link the credit note to the original invoice (auto-syncs the
+        // order first if it was never invoiced). Books links credit notes
+        // ONLY via the invoice_id query parameter — see createCreditNote.
+        const originalInvoice = await findInvoiceForOrder(orderId);
+        if (!originalInvoice) {
+            throw new Error(`No Zoho invoice found for order #${orderId} even after on-demand sync — cannot create RTO credit note`);
         }
-        if (!originalInvoiceId) {
-            creditNotePayload.creditnote_type = 'sales_return';
-        }
+        creditNotePayload.invoice_id = originalInvoice.invoice_id;
 
         // Create credit note
         const creditNote = await zohoService.createCreditNote(creditNotePayload);
@@ -221,7 +246,9 @@ async function handleRTO(shopifyOrder, carrierInfo = {}) {
  * Creates credit note for original product, notes the exchanged product.
  */
 async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
-    const orderId = shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString();
+    const rawOrderId = shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString();
+    const orderId = await resolveOrderNumber(rawOrderId);
+    if (orderId !== rawOrderId && shopifyOrder) shopifyOrder.order_number = orderId;
 
     if (!orderId) {
         return { success: false, error: 'No order identifier' };
@@ -262,6 +289,14 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
         } catch (custErr) {
             console.warn(`⚠️ Zoho customer lookup failed for exchange: ${custErr.message}`);
         }
+
+        // Link to the original invoice (auto-syncs if missing) — Books
+        // rejects credit notes with no invoice association
+        const originalInvoice = await findInvoiceForOrder(orderId);
+        if (!originalInvoice) {
+            throw new Error(`No Zoho invoice found for order #${orderId} even after on-demand sync — cannot create exchange credit note`);
+        }
+        creditNotePayload.invoice_id = originalInvoice.invoice_id;
 
         const creditNote = await zohoService.createCreditNote(creditNotePayload);
 

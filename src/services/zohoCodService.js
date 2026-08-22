@@ -246,5 +246,6 @@ module.exports = {
     handleCodDelivery,
     manualReconcile,
     getCodStats,
-    getCodLog
+    getCodLog,
+    ensureInvoiceExists
 };

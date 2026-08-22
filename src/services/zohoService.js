@@ -198,7 +198,12 @@ async function deletePayment(paymentId) {
 
 async function createCreditNote(creditNotePayload) {
     const url = `${BOOKS_BASE()}/creditnotes`;
-    const result = await zohoRequest('post', url, creditNotePayload);
+    // Books links the credit note to the invoice ONLY when invoice_id is
+    // passed as a QUERY PARAMETER — in the body it is ignored, which fails
+    // with "Select the associated invoice number or invoice type".
+    const { invoice_id, ...body } = creditNotePayload;
+    const params = invoice_id ? { invoice_id } : {};
+    const result = await zohoRequest('post', url, body, params);
     return result.creditnote;
 }
 

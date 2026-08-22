@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
+const axios = require('axios');
 
 // Services
 const zohoSyncService = require('../services/zohoSyncService');
@@ -103,38 +104,69 @@ router.post('/orders/updated', verifyShopifyWebhook, async (req, res) => {
 // SHOPIFY REFUND CREATED — create credit note in Zoho
 // ============================================================
 
+/**
+ * refunds/create delivers Shopify's INTERNAL order id, so the full order
+ * must be fetched by that id to get order_number/customer/line_items.
+ */
+async function fetchShopifyOrderByInternalId(internalId) {
+    const shop = process.env.SHOPIFY_STORE;
+    const token = process.env.SHOPIFY_ACCESS_TOKEN;
+    if (!shop || !token || !internalId) return null;
+    try {
+        const res = await axios.get(
+            `https://${shop}/admin/api/2024-01/orders/${internalId}.json`,
+            { headers: { 'X-Shopify-Access-Token': token }, timeout: 15000 }
+        );
+        return res.data?.order || null;
+    } catch (err) {
+        console.warn(`⚠️ Zoho refund webhook: Shopify order fetch failed for id ${internalId}: ${err.message}`);
+        return null;
+    }
+}
+
 router.post('/refunds/create', verifyShopifyWebhook, async (req, res) => {
     res.status(200).json({ received: true });
 
     try {
         const refund = req.body;
-        const orderId = refund.order_id?.toString() || '';
-        console.log(`🔄 Zoho webhook: refund created for order #${orderId}`);
+        const internalOrderId = refund.order_id?.toString() || '';
+        console.log(`🔄 Zoho webhook: refund created for Shopify order id ${internalOrderId}`);
 
-        // We need the original order data — fetch from the sync log or Shopify
-        const syncLog = await require('../database/db').dbAdapter.query(
-            'SELECT original_payload FROM zoho_sync_log WHERE shopify_order_id = ? ORDER BY created_at DESC LIMIT 1',
-            [orderId]
-        );
-
+        // Resolve the full order: sync log first (stores the original
+        // payload, keyed by order_number AND internal id), then Shopify.
         let shopifyOrder = null;
+        const syncLog = await require('../database/db').dbAdapter.query(
+            `SELECT original_payload FROM zoho_sync_log
+             WHERE shopify_order_id = ? OR original_payload->>'id' = ?
+             ORDER BY created_at DESC LIMIT 1`,
+            [internalOrderId, internalOrderId]
+        );
         if (syncLog.length > 0) {
             shopifyOrder = typeof syncLog[0].original_payload === 'string'
                 ? JSON.parse(syncLog[0].original_payload)
                 : syncLog[0].original_payload;
         }
 
+        if (!shopifyOrder || !shopifyOrder.order_number) {
+            const fetched = await fetchShopifyOrderByInternalId(internalOrderId);
+            if (fetched) shopifyOrder = fetched;
+        }
+
         if (!shopifyOrder) {
-            // Minimal order object from refund data
+            // Last resort — minimal object; the return service will still
+            // try to resolve the order number and self-heal the invoice
             shopifyOrder = {
-                order_number: orderId,
-                id: orderId,
-                line_items: (refund.line_items || []).map(li => ({
-                    title: li.title || li.name || '',
-                    sku: li.sku || '',
-                    quantity: li.quantity || 1,
-                    price: li.price || '0'
-                }))
+                order_number: internalOrderId,
+                id: internalOrderId,
+                line_items: (refund.refund_line_items || refund.line_items || []).map(entry => {
+                    const li = entry.line_item || entry;
+                    return {
+                        title: li.title || '',
+                        sku: li.sku || '',
+                        quantity: entry.quantity || 1,
+                        price: li.price || '0'
+                    };
+                })
             };
         }
 
