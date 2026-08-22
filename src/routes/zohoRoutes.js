@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const axios = require('axios');
 const { verifyToken, requireAdmin } = require('../middleware/auth');
 const { dbAdapter } = require('../database/db');
 
@@ -252,6 +253,152 @@ router.delete('/config/bundles/:id', requireAdmin, async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: 'Failed to delete bundle mapping', detail: err.message });
+    }
+});
+
+// Delete ALL mappings of one bundle (wizard "remove bundle")
+router.delete('/config/bundles/by-name/:name', requireAdmin, async (req, res) => {
+    try {
+        await dbAdapter.run('DELETE FROM zoho_bundle_map WHERE bundle_sku = ?', [decodeURIComponent(req.params.name)]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to delete bundle mappings', detail: err.message });
+    }
+});
+
+// Apply a whole bundle mapping in one shot (wizard save)
+router.post('/config/bundles/apply', requireAdmin, async (req, res) => {
+    try {
+        const { bundle_sku, gst_rate = 5.0, components } = req.body;
+        if (!bundle_sku || !Array.isArray(components) || components.length === 0) {
+            return res.status(400).json({ error: 'bundle_sku and a non-empty components array are required' });
+        }
+        await dbAdapter.run('DELETE FROM zoho_bundle_map WHERE bundle_sku = ?', [bundle_sku]);
+        for (const c of components) {
+            if (!c.component_sku) continue;
+            await dbAdapter.run(
+                `INSERT INTO zoho_bundle_map (bundle_sku, component_sku, component_qty, gst_rate)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT (bundle_sku, component_sku) DO NOTHING`,
+                [bundle_sku, c.component_sku, parseInt(c.component_qty || 1), parseFloat(gst_rate)]
+            );
+        }
+        res.json({ success: true, applied: components.length });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to apply bundle mapping', detail: err.message });
+    }
+});
+
+// ============================================================
+// BUNDLE SETUP WIZARD — data powering the one-click mapper:
+// Shopify bundle products + Zoho singles grouped by style/colorway
+// + an auto-suggestion whenever colorways match the pack size.
+// ============================================================
+
+const BUNDLE_RX = /\b(TRIPLE|DOUBLE|BUNDLE|COMBO|PACK|SET|KIT)\b/i;
+const normFam = (s) => String(s || '').toUpperCase().replace(/\s+/g, '').replace(/-/g, '');
+
+function packSizeOf(title) {
+    const t = String(title).toUpperCase();
+    if (/TRIPLE/.test(t)) return 3;
+    if (/DOUBLE/.test(t)) return 2;
+    let m = t.match(/COMBO[-\s]*(\d+)/);
+    if (m) return parseInt(m[1]);
+    m = t.match(/PACK\s*(?:OF)?[-\s]*(\d+)/);
+    if (m) return parseInt(m[1]);
+    m = t.match(/\(\s*(\d+)\s*SET\s*\)/);
+    if (m) return parseInt(m[1]);
+    return null; // BUNDLE/COMBO without number — size unknown
+}
+
+router.get('/config/bundles/wizard', requireAdmin, async (req, res) => {
+    try {
+        // 1. Shopify products that look like bundles
+        let products = [];
+        const shop = process.env.SHOPIFY_STORE;
+        const token = process.env.SHOPIFY_ACCESS_TOKEN;
+        if (shop && token) {
+            // Shopify REST uses cursor (Link header) pagination, not page numbers
+            let url = `https://${shop}/admin/api/2024-01/products.json?limit=250&fields=id,title,status`;
+            while (url && products.length < 1500) {
+                const r = await axios.get(url, {
+                    headers: { 'X-Shopify-Access-Token': token }, timeout: 20000
+                });
+                products = products.concat(r.data?.products || []);
+                const link = r.headers?.link || '';
+                const next = link.split(',').find(l => l.includes('rel="next"'));
+                url = next ? next.match(/<([^>]+)>/)[1] : null;
+            }
+        }
+        const bundleProducts = products
+            .filter(p => BUNDLE_RX.test(p.title))
+            .map(p => ({ title: p.title, packSize: packSizeOf(p.title) }));
+
+        // 2. Zoho items grouped into style → colorway → sizes (paginate all)
+        let items = [];
+        for (let page = 1; page <= 10; page++) {
+            const batch = await zohoService.searchItem({ per_page: 200, page });
+            items = items.concat(batch || []);
+            if (!batch || batch.length < 200) break;
+        }
+        const groups = {};
+        for (const it of items || []) {
+            const name = it.name || '';
+            const lastDash = name.lastIndexOf(' - ');
+            const size = lastDash > -1 ? name.slice(lastDash + 3).trim() : '';
+            const rest = lastDash > -1 ? name.slice(0, lastDash) : name;
+            const pm = rest.match(/^(.*?)\s*\((.*)\)\s*$/);
+            if (!pm) continue; // not a per-colorway single
+            const famKey = normFam(pm[1]);
+            const colorway = pm[2].trim().toUpperCase();
+            groups[famKey] = groups[famKey] || { family: pm[1].trim(), colorways: {} };
+            if (!groups[famKey].colorways[colorway]) {
+                groups[famKey].colorways[colorway] = { baseName: rest, sizes: [] };
+            }
+            if (size) groups[famKey].colorways[colorway].sizes.push(size);
+        }
+        const catalog = Object.entries(groups).map(([famKey, g]) => ({
+            famKey,
+            family: g.family,
+            colorways: Object.entries(g.colorways).map(([cw, v]) => ({
+                colorway: cw,
+                baseName: v.baseName,
+                // Skip bundle/composite items that snuck into the grouping
+                isPack: BUNDLE_RX.test(cw),
+                sizeCount: v.sizes.length
+            }))
+        }));
+
+        // 3. Existing mappings
+        const rows = await dbAdapter.query('SELECT * FROM zoho_bundle_map ORDER BY bundle_sku, id');
+        const configured = {};
+        for (const r of rows) (configured[r.bundle_sku] = configured[r.bundle_sku] || []).push(r);
+
+        // 4. Auto-suggest: match bundle title family against catalog families
+        const suggestions = bundleProducts.map(bp => {
+            const famKey = normFam(bp.title.replace(/\(.*$/, ''));
+            const match = catalog.find(g => g.famKey === famKey);
+            const singles = match ? match.colorways.filter(c => !c.isPack) : [];
+            const fits = bp.packSize != null && singles.length > 0 && singles.length === bp.packSize;
+            return {
+                title: bp.title,
+                packSize: bp.packSize,
+                family: match ? match.family : null,
+                candidates: singles,
+                autoReady: fits,
+                reason: !match
+                    ? 'No matching singles found in Zoho for this style'
+                    : !bp.packSize
+                        ? 'Pack size unknown — pick the colorways inside manually'
+                        : !fits
+                            ? `${singles.length} colorway(s) in Zoho but pack holds ${bp.packSize} — pick manually`
+                            : 'Colorways match the pack size — ready to apply'
+            };
+        });
+
+        res.json({ success: true, suggestions, catalog, configured });
+    } catch (err) {
+        res.status(500).json({ error: 'Wizard data failed', detail: err.message });
     }
 });
 

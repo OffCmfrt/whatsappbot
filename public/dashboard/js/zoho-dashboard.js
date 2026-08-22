@@ -1,5 +1,5 @@
 // ============================================================
-// ZOHO SYNC DASHBOARD — Frontend Logic
+// OFFCOMFRT — ZOHO SYNC CONSOLE — Frontend Logic
 // ============================================================
 
 const API_BASE = '/api/admin/zoho';
@@ -23,6 +23,20 @@ async function apiFetch(path, options = {}) {
         throw new Error('Session expired');
     }
     return res.json();
+}
+
+// ============================================================
+// Toast notifications
+// ============================================================
+
+function toast(message, kind = '') {
+    const stack = document.getElementById('toastStack');
+    const el = document.createElement('div');
+    el.className = `toast ${kind}`;
+    el.textContent = message;
+    stack.appendChild(el);
+    setTimeout(() => el.classList.add('out'), 3600);
+    setTimeout(() => el.remove(), 4000);
 }
 
 // ============================================================
@@ -71,7 +85,6 @@ async function loadOverview() {
         document.getElementById('statReturnsToday').textContent = returns.today.returns + returns.today.rtos;
         document.getElementById('statCodPending').textContent = cod.pending;
 
-        // Load recent sync activity
         const syncData = await apiFetch('/sync?limit=10');
         if (syncData.success) {
             renderSyncRows(syncData.data, 'recentSyncBody', false);
@@ -122,7 +135,7 @@ function renderSyncRows(rows, tbodyId, showActions) {
             ${showActions ? `<td>${hasTransforms ? `${transform.bundle_breaks?.length || 0} bundles, ${transform.tax_corrections?.length || 0} tax` : 'None'}</td>` : ''}
             ${showActions ? `<td class="truncate" title="${escHtml(row.error_message || '')}">${row.error_message ? escHtml(row.error_message.substring(0, 50)) : '—'}</td>` : ''}
             <td>${time}</td>
-            ${showActions ? `<td>${row.status === 'failed' ? `<button class="btn btn-sm btn-warning" onclick="event.stopPropagation(); retrySync(${row.id})">Retry</button>` : ''}</td>` : ''}
+            ${showActions ? `<td>${row.status === 'failed' ? `<button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); retrySync(${row.id})">Retry</button>` : ''}</td>` : ''}
         </tr>`;
     }).join('');
 }
@@ -130,10 +143,10 @@ function renderSyncRows(rows, tbodyId, showActions) {
 async function retrySync(id) {
     try {
         const data = await apiFetch(`/sync/retry/${id}`, { method: 'POST' });
-        alert(data.success ? 'Sync retry initiated' : `Retry failed: ${data.error}`);
+        toast(data.success ? 'Sync retry initiated' : `Retry failed: ${data.error}`, data.success ? 'ok' : 'err');
         loadSyncLog(syncPage);
     } catch (err) {
-        alert('Retry error: ' + err.message);
+        toast('Retry error: ' + err.message, 'err');
     }
 }
 
@@ -141,10 +154,10 @@ async function retryAllFailed() {
     if (!confirm('Retry all failed syncs?')) return;
     try {
         const data = await apiFetch('/sync/retry', { method: 'POST' });
-        alert(`Retried ${data.retried} syncs, ${data.succeeded} succeeded`);
+        toast(`Retried ${data.retried} syncs — ${data.succeeded} succeeded`, 'ok');
         loadSyncLog(syncPage);
     } catch (err) {
-        alert('Retry error: ' + err.message);
+        toast('Retry error: ' + err.message, 'err');
     }
 }
 
@@ -161,7 +174,6 @@ async function loadTaxCorrections() {
         const tbody = document.getElementById('taxCorrectionsBody');
         const rows = data.data || [];
 
-        // Update stats
         const rateFixes = rows.filter(r => r.correction_type === 'rate_fix').length;
         const stateFixes = rows.filter(r => r.correction_type === 'state_fix' || r.correction_type === 'intra_state' || r.correction_type === 'inter_state').length;
         document.getElementById('statTaxCorrected').textContent = rows.length;
@@ -232,7 +244,7 @@ async function loadReturns() {
                 <td class="truncate" title="${escHtml(items)}">${escHtml(items)}</td>
                 <td><span class="badge badge-${row.status}">${row.status}</span></td>
                 <td>${time}</td>
-                <td>${row.status === 'failed' ? `<button class="btn btn-sm btn-warning" onclick="retryReturn(${row.id})">Retry</button>` : ''}</td>
+                <td>${row.status === 'failed' ? `<button class="btn btn-sm btn-outline" onclick="retryReturn(${row.id})">Retry</button>` : ''}</td>
             </tr>`;
         }).join('');
     } catch (err) {
@@ -243,10 +255,10 @@ async function loadReturns() {
 async function retryReturn(id) {
     try {
         const data = await apiFetch(`/returns/retry/${id}`, { method: 'POST' });
-        alert(data.success ? 'Return retry initiated' : `Retry failed: ${data.error}`);
+        toast(data.success ? 'Return retry initiated' : `Retry failed: ${data.error}`, data.success ? 'ok' : 'err');
         loadReturns();
     } catch (err) {
-        alert('Retry error: ' + err.message);
+        toast('Retry error: ' + err.message, 'err');
     }
 }
 
@@ -289,7 +301,7 @@ async function loadCodLog() {
                 <td>₹${parseFloat(row.amount || 0).toLocaleString('en-IN')}</td>
                 <td><span class="badge badge-${row.payment_status === 'reconciled' ? 'reconciled' : row.payment_status}">${row.payment_status}</span></td>
                 <td>${time}</td>
-                <td>${row.payment_status === 'pending' || row.payment_status === 'failed' ? `<button class="btn btn-sm btn-success" onclick="reconcileCod(${row.id})">Reconcile</button>` : ''}</td>
+                <td>${row.payment_status === 'pending' || row.payment_status === 'failed' ? `<button class="btn btn-sm btn-primary" onclick="reconcileCod(${row.id})">Reconcile</button>` : ''}</td>
             </tr>`;
         }).join('');
     } catch (err) {
@@ -300,64 +312,293 @@ async function loadCodLog() {
 async function reconcileCod(id) {
     try {
         const data = await apiFetch(`/cod/reconcile/${id}`, { method: 'POST' });
-        alert(data.success ? 'COD reconciled successfully' : `Reconciliation failed: ${data.error}`);
+        toast(data.success ? 'COD reconciled successfully' : `Reconciliation failed: ${data.error}`, data.success ? 'ok' : 'err');
         loadCodLog();
     } catch (err) {
-        alert('Reconcile error: ' + err.message);
+        toast('Reconcile error: ' + err.message, 'err');
     }
 }
 
 // ============================================================
-// Configuration
+// Configuration + Bundle Setup Wizard
 // ============================================================
+
+let wizardData = null;             // raw wizard payload
+let wizardSelections = {};         // title -> Set of selected baseNames
+let wizardEditing = {};            // title -> bool (configured card in edit mode)
+let wizardFilter = 'all';
 
 async function loadConfig() {
     try {
-        const [configData, bundlesData, connResult] = await Promise.all([
+        const [configData, connResult] = await Promise.all([
             apiFetch('/config'),
-            apiFetch('/config/bundles'),
             apiFetch('/config/test-connection').catch(() => ({ success: false, error: 'Not configured' }))
         ]);
 
-        // Connection status
+        // Connection status — strip + brand-bar pill
         const connEl = document.getElementById('connectionStatus');
+        const pill = document.getElementById('connPill');
+        const pillText = document.getElementById('connPillText');
         if (connResult.success) {
-            const orgName = escHtml(connResult.organization || 'Zoho');
-            connEl.innerHTML = `<span class="status-dot status-connected"></span><span>Connected to ${orgName}</span>`;
+            const orgName = connResult.organization || 'Zoho';
+            connEl.innerHTML = `<span class="status-dot status-connected"></span> ${escHtml(orgName)}`;
+            pill.className = 'live-pill on';
+            pillText.textContent = 'LIVE — ' + orgName.toUpperCase().slice(0, 24);
         } else {
-            const errMsg = escHtml(connResult.error || 'Not connected');
-            connEl.innerHTML = `<span class="status-dot status-disconnected"></span><span>${errMsg}</span>`;
+            const errMsg = connResult.error || 'Not connected';
+            connEl.innerHTML = `<span class="status-dot status-disconnected"></span> ${escHtml(errMsg)}`;
+            pill.className = 'live-pill off';
+            pillText.textContent = 'OFFLINE';
         }
 
-        // Config info
         if (configData.success) {
             const cfg = configData.config;
-            document.getElementById('configInfo').innerHTML = `
-                <div><span>Seller State</span><span>${escHtml(cfg.sellerState)}</span></div>
-                <div><span>Auto Sync</span><span>${cfg.autoSync ? 'Enabled' : 'Disabled'}</span></div>
-                <div><span>Bundle Mappings</span><span>${cfg.bundleMappings}</span></div>
-            `;
             document.getElementById('sellerStateDisplay').textContent = cfg.sellerState;
             document.getElementById('booksDomainDisplay').textContent = cfg.booksDomain;
-
-            const toggle = document.getElementById('autoSyncToggle');
-            if (cfg.autoSync) toggle.classList.add('active');
-            else toggle.classList.remove('active');
             document.getElementById('autoSyncLabel').textContent = cfg.autoSync ? 'Enabled' : 'Disabled';
-        }
-
-        // Bundle mappings
-        if (bundlesData.success) {
-            renderBundleMap(bundlesData.data || []);
         }
     } catch (err) {
         console.error('Config load error:', err);
     }
+
+    loadWizard();
 }
+
+async function loadWizard() {
+    const grid = document.getElementById('wizardGrid');
+    grid.innerHTML = `<div class="wizard-loading"><span class="loading-spinner"></span>&nbsp;&nbsp;Loading your Shopify bundles &amp; Zoho catalog...</div>`;
+    try {
+        const data = await apiFetch('/config/bundles/wizard');
+        if (!data.success) {
+            grid.innerHTML = `<div class="wizard-loading">Could not load wizard: ${escHtml(data.error || 'unknown error')}</div>`;
+            return;
+        }
+        wizardData = data;
+
+        // Pre-select: ready bundles → all candidates; configured bundles → their components
+        wizardSelections = {};
+        wizardEditing = {};
+        for (const s of data.suggestions) {
+            const configured = data.configured[s.title];
+            if (configured && configured.length > 0) {
+                wizardSelections[s.title] = new Set(configured.map(r => r.component_sku));
+            } else if (s.autoReady) {
+                wizardSelections[s.title] = new Set(s.candidates.map(c => c.baseName));
+            } else {
+                wizardSelections[s.title] = new Set();
+            }
+        }
+
+        renderWizard();
+        renderBundleMap(Object.values(data.configured).flat());
+    } catch (err) {
+        grid.innerHTML = `<div class="wizard-loading">Could not load wizard: ${escHtml(err.message)}</div>`;
+    }
+}
+
+function cardState(s) {
+    const configured = wizardData.configured[s.title];
+    if (configured && configured.length > 0 && !wizardEditing[s.title]) return 'configured';
+    if (s.autoReady) return 'ready';
+    if (s.candidates && s.candidates.length > 0) return 'manual';
+    return 'none';
+}
+
+function filterWizard(filter) {
+    wizardFilter = filter;
+    document.querySelectorAll('.wizard-chips .chip').forEach(c => {
+        c.classList.toggle('active', c.dataset.filter === filter);
+    });
+    renderWizard();
+}
+
+function renderWizard() {
+    if (!wizardData) return;
+    const grid = document.getElementById('wizardGrid');
+    const suggestions = wizardData.suggestions || [];
+
+    // Progress + apply-all button
+    const configuredCount = suggestions.filter(s => (wizardData.configured[s.title] || []).length > 0).length;
+    document.getElementById('wizardProgress').textContent = `${configuredCount} / ${suggestions.length}`;
+    const readyUnconfigured = suggestions.filter(s => s.autoReady && !(wizardData.configured[s.title] || []).length);
+    const applyAllBtn = document.getElementById('applyAllReadyBtn');
+    applyAllBtn.style.display = readyUnconfigured.length > 0 ? '' : 'none';
+    applyAllBtn.textContent = `Apply ${readyUnconfigured.length} Ready Suggestion${readyUnconfigured.length === 1 ? '' : 's'}`;
+
+    const filtered = suggestions.filter(s => {
+        const st = cardState(s);
+        if (wizardFilter === 'all') return true;
+        if (wizardFilter === 'ready') return st === 'ready';
+        if (wizardFilter === 'manual') return st === 'manual' || st === 'none';
+        if (wizardFilter === 'configured') return (wizardData.configured[s.title] || []).length > 0;
+        return true;
+    });
+
+    if (filtered.length === 0) {
+        grid.innerHTML = `<div class="wizard-loading">Nothing here — switch filter to see other bundles.</div>`;
+        return;
+    }
+
+    grid.innerHTML = filtered.map(s => renderBundleCard(s)).join('');
+}
+
+function renderBundleCard(s) {
+    const st = cardState(s);
+    const configured = wizardData.configured[s.title] || [];
+    const sel = wizardSelections[s.title] || new Set();
+
+    const stateChip = {
+        configured: `<span class="bundle-card-state state-configured">● Configured</span>`,
+        ready: `<span class="bundle-card-state state-ready">⚡ Ready</span>`,
+        manual: `<span class="bundle-card-state state-manual">Pick pieces</span>`,
+        none: `<span class="bundle-card-state state-none">No singles</span>`
+    }[st];
+
+    const packLabel = s.packSize
+        ? `${s.packSize}-piece pack`
+        : 'Pack contents unknown';
+
+    let body = '';
+
+    if (st === 'configured') {
+        body = `
+            <div class="component-list">
+                ${configured.map(r => `
+                    <div class="component-row">
+                        <strong>${escHtml(r.component_sku)}</strong>
+                        <span>×${r.component_qty} · GST ${r.gst_rate}%</span>
+                    </div>
+                `).join('')}
+            </div>`;
+    } else if (st === 'ready' || st === 'manual') {
+        body = `
+            <div class="bundle-card-reason">${escHtml(s.reason)}</div>
+            <div class="colorway-picker">
+                ${s.candidates.map(c => `
+                    <label class="colorway-opt ${sel.has(c.baseName) ? 'selected' : ''}" onclick="toggleColorway('${escAttr(s.title)}', '${escAttr(c.baseName)}')">
+                        <span class="cw-check">✓</span>
+                        ${escHtml(c.colorway)}
+                        <span class="cw-sizes">${c.sizeCount} sizes</span>
+                    </label>
+                `).join('')}
+            </div>
+            ${s.packSize && sel.size > 0 && sel.size !== s.packSize ? `<div class="bundle-card-reason" style="color:var(--warn)">Heads-up: pack holds ${s.packSize} piece(s) but you picked ${sel.size}.</div>` : ''}`;
+    } else {
+        body = `<div class="bundle-card-reason">${escHtml(s.reason)}. Create the single items in Zoho first, then reload.</div>`;
+    }
+
+    const actions = st === 'configured'
+        ? `<button class="btn btn-sm btn-outline" onclick="editBundle('${escAttr(s.title)}')">Edit</button>
+           <span class="bundle-card-action-spacer"></span>
+           <button class="btn btn-sm btn-danger" onclick="removeBundle('${escAttr(s.title)}')">Remove</button>`
+        : (st === 'ready' || st === 'manual')
+            ? `<button class="btn btn-sm btn-primary" onclick="applyBundle('${escAttr(s.title)}')" ${sel.size === 0 ? 'disabled' : ''}>
+                   ${configured.length > 0 ? 'Save Changes' : st === 'ready' ? 'Apply — One Click' : 'Apply Selection'}
+               </button>
+               ${wizardEditing[s.title] || configured.length > 0 ? `<button class="btn btn-sm btn-ghost" onclick="cancelEdit('${escAttr(s.title)}')">Cancel</button>` : ''}`
+            : '';
+
+    return `
+        <div class="bundle-card ${st === 'configured' ? 'is-configured' : st === 'ready' ? 'is-ready' : ''}">
+            <div class="bundle-card-top">
+                <div>
+                    <div class="bundle-card-title">${escHtml(s.title)}</div>
+                    <div class="bundle-card-sub">${packLabel}${s.family ? ` · ${escHtml(s.family)}` : ''}</div>
+                </div>
+                ${stateChip}
+            </div>
+            ${body}
+            <div class="bundle-card-actions">${actions}</div>
+        </div>`;
+}
+
+function toggleColorway(title, baseName) {
+    const sel = wizardSelections[title] = wizardSelections[title] || new Set();
+    if (sel.has(baseName)) sel.delete(baseName);
+    else sel.add(baseName);
+    renderWizard();
+}
+
+function editBundle(title) {
+    wizardEditing[title] = true;
+    renderWizard();
+}
+
+function cancelEdit(title) {
+    delete wizardEditing[title];
+    // restore selection to saved components
+    const configured = wizardData.configured[title] || [];
+    wizardSelections[title] = new Set(configured.map(r => r.component_sku));
+    renderWizard();
+}
+
+async function applyBundle(title) {
+    const sel = wizardSelections[title];
+    if (!sel || sel.size === 0) {
+        toast('Pick at least one colorway first', 'err');
+        return;
+    }
+    const components = [...sel].map(baseName => ({ component_sku: baseName, component_qty: 1 }));
+    try {
+        const data = await apiFetch('/config/bundles/apply', {
+            method: 'POST',
+            body: JSON.stringify({ bundle_sku: title, gst_rate: 5.0, components })
+        });
+        if (data.success) {
+            toast(`${title} mapped to ${components.length} piece(s)`, 'ok');
+            await loadWizard();
+        } else {
+            toast(`Error: ${data.error}`, 'err');
+        }
+    } catch (err) {
+        toast('Error: ' + err.message, 'err');
+    }
+}
+
+async function removeBundle(title) {
+    if (!confirm(`Remove the mapping for "${title}"? Bundles sold after this will invoice as a single line until re-mapped.`)) return;
+    try {
+        const data = await apiFetch(`/config/bundles/by-name/${encodeURIComponent(title)}`, { method: 'DELETE' });
+        if (data.success) {
+            toast(`Removed mapping for ${title}`, 'ok');
+            await loadWizard();
+        } else {
+            toast(`Error: ${data.error}`, 'err');
+        }
+    } catch (err) {
+        toast('Error: ' + err.message, 'err');
+    }
+}
+
+async function applyAllReady() {
+    if (!wizardData) return;
+    const ready = wizardData.suggestions.filter(
+        s => s.autoReady && !(wizardData.configured[s.title] || []).length
+    );
+    if (ready.length === 0) return;
+    let ok = 0;
+    for (const s of ready) {
+        try {
+            const data = await apiFetch('/config/bundles/apply', {
+                method: 'POST',
+                body: JSON.stringify({
+                    bundle_sku: s.title,
+                    gst_rate: 5.0,
+                    components: s.candidates.map(c => ({ component_sku: c.baseName, component_qty: 1 }))
+                })
+            });
+            if (data.success) ok++;
+        } catch (err) { /* keep going */ }
+    }
+    toast(`Applied ${ok} of ${ready.length} ready bundles`, ok > 0 ? 'ok' : 'err');
+    await loadWizard();
+}
+
+// Advanced: raw row table + manual add
 
 function renderBundleMap(bundles) {
     const tbody = document.getElementById('bundleMapBody');
-    if (bundles.length === 0) {
+    if (!bundles || bundles.length === 0) {
         tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><p>No bundle mappings configured</p></div></td></tr>`;
         return;
     }
@@ -378,7 +619,7 @@ async function addBundleMapping() {
     const gstRate = parseFloat(document.getElementById('newGstRate').value) || 5;
 
     if (!bundleSku || !componentSku) {
-        alert('Bundle SKU and Component SKU are required');
+        toast('Bundle title and component name are required', 'err');
         return;
     }
 
@@ -393,44 +634,43 @@ async function addBundleMapping() {
             document.getElementById('newComponentSku').value = '';
             document.getElementById('newComponentQty').value = '1';
             document.getElementById('newGstRate').value = '5';
-            loadConfig();
+            toast('Mapping row added', 'ok');
+            loadWizard();
         } else {
-            alert(`Error: ${data.error}`);
+            toast(`Error: ${data.error}`, 'err');
         }
     } catch (err) {
-        alert('Error: ' + err.message);
+        toast('Error: ' + err.message, 'err');
     }
 }
 
 async function deleteBundle(id) {
-    if (!confirm('Delete this bundle mapping?')) return;
+    if (!confirm('Delete this mapping row?')) return;
     try {
         await apiFetch(`/config/bundles/${id}`, { method: 'DELETE' });
-        loadConfig();
+        toast('Row deleted', 'ok');
+        loadWizard();
     } catch (err) {
-        alert('Delete error: ' + err.message);
+        toast('Delete error: ' + err.message, 'err');
     }
 }
 
 async function testConnection() {
     const connEl = document.getElementById('connectionStatus');
-    connEl.innerHTML = `<span class="loading-spinner"></span><span>Testing...</span>`;
+    connEl.innerHTML = `<span class="loading-spinner"></span> Testing...`;
 
     try {
         const data = await apiFetch('/config/test-connection');
         if (data.success) {
-            connEl.innerHTML = `<span class="status-dot status-connected"></span><span>Connected to ${escHtml(data.organization || 'Zoho')}</span>`;
+            connEl.innerHTML = `<span class="status-dot status-connected"></span> ${escHtml(data.organization || 'Zoho')}`;
+            toast('Zoho connection OK', 'ok');
         } else {
-            connEl.innerHTML = `<span class="status-dot status-disconnected"></span><span>${escHtml(data.error || 'Connection failed')}</span>`;
+            connEl.innerHTML = `<span class="status-dot status-disconnected"></span> ${escHtml(data.error || 'Connection failed')}`;
+            toast('Connection failed: ' + (data.error || ''), 'err');
         }
     } catch (err) {
-        connEl.innerHTML = `<span class="status-dot status-disconnected"></span><span>${escHtml(err.message)}</span>`;
+        connEl.innerHTML = `<span class="status-dot status-disconnected"></span> ${escHtml(err.message)}`;
     }
-}
-
-function toggleAutoSync() {
-    // This is a display-only toggle — actual change requires env var update
-    alert('Auto-sync is controlled by the ZOHO_AUTO_SYNC environment variable. Update it in your .env file and restart the server.');
 }
 
 // ============================================================
@@ -469,7 +709,7 @@ async function showTransformDetail(logId) {
             ${row.error_message ? `
             <div class="transform-block">
                 <h4>Error</h4>
-                <pre style="color:var(--z-red)">${escHtml(row.error_message)}</pre>
+                <pre style="color:var(--bad)">${escHtml(row.error_message)}</pre>
             </div>` : ''}
         `;
 
@@ -483,7 +723,6 @@ function closeModal(id) {
     document.getElementById(id).style.display = 'none';
 }
 
-// Close modal on overlay click
 document.getElementById('transformModal').addEventListener('click', (e) => {
     if (e.target === document.getElementById('transformModal')) {
         closeModal('transformModal');
@@ -495,10 +734,14 @@ document.getElementById('transformModal').addEventListener('click', (e) => {
 // ============================================================
 
 function escHtml(str) {
-    if (!str) return '';
+    if (str === null || str === undefined) return '';
     const div = document.createElement('div');
     div.textContent = String(str);
     return div.innerHTML;
+}
+
+function escAttr(str) {
+    return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 }
 
 function renderPagination(containerId, data, loadFn) {
@@ -514,7 +757,6 @@ function renderPagination(containerId, data, loadFn) {
     }
     container.innerHTML = html;
 
-    // Store the load function reference
     window.loadFnArg = loadFn;
 }
 

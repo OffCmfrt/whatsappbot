@@ -3,68 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zoho Sync Dashboard</title>
-    <link rel="stylesheet" href="/dashboard/css/zoho-dashboard.css?v=1">
+    <title>OFFCOMFRT — Zoho Sync Console</title>
+    <link rel="stylesheet" href="/dashboard/css/zoho-dashboard.css?v=2">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
+    <!-- Top brand bar -->
+    <header class="brand-bar">
+        <div class="brand-left">
+            <span class="brand-wordmark">OFFCOMFRT</span>
+            <span class="brand-divider"></span>
+            <span class="brand-sub">ZOHO SYNC CONSOLE</span>
+        </div>
+        <div class="brand-right">
+            <span class="live-pill" id="connPill">
+                <span class="live-dot"></span>
+                <span id="connPillText">CONNECTING</span>
+            </span>
+        </div>
+    </header>
+
     <div class="zoho-dashboard">
         <!-- Section Tabs -->
-        <div class="section-tabs">
-            <button class="section-tab active" data-section="overview">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-                Overview
-            </button>
-            <button class="section-tab" data-section="sync">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
-                Order Sync
-            </button>
-            <button class="section-tab" data-section="tax">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-                Tax Corrections
-            </button>
-            <button class="section-tab" data-section="returns">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
-                Returns & RTO
-            </button>
-            <button class="section-tab" data-section="cod">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
-                COD Payments
-            </button>
-            <button class="section-tab" data-section="config">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                Config
-            </button>
-        </div>
+        <nav class="section-tabs">
+            <button class="section-tab active" data-section="overview">Overview</button>
+            <button class="section-tab" data-section="sync">Order Sync</button>
+            <button class="section-tab" data-section="tax">Tax Corrections</button>
+            <button class="section-tab" data-section="returns">Returns &amp; RTO</button>
+            <button class="section-tab" data-section="cod">COD Payments</button>
+            <button class="section-tab" data-section="config">Bundle Setup</button>
+        </nav>
 
         <!-- Section: Overview -->
         <div id="section-overview" class="section-content active">
             <div class="stats-grid" id="overviewStats">
-                <div class="stat-card stat-green">
-                    <div class="stat-value" id="statSyncedToday">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Synced Today</div>
+                    <div class="stat-value" id="statSyncedToday">0</div>
                 </div>
-                <div class="stat-card stat-blue">
-                    <div class="stat-value" id="statSuccessRate">0%</div>
+                <div class="stat-card">
                     <div class="stat-label">Success Rate</div>
+                    <div class="stat-value" id="statSuccessRate">0%</div>
                 </div>
-                <div class="stat-card stat-red">
-                    <div class="stat-value" id="statFailed">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Failed</div>
+                    <div class="stat-value" id="statFailed">0</div>
                 </div>
-                <div class="stat-card stat-orange">
-                    <div class="stat-value" id="statPendingRetry">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Pending Retry</div>
+                    <div class="stat-value" id="statPendingRetry">0</div>
                 </div>
-                <div class="stat-card stat-purple">
-                    <div class="stat-value" id="statReturnsToday">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Returns Today</div>
+                    <div class="stat-value" id="statReturnsToday">0</div>
                 </div>
-                <div class="stat-card stat-teal">
-                    <div class="stat-value" id="statCodPending">0</div>
+                <div class="stat-card">
                     <div class="stat-label">COD Pending</div>
+                    <div class="stat-value" id="statCodPending">0</div>
                 </div>
             </div>
             <div class="section-header">
@@ -98,7 +95,7 @@
                     <option value="retry">Retry</option>
                 </select>
                 <button class="btn btn-sm btn-primary" onclick="loadSyncLog()">Search</button>
-                <button class="btn btn-sm btn-warning" onclick="retryAllFailed()">Retry All Failed</button>
+                <button class="btn btn-sm btn-outline" onclick="retryAllFailed()">Retry All Failed</button>
             </div>
             <div class="table-container">
                 <table class="data-table">
@@ -122,17 +119,17 @@
         <!-- Section: Tax Corrections -->
         <div id="section-tax" class="section-content">
             <div class="stats-grid stats-grid-3">
-                <div class="stat-card stat-blue">
-                    <div class="stat-value" id="statTaxCorrected">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Corrections Today</div>
+                    <div class="stat-value" id="statTaxCorrected">0</div>
                 </div>
-                <div class="stat-card stat-green">
-                    <div class="stat-value" id="statRateFixes">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Rate Fixes</div>
+                    <div class="stat-value" id="statRateFixes">0</div>
                 </div>
-                <div class="stat-card stat-purple">
+                <div class="stat-card">
+                    <div class="stat-label">State Fixes (CGST+SGST / IGST)</div>
                     <div class="stat-value" id="statStateFixes">0</div>
-                    <div class="stat-label">State Fixes (CGST+SGST/IGST)</div>
                 </div>
             </div>
             <div class="filters-bar">
@@ -164,21 +161,21 @@
         <!-- Section: Returns & RTO -->
         <div id="section-returns" class="section-content">
             <div class="stats-grid stats-grid-4">
-                <div class="stat-card stat-purple">
-                    <div class="stat-value" id="statReturns">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Returns Today</div>
+                    <div class="stat-value" id="statReturns">0</div>
                 </div>
-                <div class="stat-card stat-red">
-                    <div class="stat-value" id="statRTOs">0</div>
+                <div class="stat-card">
                     <div class="stat-label">RTOs Today</div>
+                    <div class="stat-value" id="statRTOs">0</div>
                 </div>
-                <div class="stat-card stat-green">
-                    <div class="stat-value" id="statCreditNotes">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Credit Notes Created</div>
+                    <div class="stat-value" id="statCreditNotes">0</div>
                 </div>
-                <div class="stat-card stat-orange">
-                    <div class="stat-value" id="statFailedReturns">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Failed</div>
+                    <div class="stat-value" id="statFailedReturns">0</div>
                 </div>
             </div>
             <div class="filters-bar">
@@ -217,17 +214,17 @@
         <!-- Section: COD Payments -->
         <div id="section-cod" class="section-content">
             <div class="stats-grid stats-grid-3">
-                <div class="stat-card stat-orange">
-                    <div class="stat-value" id="statCodPending">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Pending Reconciliation</div>
+                    <div class="stat-value" id="statCodPending">0</div>
                 </div>
-                <div class="stat-card stat-green">
-                    <div class="stat-value" id="statCodReconciled">0</div>
+                <div class="stat-card">
                     <div class="stat-label">Reconciled Today</div>
+                    <div class="stat-value" id="statCodReconciled">0</div>
                 </div>
-                <div class="stat-card stat-blue">
-                    <div class="stat-value" id="statCodAmount">₹0</div>
+                <div class="stat-card">
                     <div class="stat-label">Amount Today</div>
+                    <div class="stat-value" id="statCodAmount">₹0</div>
                 </div>
             </div>
             <div class="filters-bar">
@@ -258,67 +255,86 @@
             </div>
         </div>
 
-        <!-- Section: Configuration -->
+        <!-- Section: Bundle Setup (Config) -->
         <div id="section-config" class="section-content">
-            <div class="config-grid">
-                <!-- Connection Status -->
-                <div class="config-card">
-                    <h3>Zoho Connection</h3>
-                    <div id="connectionStatus" class="connection-status">
-                        <span class="status-dot status-unknown"></span>
-                        <span>Checking...</span>
-                    </div>
-                    <button class="btn btn-sm btn-primary" onclick="testConnection()" style="margin-top:12px">Test Connection</button>
-                    <div class="config-info" id="configInfo"></div>
+            <!-- Connection + settings strip -->
+            <div class="config-strip">
+                <div class="config-strip-item">
+                    <span class="micro-label">Zoho</span>
+                    <span class="config-strip-value" id="connectionStatus">
+                        <span class="status-dot status-unknown"></span> Checking...
+                    </span>
+                    <button class="btn btn-xs btn-outline" onclick="testConnection()">Test</button>
                 </div>
-
-                <!-- Bundle Mapping -->
-                <div class="config-card config-card-wide">
-                    <h3>Bundle Mappings</h3>
-                    <p class="config-desc">Map bundle SKUs to individual components. When a bundle is sold, it's automatically broken into individual line items.</p>
-                    <div class="table-container">
-                        <table class="data-table data-table-sm">
-                            <thead>
-                                <tr>
-                                    <th>Bundle SKU</th>
-                                    <th>Component SKU</th>
-                                    <th>Qty</th>
-                                    <th>GST %</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="bundleMapBody"></tbody>
-                        </table>
-                    </div>
-                    <div class="add-bundle-form">
-                        <input type="text" id="newBundleSku" placeholder="Bundle SKU" class="filter-input">
-                        <input type="text" id="newComponentSku" placeholder="Component SKU" class="filter-input">
-                        <input type="number" id="newComponentQty" placeholder="Qty" value="1" class="filter-input filter-input-sm">
-                        <input type="number" id="newGstRate" placeholder="GST %" value="5" class="filter-input filter-input-sm">
-                        <button class="btn btn-sm btn-primary" onclick="addBundleMapping()">Add</button>
-                    </div>
+                <div class="config-strip-item">
+                    <span class="micro-label">Seller State</span>
+                    <span class="config-strip-value" id="sellerStateDisplay">Haryana</span>
                 </div>
-
-                <!-- Settings -->
-                <div class="config-card">
-                    <h3>Settings</h3>
-                    <div class="setting-row">
-                        <label>Auto Sync</label>
-                        <div class="toggle-switch" id="autoSyncToggle" onclick="toggleAutoSync()">
-                            <div class="toggle-knob"></div>
-                        </div>
-                        <span id="autoSyncLabel">Enabled</span>
-                    </div>
-                    <div class="setting-row">
-                        <label>Seller State</label>
-                        <span id="sellerStateDisplay" class="config-value">Haryana</span>
-                    </div>
-                    <div class="setting-row">
-                        <label>Books Domain</label>
-                        <span id="booksDomainDisplay" class="config-value">zoho.in</span>
-                    </div>
+                <div class="config-strip-item">
+                    <span class="micro-label">Books Domain</span>
+                    <span class="config-strip-value" id="booksDomainDisplay">zoho.in</span>
+                </div>
+                <div class="config-strip-item">
+                    <span class="micro-label">Auto Sync</span>
+                    <span class="config-strip-value" id="autoSyncLabel">Enabled</span>
                 </div>
             </div>
+            <div class="config-info" id="configInfo" style="display:none"></div>
+
+            <!-- Wizard hero -->
+            <div class="wizard-hero">
+                <div class="wizard-hero-text">
+                    <h2>Bundle Setup</h2>
+                    <p>When a bundle sells on Shopify, it is invoiced in Zoho as its individual pieces so stock deducts correctly. Pick the colorways inside each pack — done.</p>
+                </div>
+                <div class="wizard-hero-meta">
+                    <div class="wizard-progress">
+                        <span class="wizard-progress-num" id="wizardProgress">0 / 0</span>
+                        <span class="micro-label">Bundles configured</span>
+                    </div>
+                    <button class="btn btn-primary" id="applyAllReadyBtn" onclick="applyAllReady()" style="display:none">
+                        Apply All Ready Suggestions
+                    </button>
+                </div>
+            </div>
+
+            <!-- Filter chips -->
+            <div class="wizard-chips">
+                <button class="chip active" data-filter="all" onclick="filterWizard('all')">All</button>
+                <button class="chip" data-filter="ready" onclick="filterWizard('ready')">Ready — one click</button>
+                <button class="chip" data-filter="manual" onclick="filterWizard('manual')">Needs picking</button>
+                <button class="chip" data-filter="configured" onclick="filterWizard('configured')">Configured</button>
+            </div>
+
+            <div id="wizardGrid" class="wizard-grid">
+                <div class="wizard-loading">Loading your Shopify bundles &amp; Zoho catalog...</div>
+            </div>
+
+            <!-- Advanced -->
+            <details class="advanced-block">
+                <summary>Advanced — raw SKU mapping &amp; all rows</summary>
+                <div class="add-bundle-form">
+                    <input type="text" id="newBundleSku" placeholder="Bundle title (exact Shopify title)" class="filter-input">
+                    <input type="text" id="newComponentSku" placeholder="Component name (Zoho, without size)" class="filter-input">
+                    <input type="number" id="newComponentQty" placeholder="Qty" value="1" class="filter-input filter-input-sm">
+                    <input type="number" id="newGstRate" placeholder="GST %" value="5" class="filter-input filter-input-sm">
+                    <button class="btn btn-sm btn-primary" onclick="addBundleMapping()">Add Row</button>
+                </div>
+                <div class="table-container">
+                    <table class="data-table data-table-sm">
+                        <thead>
+                            <tr>
+                                <th>Bundle</th>
+                                <th>Component</th>
+                                <th>Qty</th>
+                                <th>GST %</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bundleMapBody"></tbody>
+                    </table>
+                </div>
+            </details>
         </div>
     </div>
 
@@ -333,6 +349,9 @@
         </div>
     </div>
 
-    <script src="/dashboard/js/zoho-dashboard.js?v=1"></script>
+    <!-- Toast stack -->
+    <div id="toastStack" class="toast-stack"></div>
+
+    <script src="/dashboard/js/zoho-dashboard.js?v=2"></script>
 </body>
 </html>
