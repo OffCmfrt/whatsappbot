@@ -280,11 +280,48 @@ router.get('/:slug/chat/:phone', verifyPortalToken, async (req, res) => {
     }
 });
 
+// AI reply suggestions for a portal chat (drafts only — never auto-sent).
+// Same engine as the admin dashboard, scoped to phones that belong to this portal.
+router.post('/:slug/ai/suggest-reply', verifyPortalToken, async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const { phone, ticketId, prefetch } = req.body;
+
+        if (slug !== req.portal.slug) {
+            return res.status(403).json({ error: 'Portal mismatch' });
+        }
+
+        if (!phone) {
+            return res.status(400).json({ success: false, error: 'Customer phone is required' });
+        }
+
+        // Verify this phone has a ticket in the portal
+        const hasAccess = await verifyPhoneInPortal(phone, req.portal);
+        if (!hasAccess) {
+            return res.status(403).json({ error: 'Phone not associated with this portal' });
+        }
+
+        const { suggestReply } = require('../services/ai/suggestReply');
+        const result = await suggestReply({
+            actor: `portal:${slug}`,
+            phone,
+            ticketId: ticketId || null,
+            prefetch: Boolean(prefetch)
+        });
+        res.json({ success: true, suggestions: result.suggestions });
+    } catch (error) {
+        console.error('Portal AI suggest-reply error:', error.message);
+        const known = ['AI_NOT_CONFIGURED', 'AI_DISABLED', 'AI_LIMIT', 'NO_HISTORY', 'AI_RATE_LIMIT', 'AI_UNAVAILABLE'];
+        const status = known.includes(error.code) ? 400 : 500;
+        res.status(status).json({ success: false, error: known.includes(error.code) ? error.message : 'Failed to generate suggestions' });
+    }
+});
+
 // Send message via portal
 router.post('/:slug/chat/send', verifyPortalToken, async (req, res) => {
     try {
         const { slug } = req.params;
-        const { phone, message, type = 'text' } = req.body;
+        const { phone, message, type = 'text', suggestedText = null } = req.body;
 
         if (slug !== req.portal.slug) {
             return res.status(403).json({ error: 'Portal mismatch' });
@@ -313,6 +350,14 @@ router.post('/:slug/chat/send', verifyPortalToken, async (req, res) => {
             result = await whatsappService.sendTemplate(formattedPhone, templateData, 'manual_reply');
         } else {
             result = await whatsappService.sendMessage(formattedPhone, message, 'manual_reply');
+        }
+
+        // AI learning: pair this human reply with the customer's latest question
+        // so future suggestions imitate approved answers (fire-and-forget).
+        // suggestedText tells us if an AI draft was accepted as-is or corrected.
+        if (type === 'text' && message) {
+            const aiLearning = require('../services/ai/learning');
+            aiLearning.learnFromAgentReply({ phone, replyText: message, suggestedText }).catch(() => {});
         }
 
         // Update shopper record if exists - try multiple phone formats

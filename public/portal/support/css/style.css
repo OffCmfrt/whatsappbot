@@ -963,3 +963,64 @@ body {
     color: var(--text-secondary);
     min-width: 80px;
 }
+
+/* ---------- AI reply suggestions (chat modal) ---------- */
+#aiSuggestReplyBtn {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s ease;
+}
+
+#aiSuggestReplyBtn:hover {
+    background: #eef2ff;
+}
+
+#aiSuggestReplyBtn:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+#aiSuggestions {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 20px 0;
+    background: var(--bg-card);
+}
+
+#aiSuggestions.open {
+    display: flex;
+}
+
+.ai-suggestion-chip {
+    text-align: left;
+    background: #eef2ff;
+    border: 1px solid #c7d2fe;
+    color: #3730a3;
+    border-radius: 10px;
+    padding: 8px 10px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.ai-suggestion-chip:hover {
+    background: #e0e7ff;
+}
+
+.ai-suggestions-note {
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding-bottom: 4px;
+}

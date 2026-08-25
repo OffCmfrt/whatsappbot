@@ -10,6 +10,7 @@ let ticketPollingInterval = null;
 let lastKnownTicketIds = new Set();
 let unreadMessageCount = 0;
 let lastChatMessageCount = 0;
+let lastAiSuggestedReply = null;
 
 // Get slug from URL
 function getSlugFromUrl() {
@@ -334,6 +335,9 @@ async function openChat(ticketId, phone, name, status) {
 
     await loadChatMessages(phone);
 
+    // Warm the AI suggestion cache in the background so the ✨ click feels instant
+    try { prefetchAiSuggestions(phone, ticketId); } catch (e) { /* never block chat open */ }
+
     // Start polling
     if (chatPollingInterval) clearInterval(chatPollingInterval);
     chatPollingInterval = setInterval(() => {
@@ -461,8 +465,12 @@ async function sendMessage() {
     try {
         const data = await portalApi(`/portal/${portalSlug}/chat/send`, 'POST', {
             phone: currentTicket.phone,
-            message
+            message,
+            suggestedText: lastAiSuggestedReply
         });
+
+        // AI learning signal consumed — clear regardless of send outcome
+        lastAiSuggestedReply = null;
 
         if (data.success) {
             // Refresh to get actual status
@@ -486,6 +494,120 @@ function closeChat() {
         clearInterval(chatPollingInterval);
         chatPollingInterval = null;
     }
+    // Hide any leftover AI suggestions for the closed chat
+    const box = document.getElementById('aiSuggestions');
+    if (box) {
+        box.classList.remove('open');
+        box.innerHTML = '';
+    }
+    lastAiSuggestedReply = null;
+}
+
+// ---------- AI reply suggestions (drafts only — agent reviews before sending) ----------
+const aiSuggestPrefetch = new Map(); // key -> { promise, at }
+const AI_PREFETCH_FRESH_MS = 90 * 1000;
+
+function aiSuggestKey(phone, ticketId) {
+    return `${phone}:${ticketId || ''}`;
+}
+
+async function aiSuggestFetch(phone, ticketId, prefetch = false) {
+    const data = await portalApi(`/portal/${portalSlug}/ai/suggest-reply`, 'POST', {
+        phone,
+        ticketId,
+        prefetch
+    });
+    if (!data.success) throw new Error(data.error || 'AI suggestions unavailable');
+    return data;
+}
+
+// Prefetch: warm the suggestion cache the moment a chat opens so the ✨
+// click feels instant. Failures are silent — the button still works as a
+// plain on-demand request.
+function prefetchAiSuggestions(phone, ticketId) {
+    if (!phone || !portalToken) return;
+    const key = aiSuggestKey(phone, ticketId);
+    const existing = aiSuggestPrefetch.get(key);
+    if (existing && Date.now() - existing.at < AI_PREFETCH_FRESH_MS) return;
+    aiSuggestPrefetch.set(key, {
+        promise: aiSuggestFetch(phone, ticketId, true).catch(() => null),
+        at: Date.now()
+    });
+}
+
+function injectAiSuggestButton() {
+    const inputArea = document.querySelector('#chatModal .chat-input-area');
+    if (!inputArea || document.getElementById('aiSuggestReplyBtn')) return;
+
+    const suggestionsBox = document.createElement('div');
+    suggestionsBox.id = 'aiSuggestions';
+    inputArea.parentNode.insertBefore(suggestionsBox, inputArea);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'aiSuggestReplyBtn';
+    btn.title = 'AI: suggest replies from this conversation';
+    btn.innerHTML = '✨';
+    const sendBtn = document.getElementById('sendMessageBtn');
+    inputArea.insertBefore(btn, sendBtn);
+
+    btn.onclick = async () => {
+        if (!currentTicket) { showToast('Open a customer chat first', 'error'); return; }
+        const phone = currentTicket.phone;
+        const ticketId = currentTicket.id;
+
+        btn.disabled = true;
+        btn.innerHTML = '…';
+        suggestionsBox.classList.add('open');
+        suggestionsBox.innerHTML = '<div class="ai-suggestions-note">Generating suggestions…</div>';
+        try {
+            // Reuse the prefetch started when the chat opened — if it already
+            // resolved this renders instantly; otherwise we just await it
+            const key = aiSuggestKey(phone, ticketId);
+            const pre = aiSuggestPrefetch.get(key);
+            let data = (pre && Date.now() - pre.at < AI_PREFETCH_FRESH_MS) ? await pre.promise : null;
+            aiSuggestPrefetch.delete(key); // single-use: next click re-checks the server
+            if (!data || !data.suggestions) {
+                data = await aiSuggestFetch(phone, ticketId);
+            }
+
+            if (!data.suggestions || !data.suggestions.length) {
+                suggestionsBox.innerHTML = '<div class="ai-suggestions-note">No suggestions available for this chat.</div>';
+            } else {
+                suggestionsBox.innerHTML = '<div class="ai-suggestions-note">✨ Tap a draft to insert it — review before sending:</div>';
+                data.suggestions.forEach(s => {
+                    const chip = document.createElement('button');
+                    chip.type = 'button';
+                    chip.className = 'ai-suggestion-chip';
+                    chip.textContent = s;
+                    chip.onclick = () => {
+                        const input = document.getElementById('chatInput');
+                        if (input) {
+                            input.value = s;
+                            input.focus();
+                            input.style.height = 'auto';
+                            input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+                        }
+                        // Remember the draft so the send flow can report whether
+                        // it was sent as-is or edited (AI learning signal)
+                        lastAiSuggestedReply = s;
+                        suggestionsBox.classList.remove('open');
+                        suggestionsBox.innerHTML = '';
+                    };
+                    suggestionsBox.appendChild(chip);
+                });
+            }
+        } catch (e) {
+            suggestionsBox.innerHTML = '';
+            const note = document.createElement('div');
+            note.className = 'ai-suggestions-note';
+            note.textContent = `❌ ${e.message}`;
+            suggestionsBox.appendChild(note);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '✨';
+        }
+    };
 }
 
 async function resolveCurrentTicket() {
@@ -603,6 +725,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('resolveChatBtn')?.addEventListener('click', resolveCurrentTicket);
     document.getElementById('closeChatBtn')?.addEventListener('click', closeChat);
     document.getElementById('sendMessageBtn')?.addEventListener('click', sendMessage);
+
+    // AI reply suggestions (✨ button in the chat input area)
+    injectAiSuggestButton();
     
     // View All Orders button
     document.getElementById('viewAllOrdersBtn')?.addEventListener('click', () => {
