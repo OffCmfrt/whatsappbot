@@ -5,6 +5,17 @@ const compression = require('compression');
 const helmet = require('helmet');
 const cors = require('cors');
 const path = require('path');
+const axios = require('axios');
+const { sharedHttpsAgent, sharedHttpAgent, reapIdleSockets } = require('./src/utils/httpAgent');
+
+// Route ALL outbound axios traffic (Meta WhatsApp, Shiprocket, Delhivery,
+// Ekart, Shopify, Zoho, AI providers) through the bounded shared agent.
+// Node >= 19's keep-alive global agent parks idle TLS sockets forever and
+// Render's NAT drops them silently — that native-memory leak is fixed by
+// capping + reaping free sockets in httpAgent.js.
+axios.defaults.httpsAgent = sharedHttpsAgent;
+axios.defaults.httpAgent = sharedHttpAgent;
+
 const messageHandler = require('./src/handlers/messageHandler');
 const adminRoutes = require('./src/routes/adminRoutes');
 const { testConnection, initializeDatabase } = require('./src/database/db');
@@ -485,157 +496,103 @@ async function startServer() {
         reengagementCron.init();
         shipmentSyncCron.init();
 
-        // NEW: Periodic task queue cleanup - clear if queue is stuck
+        // ── Unified memory watchdog ─────────────────────────────────────
+        // One adaptive 60s timer replaces the previous stack of overlapping
+        // intervals (queue check, 2-min memory monitor, 2-min pg cleanup,
+        // 60s native monitor, 30/10-min cache purges, 5-min settings purge).
+        // Every tick: reap idle TLS sockets + drain idle pg clients — the
+        // two native-memory growers. Every 5th tick: purge expired cache
+        // entries + log memory. Pressure responses scale with RSS so we act
+        // well before Render's 512MB OOM limit.
+        let watchdogTick = 0;
         setInterval(() => {
-            if (taskQueue.length > 100) {
-                console.warn(`[QUEUE] Task queue has ${taskQueue.length} items, clearing to prevent memory buildup`);
-                taskQueue.length = 0;
-            }
-        }, 10 * 60 * 1000); // Every 10 minutes
+            try {
+                watchdogTick++;
+                const every5 = watchdogTick % 5 === 0;
 
-        // Memory monitoring - log every 2 minutes
-        // NOTE: RSS includes Node.js runtime, pg driver, SSL, V8 internals (~300-400MB baseline)
-        //       Heap is what we control (caches, data). Only heap growth = real leak.
-        setInterval(() => {
-            const used = process.memoryUsage();
-            const memoryMB = Math.round(used.rss / 1024 / 1024);
-            const heapMB = Math.round(used.heapUsed / 1024 / 1024);
-            const externalMB = Math.round((used.external || 0) / 1024 / 1024);
-            const limitMB = 512;
-            const usagePercent = Math.round((memoryMB / limitMB) * 100);
-            
-            console.log(`[MEMORY] RSS: ${memoryMB}MB | Heap: ${heapMB}MB | External: ${externalMB}MB | ${usagePercent}% of ${limitMB}MB`);
-            
-            // Trigger cleanup when RSS exceeds 300MB (lowered from 400MB — native TLS buffers
-            // accumulate steadily and we need headroom before hitting 512MB OOM)
-            const CACHE_CLEAR_THRESHOLD_MB = 300;
-            if (memoryMB > CACHE_CLEAR_THRESHOLD_MB) {
-                console.warn(`⚠️ MEMORY HIGH (${memoryMB}MB > ${CACHE_CLEAR_THRESHOLD_MB}MB) — running GC + cache cleanup...`);
-                
-                const { invalidateCache, purgeAllExpired, caches: lruCaches } = require('./src/utils/cache');
-                const Settings = require('./src/models/Settings');
-                
-                // Clear all LRU caches
-                invalidateCache();
-                purgeAllExpired();
-                Settings._cache.clear();
-                
-                // Clear followUpService Maps (timeout handles can leak)
-                try {
-                    const followUpService = require('./src/services/followUpService');
-                    for (const [id, timeoutId] of followUpService.activeQueues.entries()) {
-                        clearTimeout(timeoutId);
-                        followUpService.activeQueues.delete(id);
-                    }
-                    followUpService.isProcessing.clear();
-                } catch (e) { /* ignore */ }
-                
-                // Clear shiprocketService orderCache
-                try {
-                    const shiprocketService = require('./src/services/shiprocketService');
-                    shiprocketService.orderCache.clear();
-                } catch (e) { /* ignore */ }
-                
-                // Close idle pg connections to free native TLS buffers (~5-10MB each)
-                try {
-                    const { pool } = require('./src/database/db');
+                // 1. Reap half-dead idle HTTPS sockets (native TLS buffers)
+                const reaped = reapIdleSockets();
+                if (reaped > 0) console.log(`[MEMORY] Reaped ${reaped} idle TLS socket(s)`);
+
+                // 2. Drain idle pg connections (~5-10MB native TLS each)
+                const { pool } = require('./src/database/db');
+                if ((pool.idleCount || 0) > 0) {
                     const closed = pool.endIdleClients();
-                    if (closed > 0) {
-                        console.log(`[MEMORY] Closed ${closed} idle pg connections (freed native TLS buffers)`);
-                    }
-                } catch (e) { /* ignore */ }
-                
-                // Force V8 garbage collection (requires --expose-gc flag)
-                if (typeof global.gc === 'function') {
-                    global.gc();
-                    const afterGC = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-                    console.log(`[MEMORY] GC done. Heap: ${heapMB}MB → ${afterGC}MB`);
-                } else {
-                    console.log(`[MEMORY] Cache cleanup done. Heap: ${heapMB}MB (GC not available)`);
+                    if (closed > 0) console.log(`[MEMORY] Closed ${closed} idle pg connection(s) (total=${pool.totalCount})`);
                 }
-            }
-            
-            // Emergency: if RSS is dangerously close to Render limit
-            if (usagePercent > 80) {
-                console.error(`🔥 CRITICAL RSS: ${memoryMB}MB / ${limitMB}MB (${usagePercent}%) — risk of OOM kill`);
-                // Force GC even if heap seems ok — native memory might be reclaimable
-                if (typeof global.gc === 'function') {
-                    global.gc();
-                    console.log('[MEMORY] Emergency GC triggered');
-                }
-                // Clear everything as last resort
-                try {
-                    const { invalidateCache } = require('./src/utils/cache');
-                    invalidateCache();
+
+                // 3. Stuck task queue safety valve
+                if (taskQueue.length > 100) {
+                    console.warn(`[QUEUE] Task queue has ${taskQueue.length} items, clearing to prevent memory buildup`);
                     taskQueue.length = 0;
-                } catch (e) { /* ignore */ }
-                // Aggressively close ALL idle pg connections
-                try {
-                    const { pool } = require('./src/database/db');
-                    const closed = pool.endIdleClients();
-                    if (closed > 0) console.log(`[MEMORY] Emergency: closed ${closed} idle pg connections`);
-                } catch (e) { /* ignore */ }
+                }
+
+                // 4. Housekeeping every 5 min: expired cache + settings purge
+                if (every5) {
+                    const { purgeAllExpired } = require('./src/utils/cache');
+                    const purged = purgeAllExpired();
+                    if (purged > 0) console.log(`[MEMORY] Purged ${purged} expired cache entrie(s)`);
+                    try { require('./src/models/Settings').clearOldCache(); } catch (e) { /* ignore */ }
+                }
+
+                // 5. Memory pressure response (scaled by RSS)
+                const used = process.memoryUsage();
+                const memoryMB = Math.round(used.rss / 1024 / 1024);
+                const heapMB = Math.round(used.heapUsed / 1024 / 1024);
+                const limitMB = 512;
+                const usagePercent = Math.round((memoryMB / limitMB) * 100);
+
+                if (every5) {
+                    console.log(`[MEMORY] RSS: ${memoryMB}MB | Heap: ${heapMB}MB | ${usagePercent}% of ${limitMB}MB`);
+                }
+
+                // High: clear caches + GC to reclaim headroom (lowered from
+                // 400MB — native TLS buffers accumulate steadily)
+                if (memoryMB > 300) {
+                    console.warn(`⚠️ MEMORY HIGH (${memoryMB}MB > 300MB) — running GC + cache cleanup...`);
+                    const { invalidateCache, purgeAllExpired } = require('./src/utils/cache');
+                    invalidateCache();
+                    purgeAllExpired();
+                    try { require('./src/models/Settings')._cache.clear(); } catch (e) { /* ignore */ }
+
+                    // Clear followUpService Maps (timeout handles can leak)
+                    try {
+                        const followUpService = require('./src/services/followUpService');
+                        for (const [id, timeoutId] of followUpService.activeQueues.entries()) {
+                            clearTimeout(timeoutId);
+                            followUpService.activeQueues.delete(id);
+                        }
+                        followUpService.isProcessing.clear();
+                    } catch (e) { /* ignore */ }
+
+                    try { require('./src/services/shiprocketService').orderCache.clear(); } catch (e) { /* ignore */ }
+
+                    if (typeof global.gc === 'function') {
+                        global.gc();
+                        console.log(`[MEMORY] GC done. Heap now: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+                    } else {
+                        console.log(`[MEMORY] Cache cleanup done. Heap: ${heapMB}MB (GC not available)`);
+                    }
+                }
+
+                // Critical: last-resort sweep before OOM kill
+                if (usagePercent > 80) {
+                    console.error(`🔥 CRITICAL RSS: ${memoryMB}MB / ${limitMB}MB (${usagePercent}%) — risk of OOM kill`);
+                    if (typeof global.gc === 'function') global.gc();
+                    try {
+                        require('./src/utils/cache').invalidateCache();
+                        taskQueue.length = 0;
+                    } catch (e) { /* ignore */ }
+                    try {
+                        const closed = pool.endIdleClients();
+                        if (closed > 0) console.log(`[MEMORY] Emergency: closed ${closed} idle pg connections`);
+                    } catch (e) { /* ignore */ }
+                }
+            } catch (e) {
+                // The watchdog must never take the server down with it
+                console.error('[WATCHDOG] tick failed:', e.message);
             }
-        }, 2 * 60 * 1000); // Every 2 minutes
-
-        // Periodic idle pg connection cleanup every 2 minutes
-        // Frees native TLS buffers (~5-10MB per idle connection) before they accumulate
-        setInterval(() => {
-            try {
-                const { pool } = require('./src/database/db');
-                const closed = pool.endIdleClients();
-                if (closed > 0) {
-                    console.log(`[MEMORY] Periodic pg cleanup: closed ${closed} idle connections (total=${pool.totalCount}, idle=${pool.idleCount})`);
-                }
-            } catch (e) { /* ignore */ }
-        }, 2 * 60 * 1000); // Every 2 minutes
-
-        // Native memory pressure monitor — runs every 60 seconds
-        // Proactively closes idle pg connections to prevent TLS buffer accumulation
-        // This is the KEY fix: native TLS buffers grow between cleanups, so we
-        // drain them aggressively before they stack up to 300MB+
-        setInterval(() => {
-            try {
-                const { pool } = require('./src/database/db');
-                const total = pool.totalCount || 0;
-                const idle = pool.idleCount || 0;
-                const waiting = pool.waitingCount || 0;
-                
-                // Always drain idle clients — even 1 idle connection holds ~5-10MB native TLS buffers
-                if (idle > 0) {
-                    const closed = pool.endIdleClients();
-                    console.log(`[NATIVE] Drained ${closed} idle pg connections (total=${total}, idle=${idle}, waiting=${waiting})`);
-                }
-                
-                // Force GC every minute to reclaim any reclaimable native memory
-                if (typeof global.gc === 'function') {
-                    global.gc();
-                }
-            } catch (e) { /* ignore */ }
-        }, 60 * 1000); // Every 60 seconds
-
-        // Purge expired cache entries every 30 minutes (don't clear valid entries)
-        setInterval(() => {
-            const { purgeAllExpired } = require('./src/utils/cache');
-            const purged = purgeAllExpired();
-            console.log(`[MEMORY] Scheduled expired-entry purge: ${purged} entries removed`);
-        }, 30 * 60 * 1000); // Every 30 minutes
-
-        // Periodic expired-cache purge every 10 minutes (lightweight)
-        setInterval(() => {
-            const { purgeAllExpired } = require('./src/utils/cache');
-            const purged = purgeAllExpired();
-            if (purged > 0) console.log(`[MEMORY] Periodic expired purge: removed ${purged} entries`);
-        }, 10 * 60 * 1000);
-
-        // Clear expired Settings cache entries every 5 minutes
-        // Settings.clearOldCache() was never called, causing expired entries to linger
-        setInterval(() => {
-            try {
-                const Settings = require('./src/models/Settings');
-                Settings.clearOldCache();
-            } catch (e) { /* ignore */ }
-        }, 5 * 60 * 1000);
+        }, 60 * 1000);
 
         // Start Express server
         app.listen(PORT, () => {

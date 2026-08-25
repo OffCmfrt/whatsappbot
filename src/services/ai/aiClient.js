@@ -11,19 +11,20 @@
 
 const axios = require('axios');
 const https = require('https');
+const { sharedHttpsAgent } = require('../../utils/httpAgent');
 
 // Render/Node can resolve googleapis.com to IPv6 first and hang on a dead
 // route until the request timeout (curl does happy-eyeballs, Node doesn't).
-// Force IPv4 and reuse sockets so requests connect fast and reliably.
-// timeout reaps sockets idle >30s: Render's NAT silently drops idle keep-alive
-// connections, and reusing a half-dead socket hangs until the request timeout.
-const httpsAgent = new https.Agent({ keepAlive: true, family: 4, maxSockets: 10, timeout: 30000 });
+// The shared agent forces IPv4 and reuses sockets; its free sockets are
+// capped and reaped by httpAgent.js so idle TLS buffers never accumulate.
+const httpsAgent = sharedHttpsAgent;
 
 // One-shot agent for retries after a timeout — the pooled agent may keep
 // handing out stale sockets, so retry attempts connect fresh instead.
-function freshAgent() {
-    return new https.Agent({ keepAlive: false, family: 4 });
-}
+// SINGLE reusable instance (keepAlive:false closes sockets after each
+// response) — the old per-retry `new https.Agent()` allocated agents that
+// were never destroyed and leaked their sockets on timed-out requests.
+const retryAgent = new https.Agent({ keepAlive: false, family: 4 });
 
 const PROVIDER_DEFAULTS = {
     groq: {
@@ -173,7 +174,7 @@ async function chatCompletion({ messages, tools, temperature = 0.3, maxTokens = 
                     'Authorization': `Bearer ${cfg.apiKey}`,
                     'Content-Type': 'application/json'
                 },
-                httpsAgent: timedOutLastAttempt ? freshAgent() : httpsAgent,
+                httpsAgent: timedOutLastAttempt ? retryAgent : httpsAgent,
                 // Fail fast on the first attempt (dead-socket hangs waste the
                 // whole window); thinking models (Gemini) can exceed 30s on
                 // tool-heavy turns, so retries get the full 60s.

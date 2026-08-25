@@ -24,6 +24,10 @@ const { detectLanguage } = require('./autoSupportAgent');
 const sessions = new Map();
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_HISTORY_TURNS = 10;
+// Hard cap on concurrent sessions: TTL alone doesn't protect against
+// scanner/bot traffic minting a fresh sessionId on every hit — without a
+// cap the Map grows unbounded between cleanup ticks.
+const MAX_SESSIONS = 500;
 
 function getSession(sessionId) {
     const entry = sessions.get(sessionId);
@@ -41,6 +45,11 @@ function saveSession(sessionId, history, context) {
         history.shift();
     }
     sessions.set(sessionId, { history, context: context || {}, lastAccess: Date.now() });
+    // Evict oldest (Map preserves insertion order; re-saved sessions move
+    // to the tail on delete+set above via getSession/saveSession flow)
+    while (sessions.size > MAX_SESSIONS) {
+        sessions.delete(sessions.keys().next().value);
+    }
 }
 
 // Periodic cleanup of expired sessions (every 10 min)
