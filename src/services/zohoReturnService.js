@@ -128,8 +128,47 @@ async function prepareAndCreateCreditNote({ shopifyOrder, orderId, returnItems, 
         })
         : buildCreditNotePayload(shopifyOrder, returnItems, returnType, extraNotes, fallbackTaxDecision);
 
-    creditNotePayload.customer_id = customerId;
+    // Books requires the credit note's customer to be EXACTLY the invoice's
+    // customer (400 "You cannot change the customer..."). The invoice's own
+    // customer_id is authoritative; the Shopify-resolved customer is only a
+    // fallback for the rare case the invoice has none.
+    creditNotePayload.customer_id = fullInvoice?.customer_id || originalInvoice.customer_id || customerId;
     creditNotePayload.invoice_id = originalInvoice.invoice_id;
+
+    // Books rejects a credit note whose total would exceed the invoice total
+    // ("credit notes balance isn't negative") — i.e. part of this invoice was
+    // already credited earlier. Cap the lines at the remaining creditable
+    // amount, proportionally, instead of failing. `credits_applied` on the
+    // invoice is the authoritative sum of already-applied credit notes.
+    try {
+        const invoiceTotal = parseFloat(fullInvoice?.total);
+        const alreadyCredited = parseFloat(fullInvoice?.credits_applied) || 0;
+        if (Number.isFinite(invoiceTotal) && invoiceTotal > 0 && alreadyCredited > 0) {
+            const remaining = invoiceTotal - alreadyCredited;
+
+            const estTotal = (creditNotePayload.line_items || []).reduce((sum, l) => {
+                const net = (parseFloat(l.rate) || 0) * (parseFloat(l.quantity) || 1) - (parseFloat(l.discount) || 0);
+                const pct = (parseFloat(l.cgst_rate) || 0) + (parseFloat(l.sgst_rate) || 0)
+                    + (parseFloat(l.igst_rate) || 0);
+                return sum + net * (1 + pct / 100);
+            }, 0);
+
+            if (remaining <= 0.02) {
+                console.log(`ℹ️ Zoho ${returnType}: invoice ${originalInvoice.invoice_id} already fully credited (₹${alreadyCredited.toFixed(2)} of ₹${invoiceTotal.toFixed(2)}) — skipping ${reference}`);
+                return { success: true, creditNoteId: null, fullyCredited: true, customerId };
+            }
+            if (estTotal > remaining + 0.02) {
+                const factor = remaining / estTotal;
+                console.warn(`⚠️ Zoho ${returnType}: capping ${reference} from ₹${estTotal.toFixed(2)} to remaining creditable ₹${remaining.toFixed(2)}`);
+                for (const l of creditNotePayload.line_items || []) {
+                    l.rate = Math.round((parseFloat(l.rate) || 0) * factor * 100) / 100;
+                    l.discount = Math.round((parseFloat(l.discount) || 0) * factor * 100) / 100;
+                }
+            }
+        }
+    } catch (capErr) {
+        console.warn(`⚠️ Zoho ${returnType}: balance-cap check failed (${capErr.message}) — attempting full amount`);
+    }
 
     const creditNote = await zohoService.createCreditNote(creditNotePayload);
     return { success: true, creditNoteId: creditNote?.creditnote_id || null, customerId };

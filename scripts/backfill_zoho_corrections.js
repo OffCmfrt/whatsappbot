@@ -24,6 +24,7 @@
  * Options:
  *   --limit=N        cap records processed per phase (default 500)
  *   --max-pages=N    Shopify order paging cap for refund scan (default 30)
+ *   --concurrency=N  parallel workers for API-bound phases (default 6)
  *
  * Every phase is idempotent — DB rows, Zoho-side reference checks and
  * existing-document searches are all consulted before any write.
@@ -47,12 +48,61 @@ const APPLY = args.includes('--apply');
 const PHASE = (args.find(a => a.startsWith('--phase=')) || '').split('=')[1] || 'all';
 const LIMIT = parseInt((args.find(a => a.startsWith('--limit=')) || '').split('=')[1] || '500', 10);
 const MAX_PAGES = parseInt((args.find(a => a.startsWith('--max-pages=')) || '').split('=')[1] || '30', 10);
+const CONCURRENCY = Math.max(1, parseInt((args.find(a => a.startsWith('--concurrency=')) || '').split('=')[1] || '6', 10));
 
 const summary = { phase: {}, errors: [] };
 function log(msg) { console.log(`${APPLY ? '[APPLY]' : '[DRY-RUN]'} ${msg}`); }
 function tally(phase, key) {
     summary.phase[phase] = summary.phase[phase] || {};
     summary.phase[phase][key] = (summary.phase[phase][key] || 0) + 1;
+}
+
+/**
+ * Simple worker pool — runs async tasks with bounded concurrency.
+ * The API layer already retries rate limits with exponential backoff,
+ * so parallel workers are safe.
+ */
+async function pool(items, fn, limit = Infinity) {
+    const work = items.slice(0, limit);
+    let idx = 0;
+    const results = [];
+    const workers = Array.from({ length: Math.min(CONCURRENCY, work.length) }, async () => {
+        while (idx < work.length) {
+            const i = idx++;
+            results[i] = await fn(work[i], i);
+        }
+    });
+    await Promise.all(workers);
+    return results;
+}
+
+/** Batch-load already-processed zoho_returns rows for dedupe (one query). */
+async function batchDedupeRto(orderNums) {
+    const done = new Set();
+    for (let i = 0; i < orderNums.length; i += 200) {
+        const chunk = orderNums.slice(i, i + 200);
+        const q = `SELECT shopify_order_id FROM zoho_returns
+             WHERE shopify_order_id IN (${chunk.map(() => '?').join(',')})
+               AND return_type = 'rto' AND status IN ('pending', 'synced')`;
+        try {
+            const rows = await dbAdapter.query(q, chunk);
+            for (const r of rows) done.add(String(r.shopify_order_id));
+        } catch (e) { /* leave empty — per-order checks still apply upstream */ }
+    }
+    return done;
+}
+
+/** Batch-load processed refund ids for dedupe (one query). */
+async function batchDedupeRefunds() {
+    const set = new Set();
+    try {
+        const rows = await dbAdapter.query(
+            `SELECT shopify_return_id FROM zoho_returns
+             WHERE return_type = 'return' AND status IN ('pending', 'synced') AND shopify_return_id <> ''`
+        );
+        for (const r of rows) set.add(String(r.shopify_return_id));
+    } catch (e) { /* per-refund checks still apply */ }
+    return set;
 }
 
 // ============================================================
@@ -130,22 +180,22 @@ async function phaseRtoCreditNotes(existingCnRefs) {
     );
     log(`rto-credit-notes: ${rows.length} RTO orders since ${WINDOW_START}`);
 
-    for (const row of rows) {
+    // Batch DB dedupe up front so the worker pool only touches Zoho for
+    // genuinely eligible orders
+    const dbDone = await batchDedupeRto(rows.map(r => String(r.order_id).replace(/^#/, '')));
+
+    await pool(rows, async (row) => {
         const orderNum = String(row.order_id).replace(/^#/, '');
         const reference = creditNoteReference(orderNum, 'rto');
 
         // Dedupe: DB row already synced/pending
-        const dup = await dbAdapter.query(
-            `SELECT id FROM zoho_returns WHERE shopify_order_id IN (?, ?) AND return_type = 'rto' AND status IN ('pending', 'synced')`,
-            [orderNum, row.order_id]
-        );
-        if (dup.length > 0) { tally('rto-credit-notes', 'already_in_db'); continue; }
+        if (dbDone.has(orderNum)) { tally('rto-credit-notes', 'already_in_db'); return; }
         // Dedupe: credit note already exists in Zoho with our reference
-        if (existingCnRefs.has(reference)) { tally('rto-credit-notes', 'already_in_zoho'); continue; }
+        if (existingCnRefs.has(reference)) { tally('rto-credit-notes', 'already_in_zoho'); return; }
 
         tally('rto-credit-notes', 'eligible');
         log(`  RTO #${orderNum} (${row.carrier || 'unknown carrier'}${row.awb ? ' ' + row.awb : ''}) → credit note ${reference}`);
-        if (!APPLY) continue;
+        if (!APPLY) return;
 
         try {
             // Prefer the live Shopify order (self-heals orders that predate
@@ -154,13 +204,16 @@ async function phaseRtoCreditNotes(existingCnRefs) {
             const result = order
                 ? await zohoReturnService.handleRTO(order, { carrier: row.carrier, awb: row.awb })
                 : await zohoReturnService.handleRTOByOrderId(orderNum, { carrier: row.carrier, awb: row.awb });
-            if (result.success) tally('rto-credit-notes', 'created');
+            if (result.success) {
+                tally('rto-credit-notes', 'created');
+                existingCnRefs.add(reference);
+            }
             else { tally('rto-credit-notes', 'failed'); summary.errors.push(`RTO #${orderNum}: ${result.error}`); }
         } catch (e) {
             tally('rto-credit-notes', 'failed');
             summary.errors.push(`RTO #${orderNum}: ${e.message}`);
         }
-    }
+    });
 }
 
 // ============================================================
@@ -168,37 +221,37 @@ async function phaseRtoCreditNotes(existingCnRefs) {
 // ============================================================
 
 async function phaseRefundCreditNotes() {
+    const doneRefunds = await batchDedupeRefunds();
     let scanned = 0, refundOrders = 0;
     for await (const orders of pageShopifyOrders({ updatedSince: WINDOW_START })) {
+        const jobs = [];
         for (const order of orders) {
             scanned++;
             if (!['refunded', 'partially_refunded'].includes(order.financial_status)) continue;
             refundOrders++;
+            jobs.push({ order });
+        }
+        await pool(jobs, async ({ order }) => {
             if (refundOrders > LIMIT) return;
-
             const refunds = await fetchShopifyRefunds(order.id);
             for (const refund of refunds) {
                 const refundId = String(refund.id);
-                const dup = await dbAdapter.query(
-                    `SELECT id FROM zoho_returns WHERE shopify_return_id = ? AND return_type = 'return' AND status IN ('pending', 'synced')`,
-                    [refundId]
-                );
-                if (dup.length > 0) { tally('refund-credit-notes', 'already_in_db'); continue; }
+                if (doneRefunds.has(refundId)) { tally('refund-credit-notes', 'already_in_db'); continue; }
 
                 tally('refund-credit-notes', 'eligible');
                 log(`  refund ${refundId} on ${order.name || order.id} → credit note`);
                 if (!APPLY) continue;
                 try {
                     const result = await zohoReturnService.handleShopifyRefund(order, refund);
-                    if (result.success) tally('refund-credit-notes', 'created');
+                    if (result.success) { tally('refund-credit-notes', 'created'); doneRefunds.add(refundId); }
                     else { tally('refund-credit-notes', 'failed'); summary.errors.push(`${order.name}: ${result.error}`); }
                 } catch (e) {
                     tally('refund-credit-notes', 'failed');
                     summary.errors.push(`${order.name}: ${e.message}`);
                 }
             }
-            await new Promise(r => setTimeout(r, 200));
-        }
+        });
+        if (refundOrders > LIMIT) break;
     }
     log(`refund-credit-notes: scanned ${scanned} orders, ${refundOrders} had refunds`);
 }
@@ -230,19 +283,22 @@ async function phaseHaryanaGst() {
     }
     log(`haryana-gst: ${candidates.length} Haryana invoices since ${WINDOW_START}`);
 
-    for (const inv of candidates.slice(0, LIMIT)) {
+    let processed = 0;
+    await pool(candidates, async (inv) => {
+        if (processed >= LIMIT) return;
+        processed++;
         let full;
         try { full = await zohoService.getInvoice(inv.invoice_id); }
-        catch (e) { summary.errors.push(`haryana-gst: get ${inv.invoice_id}: ${e.message}`); continue; }
+        catch (e) { summary.errors.push(`haryana-gst: get ${inv.invoice_id}: ${e.message}`); return; }
 
         const lines = full?.line_items || [];
         const hasIgst = lines.some(l => (l.taxes || []).some(t => /igst/i.test(t.tax_name || '')));
-        if (!hasIgst) { tally('haryana-gst', 'already_correct'); continue; }
+        if (!hasIgst) { tally('haryana-gst', 'already_correct'); return; }
 
         tally('haryana-gst', 'misapplied_igst');
         const orderNum = (full.reference_number || '').replace(/^#/, '');
         log(`  invoice ${full.invoice_number} (order #${orderNum}) has IGST — needs CGST+SGST`);
-        if (!APPLY) continue;
+        if (!APPLY) return;
 
         // Only auto-fix unpaid invoices: void → delete → re-sync through the
         // corrected pipeline. Paid ones need manual accountant review.
@@ -251,7 +307,7 @@ async function phaseHaryanaGst() {
         if (Math.abs(balance - total) > 0.01) {
             tally('haryana-gst', 'manual_paid');
             log(`    → has payments (balance ${balance}/${total}) — MANUAL FIX required`);
-            continue;
+            return;
         }
         try {
             const payload = await resolveOrderPayload(orderNum);
@@ -267,7 +323,7 @@ async function phaseHaryanaGst() {
             tally('haryana-gst', 'failed');
             summary.errors.push(`haryana-gst invoice ${inv.invoice_id}: ${e.message}`);
         }
-    }
+    });
 }
 
 async function resolveOrderPayload(orderNum) {
@@ -299,19 +355,19 @@ async function phaseCodPaid() {
     );
     log(`cod-paid: ${rows.length} reconciled COD payments since ${WINDOW_START}`);
 
-    for (const row of rows) {
+    await pool(rows, async (row) => {
         const orderNum = String(row.shopify_order_id).replace(/^#/, '');
         const order = await fetchShopifyOrderByName(orderNum);
-        if (!order) { tally('cod-paid', 'order_not_found'); continue; }
-        if (order.financial_status === 'paid') { tally('cod-paid', 'already_paid'); continue; }
+        if (!order) { tally('cod-paid', 'order_not_found'); return; }
+        if (order.financial_status === 'paid') { tally('cod-paid', 'already_paid'); return; }
         if (['refunded', 'partially_refunded', 'voided'].includes(order.financial_status)) {
             tally('cod-paid', 'skipped_status');
-            continue;
+            return;
         }
 
         tally('cod-paid', 'eligible');
         log(`  #${order.name || orderNum} financial_status=${order.financial_status} → mark Paid`);
-        if (!APPLY) continue;
+        if (!APPLY) return;
         try {
             const result = await shopifyService.markOrderPaidByOrderNumber(orderNum);
             if (result.success) tally('cod-paid', 'marked_paid');
@@ -320,7 +376,7 @@ async function phaseCodPaid() {
             tally('cod-paid', 'failed');
             summary.errors.push(`COD #${orderNum}: ${e.message}`);
         }
-    }
+    });
 }
 
 // ============================================================
@@ -336,7 +392,7 @@ async function phaseMissingInvoices() {
     );
     log(`missing-invoices: ${rows.length} dispatched orders since ${WINDOW_START}`);
 
-    for (const row of rows) {
+    await pool(rows, async (row) => {
         const orderNum = String(row.order_id).replace(/^#/, '');
 
         // Already synced (or cancelled-before-dispatch) in the sync log
@@ -346,22 +402,22 @@ async function phaseMissingInvoices() {
         );
         if (logged.length > 0 && ['synced', 'cancelled'].includes(logged[0].status)) {
             tally('missing-invoices', 'already_handled');
-            continue;
+            return;
         }
         // Zoho-side check (covers lost log rows)
         const existing = await zohoService.searchInvoice({ reference_number: orderNum });
-        if (existing.length > 0) { tally('missing-invoices', 'already_in_zoho'); continue; }
+        if (existing.length > 0) { tally('missing-invoices', 'already_in_zoho'); return; }
 
         const order = await fetchShopifyOrderByName(orderNum);
-        if (!order) { tally('missing-invoices', 'order_not_found'); continue; }
+        if (!order) { tally('missing-invoices', 'order_not_found'); return; }
         if (order.cancelled_at && !order.fulfillments?.length) {
             tally('missing-invoices', 'cancelled_before_dispatch');
-            continue;
+            return;
         }
 
         tally('missing-invoices', 'eligible');
         log(`  #${order.name || orderNum} has no Zoho invoice → sync`);
-        if (!APPLY) continue;
+        if (!APPLY) return;
         try {
             const result = await zohoSyncService.syncOrderToZoho(order);
             if (result.success) tally('missing-invoices', 'synced');
@@ -370,7 +426,7 @@ async function phaseMissingInvoices() {
             tally('missing-invoices', 'failed');
             summary.errors.push(`invoice #${orderNum}: ${e.message}`);
         }
-    }
+    });
 }
 
 // ============================================================
@@ -389,10 +445,10 @@ async function phaseMismatchReport() {
     const csvPath = path.join(__dirname, `../tmp/zoho_mismatch_report_${new Date().toISOString().slice(0, 10)}.csv`);
     const lines = ['order,invoice_number,zoho_subtotal,zoho_tax,zoho_total,shopify_items_total,shopify_total,delta_total,notes'];
 
-    for (const row of rows) {
+    const rowLines = await pool(rows, async (row) => {
         let inv;
         try { inv = await zohoService.getInvoice(row.zoho_invoice_id); }
-        catch (e) { lines.push(`${row.shopify_order_id},,,,,,,,get_invoice failed: ${e.message}`); continue; }
+        catch (e) { return `${row.shopify_order_id},,,,,,,,get_invoice failed: ${e.message}`; }
 
         const payload = typeof row.original_payload === 'string'
             ? JSON.parse(row.original_payload) : row.original_payload;
@@ -410,11 +466,12 @@ async function phaseMismatchReport() {
         if (notes.length) tally('mismatch-report', 'mismatches');
         else tally('mismatch-report', 'ok');
 
-        lines.push([
+        return [
             row.shopify_order_id, inv.invoice_number, zohoSubtotal, zohoTax, zohoTotal,
             Math.round(shopifyItemsTotal * 100) / 100, shopifyTotal, delta, notes.join('|')
-        ].join(','));
-    }
+        ].join(',');
+    });
+    lines.push(...rowLines.filter(Boolean));
 
     fs.mkdirSync(path.dirname(csvPath), { recursive: true });
     fs.writeFileSync(csvPath, lines.join('\n'));
@@ -427,13 +484,13 @@ async function phaseMismatchReport() {
 
 async function main() {
     console.log(`\n🔧 Zoho historical corrections — window ${WINDOW_START} → today`);
-    console.log(`   mode: ${APPLY ? 'APPLY (writes to Zoho/Shopify/DB)' : 'DRY-RUN (report only)'} | phase: ${PHASE} | limit: ${LIMIT}\n`);
+    console.log(`   mode: ${APPLY ? 'APPLY (writes to Zoho/Shopify/DB)' : 'DRY-RUN (report only)'} | phase: ${PHASE} | limit: ${LIMIT} | concurrency: ${CONCURRENCY}\n`);
 
     // One shared Zoho credit-note reference scan for RTO dedupe
     const existingCnRefs = new Set();
     if (PHASE === 'all' || PHASE === 'rto-credit-notes') {
         try {
-            const all = await zohoService.searchCreditNotes({ page_limit: 10 });
+            const all = await zohoService.searchCreditNotes({ page_limit: 200 });
             for (const cn of all) if (cn.reference_number) existingCnRefs.add(String(cn.reference_number).trim());
             log(`loaded ${existingCnRefs.size} existing credit note references from Zoho`);
         } catch (e) {

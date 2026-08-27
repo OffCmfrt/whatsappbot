@@ -21,8 +21,14 @@ let tokenCache = {
     expires_at: 0
 };
 
-// Rate limiter — Zoho allows ~100 req/min per API
-const rateBucket = { tokens: 100, max: 100, refillRate: 2, lastRefill: Date.now() };
+// Rate limiter — Books' org limit is ~100 req/min; pace well below it so
+// concurrent workers never trigger 429 storms (Zoho's cooldowns cost minutes)
+const rateBucket = {
+    tokens: parseInt(process.env.ZOHO_RATE_BURST || '10', 10),
+    max: parseInt(process.env.ZOHO_RATE_BURST || '10', 10),
+    refillRate: parseFloat(process.env.ZOHO_RATE_PER_SEC || '0.85'),
+    lastRefill: Date.now()
+};
 
 function refillTokens() {
     const now = Date.now();
@@ -89,11 +95,17 @@ async function zohoRequest(method, url, data = null, params = {}) {
     await waitForSlot();
 
     const maxRetries = 2;
+    // Rate limits (429 / "too many requests") get their own, much larger
+    // budget: Zoho imposes multi-minute cooldowns after a storm, so short
+    // backoffs just burn retries. Wait it out instead.
+    const rateLimitDelays = [10000, 20000, 30000, 45000, 60000, 60000];
+    let rateLimitRetries = 0;
     let forceRefresh = false;
     let authRetried = false;
+    let attempt = 0;
 
     // Retry with exponential backoff
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    while (true) {
         // Fetched each iteration so an auth retry picks up the fresh token
         const token = await getAccessToken(forceRefresh);
         forceRefresh = false;
@@ -132,9 +144,16 @@ async function zohoRequest(method, url, data = null, params = {}) {
             const rateLimited = err.response?.data && /too many requests/i.test(
                 `${err.response.data.error_description || ''} ${err.response.data.message || ''}`
             );
-            if (status === 429 || rateLimited || (status >= 500 && attempt < maxRetries)) {
+            if ((status === 429 || rateLimited) && rateLimitRetries < rateLimitDelays.length) {
+                const delay = rateLimitDelays[rateLimitRetries++];
+                console.warn(`⚠️ Zoho API ${status} rate limited — cooling down ${delay / 1000}s (rate retry ${rateLimitRetries}/${rateLimitDelays.length})`);
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+            if (status >= 500 && attempt < maxRetries) {
+                attempt++;
                 const delay = Math.pow(2, attempt) * 2000;
-                console.warn(`⚠️ Zoho API ${status}${rateLimited ? ' (rate limited)' : ''}, retrying in ${delay}ms (attempt ${attempt + 1})`);
+                console.warn(`⚠️ Zoho API ${status}, retrying in ${delay}ms (attempt ${attempt})`);
                 await new Promise(r => setTimeout(r, delay));
                 continue;
             }
