@@ -9,6 +9,23 @@ const { dbAdapter } = require('../database/db');
 // ============================================================
 
 /**
+ * Once COD is collected the Shopify order should show PAID as well —
+// no manual marking. Best-effort: failures only log, never break the
+// reconciliation (the backfill script retries stuck orders).
+ */
+async function markShopifyPaid(orderId) {
+    try {
+        const shopifyService = require('./shopifyService');
+        const result = await shopifyService.markOrderPaidByOrderNumber(orderId);
+        if (!result.success && !result.skipped) {
+            console.warn(`⚠️ Zoho COD: could not mark Shopify order #${orderId} paid: ${result.error}`);
+        }
+    } catch (err) {
+        console.warn(`⚠️ Zoho COD: Shopify paid-marking failed for #${orderId}: ${err.message}`);
+    }
+}
+
+/**
  * Handle a COD delivery confirmation from a carrier webhook.
  * Called when Delhivery/Shiprocket confirms delivery + COD collection.
  */
@@ -73,6 +90,7 @@ async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate, 
                 `UPDATE zoho_cod_payments SET payment_status = ?, zoho_invoice_id = ?, zoho_payment_id = ?, reconciled_at = NOW() WHERE id = ?`,
                 ['reconciled', invoiceId, existingPayments[0].payment_id, logResult.lastInsertRowid]
             );
+            await markShopifyPaid(orderId);
             return { success: true, alreadyPaid: true };
         }
 
@@ -85,6 +103,10 @@ async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate, 
             `UPDATE zoho_cod_payments SET payment_status = ?, zoho_invoice_id = ?, zoho_payment_id = ?, reconciled_at = NOW() WHERE id = ?`,
             ['reconciled', invoiceId, payment?.payment_id || null, logResult.lastInsertRowid]
         );
+
+        // Step 5: COD collected from the customer → Shopify order Paid too.
+        // Best-effort: never blocks or fails the Zoho reconciliation.
+        await markShopifyPaid(orderId);
 
         console.log(`✅ Zoho COD: order #${orderId} → payment ${payment?.payment_id || 'recorded'} (₹${invoiceAmount})`);
         return {

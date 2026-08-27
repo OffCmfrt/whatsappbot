@@ -1139,6 +1139,49 @@ class ShopifyService {
         return res.data?.transactions || [];
     }
 
+    /**
+     * Mark a Shopify order as PAID once the carrier collects the COD amount.
+     * Idempotent: already-paid orders are skipped. Tries a capture first
+     * (works when an authorization exists) and falls back to an external
+     * 'sale' transaction for COD/manual orders.
+     * Returns { success, alreadyPaid?, action?, error? }.
+     */
+    async markOrderPaidByOrderNumber(orderNumber) {
+        const cfg = this._restConfig();
+        if (!cfg) return { success: false, error: 'Shopify credentials not configured' };
+
+        const order = await this.getOrderById(this._toLookupId(orderNumber));
+        if (!order) return { success: false, error: `Order ${orderNumber} not found in Shopify` };
+
+        if (order.financial_status === 'paid') {
+            return { success: true, alreadyPaid: true };
+        }
+        if (['refunded', 'partially_refunded', 'voided'].includes(order.financial_status)) {
+            return { success: false, skipped: `financial_status=${order.financial_status}` };
+        }
+
+        const amount = parseFloat(order.total_outstanding ?? order.total_price) || 0;
+        try {
+            await axios.post(`${cfg.base}/orders/${order.id}/transactions.json`,
+                { transaction: { kind: 'capture' } },
+                { headers: cfg.headers, timeout: 15000 });
+            console.log(`💰 Shopify COD: order ${order.name || order.id} marked paid (capture)`);
+            return { success: true, action: 'capture' };
+        } catch (captureErr) {
+            // No authorization to capture (typical for COD) — record an external sale
+            try {
+                await axios.post(`${cfg.base}/orders/${order.id}/transactions.json`,
+                    { transaction: { kind: 'sale', source: 'external', gateway: 'manual', amount } },
+                    { headers: cfg.headers, timeout: 15000 });
+                console.log(`💰 Shopify COD: order ${order.name || order.id} marked paid (external sale ₹${amount})`);
+                return { success: true, action: 'sale' };
+            } catch (saleErr) {
+                const detail = saleErr.response?.data?.errors ? JSON.stringify(saleErr.response.data.errors) : saleErr.message;
+                return { success: false, error: detail };
+            }
+        }
+    }
+
     // Full refund via the REST calculate → create two-step flow
     async _createFullRefund(cfg, order) {
         const refundLineItems = (order.line_items || [])

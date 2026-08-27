@@ -1,6 +1,14 @@
 const zohoService = require('./zohoService');
 const zohoCodService = require('./zohoCodService');
-const { buildCreditNotePayload } = require('./zohoTransform');
+const {
+    buildCreditNotePayload,
+    buildCreditNoteFromInvoice,
+    creditNoteReference,
+    breakBundleLineItems,
+    loadBundleMap,
+    determineTaxType
+} = require('./zohoTransform');
+const { createItemResolver } = require('./zohoItemResolver');
 const { dbAdapter } = require('../database/db');
 
 // ============================================================
@@ -38,6 +46,155 @@ async function findInvoiceForOrder(orderId) {
     const invoices = await zohoCodService.ensureInvoiceExists(orderId);
     if (!invoices || invoices.length === 0) return null;
     return invoices.find(i => i.status !== 'void' && i.status !== 'deleted') || invoices[0];
+}
+
+/**
+ * Fetch the FULL invoice (with line items, discounts and applied taxes)
+ * — the list API only returns totals, which is not enough to mirror the
+ * original tax treatment and discount on a credit note.
+ */
+async function fetchFullInvoice(listInvoice) {
+    try {
+        const full = await zohoService.getInvoice(listInvoice.invoice_id);
+        if (full) return full;
+    } catch (e) {
+        console.warn(`⚠️ Zoho: full invoice fetch failed for ${listInvoice.invoice_id}: ${e.message}`);
+    }
+    return listInvoice;
+}
+
+/**
+ * Tax decision fallback for credit lines that don't match any invoice
+ * line — derived from seller vs customer state, never hardcoded.
+ */
+function fallbackTaxDecisionFor(shopifyOrder) {
+    const customerState = shopifyOrder?.shipping_address?.province || shopifyOrder?.billing_address?.province || '';
+    return determineTaxType(process.env.ZOHO_SELLER_STATE || 'Haryana', customerState);
+}
+
+/**
+ * Shared credit note flow for returns, RTOs and exchanges:
+ *  1. Zoho-side duplicate check (reference convention)
+ *  2. customer resolution
+ *  3. original invoice lookup (auto-syncs when missing) + full fetch
+ *  4. payload that mirrors the invoice (rate, discount share, tax basis)
+ *  5. creation linked to the invoice via invoice_id query param
+ * Never deletes the original invoice — reversal happens via credit note.
+ */
+async function prepareAndCreateCreditNote({ shopifyOrder, orderId, returnItems, returnType, reference, extraNotes = '' }) {
+    // Zoho-side dedupe: one credit note per reference (req: no duplicates)
+    try {
+        const existing = await zohoService.searchCreditNotes({ reference_number: reference });
+        if (existing.length > 0) {
+            console.log(`✅ Zoho ${returnType}: credit note for reference ${reference} already exists in Zoho (${existing[0].creditnote_id})`);
+            return { success: true, alreadyProcessed: true, creditNoteId: existing[0].creditnote_id, customerId: existing[0].customer_id || null };
+        }
+    } catch (dedupeErr) {
+        console.warn(`⚠️ Zoho ${returnType}: credit note dedupe check failed (${dedupeErr.message}) — DB dedupe still applies`);
+    }
+
+    // Resolve customer in Zoho
+    const customerName = `${shopifyOrder.customer?.first_name || ''} ${shopifyOrder.customer?.last_name || ''}`.trim();
+    let customerId = null;
+    try {
+        const zohoCustomer = await zohoService.getOrCreateCustomer(customerName, shopifyOrder.email || '', shopifyOrder.phone || '');
+        customerId = zohoCustomer?.contact_id || null;
+    } catch (custErr) {
+        console.warn(`⚠️ Zoho customer lookup failed for ${returnType}: ${custErr.message}`);
+    }
+
+    // Find the original invoice (auto-syncs the order first if it was never
+    // invoiced). Books links credit notes ONLY via the invoice_id query
+    // parameter — see zohoService.createCreditNote.
+    const originalInvoice = await findInvoiceForOrder(orderId);
+    if (!originalInvoice) {
+        throw new Error(`No Zoho invoice found for order #${orderId} even after on-demand sync — cannot create credit note`);
+    }
+    const fullInvoice = await fetchFullInvoice(originalInvoice);
+
+    // Build the credit note mirroring the original invoice — same tax
+    // basis (CGST+SGST vs IGST, inclusive/exclusive), same rate and the
+    // original discount reversed in proportion; item-linked lines so
+    // stock returns to inventory. Falls back to the state-derived payload
+    // when the invoice has no usable lines.
+    const fallbackTaxDecision = fallbackTaxDecisionFor(shopifyOrder);
+    const creditNotePayload = (fullInvoice?.line_items || []).length > 0
+        ? await buildCreditNoteFromInvoice({
+            shopifyOrder, returnItems, returnType,
+            originalInvoice: fullInvoice,
+            extraNotes,
+            referenceNumber: reference,
+            fallbackTaxDecision
+        })
+        : buildCreditNotePayload(shopifyOrder, returnItems, returnType, extraNotes, fallbackTaxDecision);
+
+    creditNotePayload.customer_id = customerId;
+    creditNotePayload.invoice_id = originalInvoice.invoice_id;
+
+    const creditNote = await zohoService.createCreditNote(creditNotePayload);
+    return { success: true, creditNoteId: creditNote?.creditnote_id || null, customerId };
+}
+
+/**
+ * Exchange replacement: zero-value invoice for the NEW items the customer
+ * received. item_id linkage makes Books deduct the new size from stock
+ * (old size returns via the exchange credit note). Bundles are expanded
+ * into size-wise singles like everywhere else.
+ */
+async function createExchangeReplacementInvoice({ shopifyOrder, orderId, exchangedItems, customerId }) {
+    if (!exchangedItems || exchangedItems.length === 0) return null;
+    const ref = `EXCH-INV-${String(orderId).replace(/^#/, '')}`;
+
+    // Dedupe — one replacement invoice per order
+    try {
+        const existing = await zohoService.searchInvoice({ reference_number: ref });
+        if (existing.length > 0) return existing[0].invoice_id;
+    } catch (e) { /* continue */ }
+
+    const bundleMap = await loadBundleMap();
+    const rawItems = exchangedItems.map(i => ({
+        title: i.title || '',
+        sku: i.sku || '',
+        quantity: parseInt(i.quantity || 1) || 1,
+        price: 0,
+        variant: i.variant || ''
+    }));
+    const { lineItems } = breakBundleLineItems(rawItems, bundleMap);
+
+    const resolver = createItemResolver();
+    const zohoLines = [];
+    for (const li of lineItems) {
+        const line = {
+            name: li.name,
+            description: 'Exchange replacement item',
+            quantity: li.quantity,
+            rate: 0,
+            discount: 0
+        };
+        const item = await resolver.resolve(li.sku || li.name);
+        if (item?.item_id) line.item_id = item.item_id;
+        zohoLines.push(line);
+    }
+
+    const payload = {
+        customer_id: customerId || undefined,
+        date: new Date().toISOString().split('T')[0],
+        payment_terms: 0,
+        line_items: zohoLines,
+        notes: `Exchange replacement for Shopify Order #${orderId}`,
+        reference_number: ref,
+        is_inclusive_tax: false,
+        gst_treatment: 'consumer'
+    };
+
+    const invoice = await zohoService.createInvoice(payload);
+    // Mark sent so the stock deduction actually happens
+    try {
+        await zohoService.markInvoiceSent(invoice.invoice_id);
+    } catch (sentErr) {
+        console.warn(`⚠️ Zoho exchange: replacement invoice mark-sent failed (${sentErr.message})`);
+    }
+    return invoice?.invoice_id || null;
 }
 
 /**
@@ -94,43 +251,36 @@ async function handleShopifyRefund(shopifyOrder, refundData) {
     );
 
     try {
-        // Build credit note payload
-        const creditNotePayload = buildCreditNotePayload(shopifyOrder, returnItems, 'return');
+        // Credit note mirroring the original invoice — same tax basis,
+        // discount reversed proportionally, item-linked for stock return.
+        const reference = creditNoteReference(orderId, 'return', refundId);
+        const result = await prepareAndCreateCreditNote({
+            shopifyOrder,
+            orderId,
+            returnItems,
+            returnType: 'return',
+            reference
+        });
 
-        // Resolve customer in Zoho
-        const customerName = creditNotePayload.customer_name;
-        const email = shopifyOrder.email || '';
-        let zohoCustomer = null;
-        try {
-            zohoCustomer = await zohoService.getOrCreateCustomer(customerName, email, shopifyOrder.phone || '');
-            creditNotePayload.customer_id = zohoCustomer?.contact_id;
-        } catch (custErr) {
-            console.warn(`⚠️ Zoho customer lookup failed for return: ${custErr.message}`);
+        if (result.alreadyProcessed) {
+            await dbAdapter.run(
+                `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, updated_at = NOW() WHERE id = ?`,
+                ['synced', result.creditNoteId || null, logResult.lastInsertRowid]
+            );
+            return { success: true, alreadyProcessed: true, logId: logResult.lastInsertRowid, creditNoteId: result.creditNoteId };
         }
-
-        // Find the original invoice in Zoho (auto-syncs the order first if
-        // it was never invoiced). Books links credit notes ONLY via the
-        // invoice_id query parameter — see zohoService.createCreditNote.
-        const originalInvoice = await findInvoiceForOrder(orderId);
-        if (!originalInvoice) {
-            throw new Error(`No Zoho invoice found for order #${orderId} even after on-demand sync — cannot create credit note`);
-        }
-        creditNotePayload.invoice_id = originalInvoice.invoice_id;
-
-        // Create credit note in Zoho
-        const creditNote = await zohoService.createCreditNote(creditNotePayload);
 
         // Update return log
         await dbAdapter.run(
             `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, updated_at = NOW() WHERE id = ?`,
-            ['synced', creditNote?.creditnote_id || null, logResult.lastInsertRowid]
+            ['synced', result.creditNoteId || null, logResult.lastInsertRowid]
         );
 
-        console.log(`✅ Zoho return: order #${orderId} → credit note ${creditNote?.creditnote_id || 'created'}`);
+        console.log(`✅ Zoho return: order #${orderId} → credit note ${result.creditNoteId || 'created'}`);
         return {
             success: true,
             logId: logResult.lastInsertRowid,
-            creditNoteId: creditNote?.creditnote_id
+            creditNoteId: result.creditNoteId
         };
 
     } catch (err) {
@@ -194,40 +344,25 @@ async function handleRTO(shopifyOrder, carrierInfo = {}) {
     );
 
     try {
-        const creditNotePayload = buildCreditNotePayload(shopifyOrder, returnItems, 'rto');
-
-        // Resolve customer
-        const customerName = creditNotePayload.customer_name;
-        let zohoCustomer = null;
-        try {
-            zohoCustomer = await zohoService.getOrCreateCustomer(customerName, shopifyOrder.email || '', shopifyOrder.phone || '');
-            creditNotePayload.customer_id = zohoCustomer?.contact_id;
-        } catch (custErr) {
-            console.warn(`⚠️ Zoho customer lookup failed for RTO: ${custErr.message}`);
-        }
-
-        // Link the credit note to the original invoice (auto-syncs the
-        // order first if it was never invoiced). Books links credit notes
-        // ONLY via the invoice_id query parameter — see createCreditNote.
-        const originalInvoice = await findInvoiceForOrder(orderId);
-        if (!originalInvoice) {
-            throw new Error(`No Zoho invoice found for order #${orderId} even after on-demand sync — cannot create RTO credit note`);
-        }
-        creditNotePayload.invoice_id = originalInvoice.invoice_id;
-
-        // Create credit note
-        const creditNote = await zohoService.createCreditNote(creditNotePayload);
+        const reference = creditNoteReference(orderId, 'rto');
+        const result = await prepareAndCreateCreditNote({
+            shopifyOrder,
+            orderId,
+            returnItems,
+            returnType: 'rto',
+            reference
+        });
 
         await dbAdapter.run(
             `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, updated_at = NOW() WHERE id = ?`,
-            ['synced', creditNote?.creditnote_id || null, logResult.lastInsertRowid]
+            ['synced', result.creditNoteId || null, logResult.lastInsertRowid]
         );
 
-        console.log(`✅ Zoho RTO: order #${orderId} → credit note ${creditNote?.creditnote_id || 'created'}`);
+        console.log(`✅ Zoho RTO: order #${orderId} → credit note ${result.creditNoteId || 'created'}`);
         return {
             success: true,
             logId: logResult.lastInsertRowid,
-            creditNoteId: creditNote?.creditnote_id
+            creditNoteId: result.creditNoteId
         };
 
     } catch (err) {
@@ -272,44 +407,57 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
     );
 
     try {
-        // Credit note for the original returned items; the replacement
-        // products the customer actually received are stamped in the notes so
-        // Zoho reflects the real exchange, not just the original selection.
+        // Credit note for the ORIGINAL items (item-linked → old size stock
+        // returns). The replacement products the customer actually received
+        // are stamped in the notes AND invoiced separately below so Zoho
+        // reflects the real exchange (e.g. Henley Acid Wash XS → S).
         const exchangedSummary = (exchangedItems || [])
             .map(i => `${i.quantity || 1}x ${i.title || i.sku || 'item'}${i.variant ? ' (' + i.variant + ')' : ''}`)
             .join(', ');
-        const creditNotePayload = buildCreditNotePayload(shopifyOrder, originalItems, 'exchange',
-            exchangedSummary ? `Exchanged for: ${exchangedSummary}` : '');
 
-        const customerName = creditNotePayload.customer_name;
-        let zohoCustomer = null;
+        const reference = creditNoteReference(orderId, 'exchange');
+        const result = await prepareAndCreateCreditNote({
+            shopifyOrder,
+            orderId,
+            returnItems: originalItems,
+            returnType: 'exchange',
+            reference,
+            extraNotes: exchangedSummary ? `Exchanged for: ${exchangedSummary}` : ''
+        });
+
+        // Replacement invoice (zero-value, item-linked → new size stock
+        // deducts). Never fails the whole exchange if Zoho rejects it.
+        let replacementInvoiceId = null;
         try {
-            zohoCustomer = await zohoService.getOrCreateCustomer(customerName, shopifyOrder.email || '', shopifyOrder.phone || '');
-            creditNotePayload.customer_id = zohoCustomer?.contact_id;
-        } catch (custErr) {
-            console.warn(`⚠️ Zoho customer lookup failed for exchange: ${custErr.message}`);
+            replacementInvoiceId = await createExchangeReplacementInvoice({
+                shopifyOrder,
+                orderId,
+                exchangedItems,
+                customerId: result.customerId
+            });
+        } catch (invErr) {
+            console.error(`❌ Zoho exchange: replacement invoice failed for order #${orderId}: ${invErr.message}`);
         }
 
-        // Link to the original invoice (auto-syncs if missing) — Books
-        // rejects credit notes with no invoice association
-        const originalInvoice = await findInvoiceForOrder(orderId);
-        if (!originalInvoice) {
-            throw new Error(`No Zoho invoice found for order #${orderId} even after on-demand sync — cannot create exchange credit note`);
+        try {
+            await dbAdapter.run(
+                `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, zoho_exchange_invoice_id = ?, updated_at = NOW() WHERE id = ?`,
+                ['synced', result.creditNoteId || null, replacementInvoiceId, logResult.lastInsertRowid]
+            );
+        } catch (colErr) {
+            // Column added post-rollout — fall back without it
+            await dbAdapter.run(
+                `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, updated_at = NOW() WHERE id = ?`,
+                ['synced', result.creditNoteId || null, logResult.lastInsertRowid]
+            );
         }
-        creditNotePayload.invoice_id = originalInvoice.invoice_id;
 
-        const creditNote = await zohoService.createCreditNote(creditNotePayload);
-
-        await dbAdapter.run(
-            `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, updated_at = NOW() WHERE id = ?`,
-            ['synced', creditNote?.creditnote_id || null, logResult.lastInsertRowid]
-        );
-
-        console.log(`✅ Zoho exchange: order #${orderId} → credit note ${creditNote?.creditnote_id || 'created'} (original items credited)`);
+        console.log(`✅ Zoho exchange: order #${orderId} → credit note ${result.creditNoteId || 'created'}${replacementInvoiceId ? ` + replacement invoice ${replacementInvoiceId}` : ''}`);
         return {
             success: true,
             logId: logResult.lastInsertRowid,
-            creditNoteId: creditNote?.creditnote_id,
+            creditNoteId: result.creditNoteId,
+            replacementInvoiceId,
             originalItems,
             exchangedItems
         };

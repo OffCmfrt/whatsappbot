@@ -1,5 +1,6 @@
 const zohoService = require('./zohoService');
 const { buildZohoInvoicePayload } = require('./zohoTransform');
+const { createItemResolver } = require('./zohoItemResolver');
 const { dbAdapter } = require('../database/db');
 
 // ============================================================
@@ -97,35 +98,9 @@ async function syncOrderToZoho(shopifyOrder) {
         // Step 2.5: Resolve line items to real Zoho items (by SKU, then exact
         // name) so invoices link to items and Zoho auto-deducts stock when the
         // invoice is marked sent — this covers broken-bundle singles too.
-        const itemCache = new Map();
-        // Zoho catalog names are inconsistent ("( B ) - M" vs "(G)-M") —
-        // normalise whitespace so bundle components still link to stock.
-        const normName = (s) => String(s || '').replace(/\s+/g, '').toUpperCase();
-        const resolveItem = async (key) => {
-            if (!key) return null;
-            if (itemCache.has(key)) return itemCache.get(key);
-            let item = null;
-            try {
-                const bySku = await zohoService.searchItem({ sku: key });
-                item = bySku[0] || null;
-                if (!item) item = await zohoService.getItemByName(key);
-                if (!item) {
-                    // Fuzzy fallback: style-prefix search + whitespace-insensitive
-                    // match (Zoho stores some variants without spaces, e.g.
-                    // "RAGLAN 001 (G)-M" vs "RAGLAN 001 ( G ) - M")
-                    const prefix = String(key)
-                        .replace(/\s*[-]\s*\w+$/, '')  // drop trailing size
-                        .replace(/\(.*$/, '')          // drop colourway paren
-                        .trim();
-                    const cands = await zohoService.searchItem({ name_contains: prefix, per_page: 200 });
-                    item = cands.find(c => normName(c.name) === normName(key)) || null;
-                }
-            } catch (e) { /* leave unlinked */ }
-            itemCache.set(key, item);
-            return item;
-        };
+        const resolver = createItemResolver();
         for (const li of invoice.line_items) {
-            const item = await resolveItem(li.item_id || li.name);
+            const item = await resolver.resolve(li.item_id || li.name);
             li.resolved_item_id = item?.item_id || null;
         }
 
@@ -140,7 +115,9 @@ async function syncOrderToZoho(shopifyOrder) {
                     description: li.description,
                     quantity: li.quantity,
                     rate: li.rate,
-                    discount: 0
+                    // Order-level Shopify discounts prorated onto each line
+                    // (mirrored proportionally on credit notes)
+                    discount: li.discount || 0
                 };
                 if (li.resolved_item_id) line.item_id = li.resolved_item_id;
                 // GST split computed by correctTax() — must reach Zoho or
@@ -197,6 +174,18 @@ async function syncOrderToZoho(shopifyOrder) {
                 }
             } else {
                 throw new Error(`Invoice creation failed: ${invoiceErr.message}`);
+            }
+        }
+
+        // Step 4.1: Tax verification — same-state orders must show
+        // CGST+SGST only. If Books applied IGST anyway (contact POS
+        // drift), flag it so the backfill/correction run can fix it.
+        if (transformations.tax_decision?.taxType === 'cgst_sgst') {
+            const lines = Array.isArray(zohoInvoice?.line_items) ? zohoInvoice.line_items : [];
+            const igstApplied = lines.some(l => (l.taxes || []).some(t => /igst/i.test(t.tax_name || '')));
+            if (igstApplied) {
+                transformations.tax_decision.zoho_misapplied_igst = true;
+                console.warn(`⚠️ Zoho sync #${orderId}: same-state order but Zoho applied IGST — flagged for GST correction`);
             }
         }
 

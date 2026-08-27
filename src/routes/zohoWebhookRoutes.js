@@ -7,6 +7,7 @@ const axios = require('axios');
 const zohoSyncService = require('../services/zohoSyncService');
 const zohoReturnService = require('../services/zohoReturnService');
 const zohoCodService = require('../services/zohoCodService');
+const zohoService = require('../services/zohoService');
 
 // ============================================================
 // SHOPIFY WEBHOOK VERIFICATION (HMAC-SHA256)
@@ -97,6 +98,61 @@ router.post('/orders/updated', verifyShopifyWebhook, async (req, res) => {
         // The initial orders/create handles the primary sync.
     } catch (err) {
         console.error('❌ Zoho webhook order/updated error:', err.message);
+    }
+});
+
+// ============================================================
+// SHOPIFY ORDER CANCELLED — void the Zoho invoice when the order
+// never shipped (cancelled-before-dispatch orders must not carry a
+// live invoice). Already-dispatched orders are left untouched — any
+// later RTO is handled via credit note, never invoice deletion.
+// ============================================================
+
+router.post('/orders/cancelled', verifyShopifyWebhook, async (req, res) => {
+    res.status(200).json({ received: true });
+
+    try {
+        const order = req.body;
+        const orderId = order.order_number?.toString() || order.id?.toString();
+        if (!orderId) return;
+
+        // Anything fulfilled (not cancelled) means it shipped — keep invoice
+        const shipped = (order.fulfillments || []).some(f =>
+            f.status !== 'cancelled' && f.status !== 'failure'
+        );
+        if (shipped) {
+            console.log(`ℹ️ Zoho cancel: order #${orderId} was shipped — invoice kept (RTOs handled via credit note)`);
+            return;
+        }
+
+        const invoices = await zohoService.searchInvoice({ reference_number: orderId });
+        let voided = 0;
+        for (const inv of invoices) {
+            if (inv.status === 'void' || inv.status === 'deleted') continue;
+            try {
+                // Void (never delete) — keeps the audit trail
+                await zohoService.voidInvoice(inv.invoice_id);
+                voided++;
+            } catch (voidErr) {
+                console.warn(`⚠️ Zoho cancel: void failed for invoice ${inv.invoice_id} (order #${orderId}): ${voidErr.message}`);
+            }
+        }
+
+        if (voided > 0) {
+            console.log(`✅ Zoho cancel: order #${orderId} cancelled before dispatch — ${voided} invoice(s) voided`);
+        }
+
+        // Mark the sync log so retries/backfill don't revive the invoice
+        try {
+            const { dbAdapter } = require('../database/db');
+            await dbAdapter.run(
+                `UPDATE zoho_sync_log SET status = ?, error_message = ?, updated_at = NOW()
+                 WHERE shopify_order_id = ? AND status IN ('synced', 'pending', 'retry')`,
+                ['cancelled', 'Order cancelled before dispatch — invoice voided', orderId]
+            );
+        } catch (e) { /* log-only */ }
+    } catch (err) {
+        console.error('❌ Zoho webhook orders/cancelled error:', err.message);
     }
 });
 

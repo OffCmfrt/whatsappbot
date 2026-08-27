@@ -1,4 +1,5 @@
 const { dbAdapter } = require('../database/db');
+const { normName } = require('./zohoItemResolver');
 
 // ============================================================
 // ZOHO TRANSFORMATION ENGINE
@@ -152,6 +153,8 @@ function breakBundleLineItems(lineItems, bundleMap) {
             // This is a bundle — expand into components
             const bundlePrice = parseFloat(item.price || 0);
             const bundleQty = parseInt(item.quantity || 1);
+            const bundleGross = bundlePrice * bundleQty;
+            const bundleDiscount = parseFloat(item.discount || 0);
             const pricePerUnit = bundlePrice / components.reduce((sum, c) => sum + c.component_qty, 0);
 
             for (const comp of components) {
@@ -165,6 +168,9 @@ function breakBundleLineItems(lineItems, bundleMap) {
                     quantity: qty,
                     rate: pricePerUnit,
                     amount: lineTotal,
+                    // Parent bundle discount prorated onto each component so
+                    // invoices AND credit notes carry the same net amounts
+                    discount: bundleGross > 0 ? round2(bundleDiscount * lineTotal / bundleGross) : 0,
                     gst_rate: comp.gst_rate,
                     is_bundle_component: true,
                     parent_bundle_sku: sku,
@@ -189,6 +195,7 @@ function breakBundleLineItems(lineItems, bundleMap) {
                 quantity: parseInt(item.quantity || 1),
                 rate: parseFloat(item.price || 0),
                 amount: parseFloat(item.price || 0) * parseInt(item.quantity || 1),
+                discount: round2(parseFloat(item.discount || 0)),
                 gst_rate: parseFloat(item.tax_rate || 5),
                 is_bundle_component: false
             });
@@ -196,6 +203,48 @@ function breakBundleLineItems(lineItems, bundleMap) {
     }
 
     return { lineItems: result, transformations };
+}
+
+// ============================================================
+// Discount Allocation
+// ============================================================
+
+const round2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+
+/**
+ * Allocate the Shopify order-level discount onto raw line items.
+ * Prefers Shopify's per-line discount_allocations; falls back to
+ * prorating total_discounts / discount_codes by gross line value.
+ * Returns an array aligned with rawLineItems.
+ */
+function allocateOrderDiscounts(shopifyOrder, rawLineItems) {
+    // 1) Per-line allocations delivered by Shopify itself
+    const fromLines = rawLineItems.map(li =>
+        round2((li.discount_allocations || []).reduce((s, a) => s + (parseFloat(a.amount) || 0), 0))
+    );
+    if (fromLines.reduce((a, b) => a + b, 0) > 0) return fromLines;
+
+    // 2) Order-level discount prorated by gross line amount
+    let total = round2(shopifyOrder.total_discounts);
+    if (!total) {
+        total = round2((shopifyOrder.discount_codes || [])
+            .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0));
+    }
+    if (!total) return rawLineItems.map(() => 0);
+
+    const grossOf = (li) => (parseFloat(li.price) || 0) * (parseInt(li.quantity) || 1);
+    const grossTotal = rawLineItems.reduce((s, li) => s + grossOf(li), 0);
+    if (!grossTotal) return rawLineItems.map(() => 0);
+
+    const allocated = rawLineItems.map(li => round2(total * grossOf(li) / grossTotal));
+    // Absorb rounding drift on the largest line so the shares sum to `total`
+    const drift = round2(total - allocated.reduce((a, b) => a + b, 0));
+    if (drift !== 0 && allocated.length > 0) {
+        let idx = 0;
+        allocated.forEach((v, i) => { if (v > allocated[idx]) idx = i; });
+        allocated[idx] = round2(allocated[idx] + drift);
+    }
+    return allocated;
 }
 
 // ============================================================
@@ -253,7 +302,7 @@ function correctTax(lineItems, sellerState, customerState) {
             };
         }
 
-        const taxAmount = item.amount * (rate / 100);
+        const taxAmount = round2((item.amount - (item.discount || 0)) * (rate / 100));
 
         corrections.push({
             sku: item.sku,
@@ -266,7 +315,6 @@ function correctTax(lineItems, sellerState, customerState) {
 
         return { ...item, ...taxBreakdown, tax_amount: taxAmount };
     });
-
     return { lineItems: correctedItems, corrections, taxDecision };
 }
 
@@ -292,9 +340,15 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         quantity: li.quantity,
         price: parseFloat(li.price || 0),
         variant: li.variant_title || '',
+        discount_allocations: li.discount_allocations || [],
         tax_rate: li.tax_lines?.[0]?.rate ? li.tax_lines[0].rate * 100 : null,
         gst_rate: li.tax_lines?.[0]?.rate ? li.tax_lines[0].rate * 100 : 5
     }));
+
+    // Order-level discounts prorated onto each line so Zoho invoices
+    // (and later credit notes) reflect the real discounted amounts
+    const discounts = allocateOrderDiscounts(shopifyOrder, rawLineItems);
+    rawLineItems.forEach((li, i) => { li.discount = discounts[i] || 0; });
 
     // Step 1: Load bundle map and break bundles
     const bundleMap = await loadBundleMap();
@@ -310,7 +364,7 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         item_id: item.sku, // Will be resolved to Zoho item_id at sync time
         quantity: item.quantity,
         rate: item.rate,
-        discount: 0
+        discount: item.discount || 0
     }));
 
     // Customer details
@@ -365,7 +419,13 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         // ignored, so we override explicitly (verified live, order #45923).
         // Legacy Shopify codes for the merged DN+DD UT are normalised to the
         // pre-merger code 'DN' — the only form Zoho Books accepts.
-        place_of_supply: normalizeStateCode(shopifyOrder.shipping_address?.province_code) || stateCodeOf(customerState)
+        // Intra-state guard: for same-state supplies (e.g. Haryana↔Haryana)
+        // the POS is forced to the seller's state code so Books can only
+        // apply CGST+SGST — an empty/foreign POS here is what produced the
+        // erroneous CGST+IGST mix on Haryana orders.
+        place_of_supply: taxDecision.taxType === 'cgst_sgst'
+            ? (stateCodeOf(taxDecision.sellerState) || stateCodeOf(taxDecision.customerState))
+            : (normalizeStateCode(shopifyOrder.shipping_address?.province_code) || stateCodeOf(customerState))
     };
 
     return {
@@ -383,25 +443,198 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
 // Build Credit Note Payload (for returns/RTO)
 // ============================================================
 
-function buildCreditNotePayload(shopifyOrder, returnItems, returnType = 'return', extraNotes = '') {
-    const lineItems = returnItems.map(item => ({
-        name: item.title || item.sku || 'Returned Item',
-        description: returnType === 'rto' ? 'RTO Return' : 'Customer Return',
-        quantity: item.quantity || 1,
-        rate: parseFloat(item.price || 0),
-        // GST 5% split on the credited amount (intra-state default)
-        cgst_rate: 2.5,
-        sgst_rate: 2.5,
-        tax_percentage: 5
-    }));
+/**
+ * Reference convention used for Zoho-side duplicate prevention:
+ * one order → one credit note per type. Backfill and live flows
+ * both check this before creating.
+ */
+function creditNoteReference(orderId, returnType, refundId = '') {
+    const o = String(orderId || '').replace(/^#/, '');
+    if (returnType === 'rto') return `RTO-${o}`;
+    if (returnType === 'exchange') return `EXCH-${o}`;
+    return refundId ? `RET-${o}-${refundId}` : `RET-${o}`;
+}
 
+function creditNoteDescription(returnType) {
+    if (returnType === 'rto') return 'RTO Return';
+    if (returnType === 'exchange') return 'Exchange Return';
+    return 'Customer Return';
+}
+
+/**
+ * Map the GST actually applied on an original invoice line to the credit
+ * note line — same basis (CGST+SGST vs IGST), no hardcoded split.
+ */
+function taxFromInvoiceLine(line) {
+    const out = {};
+    for (const t of line.taxes || []) {
+        const name = String(t.tax_name || '').toUpperCase();
+        const rate = parseFloat(t.rate || t.tax_percentage || 0);
+        if (!rate) continue;
+        if (name.includes('IGST')) out.igst_rate = round2((out.igst_rate || 0) + rate);
+        else if (name.includes('CGST')) out.cgst_rate = round2((out.cgst_rate || 0) + rate);
+        else if (name.includes('SGST')) out.sgst_rate = round2((out.sgst_rate || 0) + rate);
+    }
+    if (!out.igst_rate && !out.cgst_rate && !out.sgst_rate) {
+        // Flat percentage without named components — split intra-state style
+        const flat = parseFloat(line.tax_percentage || 0);
+        if (flat > 0) {
+            out.cgst_rate = round2(flat / 2);
+            out.sgst_rate = round2(flat / 2);
+        }
+    }
+    out.tax_percentage = round2((out.cgst_rate || 0) + (out.sgst_rate || 0) + (out.igst_rate || 0));
+    return out;
+}
+
+function creditLineFromInvoiceLine(line, qty, returnType) {
+    const invoiceQty = parseFloat(line.quantity || 1) || 1;
+
+    // Per-unit discount the original invoice gave on this line, so the
+    // credit reverses the exact same proportion (req: original discount)
+    const lineDiscountTotal = (line.discounts || [])
+        .reduce((s, d) => s + (parseFloat(d.discount_amount ?? d.amount) || 0), 0)
+        + (parseFloat(line.discount_amount || 0) || 0);
+
+    let rate = parseFloat(line.rate || 0);
+    let discount = round2((lineDiscountTotal / invoiceQty) * qty);
+
+    // No explicit discount fields but item_total shows a lower net — fall
+    // back to the net unit price so credited amount still matches invoice
+    const itemTotal = parseFloat(line.item_total);
+    if (!lineDiscountTotal && !isNaN(itemTotal) && itemTotal < rate * invoiceQty - 0.01 && invoiceQty > 0) {
+        rate = round2(itemTotal / invoiceQty);
+        discount = 0;
+    }
+
+    const creditLine = {
+        name: line.name,
+        description: creditNoteDescription(returnType),
+        quantity: qty,
+        rate,
+        discount,
+        ...taxFromInvoiceLine(line)
+    };
+    // item_id linkage is what makes Books put the stock back on hand
+    if (line.item_id) creditLine.item_id = line.item_id;
+    return creditLine;
+}
+
+/**
+ * Build a credit note payload that MIRRORS the original Zoho invoice:
+ * same rate, same discount proportion, same tax treatment (CGST+SGST vs
+ * IGST, tax-inclusive/exclusive), and item-linked lines so stock returns.
+ * Returned bundles are expanded into size-wise singles first.
+ */
+async function buildCreditNoteFromInvoice({
+    shopifyOrder, returnItems, returnType, originalInvoice,
+    extraNotes = '', referenceNumber = '', fallbackTaxDecision = null
+}) {
+    const orderId = String(shopifyOrder?.order_number || shopifyOrder?.id || '');
+
+    // 1) Expand returned bundles into their individual components
+    const bundleMap = await loadBundleMap();
+    const rawReturned = (returnItems || []).map(it => ({
+        title: it.title || '',
+        sku: it.sku || '',
+        quantity: parseInt(it.quantity || 1) || 1,
+        price: parseFloat(it.price || 0),
+        variant: it.variant || ''
+    }));
+    const { lineItems: expanded } = breakBundleLineItems(rawReturned, bundleMap);
+
+    // 2) Match each returned piece to an original invoice line
+    const invoiceLines = (originalInvoice?.line_items || []).map(l => ({ ...l, _credited: 0 }));
+    const findLine = (ret) => {
+        const keys = [normName(ret.sku), normName(ret.name)].filter(Boolean);
+        const available = invoiceLines.filter(l => l._credited < (l.quantity || 0));
+        for (const key of keys) {
+            const hit = available.find(l => normName(l.sku || '') === key || normName(l.name || '') === key);
+            if (hit) return hit;
+        }
+        // Loose containment fallback ("HENLEY 001 (G) - M" vs catalogue spacing)
+        for (const key of keys) {
+            const hit = available.find(l => key && (normName(l.name || '').includes(key) || key.includes(normName(l.name || ''))));
+            if (hit) return hit;
+        }
+        return null;
+    };
+
+    const lineItems = [];
+    for (const ret of expanded) {
+        const line = findLine(ret);
+        if (!line) {
+            // No matching invoice line — credit at the returned price with a
+            // tax split derived from the order's states (never hardcoded)
+            const gst = parseFloat(ret.gst_rate || 5);
+            const fallback = {
+                name: ret.name || ret.sku || 'Returned Item',
+                description: creditNoteDescription(returnType),
+                quantity: parseInt(ret.quantity || 1) || 1,
+                rate: round2(ret.rate ?? ret.price ?? 0),
+                discount: round2(ret.discount || 0)
+            };
+            if (fallbackTaxDecision?.taxType === 'igst') {
+                fallback.igst_rate = gst;
+            } else {
+                fallback.cgst_rate = round2(gst / 2);
+                fallback.sgst_rate = round2(gst / 2);
+            }
+            fallback.tax_percentage = gst;
+            lineItems.push(fallback);
+            continue;
+        }
+        const qty = Math.min(parseInt(ret.quantity || 1) || 1, (line.quantity || 0) - line._credited);
+        if (qty <= 0) continue;
+        line._credited += qty;
+        lineItems.push(creditLineFromInvoiceLine(line, qty, returnType));
+    }
+
+    return {
+        customer_id: null, // Resolved at sync time
+        customer_name: `${shopifyOrder?.customer?.first_name || ''} ${shopifyOrder?.customer?.last_name || ''}`.trim(),
+        date: new Date().toISOString().split('T')[0],
+        line_items: lineItems,
+        notes: `${returnType.toUpperCase()} — Shopify Order #${orderId}${extraNotes ? ' | ' + extraNotes : ''}`,
+        // Credit note must use the SAME tax basis as the invoice it reverses
+        reference_number: referenceNumber || creditNoteReference(orderId, returnType),
+        is_inclusive_tax: !!originalInvoice?.is_inclusive_tax,
+        return_type: returnType
+    };
+}
+
+/**
+ * Legacy fallback payload (no original invoice available). Tax split is
+ * derived from the caller's tax decision instead of hardcoded intra-state.
+ */
+function buildCreditNotePayload(shopifyOrder, returnItems, returnType = 'return', extraNotes = '', taxDecision = null) {
+    const lineItems = returnItems.map(item => {
+        const gst = parseFloat(item.tax_rate || item.gst_rate || 5);
+        const line = {
+            name: item.title || item.sku || 'Returned Item',
+            description: creditNoteDescription(returnType),
+            quantity: item.quantity || 1,
+            rate: parseFloat(item.price || 0),
+            discount: round2(parseFloat(item.discount || 0))
+        };
+        if (taxDecision?.taxType === 'igst') {
+            line.igst_rate = gst;
+        } else {
+            line.cgst_rate = round2(gst / 2);
+            line.sgst_rate = round2(gst / 2);
+        }
+        line.tax_percentage = gst;
+        return line;
+    });
+
+    const orderId = String(shopifyOrder.order_number || shopifyOrder.id || '');
     return {
         customer_id: null, // Resolved at sync time
         customer_name: `${shopifyOrder.customer?.first_name || ''} ${shopifyOrder.customer?.last_name || ''}`.trim(),
         date: new Date().toISOString().split('T')[0],
         line_items: lineItems,
-        notes: `${returnType.toUpperCase()} — Shopify Order #${shopifyOrder.order_number || shopifyOrder.id}${extraNotes ? ' | ' + extraNotes : ''}`,
-        reference_number: shopifyOrder.order_number?.toString() || '',
+        notes: `${returnType.toUpperCase()} — Shopify Order #${orderId}${extraNotes ? ' | ' + extraNotes : ''}`,
+        reference_number: creditNoteReference(orderId, returnType),
         is_inclusive_tax: false,
         return_type: returnType
     };
@@ -453,9 +686,13 @@ module.exports = {
     // Payloads
     buildZohoInvoicePayload,
     buildCreditNotePayload,
+    buildCreditNoteFromInvoice,
+    creditNoteReference,
     buildCodPaymentPayload,
+    allocateOrderDiscounts,
 
     // Constants
     INDIAN_STATES,
-    STATE_ALIASES
+    STATE_ALIASES,
+    stateCodeOf
 };

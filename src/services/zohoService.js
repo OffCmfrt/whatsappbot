@@ -213,6 +213,30 @@ async function getCreditNote(creditNoteId) {
     return result.creditnote;
 }
 
+/**
+ * Search credit notes. Books' list API does not reliably filter by
+ * reference_number server-side, so fetch pages and filter client-side.
+ * Used for Zoho-side duplicate prevention (one order → one credit note).
+ */
+async function searchCreditNotes({ reference_number, page_limit = 5 } = {}) {
+    const all = [];
+    for (let page = 1; page <= page_limit; page++) {
+        const result = await zohoRequest('get', `${BOOKS_BASE()}/creditnotes`, null, { page, per_page: 200 });
+        const notes = result.creditnotes || [];
+        all.push(...notes);
+        if (notes.length < 200) break;
+    }
+    if (!reference_number) return all;
+    const ref = String(reference_number).trim();
+    return all.filter(cn => String(cn.reference_number || '').trim() === ref);
+}
+
+async function updateInvoice(invoiceId, invoicePayload) {
+    const url = `${BOOKS_BASE()}/invoices/${invoiceId}`;
+    const result = await zohoRequest('put', url, invoicePayload);
+    return result.invoice;
+}
+
 // ============================================================
 // Zoho Books — Payments (COD reconciliation)
 // ============================================================
@@ -429,6 +453,12 @@ async function initializeZohoTables() {
             )
         `);
 
+        // Exchange replacements log their zero-value invoice on the same
+        // return row as the credit note (added after initial rollout)
+        await pool.query(`
+            ALTER TABLE zoho_returns ADD COLUMN IF NOT EXISTS zoho_exchange_invoice_id TEXT
+        `).catch(() => { /* older adapters without ALTER support — table recreated below on fresh installs */ });
+
         await pool.query(`
             CREATE TABLE IF NOT EXISTS zoho_cod_payments (
                 id SERIAL PRIMARY KEY,
@@ -493,6 +523,10 @@ module.exports = {
     // Credit Notes
     createCreditNote,
     getCreditNote,
+    searchCreditNotes,
+
+    // Invoice updates
+    updateInvoice,
 
     // Payments
     recordPayment,
