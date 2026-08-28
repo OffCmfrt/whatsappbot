@@ -5466,6 +5466,29 @@ router.get('/ai/quality-metrics', verifyToken, async (req, res) => {
 //   final_available = on_hand + rto_incoming + return_incoming
 //                     + exchange_incoming − exchange_outgoing
 // ==========================================
+
+// Fetch open return/exchange requests from the external returns server —
+// Shopify portal submissions live there, not in the local returns/exchanges
+// tables. Graceful: returns { connected: false } when unconfigured or down.
+async function fetchReturnsServerPipeline(windowDays) {
+    const baseUrl = process.env.RETURNS_SERVER_URL;
+    const token = process.env.WHATSAPP_INTERNAL_TOKEN;
+    if (!baseUrl) return { connected: false, reason: 'RETURNS_SERVER_URL not configured', requests: [] };
+    try {
+        const axios = require('axios');
+        const res = await axios.get(`${baseUrl.replace(/\/$/, '')}/api/internal/inventory-open-requests`, {
+            params: { window: windowDays },
+            headers: { 'x-internal-token': token || '' },
+            timeout: 15000
+        });
+        if (!res.data?.success) return { connected: false, reason: res.data?.error || 'unexpected response', requests: [] };
+        return { connected: true, requests: Array.isArray(res.data.requests) ? res.data.requests : [] };
+    } catch (err) {
+        console.warn(`⚠️ Returns server pipeline fetch failed: ${err.message}`);
+        return { connected: false, reason: err.message, requests: [] };
+    }
+}
+
 router.get('/inventory', verifyToken, async (req, res) => {
     try {
         const windowDays = Math.max(0, Math.min(parseInt(req.query.window, 10) || 90, 730));
@@ -5487,7 +5510,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
         // A) windowed history → delivered + RTO buckets
         // B) current in-circulation shipments (never window-trimmed — they are
         //    still out with couriers regardless of age)
-        const [historyRows, circulationRows, returnRows, exchangeRows] = await Promise.all([
+        const [historyRows, circulationRows, returnRows, exchangeRows, rsPipeline] = await Promise.all([
             dbAdapter.query(`
                 SELECT s.items_json, s.status AS shopper_status, o.status AS order_status, o.awb
                 FROM store_shoppers s
@@ -5506,7 +5529,8 @@ router.get('/inventory', verifyToken, async (req, res) => {
                   AND COALESCE(o.status, '') NOT IN ('delivered','rto','cancelled','failed')
             `),
             dbAdapter.query(`SELECT items FROM returns WHERE status IN ('pending_approval','initiated','approved','pickup_scheduled') ${windowSql}`),
-            dbAdapter.query(`SELECT old_items, new_items FROM exchanges WHERE status IN ('pending_approval','initiated','pickup_scheduled') ${windowSql}`)
+            dbAdapter.query(`SELECT old_items, new_items FROM exchanges WHERE status IN ('pending_approval','initiated','pickup_scheduled') ${windowSql}`),
+            fetchReturnsServerPipeline(windowDays)
         ]);
 
         // ---------- Variant resolution indexes ----------
@@ -5618,6 +5642,36 @@ router.get('/inventory', verifyToken, async (req, res) => {
             addItemUnits(parseItems(row.new_items), 'exchange_outgoing');
         }
 
+        // 4) External returns server — Shopify portal return/exchange requests
+        //    (separate system; no overlap with the local returns/exchanges tables)
+        const rsUnits = { return_incoming: 0, exchange_incoming: 0, exchange_outgoing: 0 };
+        const rsQty = (items) => items.reduce((acc, i) => acc + Math.max(1, parseInt(i?.quantity, 10) || 1), 0);
+        for (const request of rsPipeline.requests) {
+            const items = Array.isArray(request.items) ? request.items : [];
+            if (items.length === 0) continue;
+            if (request.type === 'return') {
+                rsUnits.return_incoming += rsQty(items);
+                addItemUnits(items, 'return_incoming');
+            } else if (request.type === 'exchange') {
+                rsUnits.exchange_incoming += rsQty(items);
+                addItemUnits(items, 'exchange_incoming');
+                // Replacements ship via carrier (not a Shopify order), so Shopify
+                // on-hand is NOT decremented for them — reserve them here.
+                const replacements = items
+                    .filter(i => i && (i.replacementProductTitle || i.replacementSku || i.replacementVariant))
+                    .map(i => ({
+                        title: i.replacementProductTitle || i.name || i.title || '',
+                        sku: i.replacementSku || '',
+                        variant: i.replacementVariant || '',
+                        quantity: i.quantity
+                    }));
+                if (replacements.length) {
+                    rsUnits.exchange_outgoing += rsQty(replacements);
+                    addItemUnits(replacements, 'exchange_outgoing');
+                }
+            }
+        }
+
         // ---------- Assemble product/variant response ----------
         const money = (n) => Math.round((Number(n) || 0) * 100) / 100;
         let products = catalog.map(p => {
@@ -5698,7 +5752,13 @@ router.get('/inventory', verifyToken, async (req, res) => {
             generated_at: new Date().toISOString(),
             summary,
             products,
-            untracked: untrackedList
+            untracked: untrackedList,
+            returns_server: {
+                connected: rsPipeline.connected,
+                reason: rsPipeline.connected ? null : (rsPipeline.reason || null),
+                open_requests: rsPipeline.requests.length,
+                units: rsUnits
+            }
         };
         setCache(cacheKey, response, 'stats', 3 * 60 * 1000);
         res.json(response);

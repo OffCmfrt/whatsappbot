@@ -6996,8 +6996,16 @@ function renderInventory() {
     renderInventorySummary(s);
     const generatedAt = new Date(invData.generated_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
     const windowLabel = invData.window_days > 0 ? `last ${invData.window_days} days` : 'all time';
+    let rsLine = '';
+    const rs = invData.returns_server;
+    if (rs && rs.connected) {
+        const u = rs.units || {};
+        rsLine = ` · Portal returns server: ${rs.open_requests} open requests (${u.return_incoming || 0} returns · ${u.exchange_incoming || 0} exch-in · ${u.exchange_outgoing || 0} exch-out)`;
+    } else if (rs) {
+        rsLine = ` · Portal returns server: offline (${rs.reason || 'unreachable'})`;
+    }
     document.getElementById('invStatusLine').textContent =
-        `${invData.cached ? 'Cached snapshot' : 'Live snapshot'} · generated ${generatedAt} IST · RTO / return / exchange pipeline: ${windowLabel}`;
+        `${invData.cached ? 'Cached snapshot' : 'Live snapshot'} · generated ${generatedAt} IST · RTO / return / exchange pipeline: ${windowLabel}${rsLine}`;
     renderInventoryTable();
     renderInventoryUntracked();
 }
