@@ -1,0 +1,1541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shopper Management | OFFCOMFRT</title>
+    <!-- Google Fonts: Outfit, Inter, Archivo Narrow -->
+        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Inter:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1788000000">
+</head>
+<body class="dark-theme">
+    <!-- Login View -->
+    <div id="loginView" style="display: none; height: 100vh; align-items: center; justify-content: center; background: #0a0a0a;">
+        <div style="background: rgba(20, 20, 20, 0.8); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; padding: 48px; width: 100%; max-width: 440px; text-align: center; box-shadow: 0 24px 40px rgba(0, 0, 0, 0.5);">
+            <img src="/shoppers/assets/logo.svg" alt="OFFCOMFRT" style="height:48px; margin-bottom:16px;">
+            <h1 style="font-family: 'Outfit', sans-serif; font-size: 28px; letter-spacing: 4px; margin: 0 0 8px 0; text-transform: uppercase;">OFFCOMFRT</h1>
+            <span style="font-size: 11px; font-weight: 600; letter-spacing: 2px; padding: 4px 10px; background: #fff; color: #000; border-radius: 20px; text-transform: uppercase; display: inline-block;">SHOPPER HUB</span>
+            
+            <form id="shopperLoginForm" style="margin-top: 40px; text-align: left;">
+                <label style="display: block; font-size: 12px; font-weight: 500; color: rgba(255, 255, 255, 0.6); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Operator ID <span style="opacity:0.5; text-transform:none; letter-spacing:0;">(leave blank for admin)</span></label>
+                <input type="text" id="hubUsername" placeholder="Enter Operator ID" autocomplete="username" style="width: 100%; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.12); color: #fff; padding: 16px; border-radius: 8px; outline: none; box-sizing: border-box; margin-bottom: 16px; font-family: 'Inter', sans-serif; font-size: 16px;">
+                <label style="display: block; font-size: 12px; font-weight: 500; color: rgba(255, 255, 255, 0.6); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Password / Access Code</label>
+                <input type="password" id="hubPassword" placeholder="Enter Secure Code" required autofocus autocomplete="current-password" style="width: 100%; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.12); color: #fff; padding: 16px; border-radius: 8px; outline: none; box-sizing: border-box; margin-bottom: 16px; font-family: 'Inter', sans-serif; font-size: 16px;">
+                <div id="errorMessage" style="color: #ff4757; font-size: 13px; font-weight: 500; text-align: center; margin-bottom: 15px; display: none;"></div>
+                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 16px; font-weight: 600; letter-spacing: 1.5px; border-radius: 8px; background: #fff; color: #000;">
+                    <span>AUTHENTICATE</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Dashboard View -->
+    <div id="dashboardView" style="display: none;">
+        <!-- Premium Navigation -->
+        <nav class="premium-nav">
+            <div class="nav-brand">
+                <img src="/shoppers/assets/logo.svg" alt="OFFCOMFRT" style="height:32px;">
+                <h1>OFFCOMFRT</h1>
+                <span class="brand-subtitle">SHOPPER HUB</span>
+            </div>
+            <div class="nav-actions">
+                <button id="inboxBtn" class="btn btn-outline" style="border-color: #25d366; color: #25d366;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    Inbox
+                    <span id="inboxNavBadge" style="background: #25d366; color: #000; font-size: 0.65rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 10px; margin-left: 0.3rem; display: none;">0</span>
+                </button>
+                <button id="followUpBtn" class="btn btn-outline" style="border-color: #ffa502; color: #ffa502;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    Follow-Up
+                </button>
+                <button id="multiOrdersBtn" class="btn btn-outline" style="border-color: #ff4757; color: #ff4757;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                    Multi Orders
+                </button>
+                <button id="shippedOrdersBtn" class="btn btn-outline" style="border-color: #53bdeb; color: #53bdeb;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
+                    </svg>
+                    Shipped
+                </button>
+                <button id="analyticsBtn" class="btn btn-outline">Analytics</button>
+                <button id="teamBtn" class="btn btn-outline" style="display: none; border-color: #b18cff; color: #b18cff;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                    Team
+                </button>
+                <span id="hubUserBadge" style="display: none; font-size: 0.7rem; font-weight: 600; letter-spacing: 1px; padding: 6px 12px; border-radius: 20px; background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7); border: 1px solid rgba(255,255,255,0.12); text-transform: uppercase;"></span>
+                <button id="exportBtn" class="btn btn-primary">
+                    <img src="/shoppers/assets/export-icon.svg" width="18" height="18" alt="Export Icon" style="vertical-align: middle; margin-right: 6px;" />
+                    Export
+                </button>
+                <button id="hubLogoutBtn" class="btn btn-outline" style="border-color: #ff4757; color: #ff4757;" title="Log out of Shoppers Hub">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+                    </svg>
+                    Logout
+                </button>
+            </div>
+        </nav>
+        
+        <!-- Main Content Area -->
+        <main class="dashboard-main">
+            <header class="page-header">
+                <div class="header-content">
+                    <h2>Shopper Confirmations</h2>
+                    <p>Monitor, track, and manage all automated WhatsApp confirmations in real-time.</p>
+                </div>
+
+            </header>
+            
+            <!-- Bulk Actions Bar (Hidden by default) -->
+            <div class="bulk-actions-bar" id="bulkActionsBar">
+                <div class="bulk-actions-left">
+                    <span class="selected-count"><span id="selectedCount">0</span> selected</span>
+                    <button class="bulk-btn bulk-btn-select-all" id="selectAllBtn" onclick="selectAllVisible()">Select All Visible</button>
+                    <button class="bulk-btn bulk-btn-select-all" id="selectAllMatchingBtn" onclick="selectAllMatching()">Select All Matching Filters</button>
+                </div>
+                <div class="bulk-actions-right">
+                    <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('confirmed')">Mark Confirmed</button>
+                    <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('pending')">Mark Pending</button>
+                    <button class="bulk-btn bulk-btn-status" onclick="bulkUpdateStatus('cancelled')">Mark Cancelled</button>
+                    <button class="bulk-btn bulk-btn-shopify-cancel" onclick="openShopifyCancelModal()">✨ Cancel in Shopify &amp; Refund</button>
+                    <button class="bulk-btn bulk-btn-status" style="border-color: rgba(37,211,102,0.5); color: #25d366;" onclick="openBulkShipModal()">Ship Selected</button>
+                    <button class="bulk-btn bulk-btn-delete" onclick="bulkDelete()">Delete Selected</button>
+                    <button class="bulk-btn-close" onclick="clearSelection()">&times;</button>
+                </div>
+            </div>
+            
+            <!-- Segment & Filter Bar -->
+            <div class="control-bar">
+                <!-- Row 1: Status Tabs -->
+                <div class="control-row">
+                    <div class="filter-group">
+                        <div class="filter-section-title">Status</div>
+                        <div class="segment-tabs">
+                            <button class="tab active" data-filter="all">All <span class="tab-count" id="countAll"></span></button>
+                            <button class="tab" data-filter="pending">Pending <span class="tab-count" id="countPending"></span></button>
+                            <button class="tab" data-filter="confirmed">Confirmed <span class="tab-count" id="countConfirmed"></span></button>
+                            <button class="tab" data-filter="shipped">Shipped <span class="tab-count" id="countShipped"></span></button>
+                            <button class="tab" data-filter="cancelled">Cancelled <span class="tab-count" id="countCancelled"></span></button>
+                            <button class="tab" data-filter="edit_details">Edits <span class="tab-count" id="countEdits"></span></button>
+                        </div>
+                    </div>
+                    <button class="clear-filters-btn" id="clearFiltersBtn" style="display: none;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        Clear Filters
+                    </button>
+                    <div class="view-toggle-wrapper">
+                        <button class="view-toggle-btn active" id="viewRowsBtn" title="List view">☰ List</button>
+                        <button class="view-toggle-btn" id="viewCardsBtn" title="Card view">▦ Cards</button>
+                    </div>
+                </div>
+                
+                <!-- Row 2: Search + Date Filters -->
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <div class="filter-section-title">Search</div>
+                        <div class="search-box">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                            <input type="text" id="searchInput" placeholder="Search by ID, Name, Phone, Email...">
+                        </div>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <div class="filter-section-title">Date Range</div>
+                        <div class="date-filter-container">
+                            <div class="date-filter"><input type="date" id="startDate"></div>
+                            <span class="date-separator">to</span>
+                            <div class="date-filter"><input type="date" id="endDate"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <div class="filter-section-title">Quick Select</div>
+                        <div class="quick-date-filters">
+                            <button class="quick-date-btn" data-range="today">Today</button>
+                            <button class="quick-date-btn" data-range="yesterday">Yesterday</button>
+                            <button class="quick-date-btn" data-range="last7">Last 7 Days</button>
+                            <button class="quick-date-btn" data-range="last30">Last 30 Days</button>
+                            <button class="quick-date-btn" data-range="thisMonth">This Month</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Row 3: Advanced Filters -->
+                <div class="control-row">
+                    <div class="filter-group">
+                        <div class="filter-section-title">Advanced Filters</div>
+                        <div class="advanced-filters">
+                            <div class="order-id-filter">
+                                <input type="text" id="orderIdFrom" class="order-id-input" placeholder="From Order #">
+                                <span class="order-id-separator">to</span>
+                                <input type="text" id="orderIdTo" class="order-id-input" placeholder="To Order #">
+                                <button class="btn-apply-small" id="applyOrderIdFilter">Apply</button>
+                            </div>
+                            
+                            <div class="filter-dropdown">
+                                <select id="paymentMethodFilter">
+                                    <option value="">All Payment Methods</option>
+                                    <option value="COD">Cash on Delivery</option>
+                                    <option value="Prepaid">Prepaid</option>
+                                </select>
+                            </div>
+                            
+                            <div class="filter-dropdown">
+                                <select id="deliveryTypeFilter">
+                                    <option value="">All Delivery Types</option>
+                                    <option value="Standard">Standard</option>
+                                    <option value="Express">Express</option>
+                                    <option value="Same Day">Same Day</option>
+                                </select>
+                            </div>
+                            
+                            <div class="filter-dropdown">
+                                <select id="sortByFilter">
+                                    <option value="newest">Newest First</option>
+                                    <option value="oldest">Oldest First</option>
+                                    <option value="amount_high">Amount: High to Low</option>
+                                    <option value="amount_low">Amount: Low to High</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Shoppers Grid -->
+            <div id="shoppersGrid" class="shoppers-grid">
+                <div class="table-loading"><div class="spinner"></div><span>Fetching data...</span></div>
+            </div>
+            
+            <!-- Pagination -->
+            <div class="pagination">
+                <div class="page-info" id="pageInfo">Showing 0-0 of 0</div>
+                <div class="page-controls">
+                    <button class="btn btn-primary" id="showMoreBtn" style="display: none;">SHOW MORE</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Edit Modal -->
+    <div id="editModal">
+        <div class="modal-content">
+            <h3>Edit Shopper Details</h3>
+            <div id="editCustomerMessage" class="customer-message-box" style="display: none;">
+                <div class="msg-header">
+                    <span>Customer Message</span>
+                    <span id="editMsgTime" style="color: #888; font-size: 0.7rem;"></span>
+                </div>
+                <div class="msg-content" id="editMsgContent"></div>
+            </div>
+            <form id="editForm">
+                <input type="hidden" id="editShopperId">
+                <input type="hidden" id="editOrderId">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="editName" required>
+                </div>
+                <div class="form-group">
+                    <label>Phone</label>
+                    <input type="text" id="editPhone" required>
+                </div>
+                <div class="form-group">
+                    <div class="addr-label-row">
+                        <label>Shipping Address</label>
+                        <button type="button" class="addr-sync-btn" onclick="pullShopifyAddress()" title="Load the current shipping address from the Shopify order">⟳ Pull from Shopify</button>
+                    </div>
+                    <textarea id="editAddress" placeholder="Flat / house no., building, street, area"></textarea>
+                    <div class="addr-grid">
+                        <div>
+                            <label>City</label>
+                            <input type="text" id="editCity" placeholder="City">
+                        </div>
+                        <div>
+                            <label>State</label>
+                            <input type="text" id="editState" placeholder="State">
+                        </div>
+                        <div>
+                            <label>Pincode</label>
+                            <input type="text" id="editZip" placeholder="Pincode" inputmode="numeric" maxlength="10">
+                        </div>
+                    </div>
+                    <div id="editAddrSyncStatus" class="addr-sync-status"></div>
+                </div>
+                <div id="productEditor">
+                    <div id="editOrderEditor"></div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-outline" id="cancelEdit">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Details</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Live Chat Modal -->
+    <div id="chatModal">
+        <div class="chat-container">
+            <div class="chat-sidebar">
+                <h3>Customer Info</h3>
+                <div class="chat-customer-info" id="chatCustomerInfo">
+                    <div class="info-row">
+                        <span class="info-label">Name:</span>
+                        <span class="info-value" id="chatCustomerName">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Phone:</span>
+                        <span class="info-value" id="chatCustomerPhone">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Order:</span>
+                        <span class="info-value" id="chatCustomerOrder">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Status:</span>
+                        <span class="info-value" id="chatCustomerStatus">-</span>
+                    </div>
+                </div>
+                <button class="btn btn-outline" id="viewOrderBtn" style="width: 100%; margin-bottom: 0.5rem;">View Order Details</button>
+                <button class="btn btn-primary" id="markResolvedBtn" style="width: 100%;">Mark as Resolved</button>
+            </div>
+            <div class="chat-main">
+                <div class="chat-header">
+                    <h4 id="chatHeaderTitle">Live Chat</h4>
+                    <button class="chat-close" id="closeChat">&times;</button>
+                </div>
+                <div class="chat-messages" id="chatMessages">
+                    <div class="chat-loading">Loading conversation...</div>
+                </div>
+                <div class="chat-input-area">
+                    <textarea id="chatInput" placeholder="Type your message..."></textarea>
+                    <button class="btn btn-chat" id="sendChatBtn">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Full Screen Analytics View -->
+    <div id="analyticsView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <!-- Analytics Header -->
+        <div class="analytics-header">
+            <div class="analytics-header-left">
+                <button id="backToShoppers" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back to Shoppers
+                </button>
+                <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Analytics Dashboard</h2>
+            </div>
+            <div class="analytics-header-right">
+                <div class="analytics-filter-section">
+                    <!-- Quick Preset Buttons -->
+                    <div class="analytics-quick-filters">
+                        <button class="quick-filter-btn" data-range="today">Today</button>
+                        <button class="quick-filter-btn" data-range="yesterday">Yesterday</button>
+                        <button class="quick-filter-btn active" data-range="last7">Last 7 Days</button>
+                        <button class="quick-filter-btn" data-range="last30">Last 30 Days</button>
+                        <button class="quick-filter-btn" data-range="thisMonth">This Month</button>
+                    </div>
+                    <!-- Custom Date Range -->
+                    <div class="analytics-date-filter">
+                        <span class="filter-label">Custom:</span>
+                        <input type="date" id="analyticsStartDate">
+                        <span style="color: #666;">to</span>
+                        <input type="date" id="analyticsEndDate">
+                        <button id="applyAnalyticsDate" class="btn btn-primary">Apply</button>
+                    </div>
+                </div>
+                <button id="exportAnalyticsBtn" class="btn btn-success">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Export to Excel
+                </button>
+            </div>
+        </div>
+
+        <!-- Analytics Content -->
+        <div class="analytics-content">
+            <!-- Summary Stats Row -->
+            <div class="analytics-stats-row">
+                <div class="analytics-stat-card total">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                            <circle cx="9" cy="7" r="4"/>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsTotalOrders">0</span>
+                        <span class="stat-label">Total Orders</span>
+                    </div>
+                </div>
+                <div class="analytics-stat-card confirmed">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsConfirmed">0</span>
+                        <span class="stat-label">Confirmed</span>
+                        <span class="stat-percent" id="analyticsConfirmedPct">0%</span>
+                    </div>
+                </div>
+                <div class="analytics-stat-card shipped">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsShipped">0</span>
+                        <span class="stat-label">Shipped</span>
+                        <span class="stat-percent" id="analyticsShippedPct">0%</span>
+                    </div>
+                </div>
+                <div class="analytics-stat-card pending">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsPending">0</span>
+                        <span class="stat-label">Pending</span>
+                        <span class="stat-percent" id="analyticsPendingPct">0%</span>
+                    </div>
+                </div>
+                <div class="analytics-stat-card cancelled">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsCancelled">0</span>
+                        <span class="stat-label">Cancelled</span>
+                        <span class="stat-percent" id="analyticsCancelledPct">0%</span>
+                    </div>
+                </div>
+                <div class="analytics-stat-card edits">
+                    <div class="stat-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-number" id="analyticsEdits">0</span>
+                        <span class="stat-label">Edit Requests</span>
+                        <span class="stat-percent" id="analyticsEditsPct">0%</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="analytics-charts-grid">
+                <!-- Circular Charts -->
+                <div class="analytics-card">
+                    <h3 class="analytics-card-title">Order Status Distribution</h3>
+                    <div class="circular-charts-container">
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress confirmed" id="circleConfirmed" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartConfirmedValue">0%</div>
+                            <div class="circular-chart-label">Confirmed</div>
+                        </div>
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress shipped" id="circleShipped" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartShippedValue">0%</div>
+                            <div class="circular-chart-label">Shipped</div>
+                        </div>
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress pending" id="circlePending" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartPendingValue">0%</div>
+                            <div class="circular-chart-label">Pending</div>
+                        </div>
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress cancelled" id="circleCancelled" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartCancelledValue">0%</div>
+                            <div class="circular-chart-label">Cancelled</div>
+                        </div>
+                        <div class="circular-chart-wrapper">
+                            <svg class="circular-chart" viewBox="0 0 100 100">
+                                <circle class="circular-chart-bg" cx="50" cy="50" r="45"/>
+                                <circle class="circular-chart-progress edits" id="circleEdits" cx="50" cy="50" r="45"/>
+                            </svg>
+                            <div class="circular-chart-value" id="chartEditsValue">0%</div>
+                            <div class="circular-chart-label">Edits</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Daily Breakdown Bar Chart -->
+                <div class="analytics-card wide">
+                    <h3 class="analytics-card-title">Daily Order Breakdown</h3>
+                    <div class="bar-chart-container" id="dailyBarChart">
+                        <!-- Bars will be rendered here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trend Chart -->
+            <div class="analytics-card">
+                <h3 class="analytics-card-title">Order Trend Over Time</h3>
+                <div class="trend-chart-container">
+                    <svg id="trendChart" viewBox="0 0 800 200" preserveAspectRatio="none">
+                        <!-- Trend line will be rendered here -->
+                    </svg>
+                    <div class="trend-chart-labels" id="trendLabels">
+                        <!-- Labels will be rendered here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Daily Statistics Table -->
+            <div class="analytics-card">
+                <h3 class="analytics-card-title">Daily Statistics</h3>
+                <div class="analytics-table-container">
+                    <table class="analytics-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Total Orders</th>
+                                <th>Confirmed</th>
+                                <th>Shipped</th>
+                                <th>Pending</th>
+                                <th>Cancelled</th>
+                                <th>Edit Requests</th>
+                                <th>Response Rate</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="analyticsTableBody">
+                            <!-- Table rows will be rendered here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Follow-Up View -->
+    <div id="followUpView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <div class="follow-up-header">
+            <div class="follow-up-header-left">
+                <button id="backToShoppersFromFollowUp" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back to Shoppers
+                </button>
+                <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Follow-Up Campaigns</h2>
+            </div>
+            <div class="follow-up-header-right">
+                <button id="followUpAnalyticsBtn" class="btn btn-outline" style="border-color: #53bdeb; color: #53bdeb;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M3 3v18h18"/>
+                        <path d="m19 9-5 5-4-4-3 3"/>
+                    </svg>
+                    Analytics
+                </button>
+                <button id="createCampaignBtn" class="btn btn-primary" style="background: #ffa502; color: #000; border-color: #ffa502;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <line x1="12" y1="5" x2="12" y2="19"/>
+                        <line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    Create Campaign
+                </button>
+            </div>
+        </div>
+
+        <div class="follow-up-content">
+            <!-- Campaigns Grid -->
+            <div id="campaignsGrid" class="campaigns-grid">
+                <div class="table-loading"><div class="spinner"></div><span>Loading campaigns...</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Team View - Smart Login: Operators, Permissions & Activity Monitoring (admin only) -->
+    <div id="teamView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <div class="team-header">
+            <div class="team-header-left">
+                <button id="backToShoppersFromTeam" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back to Shoppers
+                </button>
+                <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Team &amp; Permissions</h2>
+            </div>
+            <div class="team-header-right">
+                <button id="createOperatorBtn" class="btn btn-primary" style="background: #b18cff; color: #000; border-color: #b18cff;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    Add Operator
+                </button>
+            </div>
+        </div>
+
+        <div class="team-content">
+            <div class="team-grid">
+                <!-- Operators list -->
+                <div class="team-card">
+                    <h3>Operators</h3>
+                    <div id="operatorsList">
+                        <div class="table-loading"><div class="spinner"></div><span>Loading team...</span></div>
+                    </div>
+                </div>
+
+                <!-- Activity monitor -->
+                <div class="team-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 0.5rem; flex-wrap: wrap;">
+                        <h3 style="margin: 0;">Activity Monitor</h3>
+                        <select id="activityOperatorFilter" class="activity-filter-select">
+                            <option value="">All operators</option>
+                        </select>
+                    </div>
+                    <div id="activityFeed" style="max-height: 70vh; overflow-y: auto;">
+                        <div class="table-loading"><div class="spinner"></div><span>Loading activity...</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Operator Create/Edit Modal -->
+    <div id="operatorModal">
+        <div class="op-modal-content">
+            <h3 id="operatorModalTitle">Add Operator</h3>
+            <div id="operatorModalMsg" class="op-msg"></div>
+            <form id="operatorForm">
+                <input type="hidden" id="opEditId">
+                <div class="op-form-group">
+                    <label>Operator ID (login username)</label>
+                    <input type="text" id="opUsername" placeholder="e.g. priya.ops" required minlength="3" maxlength="30" autocomplete="off">
+                </div>
+                <div class="op-form-group">
+                    <label>Full Name</label>
+                    <input type="text" id="opName" placeholder="e.g. Priya Sharma">
+                </div>
+                <div class="op-form-group" id="opPasswordGroup">
+                    <label>Password (min 6 characters)</label>
+                    <input type="text" id="opPassword" placeholder="Set a password" minlength="6" autocomplete="off">
+                </div>
+                <div class="perm-section-title">Page Access</div>
+                <div class="perm-columns" id="opPagePerms"></div>
+                <div class="perm-section-title">Function Permissions</div>
+                <div class="perm-columns" id="opFunctionPerms"></div>
+                <div class="op-modal-actions">
+                    <button type="button" class="btn btn-outline" id="cancelOperatorModal">Cancel</button>
+                    <button type="submit" class="btn btn-primary" style="background: #b18cff; color: #000; border-color: #b18cff;">Save Operator</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Reset Password Modal -->
+    <div id="resetPasswordModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 3100; align-items: center; justify-content: center; padding: 1rem;">
+        <div class="op-modal-content" style="max-width: 420px;">
+            <h3>Reset Password</h3>
+            <div id="resetPasswordMsg" class="op-msg"></div>
+            <div class="op-form-group">
+                <label>New password for <span id="resetPasswordFor" style="color:#b18cff;"></span></label>
+                <input type="text" id="resetPasswordInput" placeholder="New password (min 6 chars)" minlength="6" autocomplete="off">
+            </div>
+            <div class="op-modal-actions">
+                <button type="button" class="btn btn-outline" id="cancelResetPassword">Cancel</button>
+                <button type="button" class="btn btn-primary" style="background: #b18cff; color: #000; border-color: #b18cff;" id="confirmResetPassword">Reset</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inbox View - Unread Messages & Recent Confirmations -->
+    <div id="inboxView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <div class="inbox-header">
+            <div class="inbox-header-left">
+                <button id="backToShoppersFromInbox" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back to Shoppers
+                </button>
+                <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Inbox</h2>
+                <div class="inbox-tabs">
+                    <button class="inbox-tab active" data-inbox-tab="unread">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        Unread
+                        <span class="inbox-tab-count" id="inboxUnreadCount">0</span>
+                    </button>
+                    <button class="inbox-tab confirmed-tab" data-inbox-tab="confirmed">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                        Confirmed
+                        <span class="inbox-tab-count" id="inboxConfirmedCount">0</span>
+                    </button>
+                </div>
+            </div>
+            <div class="inbox-header-right">
+                <button id="refreshInboxBtn" class="btn btn-outline" style="padding: 0.5rem 1rem;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <div class="inbox-content">
+            <!-- Stats Row -->
+            <div class="inbox-stats-row">
+                <div class="inbox-stat-card unread-stat">
+                    <div class="stat-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="inboxStatUnread">0</div>
+                        <div class="stat-label">Unread Messages</div>
+                    </div>
+                </div>
+                <div class="inbox-stat-card confirmed-stat">
+                    <div class="stat-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="inboxStatConfirmed">0</div>
+                        <div class="stat-label">Total Confirmed</div>
+                    </div>
+                </div>
+                <div class="inbox-stat-card pending-stat">
+                    <div class="stat-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="inboxStatPending">0</div>
+                        <div class="stat-label">Pending</div>
+                    </div>
+                </div>
+                <div class="inbox-stat-card edits-stat">
+                    <div class="stat-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </div>
+                    <div>
+                        <div class="stat-number" id="inboxStatEdits">0</div>
+                        <div class="stat-label">Edit Requests</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Date Filter Bar -->
+            <div class="inbox-date-bar">
+                <span class="inbox-date-bar-label" id="inboxDateBarLabel">📅 Orders from:</span>
+                <select id="inboxDateField" class="inbox-filter-select inbox-confirmed-filter hidden">
+                    <option value="updated_at">Confirmed Date</option>
+                    <option value="created_at">Order Date</option>
+                </select>
+                <button class="inbox-quick-date" data-inbox-range="today">Today</button>
+                <button class="inbox-quick-date" data-inbox-range="yesterday">Yesterday</button>
+                <button class="inbox-quick-date" data-inbox-range="last7">Last 7 Days</button>
+                <button class="inbox-quick-date" data-inbox-range="last30">Last 30 Days</button>
+                <button class="inbox-quick-date" data-inbox-range="thisMonth">This Month</button>
+                <span style="color: rgba(255,255,255,0.2); margin: 0 0.3rem;">|</span>
+                <label>From</label>
+                <input type="date" id="inboxStartDate">
+                <label>To</label>
+                <input type="date" id="inboxEndDate">
+                <button class="clear-btn" id="clearInboxFiltersBtn">Clear</button>
+            </div>
+
+            <!-- Filter & Actions Bar -->
+            <div class="inbox-filter-bar">
+                <input type="text" id="inboxSearch" placeholder="Search name, phone, order..." class="inbox-search-input">
+
+                <select id="inboxActionType" class="inbox-filter-select inbox-unread-filter hidden">
+                    <option value="">All Actions</option>
+                    <option value="edit_details">Edit</option>
+                    <option value="confirmed">Confirm</option>
+                    <option value="cancelled">Cancel</option>
+                    <option value="pending">Pending</option>
+                </select>
+
+                <select id="inboxConfirmedBy" class="inbox-filter-select inbox-confirmed-filter hidden">
+                    <option value="">All Methods</option>
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="manual">Manual</option>
+                </select>
+                <select id="inboxPaymentMethod" class="inbox-filter-select inbox-confirmed-filter hidden">
+                    <option value="">All Payment</option>
+                    <option value="COD">COD</option>
+                    <option value="Prepaid">Prepaid</option>
+                </select>
+                <select id="inboxDeliveryType" class="inbox-filter-select inbox-confirmed-filter hidden">
+                    <option value="">All Delivery</option>
+                    <option value="Express">Express</option>
+                    <option value="Standard">Standard</option>
+                </select>
+
+                <div class="inbox-filter-spacer"></div>
+
+                <button id="inboxSelectAllBtn" class="inbox-filter-action">Select All</button>
+                <button id="inboxExportBtn" class="inbox-filter-action export">Export</button>
+            </div>
+
+            <!-- List Header -->
+            <div class="inbox-list-header">
+                <h3 id="inboxListTitle">Unread Customer Messages</h3>
+                <span class="inbox-active-filter-chip" id="inboxActiveFilterChip" style="display: none;"></span>
+            </div>
+
+            <!-- List Container -->
+            <div class="inbox-list-container" id="inboxListContainer">
+                <div class="inbox-empty">
+                    <div class="inbox-empty-icon">💬</div>
+                    <div class="inbox-empty-title">No unread messages</div>
+                    <div class="inbox-empty-text">All customer messages have been attended to</div>
+                </div>
+            </div>
+
+            <!-- Pagination -->
+            <div class="inbox-pagination">
+                <div class="page-info" id="inboxPageInfo">Showing 0-0 of 0</div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="btn btn-outline" id="inboxPrevBtn" disabled>PREVIOUS</button>
+                    <button class="btn btn-outline" id="inboxNextBtn" disabled>NEXT</button>
+                </div>
+            </div>
+
+            <!-- Bulk Actions Bar -->
+            <div id="inboxBulkBar" class="inbox-bulk-bar" style="display:none;">
+                <span id="inboxSelectedCount">0 selected</span>
+                <button id="inboxExportSelectedBtn" class="inbox-bulk-btn export">Export Selected</button>
+                <button id="inboxMarkReadSelectedBtn" class="inbox-bulk-btn read">Mark Read</button>
+                <button id="inboxDeselectAllBtn" class="inbox-bulk-btn deselect">Deselect</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Multi Orders View - Customers with 2+ Orders within 24h -->
+    <div id="multiOrdersView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <div class="multi-orders-header" style="display: flex; justify-content: space-between; align-items: center; padding: 1.5rem 2rem; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.08);">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <button id="backToShoppersFromMultiOrders" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back
+                </button>
+                <div>
+                    <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Multi Orders (24h)</h2>
+                    <p style="margin: 0; opacity: 0.7; font-size: 0.85rem;">Customers who placed 2 or more orders within 24 hours</p>
+                </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <button id="moCollapseAll" class="mo-card-toggle" title="Collapse All">Collapse All</button>
+                <button id="moExpandAll" class="mo-card-toggle" title="Expand All">Expand All</button>
+                <button id="refreshMultiOrdersBtn" class="btn btn-primary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                    </svg>
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- Multi Orders Control Bar -->
+        <div class="mo-control-bar">
+            <!-- Row 1: Sort + Status + Search -->
+            <div class="mo-control-row">
+                <span class="mo-section-label">Sort</span>
+                <div class="filter-dropdown">
+                    <select id="moSortBy" class="mo-sort-select">
+                        <option value="newest">Newest Orders First</option>
+                        <option value="oldest">Oldest Orders First</option>
+                        <option value="order_count_desc">Most Orders First</option>
+                        <option value="order_count_asc">Fewest Orders First</option>
+                        <option value="total_desc">Highest Total Value</option>
+                        <option value="total_asc">Lowest Total Value</option>
+                        <option value="name_asc">Customer Name A-Z</option>
+                        <option value="name_desc">Customer Name Z-A</option>
+                        <option value="recent_order">Most Recent Order</option>
+                    </select>
+                </div>
+
+                <span class="mo-section-label" style="margin-left: 0.5rem;">Status</span>
+                <div class="mo-status-pills">
+                    <button class="mo-status-pill active" data-mo-status="all">All<span class="pill-count" id="moCountAll"></span></button>
+                    <button class="mo-status-pill" data-mo-status="pending">Pending<span class="pill-count" id="moCountPending"></span></button>
+                    <button class="mo-status-pill" data-mo-status="confirmed">Confirmed<span class="pill-count" id="moCountConfirmed"></span></button>
+                    <button class="mo-status-pill" data-mo-status="cancelled">Cancelled<span class="pill-count" id="moCountCancelled"></span></button>
+                    <button class="mo-status-pill" data-mo-status="edit_details">Edit Req<span class="pill-count" id="moCountEdit"></span></button>
+                </div>
+
+                <div class="mo-search">
+                    <input type="text" id="moSearchInput" placeholder="Search name, phone, or order ID...">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </div>
+
+                <button class="mo-clear-btn" id="moClearFilters">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    Clear All
+                </button>
+            </div>
+
+            <!-- Row 2: Min Orders + Date Range + Quick Dates -->
+            <div class="mo-control-row">
+                <span class="mo-section-label">Orders</span>
+                <div class="filter-dropdown">
+                    <select id="moMinOrders" class="mo-count-select">
+                        <option value="2">2+ Orders</option>
+                        <option value="3">3+ Orders</option>
+                        <option value="4">4+ Orders</option>
+                        <option value="5">5+ Orders</option>
+                    </select>
+                </div>
+
+                <span class="mo-section-label" style="margin-left: 0.5rem;">Date</span>
+                <div class="mo-date-range">
+                    <input type="date" id="moStartDate" title="Start date">
+                    <span class="mo-date-sep">to</span>
+                    <input type="date" id="moEndDate" title="End date">
+                </div>
+
+                <div class="mo-quick-dates">
+                    <button class="mo-quick-date" data-mo-range="today">Today</button>
+                    <button class="mo-quick-date" data-mo-range="yesterday">Yesterday</button>
+                    <button class="mo-quick-date" data-mo-range="last7">7 Days</button>
+                    <button class="mo-quick-date" data-mo-range="last30">30 Days</button>
+                    <button class="mo-quick-date" data-mo-range="thisMonth">This Month</button>
+                </div>
+            </div>
+        </div>
+
+        <div style="padding: 2rem;">
+            <div id="multiOrdersStats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #ff4757;" id="multiOrdersCustomerCount">0</span>
+                    <span style="font-size: 0.85rem; opacity: 0.8;">Customers</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #ffa502;" id="multiOrdersTotalCount">0</span>
+                    <span style="font-size: 0.85rem; opacity: 0.8;">Total Orders</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #2ed573;" id="multiOrdersTotalValue">₹0</span>
+                    <span style="font-size: 0.85rem; opacity: 0.8;">Total Value</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #53bdeb;" id="multiOrdersAvgValue">₹0</span>
+                    <span style="font-size: 0.85rem; opacity: 0.8;">Avg Order Value</span>
+                </div>
+            </div>
+
+            <!-- Results Bar -->
+            <div class="mo-results-bar" id="moResultsBar" style="display: none;">
+                <span class="mo-results-count">Showing <strong id="moShowingCount">0</strong> of <strong id="moTotalCount">0</strong> customers</span>
+                <div class="mo-active-filters" id="moActiveFilters"></div>
+            </div>
+
+            <div id="multiOrdersContainer">
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem; opacity: 0.6;">
+                    <div class="spinner" style="width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #ff4757; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 1rem;"></div>
+                    <span style="font-family: 'Archivo Narrow', sans-serif; letter-spacing: 2px; font-weight: 500;">FETCHING DATA...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shipped Orders View (full-page, Shiprocket-style history) -->
+    <div id="shippedOrdersView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <div class="shipped-orders-header" style="display: flex; justify-content: space-between; align-items: center; padding: 1.5rem 2rem; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.08); flex-wrap: wrap; gap: 0.75rem;">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <button id="backToShoppersFromShipped" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back
+                </button>
+                <div>
+                    <h2 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.5rem;">Shipped Orders</h2>
+                    <p style="margin: 0; opacity: 0.7; font-size: 0.85rem;">Full shipment history with tracking, labels, pickups &amp; more</p>
+                </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <button id="soNewShipBtn" class="btn btn-primary" title="Create a forward shipment for any order by its Order ID">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    New Shipment
+                </button>
+                <button id="soExportBtn" class="mo-card-toggle" title="Export current filters as CSV">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Export CSV
+                </button>
+                <button id="soSyncBtn" class="mo-card-toggle" title="Poll couriers now and auto-update shipment statuses">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;">
+                                        <polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+                                    </svg>
+                                    <span id="soSyncBtnLabel">Sync Status</span>
+                                </button>
+                <button id="refreshShippedBtn" class="btn btn-primary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                    </svg>
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- Shipped Orders Control Bar -->
+        <div class="so-control-bar">
+            <!-- Row 1: Status + Carrier + Payment + Search -->
+            <div class="mo-control-row">
+                <span class="mo-section-label">Status</span>
+                <div class="so-status-pills">
+                    <button class="so-status-pill active" data-so-status="">All<span class="pill-count" id="soCountAll"></span></button>
+                    <button class="so-status-pill" data-so-status="ready">Ready<span class="pill-count" id="soCountReady"></span></button>
+                    <button class="so-status-pill" data-so-status="pickup_scheduled">Pickup<span class="pill-count" id="soCountPickup"></span></button>
+                    <button class="so-status-pill" data-so-status="in_transit">In Transit<span class="pill-count" id="soCountTransit"></span></button>
+                    <button class="so-status-pill" data-so-status="delivered">Delivered<span class="pill-count" id="soCountDelivered"></span></button>
+                    <button class="so-status-pill" data-so-status="cancelled">Cancelled<span class="pill-count" id="soCountCancelled"></span></button>
+                </div>
+
+                <div class="filter-dropdown">
+                    <select id="soCarrierFilter" class="so-select">
+                        <option value="">All Carriers</option>
+                    </select>
+                </div>
+
+                <div class="filter-dropdown">
+                    <select id="soPaymentFilter" class="so-select">
+                        <option value="">All Payments</option>
+                        <option value="COD">COD</option>
+                        <option value="Prepaid">Prepaid</option>
+                    </select>
+                </div>
+
+                <div class="so-search">
+                    <input type="text" id="soSearchInput" placeholder="Search order, AWB, courier, name, phone...">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </div>
+
+                <button class="so-clear-btn" id="soClearFilters">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    Clear All
+                </button>
+            </div>
+
+            <!-- Row 2: Date Range + Quick Dates -->
+            <div class="mo-control-row">
+                <span class="mo-section-label">Date</span>
+                <div class="so-date-range">
+                    <input type="date" id="soStartDate" title="Start date">
+                    <span class="mo-date-sep">to</span>
+                    <input type="date" id="soEndDate" title="End date">
+                </div>
+
+                <div class="so-quick-dates">
+                    <button class="so-quick-date" data-so-range="today">Today</button>
+                    <button class="so-quick-date" data-so-range="yesterday">Yesterday</button>
+                    <button class="so-quick-date" data-so-range="last7">7 Days</button>
+                    <button class="so-quick-date" data-so-range="last30">30 Days</button>
+                    <button class="so-quick-date" data-so-range="thisMonth">This Month</button>
+                </div>
+            </div>
+        </div>
+
+        <div style="padding: 2rem;">
+            <div id="shippedOrdersStats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #53bdeb;" id="soStatTotal">0</span>
+                    <span style="font-size: 0.8rem; opacity: 0.8;">Total Shipments</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #a29bfe;" id="soStatReady">0</span>
+                    <span style="font-size: 0.8rem; opacity: 0.8;">Ready to Ship</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #ffa502;" id="soStatPickup">0</span>
+                    <span style="font-size: 0.8rem; opacity: 0.8;">Pickup Scheduled</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #f0a05a;" id="soStatTransit">0</span>
+                    <span style="font-size: 0.8rem; opacity: 0.8;">In Transit</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #2ed573;" id="soStatDelivered">0</span>
+                    <span style="font-size: 0.8rem; opacity: 0.8;">Delivered</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #ff6b7a;" id="soStatCancelled">0</span>
+                    <span style="font-size: 0.8rem; opacity: 0.8;">Cancelled</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #ffd166;" id="soStatCodValue">₹0</span>
+                    <span style="font-size: 0.8rem; opacity: 0.8;">COD Value</span>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); padding: 1.25rem; border-radius: 8px; text-align: center;">
+                    <span style="display: block; font-size: 1.75rem; font-weight: 600; font-family: 'Archivo Narrow', sans-serif; color: #53bdeb;" id="soStatFreight">₹0</span>
+                    <span style="font-size: 0.8rem; opacity: 0.8;">Freight Charges</span>
+                </div>
+            </div>
+
+            <!-- Results Bar -->
+            <div class="so-results-bar" id="soResultsBar" style="display: none;">
+                <span class="so-results-count">Showing <strong id="soShowingCount">0</strong> of <strong id="soTotalCount">0</strong> shipments</span>
+                <div class="so-active-filters" id="soActiveFilters"></div>
+            </div>
+
+            <div id="shippedOrdersContainer">
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem; opacity: 0.6;">
+                    <div class="spinner" style="width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #53bdeb; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 1rem;"></div>
+                    <span style="font-family: 'Archivo Narrow', sans-serif; letter-spacing: 2px; font-weight: 500;">FETCHING SHIPMENTS...</span>
+                </div>
+            </div>
+
+            <div class="so-pagination" id="soPagination" style="display: none;">
+                <button class="so-page-btn" id="soPrevBtn">&larr; Prev</button>
+                <span class="so-page-info" id="soPageInfo">Page 1</span>
+                <button class="so-page-btn" id="soNextBtn">Next &rarr;</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Campaign Wizard Modal -->
+    <div id="campaignWizard" class="campaign-wizard">
+        <div class="wizard-content">
+            <div class="wizard-header">
+                <h2>Create Follow-Up Campaign</h2>
+                <button class="wizard-close" id="closeCampaignWizard">&times;</button>
+            </div>
+            
+            <div class="wizard-body">
+                <!-- Step Indicator -->
+                <div class="step-indicator">
+                    <div class="step-dot active" data-step="1">1</div>
+                    <div class="step-dot" data-step="2">2</div>
+                    <div class="step-dot" data-step="3">3</div>
+                </div>
+
+                <!-- Step 1: Campaign Details -->
+                <div class="wizard-step active" data-step="1">
+                    <h3 style="margin-bottom: 1.5rem; color: #ffa502;">Campaign Details</h3>
+                    <div style="margin-bottom: 1.5rem;">
+                        <label style="display: block; margin-bottom: 0.5rem; font-size: 0.85rem; color: rgba(255,255,255,0.7);">Campaign Name</label>
+                        <input type="text" id="campaignName" placeholder="e.g., Weekend Follow-Up" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #fff; font-size: 1rem;">
+                    </div>
+                    <div style="margin-bottom: 1.5rem;">
+                        <label style="display: block; margin-bottom: 0.5rem; font-size: 0.85rem; color: rgba(255,255,255,0.7);">Template</label>
+                        <select id="campaignTemplate" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #fff; font-size: 1rem;">
+                            <option value="order_follow_up_v1">Order Follow-Up v1 (Confirm/Cancel/Edit)</option>
+                        </select>
+                    </div>
+                    <div style="background: rgba(255,165,2,0.1); border-left: 3px solid #ffa502; padding: 1rem; border-radius: 0 8px 8px 0;">
+                        <p style="margin: 0; font-size: 0.85rem; color: rgba(255,255,255,0.8);">
+                            <strong style="color: #ffa502;">Template Preview:</strong><br>
+                            Hi {Customer Name},<br><br>
+                            We noticed you haven't confirmed your Offcomfrt order yet.<br><br>
+                            ▫️ Order ID: {Order ID}<br>
+                            ▫️ Amount: Rs.{Amount}<br>
+                            ▫️ Products: {Products}<br><br>
+                            Please select an option below to proceed:
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Step 2: Recipient Selection -->
+                <div class="wizard-step" data-step="2">
+                    <h3 style="margin-bottom: 1.5rem; color: #ffa502;">Select Recipients</h3>
+                    
+                    <div class="recipient-tabs">
+                        <button class="recipient-tab active" data-tab="all-pending">All Pending</button>
+                        <button class="recipient-tab" data-tab="select-pending">Select from Pending</button>
+                        <button class="recipient-tab" data-tab="import-file">Import File</button>
+                        <button class="recipient-tab" data-tab="manual-entry">Manual Entry</button>
+                    </div>
+
+                    <!-- All Pending Tab -->
+                    <div class="recipient-tab-content active" data-tab="all-pending">
+                        <p style="color: rgba(255,255,255,0.7); margin-bottom: 1rem;">
+                            This will send follow-up messages to <strong id="allPendingCount" style="color: #ffa502;">0</strong> pending shoppers who haven't been contacted yet.
+                        </p>
+                        <div style="background: rgba(46,213,115,0.1); border: 1px solid rgba(46,213,115,0.2); padding: 1rem; border-radius: 8px;">
+                            <p style="margin: 0; font-size: 0.85rem; color: #2ed573;">
+                                ✅ All pending shoppers will receive the follow-up message.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Select from Pending Tab -->
+                    <div class="recipient-tab-content" data-tab="select-pending">
+                        <div style="margin-bottom: 1rem;">
+                            <input type="text" id="searchPendingShoppers" placeholder="Search by name, phone, or order ID..." style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #fff;">
+                        </div>
+                        <div class="pending-shoppers-table">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th><input type="checkbox" id="selectAllPending"></th>
+                                        <th>Order ID</th>
+                                        <th>Name</th>
+                                        <th>Phone</th>
+                                        <th>Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pendingShoppersTableBody">
+                                    <tr><td colspan="5" style="text-align: center; padding: 2rem;">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p style="margin-top: 1rem; color: rgba(255,255,255,0.6); font-size: 0.85rem;">
+                            <span id="selectedPendingCount">0</span> shoppers selected
+                        </p>
+                    </div>
+
+                    <!-- Import File Tab -->
+                    <div class="recipient-tab-content" data-tab="import-file">
+                        <div class="file-upload-area" id="fileUploadArea">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 1rem; opacity: 0.5;">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="17 8 12 3 7 8"/>
+                                <line x1="12" y1="3" x2="12" y2="15"/>
+                            </svg>
+                            <p style="color: rgba(255,255,255,0.7); margin-bottom: 1rem;">Upload Excel or CSV file with Order IDs or Phone numbers</p>
+                            <input type="file" id="campaignFileUpload" accept=".xlsx,.xls,.csv">
+                            <button class="file-upload-btn" onclick="document.getElementById('campaignFileUpload').click()">Choose File</button>
+                            <p id="selectedFileName" style="margin-top: 1rem; color: #ffa502; font-size: 0.85rem;"></p>
+                        </div>
+                    </div>
+
+                    <!-- Manual Entry Tab -->
+                    <div class="recipient-tab-content" data-tab="manual-entry">
+                        <p style="color: rgba(255,255,255,0.7); margin-bottom: 1rem;">Enter phone numbers or order IDs (one per line or comma-separated):</p>
+                        <textarea id="manualPhoneEntry" rows="8" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #fff; font-family: monospace; resize: vertical;" placeholder="919876543210&#10;919876543211&#10;ORD-123456&#10;ORD-123457"></textarea>
+                        <p style="margin-top: 0.5rem; color: rgba(255,255,255,0.5); font-size: 0.8rem;">Enter phone numbers with country code (e.g., 91 for India) or Order IDs</p>
+                    </div>
+                </div>
+
+                <!-- Step 3: Review & Send -->
+                <div class="wizard-step" data-step="3">
+                    <h3 style="margin-bottom: 1.5rem; color: #ffa502;">Review & Send</h3>
+                    
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem;">
+                        <h4 style="margin: 0 0 1rem 0; color: #fff;">Campaign Summary</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div>
+                                <p style="margin: 0; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Campaign Name</p>
+                                <p id="reviewCampaignName" style="margin: 0.25rem 0 0 0; color: #fff; font-weight: 500;">-</p>
+                            </div>
+                            <div>
+                                <p style="margin: 0; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Template</p>
+                                <p id="reviewTemplate" style="margin: 0.25rem 0 0 0; color: #fff; font-weight: 500;">-</p>
+                            </div>
+                            <div>
+                                <p style="margin: 0; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Recipients</p>
+                                <p id="reviewRecipientCount" style="margin: 0.25rem 0 0 0; color: #ffa502; font-weight: 600; font-size: 1.2rem;">0</p>
+                            </div>
+                            <div>
+                                <p style="margin: 0; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Est. Time</p>
+                                <p id="reviewEstTime" style="margin: 0.25rem 0 0 0; color: #fff; font-weight: 500;">~0 minutes</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="background: rgba(255,165,2,0.1); border-left: 3px solid #ffa502; padding: 1rem; border-radius: 0 8px 8px 0;">
+                        <p style="margin: 0; font-size: 0.85rem; color: rgba(255,255,255,0.8);">
+                            <strong style="color: #ffa502;">⚠️ Important:</strong><br>
+                            Once sent, follow-up messages cannot be recalled. The messages will be sent at a rate of 20 messages per minute to comply with WhatsApp rate limits.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="wizard-footer">
+                <button class="wizard-btn wizard-btn-secondary" id="wizardPrevBtn" style="visibility: hidden;">Previous</button>
+                <button class="wizard-btn wizard-btn-primary" id="wizardNextBtn">Next</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export Modal -->
+    <div id="exportModal">
+        <div class="export-modal-content">
+            <h3>Export Options</h3>
+            <div class="export-options">
+                <div class="export-option-group">
+                    <label>Export Type</label>
+                    <select id="exportType">
+                        <option value="all">All Records (Current Filters)</option>
+                        <option value="daily">Daily Report</option>
+                        <option value="confirmed">Confirmed Orders Only</option>
+                        <option value="cancelled">Cancelled Orders Only</option>
+                        <option value="pending">Pending Orders Only</option>
+                    </select>
+                </div>
+                
+                <div class="export-option-group">
+                    <label>Date Range</label>
+                    <select id="exportDateRange">
+                        <option value="current">Current Filter Dates</option>
+                        <option value="today">Today</option>
+                        <option value="yesterday">Yesterday</option>
+                        <option value="last7">Last 7 Days</option>
+                        <option value="last30">Last 30 Days</option>
+                        <option value="thisMonth">This Month</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+                </div>
+                
+                <div class="export-option-group" id="customDateRange" style="display: none;">
+                    <label>Custom Date Range</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="date" id="exportStartDate" style="flex: 1;">
+                        <span style="color: #666;">to</span>
+                        <input type="date" id="exportEndDate" style="flex: 1;">
+                    </div>
+                </div>
+                
+                <div class="export-option-group">
+                    <label>Order ID Range (Optional)</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="text" id="exportOrderIdFrom" placeholder="From Order #" style="flex: 1;">
+                        <span style="color: #666;">to</span>
+                        <input type="text" id="exportOrderIdTo" placeholder="To Order #" style="flex: 1;">
+                    </div>
+                </div>
+                
+                <div class="export-option-group">
+                    <label>Format</label>
+                    <select id="exportFormat">
+                        <option value="xlsx">Excel (.xlsx)</option>
+                        <option value="csv">CSV (.csv)</option>
+                    </select>
+                </div>
+                
+                <div class="export-checkbox-group">
+                    <input type="checkbox" id="includeCustomerMessage" checked>
+                    <label for="includeCustomerMessage">Include Customer Messages</label>
+                </div>
+                
+                <div class="export-checkbox-group">
+                    <input type="checkbox" id="includeAddress" checked>
+                    <label for="includeAddress">Include Address Details</label>
+                </div>
+            </div>
+            
+            <div class="export-btn-row">
+                <button class="btn btn-outline" id="cancelExport">Cancel</button>
+                <button class="btn btn-primary" id="confirmExport">
+                    <img src="/shoppers/assets/export-icon.svg" width="16" height="16" alt="Export" style="vertical-align: middle; margin-right: 6px;" />
+                    Export Now
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shipping Modal (3-step wizard) -->
+    <div id="shipModal">
+        <div class="ship-modal-content">
+            <div class="ship-modal-header">
+                <h3>🚚 Ship Order <span class="ship-order-label" id="shipOrderIdLabel"></span></h3>
+                <button class="ship-close" onclick="closeShipModal()">&times;</button>
+            </div>
+            <div id="shipReshipBanner"></div>
+            <div class="ship-steps">
+                <div class="ship-step-tab active" id="shipStepTab1">1 &middot; Review &amp; Package</div>
+                <div class="ship-step-tab" id="shipStepTab2">2 &middot; Carrier &amp; Rates</div>
+                <div class="ship-step-tab" id="shipStepTab3">3 &middot; Confirm &amp; Ship</div>
+            </div>
+            <div class="ship-body">
+                <!-- Step 1: Review & Package -->
+                <div class="ship-step-panel active" id="shipStep1">
+                    <div class="ship-validation-errors" id="shipValidationErrors"></div>
+                    <div class="ship-section-title">Consignee</div>
+                    <div class="ship-grid-2">
+                        <div class="form-group"><label>Name</label><input type="text" id="shipName"></div>
+                        <div class="form-group"><label>Phone</label><input type="text" id="shipPhone"></div>
+                    </div>
+                    <div class="form-group"><label>Address</label><textarea id="shipAddress" rows="2"></textarea></div>
+                    <div class="ship-grid-2">
+                        <div class="form-group"><label>City</label><input type="text" id="shipCity"></div>
+                        <div class="form-group"><label>State</label><input type="text" id="shipState"></div>
+                    </div>
+                    <div class="ship-grid-2">
+                        <div class="form-group"><label>Pincode</label><input type="text" id="shipPincode" maxlength="6"></div>
+                        <div class="form-group"><label>Payment</label><div id="shipPaymentBadge"></div></div>
+                    </div>
+                    <div class="ship-section-title">Order Items, Pricing &amp; Payment <span class="ship-edit-hint">edits are saved to the order when you continue</span></div>
+                    <div id="shipOrderEditor"></div>
+                    <div class="ship-section-title">Package</div>
+                    <div class="ship-grid-4">
+                        <div class="form-group"><label>Weight (g)</label><input type="number" id="shipWeight" min="1"></div>
+                        <div class="form-group"><label>Length (cm)</label><input type="number" id="shipLength" min="1"></div>
+                        <div class="form-group"><label>Breadth (cm)</label><input type="number" id="shipBreadth" min="1"></div>
+                        <div class="form-group"><label>Height (cm)</label><input type="number" id="shipHeight" min="1"></div>
+                    </div>
+                </div>
+                <!-- Step 2: Carrier & Rates -->
+                <div class="ship-step-panel" id="shipStep2">
+                    <div class="ship-section-title">Choose Carrier</div>
+                    <div class="ship-carrier-cards" id="shipCarrierCards"></div>
+                    <div id="shipServiceabilityResult"></div>
+                </div>
+                <!-- Step 3: Confirm & Ship -->
+                <div class="ship-step-panel" id="shipStep3">
+                    <div id="shipConfirmView">
+                        <div class="ship-section-title">Shipment Summary</div>
+                        <table class="ship-summary-table" id="shipSummaryTable"></table>
+                        <div class="ship-notify-row">
+                            <input type="checkbox" id="shipNotifyCustomer">
+                            <label for="shipNotifyCustomer" style="cursor: pointer;">Notify customer on WhatsApp after AWB is assigned</label>
+                        </div>
+                        <div id="shipSubmitError"></div>
+                    </div>
+                    <div id="shipSuccessPanel" style="display: none;"></div>
+                </div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" id="shipBackBtn" onclick="shipGoBack()">Back</button>
+                <button class="btn btn-primary" id="shipNextBtn" onclick="shipGoNext()">Next</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shipments Drawer (per-order history) -->
+    <div id="shipmentsDrawer" onclick="if(event.target === this) closeShipmentsDrawer()">
+        <div class="shipments-drawer-content">
+            <div class="shipments-drawer-header">
+                <h3>📦 Shipments <span style="color: #25d366;" id="shipmentsDrawerOrderId"></span></h3>
+                <button class="ship-close" onclick="closeShipmentsDrawer()">&times;</button>
+            </div>
+            <div class="shipments-drawer-body" id="shipmentsDrawerBody"></div>
+        </div>
+    </div>
+
+    <!-- Bulk Ship Modal -->
+    <div id="bulkShipModal">
+        <div class="bulk-ship-content">
+            <div class="ship-modal-header">
+                <h3>🚚 Bulk Ship <span class="ship-order-label" id="bulkShipCount"></span></h3>
+                <button class="ship-close" onclick="closeBulkShipModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div class="form-group">
+                    <label>Carrier</label>
+                    <select id="bulkShipCarrier" style="width: 100%; padding: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff;"></select>
+                </div>
+                <div class="ship-grid-4">
+                    <div class="form-group"><label>Weight (g)</label><input type="number" id="bulkShipWeight" value="500" min="1"></div>
+                    <div class="form-group"><label>Length (cm)</label><input type="number" id="bulkShipLength" value="30" min="1"></div>
+                    <div class="form-group"><label>Breadth (cm)</label><input type="number" id="bulkShipBreadth" value="40" min="1"></div>
+                    <div class="form-group"><label>Height (cm)</label><input type="number" id="bulkShipHeight" value="2" min="1"></div>
+                </div>
+                <div style="font-size: 0.75rem; color: #888;">Shiprocket auto-assigns the cheapest courier per order. Only confirmed, un-shipped orders will be processed.</div>
+                <div class="bulk-ship-progress" id="bulkShipProgress"></div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" onclick="closeBulkShipModal()">Close</button>
+                <button class="btn btn-primary" id="bulkShipStartBtn" onclick="startBulkShip()">Start Shipping</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shopify Cancel & Refund Modal (premium bulk action for cancelled orders) -->
+    <div id="shopifyCancelModal">
+        <div class="bulk-ship-content" style="max-width: 640px;">
+            <div class="ship-modal-header">
+                <h3>✨ Shopify Cancel &amp; Refund <span class="ship-order-label" id="scCancelCount"></span></h3>
+                <button class="ship-close" onclick="closeShopifyCancelModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div class="sc-summary" id="scSummary"></div>
+                <label class="sc-refund-toggle">
+                    <input type="checkbox" id="scRefundToggle" checked>
+                    <span>Refund prepaid orders automatically (full refund incl. shipping)</span>
+                </label>
+                <div style="font-size: 0.75rem; color: #888;">Prepaid orders are fully refunded in Shopify before the order is cancelled; COD orders are cancelled only. Already-cancelled orders in Shopify are skipped safely.</div>
+                <div class="bulk-ship-progress" id="scProgress"></div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" onclick="closeShopifyCancelModal()">Close</button>
+                <button class="btn btn-primary" id="scStartBtn" onclick="startShopifyCancel()" style="background: linear-gradient(135deg, #ffd166, #ffa502); color: #000; font-weight: 700;">Start Cancellation</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Forward Shipment Modal (ship any order by its Order ID) -->
+    <div id="soNewShipModal" onclick="if(event.target === this) closeSoNewShipModal()">
+        <div class="ship-modal-content" style="max-width: 660px;">
+            <div class="ship-modal-header">
+                <h3>➕ New Forward Shipment</h3>
+                <button class="ship-close" onclick="closeSoNewShipModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div class="form-group">
+                    <label>Find Order</label>
+                    <input type="text" id="soLookupInput" placeholder="Type an Order ID, customer name, phone or AWB..." autocomplete="off">
+                </div>
+                <div style="font-size: 0.75rem; color: #888; margin-bottom: 0.85rem;">Pick an order below — consignee, items and payment details are grabbed automatically. You only choose the carrier.</div>
+                <div id="soLookupResults"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Premium Re-Ship Modal (reason-tracked replacement shipments) -->
+    <div id="reshipModal" onclick="if(event.target === this) closeReshipModal()">
+        <div class="ship-modal-content" style="max-width: 640px;">
+            <div class="ship-modal-header">
+                <h3>🔄 Re-Ship Order <span class="ship-order-label" id="reshipOrderIdLabel"></span></h3>
+                <button class="ship-close" onclick="closeReshipModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div id="reshipPrevSummary"></div>
+                <div class="ship-section-title">Why are you re-shipping?</div>
+                <div class="reship-reason-grid" id="reshipReasonGrid"></div>
+                <div class="form-group">
+                    <label>Note <span style="color:#888; font-weight:400;">(optional — saved in the shipment audit trail)</span></label>
+                    <input type="text" id="reshipNote" maxlength="200" placeholder="e.g. courier confirmed package lost at hub" autocomplete="off">
+                </div>
+                <div id="reshipWarnBox"></div>
+                <div id="reshipError"></div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" onclick="closeReshipModal()">Back</button>
+                <button class="btn btn-primary" id="reshipContinueBtn" onclick="reshipContinue()">Continue</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/shoppers/assets/shoppers-app.js?v=1788000000"></script>
+    <script src="/shoppers/assets/shoppers-ai-copilot-pro.js?v=1788000000"></script>
+</body>
+</html>

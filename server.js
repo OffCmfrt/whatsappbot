@@ -131,6 +131,19 @@ app.use('/webhooks/zoho', express.raw({ type: '*/*' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Shoppers Hub CSP override — must run before express.static below.
+// The hub (migrated from the Shopify theme page) relies on inline event
+// handlers and renders product images from Shopify's CDN, so relax only
+// script-src-attr and img-src; every other helmet protection stays default.
+app.use('/shoppers', helmet({
+    contentSecurityPolicy: {
+        directives: {
+            'script-src-attr': ["'unsafe-inline'"],
+            'img-src': ["'self'", 'data:', 'https:']
+        }
+    }
+}));
+
 // Serve static files (admin dashboard)
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -419,6 +432,11 @@ app.get('/health', (req, res) => {
 // Serve admin dashboard
 app.get('/admin', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'dashboard', 'index.html'));
+});
+
+// Serve Shoppers Hub (migrated from the Shopify theme page)
+app.get('/shoppers', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'shoppers', 'index.html'));
 });
 
 // 404 handler
