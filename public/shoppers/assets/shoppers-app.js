@@ -6787,10 +6787,27 @@ setupTeamEvents();
             btn.classList.toggle('active', btn.dataset.nav === key);
         });
     };
+    // nav key -> sub-view element. Each show*View() only hides the dashboard,
+    // so switching views from the sidebar would stack stale sub-views on top.
+    const NAV_VIEWS = {
+        inbox: 'inboxView',
+        follow_up: 'followUpView',
+        multi_orders: 'multiOrdersView',
+        shipped: 'shippedOrdersView',
+        analytics: 'analyticsView',
+        team: 'teamView',
+    };
     sidebar.addEventListener('click', (e) => {
         const item = e.target.closest('.sidebar-item[data-nav]');
         if (!item) return;
         setActive(item.dataset.nav);
+        // Runs after the button's own show*View handler (bubble phase):
+        // close every other sub-view, or restore the main list for 'shoppers'.
+        const targetView = NAV_VIEWS[item.dataset.nav];
+        Object.values(NAV_VIEWS).forEach(id => {
+            if (id !== targetView) document.getElementById(id).style.display = 'none';
+        });
+        if (!targetView) document.querySelector('.dashboard-main').style.display = 'block';
         if (window.innerWidth < 1024) closeDrawer();
     });
     // Returning to the main list re-activates the Shoppers item
