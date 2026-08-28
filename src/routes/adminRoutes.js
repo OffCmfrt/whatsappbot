@@ -5458,4 +5458,254 @@ router.get('/ai/quality-metrics', verifyToken, async (req, res) => {
     }
 });
 
+// ==========================================
+// PREMIUM INVENTORY INTELLIGENCE
+// Computes true sellable stock per product/variant by reconciling Shopify
+// on-hand stock with units out in the field: in-circulation shipments,
+// RTO returns coming back, open customer returns and exchange pipelines.
+//   final_available = on_hand + rto_incoming + return_incoming
+//                     + exchange_incoming − exchange_outgoing
+// ==========================================
+router.get('/inventory', verifyToken, async (req, res) => {
+    try {
+        const windowDays = Math.max(0, Math.min(parseInt(req.query.window, 10) || 90, 730));
+        const force = req.query.refresh === '1' || req.query.refresh === 'true';
+        const cacheKey = `inventory_intel:${windowDays}`;
+        if (!force) {
+            const cached = getCached(cacheKey);
+            if (cached) return res.json({ ...cached, cached: true });
+        }
+
+        const shopifyService = require('../services/shopifyService');
+        const { extractItemSize } = require('../utils/orderItems');
+
+        const catalog = await shopifyService.getProductCatalog(force);
+
+        const windowSql = windowDays > 0 ? `AND created_at >= NOW() - INTERVAL '${windowDays} days'` : '';
+
+        // Two simple, index-friendly scans instead of one OR-heavy scan:
+        // A) windowed history → delivered + RTO buckets
+        // B) current in-circulation shipments (never window-trimmed — they are
+        //    still out with couriers regardless of age)
+        const [historyRows, circulationRows, returnRows, exchangeRows] = await Promise.all([
+            dbAdapter.query(`
+                SELECT s.items_json, s.status AS shopper_status, o.status AS order_status, o.awb
+                FROM store_shoppers s
+                LEFT JOIN orders o ON o.order_id = s.order_id
+                WHERE s.items_json IS NOT NULL
+                  AND (o.status IN ('delivered','rto') OR s.status = 'rto')
+                  ${windowDays > 0 ? `AND s.created_at >= NOW() - INTERVAL '${windowDays} days'` : ''}
+            `),
+            dbAdapter.query(`
+                SELECT s.items_json, s.status AS shopper_status, o.status AS order_status, o.awb
+                FROM store_shoppers s
+                INNER JOIN orders o ON o.order_id = s.order_id
+                WHERE s.items_json IS NOT NULL
+                  AND s.status = 'confirmed'
+                  AND (o.awb IS NOT NULL OR o.status = 'shipped')
+                  AND COALESCE(o.status, '') NOT IN ('delivered','rto','cancelled','failed')
+            `),
+            dbAdapter.query(`SELECT items FROM returns WHERE status IN ('pending_approval','initiated','approved','pickup_scheduled') ${windowSql}`),
+            dbAdapter.query(`SELECT old_items, new_items FROM exchanges WHERE status IN ('pending_approval','initiated','pickup_scheduled') ${windowSql}`)
+        ]);
+
+        // ---------- Variant resolution indexes ----------
+        const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const skuIndex = new Map();      // normalized sku -> { p, v }
+        const titleIndex = new Map();    // normalized product title -> product
+        const variantKey = (p, v) => `${p.id}:${v.id}`;
+        for (const p of catalog) {
+            titleIndex.set(norm(p.title), p);
+            for (const v of (p.variants || [])) {
+                if (v.sku) skuIndex.set(norm(v.sku), { p, v });
+            }
+        }
+
+        // Resolve a raw line item ({title|product_name|name, sku, variant|variant_title|size, quantity})
+        // to a catalog variant. Returns { p, v } or null.
+        const resolveItem = (item) => {
+            if (!item || typeof item !== 'object') return null;
+            const sku = norm(item.sku);
+            if (sku && skuIndex.has(sku)) return skuIndex.get(sku);
+
+            const title = norm(item.title || item.product_name || item.name);
+            if (!title) return null;
+
+            let product = titleIndex.get(title) || null;
+            if (!product) {
+                // Titles often carry trailing size/colour suffixes — match by containment
+                for (const [pTitle, p] of titleIndex) {
+                    if (!pTitle) continue;
+                    if (title.startsWith(pTitle) || pTitle.startsWith(title)) { product = p; break; }
+                }
+            }
+            if (!product) return null;
+
+            const variants = product.variants || [];
+            if (variants.length === 1) return { p: product, v: variants[0] };
+
+            const size = norm(extractItemSize(item));
+            if (size) {
+                const hit = variants.find(v => norm(v.title) && norm(v.title).split(' ').includes(size));
+                if (hit) return { p: product, v: hit };
+            }
+            return { p: product, v: null }; // product matched but variant is ambiguous
+        };
+
+        const parseItems = (raw) => {
+            if (!raw) return [];
+            try {
+                const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                return Array.isArray(parsed) ? parsed : [];
+            } catch (_) { return []; }
+        };
+
+        // ---------- Aggregate buckets per variant ----------
+        const BUCKETS = ['in_circulation', 'delivered', 'rto_incoming', 'return_incoming', 'exchange_incoming', 'exchange_outgoing'];
+        const stats = new Map(); // variantKey -> bucket counts
+        const ensureStats = (key) => {
+            if (!stats.has(key)) stats.set(key, Object.fromEntries(BUCKETS.map(b => [b, 0])));
+            return stats.get(key);
+        };
+        const untracked = new Map(); // "title|size" -> { title, size, bucket counts }
+
+        const addItemUnits = (items, bucket) => {
+            for (const item of items) {
+                const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
+                const resolved = resolveItem(item);
+                if (resolved && resolved.v) {
+                    ensureStats(variantKey(resolved.p, resolved.v))[bucket] += qty;
+                } else {
+                    const title = String(item.title || item.product_name || item.name || 'Unknown item').trim();
+                    const size = extractItemSize(item) || resolved?.v?.title || '';
+                    const uKey = `${norm(title)}|${norm(size)}`;
+                    if (!untracked.has(uKey)) {
+                        untracked.set(uKey, { title, size, ...Object.fromEntries(BUCKETS.map(b => [b, 0])) });
+                    }
+                    untracked.get(uKey)[bucket] += qty;
+                }
+            }
+        };
+
+        // 1) Forward orders: in-circulation / delivered / RTO buckets.
+        //    Circulation rows are counted from the dedicated query only; the
+        //    windowed history query skips them to avoid double counting.
+        const classifyRow = (row) => {
+            const orderStatus = String(row.order_status || '').toLowerCase();
+            const shipped = row.shopper_status === 'confirmed' && (row.awb || orderStatus === 'shipped');
+            if (row.shopper_status === 'rto' || orderStatus === 'rto') return 'rto_incoming';
+            if (orderStatus === 'delivered') return 'delivered';
+            if (shipped && !['cancelled', 'failed'].includes(orderStatus)) return 'in_circulation';
+            return null;
+        };
+        for (const row of circulationRows) {
+            const bucket = classifyRow(row);
+            if (bucket) addItemUnits(parseItems(row.items_json), bucket);
+        }
+        for (const row of historyRows) {
+            const bucket = classifyRow(row);
+            // In-circulation units already counted from the dedicated query above
+            if (!bucket || bucket === 'in_circulation') continue;
+            addItemUnits(parseItems(row.items_json), bucket);
+        }
+
+        // 2) Open customer returns → stock coming back
+        for (const row of returnRows) addItemUnits(parseItems(row.items), 'return_incoming');
+
+        // 3) Open exchanges → old items come back, replacement items go out
+        for (const row of exchangeRows) {
+            addItemUnits(parseItems(row.old_items), 'exchange_incoming');
+            addItemUnits(parseItems(row.new_items), 'exchange_outgoing');
+        }
+
+        // ---------- Assemble product/variant response ----------
+        const money = (n) => Math.round((Number(n) || 0) * 100) / 100;
+        let products = catalog.map(p => {
+            const variants = (p.variants || []).map(v => {
+                const s = stats.get(variantKey(p, v)) || Object.fromEntries(BUCKETS.map(b => [b, 0]));
+                const onHand = typeof v.inventory === 'number' ? v.inventory : 0;
+                const finalAvailable = onHand + s.rto_incoming + s.return_incoming + s.exchange_incoming - s.exchange_outgoing;
+                const shippedUnits = s.delivered + s.rto_incoming + s.in_circulation;
+                return {
+                    id: v.id,
+                    title: v.title || 'Default',
+                    sku: v.sku || '',
+                    price: v.price,
+                    compare_at_price: v.compare_at_price,
+                    on_hand: onHand,
+                    in_circulation: s.in_circulation,
+                    delivered: s.delivered,
+                    rto_incoming: s.rto_incoming,
+                    return_incoming: s.return_incoming,
+                    exchange_incoming: s.exchange_incoming,
+                    exchange_outgoing: s.exchange_outgoing,
+                    final_available: finalAvailable,
+                    stock_value: money(onHand * v.price),
+                    rto_rate_pct: shippedUnits > 0 ? Math.round(s.rto_incoming / shippedUnits * 1000) / 10 : 0,
+                    return_rate_pct: s.delivered > 0 ? Math.round(s.return_incoming / s.delivered * 1000) / 10 : 0,
+                    low_stock: onHand <= 3
+                };
+            });
+            const sum = (key) => variants.reduce((acc, v) => acc + (v[key] || 0), 0);
+            const totals = {
+                on_hand: sum('on_hand'),
+                in_circulation: sum('in_circulation'),
+                delivered: sum('delivered'),
+                rto_incoming: sum('rto_incoming'),
+                return_incoming: sum('return_incoming'),
+                exchange_incoming: sum('exchange_incoming'),
+                exchange_outgoing: sum('exchange_outgoing'),
+                final_available: sum('final_available'),
+                stock_value: money(sum('stock_value'))
+            };
+            const shippedUnits = totals.delivered + totals.rto_incoming + totals.in_circulation;
+            return {
+                id: p.id,
+                title: p.title,
+                image: p.image,
+                handle: p.handle,
+                variant_count: variants.length,
+                totals,
+                rto_rate_pct: shippedUnits > 0 ? Math.round(totals.rto_incoming / shippedUnits * 1000) / 10 : 0,
+                variants
+            };
+        }).sort((a, b) => a.title.localeCompare(b.title));
+
+        // ---------- Portfolio summary ----------
+        const agg = (key) => products.reduce((acc, p) => acc + p.totals[key], 0);
+        const onHandUnits = agg('on_hand');
+        const summary = {
+            products: products.length,
+            variants: products.reduce((acc, p) => acc + p.variant_count, 0),
+            on_hand_units: onHandUnits,
+            stock_value: money(agg('stock_value')),
+            in_circulation_units: agg('in_circulation'),
+            rto_incoming_units: agg('rto_incoming'),
+            return_incoming_units: agg('return_incoming'),
+            exchange_incoming_units: agg('exchange_incoming'),
+            exchange_outgoing_units: agg('exchange_outgoing'),
+            final_available_units: onHandUnits + agg('rto_incoming') + agg('return_incoming') + agg('exchange_incoming') - agg('exchange_outgoing'),
+            delivered_units: agg('delivered'),
+            low_stock_variants: products.reduce((acc, p) => acc + p.variants.filter(v => v.low_stock).length, 0)
+        };
+
+        const untrackedList = [...untracked.values()].filter(u => BUCKETS.some(b => u[b] > 0))
+            .sort((a, b) => a.title.localeCompare(b.title));
+
+        const response = {
+            success: true,
+            window_days: windowDays,
+            generated_at: new Date().toISOString(),
+            summary,
+            products,
+            untracked: untrackedList
+        };
+        setCache(cacheKey, response, 'stats', 3 * 60 * 1000);
+        res.json(response);
+    } catch (error) {
+        console.error('Inventory intelligence error:', error);
+        res.status(500).json({ success: false, error: 'Failed to compute inventory intelligence' });
+    }
+});
+
 module.exports = router;

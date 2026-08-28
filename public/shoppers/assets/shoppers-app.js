@@ -6771,6 +6771,280 @@ function setupTeamEvents() {
 }
 setupTeamEvents();
 
+// ==========================================
+// PREMIUM INVENTORY INTELLIGENCE
+// Reconciles Shopify on-hand stock with RTOs, open returns and
+// exchange pipelines to show true sellable stock per product/variant.
+// ==========================================
+let invData = null;
+let invWindowDays = 90;
+const invExpandedProducts = new Set();
+
+const INV_LOADING_HTML = `
+    <div class="inv-loading">
+        <div class="inv-spinner"></div>
+        <span>Reconciling stock, RTOs, returns &amp; exchanges...</span>
+    </div>`;
+
+function showInventoryView() {
+    document.querySelector('.dashboard-main').style.display = 'none';
+    document.getElementById('inventoryView').style.display = 'block';
+    if (!invData) loadInventoryData();
+}
+
+function hideInventoryView() {
+    document.getElementById('inventoryView').style.display = 'none';
+    document.querySelector('.dashboard-main').style.display = 'block';
+}
+
+async function loadInventoryData(force = false) {
+    const wrap = document.getElementById('invTableWrap');
+    if (wrap) wrap.innerHTML = INV_LOADING_HTML;
+    try {
+        const data = await apiCall(`/inventory?window=${invWindowDays}${force ? '&refresh=1' : ''}`);
+        if (!data || data.success === false) throw new Error(data?.error || 'Failed to load inventory');
+        invData = data;
+        renderInventory();
+    } catch (err) {
+        if (wrap) wrap.innerHTML = `<div class="inv-error">Could not load inventory intelligence — ${escapeHtml(err.message || 'unknown error')}</div>`;
+    }
+}
+
+function invMoney(n) {
+    return '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+
+function renderInventorySummary(s) {
+    const cards = [
+        { label: 'Final Sellable Stock', value: s.final_available_units, sub: 'on-hand + returns inbound − exchange outbound', cls: 'inv-stat-hero' },
+        { label: 'On Hand', value: s.on_hand_units, sub: `value ${invMoney(s.stock_value)}` },
+        { label: 'In Circulation', value: s.in_circulation_units, sub: 'shipped, not yet delivered' },
+        { label: 'RTO Incoming', value: s.rto_incoming_units, sub: 'returning to warehouse' },
+        { label: 'Returns Incoming', value: s.return_incoming_units, sub: 'open customer returns' },
+        { label: 'Exchange Pipeline', value: `${s.exchange_incoming_units} / ${s.exchange_outgoing_units}`, sub: 'inbound / outbound units' },
+        { label: 'Low Stock Variants', value: s.low_stock_variants, sub: '≤ 3 units on hand', cls: s.low_stock_variants > 0 ? 'inv-stat-warn' : '' }
+    ];
+    document.getElementById('invSummaryRow').innerHTML = cards.map(c => `
+        <div class="inv-stat-card ${c.cls || ''}">
+            <span class="inv-stat-label">${c.label}</span>
+            <span class="inv-stat-value">${typeof c.value === 'number' ? c.value.toLocaleString('en-IN') : c.value}</span>
+            <span class="inv-stat-sub">${c.sub}</span>
+        </div>`).join('');
+}
+
+function invFilterProducts() {
+    if (!invData) return [];
+    const q = (document.getElementById('invSearchInput')?.value || '').trim().toLowerCase();
+    const lowOnly = document.getElementById('invLowStockOnly')?.checked;
+
+    let products = invData.products.map(p => {
+        let variants = p.variants;
+        if (q) {
+            const productHit = p.title.toLowerCase().includes(q);
+            variants = variants.filter(v =>
+                productHit
+                || v.title.toLowerCase().includes(q)
+                || (v.sku || '').toLowerCase().includes(q)
+            );
+            if (variants.length === 0) return null;
+        }
+        if (lowOnly) {
+            variants = variants.filter(v => v.low_stock);
+            if (variants.length === 0) return null;
+        }
+        return { ...p, variants };
+    }).filter(Boolean);
+
+    const sort = document.getElementById('invSortSelect')?.value || 'name';
+    const sorters = {
+        name: (a, b) => a.title.localeCompare(b.title),
+        final_asc: (a, b) => a.totals.final_available - b.totals.final_available,
+        final_desc: (a, b) => b.totals.final_available - a.totals.final_available,
+        value_desc: (a, b) => b.totals.stock_value - a.totals.stock_value,
+        rto_desc: (a, b) => b.rto_rate_pct - a.rto_rate_pct
+    };
+    products.sort(sorters[sort] || sorters.name);
+    return products;
+}
+
+function invNumCell(value, { strong = false, muted = false } = {}) {
+    const cls = strong ? 'inv-num inv-num-strong' : muted ? 'inv-num inv-num-muted' : 'inv-num';
+    return `<td class="${cls}">${Number(value || 0).toLocaleString('en-IN')}</td>`;
+}
+
+function invVariantCells(v) {
+    return [
+        invNumCell(v.on_hand, { strong: true }),
+        invNumCell(v.in_circulation, { muted: !v.in_circulation }),
+        invNumCell(v.rto_incoming, { muted: !v.rto_incoming }),
+        invNumCell(v.return_incoming, { muted: !v.return_incoming }),
+        invNumCell(v.exchange_incoming, { muted: !v.exchange_incoming }),
+        invNumCell(v.exchange_outgoing, { muted: !v.exchange_outgoing }),
+        invNumCell(v.final_available, { strong: true }),
+        `<td class="inv-num">${invMoney(v.stock_value)}</td>`,
+        `<td class="inv-num">${v.rto_rate_pct}%</td>`,
+        `<td class="inv-num">${v.low_stock ? '<span class="inv-badge inv-badge-low">Low</span>' : '<span class="inv-badge inv-badge-ok">OK</span>'}</td>`
+    ].join('');
+}
+
+function renderInventoryTable() {
+    const wrap = document.getElementById('invTableWrap');
+    const products = invFilterProducts();
+    const expandAll = document.getElementById('invExpandAll')?.checked;
+
+    document.getElementById('invCountsLabel').textContent =
+        `${products.length} of ${invData.products.length} products`;
+
+    if (products.length === 0) {
+        wrap.innerHTML = '<div class="inv-empty">No products match the current filters.</div>';
+        return;
+    }
+
+    const headerCells = [
+        '<th class="inv-col-left">Product / Variant</th>',
+        '<th>On Hand</th>', '<th>In Transit</th>', '<th>RTO Inbound</th>',
+        '<th>Returns Inbound</th>', '<th>Exch In</th>', '<th>Exch Out</th>',
+        '<th>Final Available</th>', '<th>Stock Value</th>', '<th>RTO %</th>', '<th>Status</th>'
+    ].join('');
+
+    const rows = products.map(p => {
+        const expanded = expandAll || invExpandedProducts.has(String(p.id));
+        const lowCount = p.variants.filter(v => v.low_stock).length;
+        const productCells = [
+            invNumCell(p.totals.on_hand, { strong: true }),
+            invNumCell(p.totals.in_circulation, { muted: !p.totals.in_circulation }),
+            invNumCell(p.totals.rto_incoming, { muted: !p.totals.rto_incoming }),
+            invNumCell(p.totals.return_incoming, { muted: !p.totals.return_incoming }),
+            invNumCell(p.totals.exchange_incoming, { muted: !p.totals.exchange_incoming }),
+            invNumCell(p.totals.exchange_outgoing, { muted: !p.totals.exchange_outgoing }),
+            invNumCell(p.totals.final_available, { strong: true }),
+            `<td class="inv-num">${invMoney(p.totals.stock_value)}</td>`,
+            `<td class="inv-num">${p.rto_rate_pct}%</td>`,
+            `<td class="inv-num">${lowCount > 0 ? `<span class="inv-badge inv-badge-low">${lowCount} Low</span>` : '<span class="inv-badge inv-badge-ok">OK</span>'}</td>`
+        ].join('');
+        const thumb = p.image
+            ? `<img class="inv-product-thumb" src="${escapeHtml(p.image)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'inv-product-thumb-fallback\\'>◈</div>'">`
+            : '<div class="inv-product-thumb-fallback">◈</div>';
+        const productRow = `
+            <tr class="inv-product-row ${expanded ? 'expanded' : ''}" data-inv-product="${p.id}">
+                <td class="inv-col-left">
+                    <div class="inv-product-cell">
+                        <span class="inv-expand-icon">›</span>
+                        ${thumb}
+                        <div>
+                            <div class="inv-product-name">${escapeHtml(p.title)}</div>
+                            <div class="inv-product-meta">${p.variant_count} variant${p.variant_count === 1 ? '' : 's'} · RTO rate ${p.rto_rate_pct}%</div>
+                        </div>
+                    </div>
+                </td>
+                ${productCells}
+            </tr>`;
+        const variantRows = p.variants.map(v => `
+            <tr class="inv-variant-row ${expanded ? 'visible' : ''}" data-inv-variant-of="${p.id}">
+                <td class="inv-col-left">
+                    <div class="inv-variant-cell">
+                        <span>${escapeHtml(v.title)}</span>
+                        ${v.sku ? `<span class="inv-sku-chip">${escapeHtml(v.sku)}</span>` : ''}
+                    </div>
+                </td>
+                ${invVariantCells(v)}
+            </tr>`).join('');
+        return productRow + variantRows;
+    }).join('');
+
+    wrap.innerHTML = `<table class="inv-table"><thead><tr>${headerCells}</tr></thead><tbody>${rows}</tbody></table>`;
+
+    wrap.querySelectorAll('.inv-product-row').forEach(tr => {
+        tr.addEventListener('click', () => {
+            const id = tr.dataset.invProduct;
+            const isOpen = tr.classList.toggle('expanded');
+            wrap.querySelectorAll(`[data-inv-variant-of="${id}"]`).forEach(vr => vr.classList.toggle('visible', isOpen));
+            if (isOpen) invExpandedProducts.add(id); else invExpandedProducts.delete(id);
+        });
+    });
+}
+
+function renderInventoryUntracked() {
+    const wrap = document.getElementById('invUntrackedWrap');
+    const list = (invData.untracked || []).filter(u =>
+        ['rto_incoming', 'return_incoming', 'exchange_incoming', 'exchange_outgoing', 'in_circulation'].some(k => u[k] > 0));
+    if (list.length === 0) { wrap.innerHTML = ''; return; }
+    const fmtBuckets = (u) => [
+        u.in_circulation ? `${u.in_circulation} in transit` : null,
+        u.rto_incoming ? `${u.rto_incoming} RTO` : null,
+        u.return_incoming ? `${u.return_incoming} returns` : null,
+        u.exchange_incoming ? `${u.exchange_incoming} exch-in` : null,
+        u.exchange_outgoing ? `${u.exchange_outgoing} exch-out` : null
+    ].filter(Boolean).join(' · ');
+    wrap.innerHTML = `
+        <div class="inv-untracked">
+            <h3>⚠ Unmatched Items</h3>
+            <div class="inv-untracked-sub">These line items from orders, returns and exchanges could not be matched to a Shopify catalog variant — verify their SKUs/product titles.</div>
+            <div class="inv-untracked-list">
+                ${list.map(u => `
+                    <div class="inv-untracked-item">
+                        <span>${escapeHtml(u.title)}${u.size ? ` — ${escapeHtml(u.size)}` : ''}</span>
+                        <span class="inv-untracked-buckets">${fmtBuckets(u)}</span>
+                    </div>`).join('')}
+            </div>
+        </div>`;
+}
+
+function renderInventory() {
+    if (!invData) return;
+    const s = invData.summary;
+    renderInventorySummary(s);
+    const generatedAt = new Date(invData.generated_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    const windowLabel = invData.window_days > 0 ? `last ${invData.window_days} days` : 'all time';
+    document.getElementById('invStatusLine').textContent =
+        `${invData.cached ? 'Cached snapshot' : 'Live snapshot'} · generated ${generatedAt} IST · RTO / return / exchange pipeline: ${windowLabel}`;
+    renderInventoryTable();
+    renderInventoryUntracked();
+}
+
+function exportInventoryCsv() {
+    if (!invData) return;
+    const headers = ['Product', 'Variant', 'SKU', 'Price', 'On Hand', 'In Circulation', 'Delivered (window)',
+        'RTO Incoming', 'Returns Incoming', 'Exchange Incoming', 'Exchange Outgoing', 'Final Available',
+        'Stock Value', 'RTO Rate %', 'Return Rate %'];
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [headers.join(',')];
+    for (const p of invData.products) {
+        for (const v of p.variants) {
+            lines.push([p.title, v.title, v.sku, v.price, v.on_hand, v.in_circulation, v.delivered,
+                v.rto_incoming, v.return_incoming, v.exchange_incoming, v.exchange_outgoing,
+                v.final_available, v.stock_value, v.rto_rate_pct, v.return_rate_pct].map(esc).join(','));
+        }
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `inventory-intelligence-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+(function setupInventoryEvents() {
+    document.getElementById('inventoryBtn')?.addEventListener('click', showInventoryView);
+    document.getElementById('backToShoppersFromInventory')?.addEventListener('click', hideInventoryView);
+    document.getElementById('invRefreshBtn')?.addEventListener('click', () => loadInventoryData(true));
+    document.getElementById('invExportBtn')?.addEventListener('click', exportInventoryCsv);
+    document.getElementById('invSearchInput')?.addEventListener('input', () => invData && renderInventoryTable());
+    document.getElementById('invLowStockOnly')?.addEventListener('change', () => invData && renderInventoryTable());
+    document.getElementById('invExpandAll')?.addEventListener('change', () => invData && renderInventoryTable());
+    document.getElementById('invSortSelect')?.addEventListener('change', () => invData && renderInventoryTable());
+    document.getElementById('invWindowPills')?.addEventListener('click', (e) => {
+        const pill = e.target.closest('.inv-pill');
+        if (!pill) return;
+        invWindowDays = parseInt(pill.dataset.window, 10) || 0;
+        document.querySelectorAll('#invWindowPills .inv-pill').forEach(b => b.classList.toggle('active', b === pill));
+        loadInventoryData();
+    });
+})();
+
 // ===== Premium sidebar: drawer toggle + active-state tracking =====
 (function initHubSidebar() {
     const sidebar = document.getElementById('hubSidebar');
@@ -6795,6 +7069,7 @@ setupTeamEvents();
         multi_orders: 'multiOrdersView',
         shipped: 'shippedOrdersView',
         analytics: 'analyticsView',
+        inventory: 'inventoryView',
         team: 'teamView',
     };
     sidebar.addEventListener('click', (e) => {
@@ -6812,7 +7087,8 @@ setupTeamEvents();
     }, true);
     // Returning to the main list re-activates the Shoppers item
     ['backToShoppers', 'backToShoppersFromInbox', 'backToShoppersFromFollowUp',
-     'backToShoppersFromMultiOrders', 'backToShoppersFromTeam', 'backToShoppersFromShipped'
+     'backToShoppersFromMultiOrders', 'backToShoppersFromTeam', 'backToShoppersFromShipped',
+     'backToShoppersFromInventory'
     ].forEach(id => {
         document.getElementById(id)?.addEventListener('click', () => setActive('shoppers'));
     });

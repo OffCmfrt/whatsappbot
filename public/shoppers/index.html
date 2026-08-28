@@ -6,7 +6,7 @@
     <title>Shopper Management | OFFCOMFRT</title>
     <!-- Google Fonts: Outfit, Inter, Archivo Narrow -->
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Inter:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1788600000">
+        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1788700000">
 </head>
 <body class="dark-theme">
     <!-- Login View -->
@@ -71,6 +71,11 @@
                     <button id="analyticsBtn" class="sidebar-item" data-nav="analytics" title="Analytics">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
                         <span>Analytics</span>
+                    </button>
+                    <button id="inventoryBtn" class="sidebar-item" data-nav="inventory" title="Inventory Intelligence">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                        <span>Inventory</span>
+                        <span class="sidebar-badge sidebar-badge-pro">PRO</span>
                     </button>
                 </div>
                 <div class="sidebar-section">
@@ -1558,8 +1563,86 @@
         </div>
     </div>
 
+    <!-- Full Screen Inventory Intelligence View -->
+    <div id="inventoryView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2500; overflow-y: auto;">
+        <div class="inv-header">
+            <div class="inv-header-left">
+                <button id="backToShoppersFromInventory" class="btn btn-outline">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back to Shoppers
+                </button>
+                <div class="inv-title-block">
+                    <h2>Inventory Intelligence</h2>
+                    <span class="inv-pro-tag">PREMIUM</span>
+                </div>
+            </div>
+            <div class="inv-header-right">
+                <div class="inv-window-pills" id="invWindowPills">
+                    <button class="inv-pill" data-window="30">30d</button>
+                    <button class="inv-pill" data-window="60">60d</button>
+                    <button class="inv-pill active" data-window="90">90d</button>
+                    <button class="inv-pill" data-window="0">All time</button>
+                </div>
+                <input type="text" id="invSearchInput" class="inv-search" placeholder="Search product, variant or SKU..." autocomplete="off">
+                <button id="invRefreshBtn" class="btn btn-outline" title="Refresh live data">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle;">
+                        <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                    </svg>
+                </button>
+                <button id="invExportBtn" class="btn btn-success">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Export CSV
+                </button>
+            </div>
+        </div>
+
+        <div class="inv-content">
+            <div id="invStatusLine" class="inv-status-line"></div>
+            <div id="invSummaryRow" class="inv-stats-row"></div>
+
+            <div class="inv-toolbar">
+                <div class="inv-toolbar-left">
+                    <span id="invCountsLabel" class="inv-counts-label"></span>
+                    <label class="inv-toggle">
+                        <input type="checkbox" id="invLowStockOnly">
+                        <span>Low stock only</span>
+                    </label>
+                    <label class="inv-toggle">
+                        <input type="checkbox" id="invExpandAll">
+                        <span>Expand all variants</span>
+                    </label>
+                </div>
+                <div class="inv-toolbar-right">
+                    <span class="filter-label">Sort:</span>
+                    <select id="invSortSelect">
+                        <option value="name">Product A–Z</option>
+                        <option value="final_asc">Final stock · low → high</option>
+                        <option value="final_desc">Final stock · high → low</option>
+                        <option value="value_desc">Stock value · high → low</option>
+                        <option value="rto_desc">RTO rate · high → low</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="invTableWrap" class="inv-table-wrap">
+                <div class="inv-loading">
+                    <div class="inv-spinner"></div>
+                    <span>Reconciling stock, RTOs, returns &amp; exchanges...</span>
+                </div>
+            </div>
+
+            <div id="invUntrackedWrap"></div>
+        </div>
+    </div>
+
     <!-- Scripts -->
-    <script src="/shoppers/assets/shoppers-app.js?v=1788600000"></script>
-    <script src="/shoppers/assets/shoppers-ai-copilot-pro.js?v=1788600000"></script>
+    <script src="/shoppers/assets/shoppers-app.js?v=1788700000"></script>
+    <script src="/shoppers/assets/shoppers-ai-copilot-pro.js?v=1788700000"></script>
 </body>
 </html>
