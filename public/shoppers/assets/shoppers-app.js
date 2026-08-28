@@ -6801,15 +6801,15 @@ setupTeamEvents();
         const item = e.target.closest('.sidebar-item[data-nav]');
         if (!item) return;
         setActive(item.dataset.nav);
-        // Runs after the button's own show*View handler (bubble phase):
-        // close every other sub-view, or restore the main list for 'shoppers'.
+        // Capture phase: runs BEFORE the button's own show*View handler so
+        // stale sub-views are closed first, immune to stopPropagation.
         const targetView = NAV_VIEWS[item.dataset.nav];
         Object.values(NAV_VIEWS).forEach(id => {
             if (id !== targetView) document.getElementById(id).style.display = 'none';
         });
         if (!targetView) document.querySelector('.dashboard-main').style.display = 'block';
         if (window.innerWidth < 1024) closeDrawer();
-    });
+    }, true);
     // Returning to the main list re-activates the Shoppers item
     ['backToShoppers', 'backToShoppersFromInbox', 'backToShoppersFromFollowUp',
      'backToShoppersFromMultiOrders', 'backToShoppersFromTeam', 'backToShoppersFromShipped'

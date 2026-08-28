@@ -145,7 +145,13 @@ app.use('/shoppers', helmet({
 }));
 
 // Serve static files (admin dashboard)
-app.use(express.static(path.join(__dirname, 'public')));
+// HTML must always revalidate so deploys ship fresh markup immediately;
+// versioned assets (?v= busters) handle long-lived caching.
+app.use(express.static(path.join(__dirname, 'public'), {
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+    }
+}));
 
 // Serve support portal
 app.use('/portal/support', express.static(path.join(__dirname, 'public', 'portal', 'support')));
