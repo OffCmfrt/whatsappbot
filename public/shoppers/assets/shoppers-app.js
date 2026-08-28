@@ -65,11 +65,11 @@ function applyRolePermissions() {
     const identity = getHubIdentity();
     const isAdmin = identity.role === 'admin';
 
-    // User badge in the nav bar
+    // User badge in the sidebar footer
     const badge = document.getElementById('hubUserBadge');
     if (badge) {
-        badge.textContent = `${isAdmin ? '👑 Admin' : '👤 ' + (identity.name || identity.username)}`;
-        badge.style.display = 'inline-block';
+        badge.textContent = isAdmin ? 'Admin' : (identity.name || identity.username);
+        badge.style.display = 'flex';
     }
 
     // Nav buttons ↔ page permissions
@@ -88,7 +88,7 @@ function applyRolePermissions() {
 
     // Team button — master admin only
     const teamBtn = document.getElementById('teamBtn');
-    if (teamBtn) teamBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+    if (teamBtn) teamBtn.style.display = isAdmin ? 'flex' : 'none';
 
     // Logout — clears the session for both admin and operator accounts
     const logoutBtn = document.getElementById('hubLogoutBtn');
@@ -1115,7 +1115,7 @@ async function fetchInboxCounts() {
 }
 
 function showInboxView() {
-    document.getElementById('dashboardView').style.display = 'none';
+    document.querySelector('.dashboard-main').style.display = 'none';
     document.getElementById('inboxView').style.display = 'block';
     inboxPageOffset = 0;
 
@@ -1139,7 +1139,7 @@ function showInboxView() {
 
 function hideInboxView() {
     document.getElementById('inboxView').style.display = 'none';
-    document.getElementById('dashboardView').style.display = 'block';
+    document.querySelector('.dashboard-main').style.display = 'block';
 }
 
 // ==========================================
@@ -1147,7 +1147,7 @@ function hideInboxView() {
 // ==========================================
 
 function showMultiOrdersView() {
-    document.getElementById('dashboardView').style.display = 'none';
+    document.querySelector('.dashboard-main').style.display = 'none';
     document.getElementById('multiOrdersView').style.display = 'block';
 
     if (moQuickDate) {
@@ -1170,7 +1170,7 @@ function showMultiOrdersView() {
 
 function hideMultiOrdersView() {
     document.getElementById('multiOrdersView').style.display = 'none';
-    document.getElementById('dashboardView').style.display = 'block';
+    document.querySelector('.dashboard-main').style.display = 'block';
 }
 
 async function fetchMultiOrdersData() {
@@ -3448,8 +3448,8 @@ let currentAnalyticsData = null;
 let analyticsDateRange = { start: null, end: null };
 
 function showAnalyticsView() {
-    // Hide dashboard, show analytics
-    document.getElementById('dashboardView').style.display = 'none';
+    // Hide dashboard main (sidebar stays visible), show analytics
+    document.querySelector('.dashboard-main').style.display = 'none';
     document.getElementById('analyticsView').style.display = 'block';
     
     // Reset days to show counter
@@ -3461,7 +3461,7 @@ function showAnalyticsView() {
 
 function hideAnalyticsView() {
     document.getElementById('analyticsView').style.display = 'none';
-    document.getElementById('dashboardView').style.display = 'block';
+    document.querySelector('.dashboard-main').style.display = 'block';
 }
 
 function formatDateForInput(date) {
@@ -5971,7 +5971,7 @@ window.startShopifyCancel = startShopifyCancel;
 // ==========================================
 
 function showShippedOrdersView() {
-    document.getElementById('dashboardView').style.display = 'none';
+    document.querySelector('.dashboard-main').style.display = 'none';
     document.getElementById('shippedOrdersView').style.display = 'block';
 
     if (soQuickDate) {
@@ -6029,7 +6029,7 @@ async function syncShipmentStatuses(announce = false) {
 
 function hideShippedOrdersView() {
     document.getElementById('shippedOrdersView').style.display = 'none';
-    document.getElementById('dashboardView').style.display = 'block';
+    document.querySelector('.dashboard-main').style.display = 'block';
 }
 
 function buildSoParams(limit, offset) {
@@ -6770,3 +6770,33 @@ function setupTeamEvents() {
     });
 }
 setupTeamEvents();
+
+// ===== Premium sidebar: drawer toggle + active-state tracking =====
+(function initHubSidebar() {
+    const sidebar = document.getElementById('hubSidebar');
+    if (!sidebar) return;
+
+    const toggle = document.getElementById('sidebarToggle');
+    const backdrop = document.getElementById('sidebarBackdrop');
+    const closeDrawer = () => document.body.classList.remove('sidebar-open');
+    toggle?.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
+    backdrop?.addEventListener('click', closeDrawer);
+
+    const setActive = (key) => {
+        sidebar.querySelectorAll('.sidebar-item[data-nav]').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.nav === key);
+        });
+    };
+    sidebar.addEventListener('click', (e) => {
+        const item = e.target.closest('.sidebar-item[data-nav]');
+        if (!item) return;
+        setActive(item.dataset.nav);
+        if (window.innerWidth < 1024) closeDrawer();
+    });
+    // Returning to the main list re-activates the Shoppers item
+    ['backToShoppers', 'backToShoppersFromInbox', 'backToShoppersFromFollowUp',
+     'backToShoppersFromMultiOrders', 'backToShoppersFromTeam', 'backToShoppersFromShipped'
+    ].forEach(id => {
+        document.getElementById(id)?.addEventListener('click', () => setActive('shoppers'));
+    });
+})();
