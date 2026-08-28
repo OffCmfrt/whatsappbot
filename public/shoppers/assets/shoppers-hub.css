@@ -4184,3 +4184,48 @@ body.dark-theme {
 }
 .card-actions-grid .btn-call:hover,
 .card-actions-grid .btn-chat:hover { background: #fff; color: #000; border-color: #fff; }
+
+/* ================================================================
+   COLLAPSIBLE SIDEBAR — desktop icon rail
+   ================================================================ */
+.hub-sidebar { transition: transform 0.45s var(--ease-premium), width 0.35s var(--ease-premium); }
+.hub-content { transition: margin-left 0.35s var(--ease-premium); }
+#analyticsView, #followUpView, #teamView, #inboxView, #multiOrdersView, #shippedOrdersView {
+    transition: left 0.35s var(--ease-premium);
+}
+
+.sidebar-collapse-btn {
+    display: flex; align-items: center; gap: 0.7rem; width: 100%;
+    margin-top: 0.45rem; padding: 0.8rem 0.7rem 0.15rem;
+    border: none; border-top: 1px solid var(--mono-hairline);
+    background: transparent; color: var(--mono-faint);
+    font-family: 'Archivo Narrow', sans-serif; font-size: 0.7rem; font-weight: 600;
+    letter-spacing: 1.4px; text-transform: uppercase; text-align: left;
+    cursor: pointer; transition: color 0.2s ease;
+}
+.sidebar-collapse-btn svg { width: 15px; height: 15px; flex-shrink: 0; transition: transform 0.35s var(--ease-premium); }
+.sidebar-collapse-btn:hover { color: #fff; }
+
+@media (max-width: 1023px) {
+    .sidebar-collapse-btn { display: none; }
+}
+
+@media (min-width: 1024px) {
+    body.sidebar-collapsed { --sidebar-w: 84px; }
+    body.sidebar-collapsed .sidebar-brand { justify-content: center; padding: 1.35rem 0.5rem 1.15rem; }
+    body.sidebar-collapsed .sidebar-brand-text { display: none; }
+    body.sidebar-collapsed .sidebar-section-title { display: none; }
+    body.sidebar-collapsed .sidebar-section:not(:first-child) { border-top: 1px solid var(--mono-hairline); padding-top: 0.55rem; }
+    body.sidebar-collapsed .sidebar-item { justify-content: center; gap: 0; padding: 0.66rem 0; }
+    body.sidebar-collapsed .sidebar-item > span:not(.sidebar-badge) { display: none; }
+    body.sidebar-collapsed .sidebar-badge {
+        position: absolute; top: 6px; right: calc(50% - 17px);
+        min-width: 7px; width: 7px; height: 7px; padding: 0;
+        font-size: 0; border-radius: 50%;
+        background: #fff; box-shadow: 0 0 6px rgba(255,255,255,0.7);
+    }
+    body.sidebar-collapsed #hubUserBadge { display: none !important; }
+    body.sidebar-collapsed .sidebar-collapse-btn { justify-content: center; gap: 0; }
+    body.sidebar-collapsed .sidebar-collapse-btn span { display: none; }
+    body.sidebar-collapsed .sidebar-collapse-btn svg { transform: rotate(180deg); }
+}

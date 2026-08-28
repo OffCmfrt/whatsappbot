@@ -6799,4 +6799,20 @@ setupTeamEvents();
     ].forEach(id => {
         document.getElementById(id)?.addEventListener('click', () => setActive('shoppers'));
     });
+
+    // Desktop collapse-to-rail toggle (persisted across reloads)
+    const collapseBtn = document.getElementById('sidebarCollapseBtn');
+    const setCollapsed = (on) => {
+        document.body.classList.toggle('sidebar-collapsed', on);
+        if (collapseBtn) {
+            collapseBtn.title = on ? 'Expand sidebar' : 'Collapse sidebar';
+            collapseBtn.setAttribute('aria-label', collapseBtn.title);
+        }
+        try { localStorage.setItem('hubSidebarCollapsed', on ? '1' : '0'); } catch (e) { /* private mode */ }
+    };
+    collapseBtn?.addEventListener('click', () =>
+        setCollapsed(!document.body.classList.contains('sidebar-collapsed')));
+    try {
+        if (localStorage.getItem('hubSidebarCollapsed') === '1') setCollapsed(true);
+    } catch (e) { /* private mode */ }
 })();
