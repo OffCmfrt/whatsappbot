@@ -520,6 +520,31 @@ async function startServer() {
         reengagementCron.init();
         shipmentSyncCron.init();
 
+        // Keep the Inventory Control Tower's 3-min snapshot cache perpetually
+        // warm so the hub view opens instantly; without this the first open
+        // after a deploy pays for the full reconciliation pass.
+        const warmInventoryTower = async () => {
+            try {
+                const jwt = require('jsonwebtoken');
+                const { adminCredentialFingerprint } = require('./src/middleware/auth');
+                const token = jwt.sign(
+                    { username: 'cache-warm', role: 'admin', credFp: adminCredentialFingerprint() },
+                    process.env.JWT_SECRET,
+                    { expiresIn: '60s' }
+                );
+                const port = process.env.PORT || 3000;
+                const res = await fetch(`http://localhost:${port}/api/admin/inventory?window=90`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                console.log('✅ Inventory tower cache warmed');
+            } catch (error) {
+                console.warn('⚠️ Inventory tower warm-up failed (non-critical):', error.message);
+            }
+        };
+        setTimeout(warmInventoryTower, 8000);
+        setInterval(warmInventoryTower, 150000); // refresh before the 3-min TTL lapses
+
         // ── Unified memory watchdog ─────────────────────────────────────
         // One adaptive 60s timer replaces the previous stack of overlapping
         // intervals (queue check, 2-min memory monitor, 2-min pg cleanup,
