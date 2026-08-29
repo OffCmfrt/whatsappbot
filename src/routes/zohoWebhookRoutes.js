@@ -151,6 +151,21 @@ router.post('/orders/cancelled', verifyShopifyWebhook, async (req, res) => {
                 ['cancelled', 'Order cancelled before dispatch — invoice voided', orderId]
             );
         } catch (e) { /* log-only */ }
+
+        // Flag matching hub rows as cancelled on the order channel so the
+        // Shoppers Hub shows the "Synced" badge on these cancelled orders.
+        try {
+            const { dbAdapter } = require('../database/db');
+            const names = [order.name, order.order_number?.toString()].filter(Boolean);
+            const uniqueNames = [...new Set(names)];
+            if (uniqueNames.length) {
+                await dbAdapter.run(
+                    `UPDATE store_shoppers SET shopify_cancelled_at = NOW(), updated_at = NOW()
+                     WHERE order_id IN (${uniqueNames.map(() => '?').join(',')}) AND shopify_cancelled_at IS NULL`,
+                    uniqueNames
+                );
+            }
+        } catch (e) { /* log-only */ }
     } catch (err) {
         console.error('❌ Zoho webhook orders/cancelled error:', err.message);
     }

@@ -414,12 +414,15 @@ class MessageHandler {
                 const targetOrderId = target.id;
                 console.log(`[CANCEL] Cancelling order ${target.order_id} (row ${targetOrderId}) for ${phone}`);
                 
-                // Update only that specific order
+                // Update only that specific order.
+                // Customer-initiated cancellations are stamped 'AUTO' so the hub
+                // can tell them apart from manual (reason-entered) cancellations.
                 await dbAdapter.query(
                     `UPDATE store_shoppers 
                      SET status = 'cancelled', 
                          updated_at = ?,
                          confirmed_by = 'whatsapp',
+                         cancel_reason = 'AUTO',
                          customer_message = COALESCE(customer_message || '\n---\n', '') || ?,
                          response_count = COALESCE(response_count, 0) + 1,
                          last_response_at = ?

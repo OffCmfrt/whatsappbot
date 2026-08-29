@@ -1920,6 +1920,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
                    CASE WHEN s.status = 'confirmed' AND ${shippedExpr} THEN 'shipped' ELSE s.status END as status,
                    s.customer_message, s.last_response_at, s.created_at, s.updated_at,
                    s.confirmed_by, s.items_json, s.rto_risk,
+                   s.cancel_reason, s.shopify_cancelled_at, s.shopify_refund_amount,
                    o.awb,
                    o.courier_name,
                    COALESCE(s.order_total, o.total) as order_total,
@@ -2116,6 +2117,26 @@ router.get('/shopify/products', verifyToken, async (req, res) => {
     }
 });
 
+// Send the customer a WhatsApp notice about a manual cancellation.
+// Delegates to whatsappService.sendOrderCancellationNotice, which uses the
+// Meta template order_cancelled_v1 and falls back to a plain session message
+// while the template is pending approval or if the template call fails.
+async function notifyCustomerOfCancellation(shopper, reason) {
+    if (!shopper?.phone) return false;
+    const isPrepaid = shopper.payment_method && !/cod|cash on delivery/i.test(String(shopper.payment_method));
+    const amount = parseFloat(shopper.order_total) || 0;
+    const refundNote = isPrepaid
+        ? `Your prepaid amount of ₹${amount.toLocaleString('en-IN')} will be refunded to the original payment method within 5-7 business days.`
+        : 'This was a Cash on Delivery order, so no refund is applicable.';
+    return await whatsappService.sendOrderCancellationNotice(
+        shopper.phone,
+        shopper.name || 'Customer',
+        shopper.order_id || 'N/A',
+        reason,
+        refundNote
+    );
+}
+
 // Update shopper status manually (Confirm/Reject)
 router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'), async (req, res) => {
     try {
@@ -2125,7 +2146,19 @@ router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'
         if (!['pending', 'confirmed', 'cancelled', 'edit_details'].includes(status)) {
             return res.status(400).json({ error: 'Invalid status' });
         }
-        logOperatorActivity(req, 'status_update', `Shopper ${id} → ${status}`);
+
+        // Manual cancellations must carry a reason — it is stored on the order
+        // and included in the WhatsApp notice sent to the customer.
+        // (Customer-initiated WhatsApp cancels are stamped 'AUTO' by the bot.)
+        const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+        if (status === 'cancelled' && !reason) {
+            return res.status(400).json({ error: 'Cancellation reason is required' });
+        }
+
+        // Previous status (before this update) — a re-cancel must not re-notify the customer
+        const prevRows = await dbAdapter.select('store_shoppers', { id }, { limit: 1 });
+        const wasAlreadyCancelled = status === 'cancelled' && prevRows[0]?.status === 'cancelled';
+        logOperatorActivity(req, 'status_update', `Shopper ${id} → ${status}${status === 'cancelled' ? ` (reason: ${reason})` : ''}`);
 
         const updateData = { 
             status, 
@@ -2136,15 +2169,20 @@ router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'
         if (['confirmed', 'cancelled', 'edit_details'].includes(status)) {
             updateData.confirmed_by = 'manual';
         }
+        if (status === 'cancelled') {
+            updateData.cancel_reason = reason;
+        }
 
         await dbAdapter.update('store_shoppers', updateData, { id });
 
         // If the order was already shipped, cancel the shipment at its carrier too
         let shipmentCancellation = null;
+        let whatsappNotified = null;
         if (status === 'cancelled') {
             try {
                 const shopperRows = await dbAdapter.select('store_shoppers', { id }, { limit: 1 });
-                const orderId = shopperRows[0]?.order_id;
+                const shopper = shopperRows[0];
+                const orderId = shopper?.order_id;
                 if (orderId) {
                     const shipping = require('../services/shippingService');
                     shipmentCancellation = await shipping.cancelActiveShipmentForOrder(orderId);
@@ -2153,6 +2191,11 @@ router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'
                     } else if (shipmentCancellation.cancelled) {
                         console.log(`📦 Cancelled shipment (AWB: ${shipmentCancellation.awb}) at ${shipmentCancellation.carrier} for order ${orderId}`);
                     }
+                }
+                // Notify the customer on WhatsApp with the reason — only on the
+                // first cancel (re-cancelling must not spam the customer again)
+                if (!wasAlreadyCancelled) {
+                    whatsappNotified = await notifyCustomerOfCancellation(shopper, reason);
                 }
             } catch (shipError) {
                 console.error('⚠️ Carrier cancellation check failed (order status still updated):', shipError.message);
@@ -2169,7 +2212,10 @@ router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'
         } else if (shipmentCancellation?.hadShipment && !shipmentCancellation.cancelled) {
             message += ` — but carrier cancellation FAILED: ${shipmentCancellation.error}. Cancel it manually from the shipments drawer.`;
         }
-        res.json({ success: true, message, shipmentCancellation });
+        if (status === 'cancelled' && whatsappNotified === true) {
+            message += ' — customer notified on WhatsApp';
+        }
+        res.json({ success: true, message, shipmentCancellation, whatsappNotified });
     } catch (error) {
         console.error('Shopper status update error:', error);
         res.status(500).json({ error: 'Failed to update status' });
@@ -2221,6 +2267,20 @@ router.post('/shoppers/:id/shopify-cancel', verifyToken, requirePermission('edit
         if (!result.cancelled) {
             return res.status(502).json({ success: false, error: result.error || 'Shopify cancellation failed', result });
         }
+
+        // Persist the channel-sync state so the hub shows the "Synced" badge
+        // on this cancelled order (cancelled on the order channel itself).
+        try {
+            await dbAdapter.update('store_shoppers', {
+                shopify_cancelled_at: new Date().toISOString(),
+                shopify_refund_amount: result.refunded ? (result.refundAmount || null) : null,
+                updated_at: new Date().toISOString()
+            }, { id });
+            invalidateCache('shoppers');
+        } catch (syncErr) {
+            console.warn(`⚠️ Could not persist Shopify cancel sync flag for shopper ${id}:`, syncErr.message);
+        }
+
         res.json({ success: true, result });
     } catch (error) {
         console.error('Shopify cancel error:', error);
@@ -5510,23 +5570,27 @@ router.get('/inventory', verifyToken, async (req, res) => {
         // A) windowed history → delivered + RTO buckets
         // B) current in-circulation shipments (never window-trimmed — they are
         //    still out with couriers regardless of age)
-        const [historyRows, circulationRows, returnRows, exchangeRows, rsPipeline, salesRows] = await Promise.all([
+        const [historyRows, circulationRows, returnRows, exchangeRows, rsPipeline, salesRows, bundleRows] = await Promise.all([
             dbAdapter.query(`
-                SELECT s.items_json, s.status AS shopper_status, o.status AS order_status, o.awb
+                SELECT jsonb_agg(jsonb_build_object('quantity', it->>'quantity', 'qty', it->>'qty', 'sku', it->>'sku', 'title', it->>'title', 'size', it->>'size', 'variant', it->>'variant', 'variant_title', it->>'variant_title', 'variant_size', it->>'variant_size', 'product_size', it->>'product_size')) AS items_json, s.status AS shopper_status, o.status AS order_status
                 FROM store_shoppers s
                 LEFT JOIN orders o ON o.order_id = s.order_id
+                CROSS JOIN LATERAL jsonb_array_elements(s.items_json::jsonb) it
                 WHERE s.items_json IS NOT NULL
                   AND (o.status IN ('delivered','rto') OR s.status = 'rto')
                   ${windowDays > 0 ? `AND s.created_at >= NOW() - INTERVAL '${windowDays} days'` : ''}
+                GROUP BY s.id, o.status
             `),
             dbAdapter.query(`
-                SELECT s.items_json, s.status AS shopper_status, o.status AS order_status, o.awb
+                SELECT jsonb_agg(jsonb_build_object('quantity', it->>'quantity', 'qty', it->>'qty', 'sku', it->>'sku', 'title', it->>'title', 'size', it->>'size', 'variant', it->>'variant', 'variant_title', it->>'variant_title', 'variant_size', it->>'variant_size', 'product_size', it->>'product_size')) AS items_json, s.status AS shopper_status, o.status AS order_status, o.awb
                 FROM store_shoppers s
                 INNER JOIN orders o ON o.order_id = s.order_id
+                CROSS JOIN LATERAL jsonb_array_elements(s.items_json::jsonb) it
                 WHERE s.items_json IS NOT NULL
                   AND s.status = 'confirmed'
                   AND (o.awb IS NOT NULL OR o.status = 'shipped')
                   AND COALESCE(o.status, '') NOT IN ('delivered','rto','cancelled','failed')
+                GROUP BY s.id, o.status, o.awb
             `),
             dbAdapter.query(`SELECT items FROM returns WHERE status IN ('pending_approval','initiated','approved','pickup_scheduled') ${windowSql}`),
             dbAdapter.query(`SELECT old_items, new_items FROM exchanges WHERE status IN ('pending_approval','initiated','pickup_scheduled') ${windowSql}`),
@@ -5534,22 +5598,46 @@ router.get('/inventory', verifyToken, async (req, res) => {
             // Trailing 84 days of shipped/delivered units for velocity & forecast
             // series — always a fixed window, independent of the pipeline window.
             dbAdapter.query(`
-                SELECT s.created_at, s.items_json
+                SELECT jsonb_agg(jsonb_build_object('quantity', it->>'quantity', 'qty', it->>'qty', 'sku', it->>'sku', 'title', it->>'title', 'size', it->>'size', 'variant', it->>'variant', 'variant_title', it->>'variant_title', 'variant_size', it->>'variant_size', 'product_size', it->>'product_size')) AS items_json, MAX(s.created_at) AS created_at
                 FROM store_shoppers s
                 LEFT JOIN orders o ON o.order_id = s.order_id
+                CROSS JOIN LATERAL jsonb_array_elements(s.items_json::jsonb) it
                 WHERE s.items_json IS NOT NULL
                   AND s.created_at >= NOW() - INTERVAL '84 days'
                   AND (o.status IN ('delivered','shipped') OR (s.status = 'confirmed' AND o.awb IS NOT NULL))
                   AND COALESCE(o.status, '') NOT IN ('cancelled','failed')
-            `)
+                GROUP BY s.id
+            `),
+            dbAdapter.query(`SELECT bundle_sku, component_sku, component_qty FROM zoho_bundle_map`)
         ]);
+
+        // ---------- Bundle / combo expansion (Zoho configuration) ----------
+        // Combos & bundles are NOT distinct products — zoho_bundle_map breaks
+        // them into their single-product components (e.g. "POLO- 001 ( COMBO )"
+        // = POLO- 001 BLACK + OFF-WHITE). Every order-derived count is expanded
+        // into components, and the bundle products themselves are excluded from
+        // the dashboard catalog so they never surface as separate items.
+        const normBundleKey = (s) => String(s || '').toUpperCase()
+            .replace(/\s*([()])\s*/g, '$1')
+            .replace(/\s*-\s*/g, '-')
+            .replace(/\s+/g, ' ').trim();
+        const bundleMap = new Map(); // raw / normalized bundle key -> component rows
+        for (const r of bundleRows) {
+            for (const k of [r.bundle_sku, normBundleKey(r.bundle_sku)]) {
+                if (!k) continue;
+                if (!bundleMap.has(k)) bundleMap.set(k, []);
+                bundleMap.get(k).push(r);
+            }
+        }
+        const activeCatalog = catalog.filter(p =>
+            !bundleMap.has(p.title) && !bundleMap.has(normBundleKey(p.title)));
 
         // ---------- Variant resolution indexes ----------
         const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
         const skuIndex = new Map();      // normalized sku -> { p, v }
         const titleIndex = new Map();    // normalized product title -> product
         const variantKey = (p, v) => `${p.id}:${v.id}`;
-        for (const p of catalog) {
+        for (const p of activeCatalog) {
             titleIndex.set(norm(p.title), p);
             for (const v of (p.variants || [])) {
                 if (v.sku) skuIndex.set(norm(v.sku), { p, v });
@@ -5580,6 +5668,22 @@ router.get('/inventory', verifyToken, async (req, res) => {
             if (variants.length === 1) return { p: product, v: variants[0] };
 
             const size = norm(extractItemSize(item));
+            // Colourway hint: whatever the title carries beyond the product
+            // family (bundle component "POLO- 001 ( BLACK )" → "black").
+            const pNorm = norm(product.title);
+            const extraTokens = title.startsWith(pNorm)
+                ? title.slice(pNorm.length).split(' ').filter(Boolean)
+                : [];
+            const wanted = [...extraTokens, ...(size ? [size] : [])];
+            if (wanted.length) {
+                const hit = variants.find(v => {
+                    const vt = norm(v.title);
+                    if (!vt) return false;
+                    const vtTokens = vt.split(' ').filter(Boolean);
+                    return wanted.every(t => vtTokens.includes(t) || vt.includes(t));
+                });
+                if (hit) return { p: product, v: hit };
+            }
             if (size) {
                 const hit = variants.find(v => norm(v.title) && norm(v.title).split(' ').includes(size));
                 if (hit) return { p: product, v: hit };
@@ -5595,6 +5699,30 @@ router.get('/inventory', verifyToken, async (req, res) => {
             } catch (_) { return []; }
         };
 
+        // Expand combo/bundle line items into their single-product components
+        // per zoho_bundle_map; non-bundle items pass through untouched.
+        const expandBundleItems = (items) => {
+            if (!bundleMap.size) return items;
+            const out = [];
+            for (const item of items) {
+                if (!item || typeof item !== 'object') continue;
+                const comps = bundleMap.get(item.sku || '')
+                    || bundleMap.get(item.title || '')
+                    || bundleMap.get(normBundleKey(item.title));
+                if (!comps) { out.push(item); continue; }
+                const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
+                for (const c of comps) {
+                    out.push({
+                        title: c.component_sku,
+                        sku: '',
+                        variant: item.variant || item.variant_title || item.size || '',
+                        quantity: qty * (c.component_qty || 1),
+                    });
+                }
+            }
+            return out;
+        };
+
         // ---------- Aggregate buckets per variant ----------
         const BUCKETS = ['in_circulation', 'delivered', 'rto_incoming', 'return_incoming', 'exchange_incoming', 'exchange_outgoing'];
         const stats = new Map(); // variantKey -> bucket counts
@@ -5605,7 +5733,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
         const untracked = new Map(); // "title|size" -> { title, size, bucket counts }
 
         const addItemUnits = (items, bucket) => {
-            for (const item of items) {
+            for (const item of expandBundleItems(items)) {
                 const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
                 const resolved = resolveItem(item);
                 if (resolved && resolved.v) {
@@ -5692,7 +5820,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
             if (!ts || isNaN(ts)) continue;
             const ageDays = Math.floor((nowTs - ts) / 86400000);
             if (ageDays < 0 || ageDays >= VEL_DAYS) continue;
-            for (const item of parseItems(row.items_json)) {
+            for (const item of expandBundleItems(parseItems(row.items_json))) {
                 const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
                 const resolved = resolveItem(item);
                 if (!resolved || !resolved.v) continue; // unattributable units can't feed SKU velocity
@@ -5723,7 +5851,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
 
         // ---------- Assemble product/variant response ----------
         const money = (n) => Math.round((Number(n) || 0) * 100) / 100;
-        let products = catalog.map(p => {
+        let products = activeCatalog.map(p => {
             const productCreatedAt = p.created_at ? new Date(p.created_at).getTime() : null;
             const ageingDays = productCreatedAt && !isNaN(productCreatedAt)
                 ? Math.max(0, Math.floor((nowTs - productCreatedAt) / 86400000))

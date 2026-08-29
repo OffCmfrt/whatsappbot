@@ -6,7 +6,7 @@
     <title>Shopper Management | OFFCOMFRT</title>
     <!-- Google Fonts: Outfit, Inter, Archivo Narrow -->
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Inter:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1788700000">
+        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1788900002">
 </head>
 <body class="dark-theme">
     <!-- Login View -->
@@ -1520,6 +1520,33 @@
         </div>
     </div>
 
+    <!-- Cancel Reason Modal (reason is mandatory before every manual cancellation;
+         the customer gets a WhatsApp notice containing this reason) -->
+    <div id="cancelReasonModal">
+        <div class="bulk-ship-content" style="max-width: 560px;">
+            <div class="ship-modal-header">
+                <h3>Cancel Order <span class="ship-order-label" id="crOrderCount"></span></h3>
+                <button class="ship-close" onclick="closeCancelReasonModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div class="cr-label">Why is this order being cancelled? <span class="cr-required">Required</span></div>
+                <div class="cr-chips">
+                    <button type="button" class="cr-chip" data-reason="Customer requested cancellation" onclick="selectCancelReason(this)">Customer Requested</button>
+                    <button type="button" class="cr-chip" data-reason="Out of stock" onclick="selectCancelReason(this)">Out of Stock</button>
+                    <button type="button" class="cr-chip" data-reason="Incorrect address" onclick="selectCancelReason(this)">Address Issue</button>
+                    <button type="button" class="cr-chip" data-reason="Duplicate order" onclick="selectCancelReason(this)">Duplicate Order</button>
+                    <button type="button" class="cr-chip" data-reason="Payment failed" onclick="selectCancelReason(this)">Payment Failed</button>
+                </div>
+                <textarea id="crReasonText" class="cr-reason-text" rows="2" placeholder="Or type a custom reason..." oninput="clearCancelReasonChips()"></textarea>
+                <div class="cr-note">📲 The customer will receive a WhatsApp message about this cancellation with the reason.</div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" onclick="closeCancelReasonModal()">Back</button>
+                <button class="btn btn-primary" id="crConfirmBtn" onclick="confirmCancelWithReason()" style="background: #ff4757; color: #fff; border-color: #ff4757; font-weight: 700;">Cancel Order</button>
+            </div>
+        </div>
+    </div>
+
     <!-- New Forward Shipment Modal (ship any order by its Order ID) -->
     <div id="soNewShipModal" onclick="if(event.target === this) closeSoNewShipModal()">
         <div class="ship-modal-content" style="max-width: 660px;">
@@ -1624,7 +1651,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/shoppers/assets/shoppers-app.js?v=1788900001"></script>
+    <script src="/shoppers/assets/shoppers-app.js?v=1788900002"></script>
     <script src="/shoppers/assets/shoppers-inventory-tower.js?v=1788900000"></script>
     <script src="/shoppers/assets/shoppers-ai-copilot-pro.js?v=1788900000"></script>
 </body>

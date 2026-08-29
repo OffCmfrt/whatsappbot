@@ -153,7 +153,7 @@ async function handleGokwikEvent(payload) {
             return { handled: 'order_cancelled', skipped: true };
         }
         await dbAdapter.update('store_shoppers',
-            { status: 'cancelled', updated_at: new Date().toISOString() },
+            { status: 'cancelled', cancel_reason: 'AUTO — GoKwik', confirmed_by: 'gokwik', updated_at: new Date().toISOString() },
             { order_id: orderId });
         try {
             const shippingService = require('../services/shippingService');

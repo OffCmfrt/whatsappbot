@@ -299,7 +299,10 @@ async function initializeShoppersTable() {
       { name: 'confirmed_by', type: 'VARCHAR(50)' },
       { name: 'conversation_lock_until', type: 'TIMESTAMP' },
       { name: 'gokwik_order_id', type: 'TEXT' },
-      { name: 'rto_risk', type: 'VARCHAR(20)' }
+      { name: 'rto_risk', type: 'VARCHAR(20)' },
+      { name: 'cancel_reason', type: 'TEXT' },
+      { name: 'shopify_cancelled_at', type: 'TIMESTAMP' },
+      { name: 'shopify_refund_amount', type: 'DECIMAL(10,2)' }
     ];
 
     for (const col of columns) {

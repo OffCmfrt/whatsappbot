@@ -206,6 +206,9 @@ CREATE TABLE IF NOT EXISTS store_shoppers (
     conversation_lock_until TIMESTAMP,
     gokwik_order_id TEXT,
     rto_risk VARCHAR(20),
+    cancel_reason TEXT,
+    shopify_cancelled_at TIMESTAMP,
+    shopify_refund_amount DECIMAL(10, 2),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(phone, order_id)

@@ -132,6 +132,9 @@ CREATE TABLE IF NOT EXISTS store_shoppers (
     customer_message TEXT,
     last_response_at TIMESTAMP,
     conversation_lock_until TIMESTAMP NULL,
+    cancel_reason TEXT,
+    shopify_cancelled_at TIMESTAMP,
+    shopify_refund_amount DECIMAL(10, 2),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(phone, order_id)

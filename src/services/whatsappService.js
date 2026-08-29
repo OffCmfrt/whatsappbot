@@ -611,6 +611,65 @@ class WhatsAppService {
     }
 
     /**
+     * Send an order-cancellation notice with the reason entered by the operator.
+     * Used ONLY for manual cancellations from Shoppers Hub — customer-initiated
+     * ("AUTO") cancellations never trigger this. Uses Meta-approved template
+     * order_cancelled_v1; falls back to plain text while the template is
+     * pending approval or if the template call fails.
+     * @param {string} to        - Customer phone number
+     * @param {string} name      - Customer name ({{1}})
+     * @param {string} orderId   - Order number ({{2}})
+     * @param {string} reason    - Cancellation reason ({{3}})
+     * @param {string} refundNote - Refund/prepaid note ({{4}})
+     */
+    async sendOrderCancellationNotice(to, name, orderId, reason, refundNote) {
+        try {
+            const cleanPhone = this.formatPhoneNumber(to);
+            console.log(`[CANCEL-NOTICE] Sending cancellation template to ${cleanPhone} for order ${orderId}`);
+
+            const templateData = {
+                name: 'order_cancelled_v1',
+                language: { code: 'en_US' }, // must match the registered language exactly ('en' → #132001)
+                components: [
+                    {
+                        type: 'body',
+                        parameters: [
+                            { type: 'text', text: name || 'Customer' },
+                            { type: 'text', text: orderId || 'N/A' },
+                            { type: 'text', text: reason || 'Order cancelled' },
+                            { type: 'text', text: refundNote || 'Thank you for shopping with us.' }
+                        ]
+                    }
+                ]
+            };
+
+            // Normalize to a boolean so callers can rely on true/false
+            // (sendTemplate returns the Meta response object on success,
+            // false when the recipient is blocked by the sandbox allow-list)
+            const result = await this.sendTemplate(to, templateData, 'order_cancelled');
+            return result !== false;
+        } catch (error) {
+            console.error('[CANCEL-NOTICE] Template send failed (may still be pending Meta approval):', error.message);
+            // Fallback: plain text message mirroring the template body
+            try {
+                const message =
+                    `❌ *Order Cancelled*\n\n` +
+                    `Hi ${name || 'Customer'},\n\n` +
+                    `Your OFFCOMFRT order *${orderId || 'N/A'}* has been cancelled.\n\n` +
+                    `*Reason:* ${reason || 'Order cancelled'}\n\n` +
+                    `${refundNote || ''}\n\n` +
+                    `We hope to serve you again soon. 💙\nTeam OFFCOMFRT`;
+                await this.sendMessage(to, message, 'order_cancelled');
+                console.log(`[CANCEL-NOTICE] Fallback plain message sent to ${to}`);
+                return true;
+            } catch (fallbackErr) {
+                console.error(`[CANCEL-NOTICE] Fallback also failed for ${to}:`, fallbackErr.message);
+                return false;
+            }
+        }
+    }
+
+    /**
      * sendRichNotification — Central helper for ALL transactional messages.
      *
      * Sends a rich interactive CTA message that looks like the order

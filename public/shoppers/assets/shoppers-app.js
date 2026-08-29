@@ -130,6 +130,7 @@ const limitPerPage = 50;
 // Safety cap for one bulk-ship run — protects carrier APIs (rate limits /
 // freight spend) and the browser from runaway batches. Raise cautiously.
 const MAX_BULK_SHIP = 200;
+const MAX_BULK_CANCEL = 200; // hub-side cancellation cap (single run, incl. WhatsApp notice per order)
 let searchTimeout = null;
 let filterTimeout = null;
 let currentChatPhone = null;
@@ -1459,21 +1460,8 @@ async function confirmMultiOrder(id) {
 
 async function cancelMultiOrder(id) {
     if (!hubRequirePerm('edit_orders', 'change order statuses')) return;
-    if (!confirm('Are you sure you want to CANCEL this order?')) return;
-    try {
-        const data = await apiCall(`/shoppers/${id}/status`, 'POST', { status: 'cancelled' });
-        if (data.success) {
-            // Surface carrier cancellation outcome for shipped orders
-            if (data.shipmentCancellation?.hadShipment) {
-                alert(data.message);
-            }
-            fetchMultiOrdersData();
-        } else {
-            alert('Failed to cancel order');
-        }
-    } catch (err) {
-        alert('Error cancelling order');
-    }
+    // Reasons are mandatory — the modal collects it, then notifies the customer
+    openCancelReasonModal([id]);
 }
 
 function editMultiOrder(id, nameEnc, phone, orderId, addressEnc, itemsEnc, paymentEnc, orderTotal) {
@@ -2432,7 +2420,13 @@ async function selectAllMatching() {
 async function bulkUpdateStatus(status) {
     if (!hubRequirePerm('edit_orders', 'change shopper statuses')) return;
     if (selectedShoppers.size === 0) return;
-    
+
+    // Cancellations must carry a reason — route through the reason modal
+    if (status === 'cancelled') {
+        openCancelReasonModal(Array.from(selectedShoppers));
+        return;
+    }
+
     if (!confirm(`Are you sure you want to mark ${selectedShoppers.size} orders as ${status.toUpperCase()}?`)) {
         return;
     }
@@ -2579,6 +2573,20 @@ function renderCards(shoppers, total, append = false) {
         const rtoChipHtml = (rtoRisk === 'high' || rtoRisk === 'medium')
             ? `<span class="rto-chip rto-${rtoRisk}" title="GoKwik RTO risk: ${rtoRisk.toUpperCase()}">${rtoRisk === 'high' ? 'HIGH RTO' : 'MED RTO'}</span>`
             : '';
+
+        // Synced badge: cancelled order that is ALSO cancelled on the order
+        // channel (Shopify) — lets operators see channel sync at a glance.
+        let syncedBadgeHtml = '';
+        if (s.status === 'cancelled' && s.shopify_cancelled_at) {
+            const refundAmt = parseFloat(s.shopify_refund_amount);
+            const syncedTitle = `Cancelled on the order channel (Shopify) · synced ${formatDate(s.shopify_cancelled_at)}${refundAmt > 0 ? ` · refunded ₹${refundAmt.toLocaleString('en-IN')}` : ''}`;
+            syncedBadgeHtml = `<span class="badge badge-synced" title="${escapeHtml(syncedTitle)}"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="margin-right:3px;"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>Synced</span>`;
+        }
+
+        // Cancellation reason chip (AUTO = customer cancelled via WhatsApp)
+        const cancelReasonChipHtml = (s.status === 'cancelled' && s.cancel_reason)
+            ? `<span class="badge badge-cancel-reason" title="Cancellation reason">${String(s.cancel_reason).toUpperCase() === 'AUTO' ? 'Customer · AUTO' : escapeHtml(s.cancel_reason)}</span>`
+            : '';
         
         if (currentViewMode === 'cards') {
             card.innerHTML = `
@@ -2589,6 +2597,8 @@ function renderCards(shoppers, total, append = false) {
                     <div class="source-info">
                         <span class="badge badge-shopify">Shopify</span>
                         <span class="badge badge-status ${statusBadgeClass}">${statusLabel}</span>
+                        ${syncedBadgeHtml}
+                        ${cancelReasonChipHtml}
                         <span class="badge badge-delivery">${s.delivery_type || 'Standard'}</span>
                         ${rtoChipHtml}
                     </div>
@@ -2656,6 +2666,8 @@ function renderCards(shoppers, total, append = false) {
 
             <div class="row-status">
                 <span class="badge badge-status ${statusBadgeClass}">${statusLabel}</span>
+                ${syncedBadgeHtml}
+                ${cancelReasonChipHtml}
                 ${rtoChipHtml}
             </div>
 
@@ -3536,6 +3548,9 @@ function getOrderEditorState() {
 
 async function updateStatus(id, status) {
     if (!hubRequirePerm('edit_orders', 'change order statuses')) return;
+    // Cancelling requires a reason — the modal collects it and triggers the
+    // WhatsApp cancellation notice to the customer.
+    if (status === 'cancelled') { openCancelReasonModal([id]); return; }
     if (!confirm(`Are you sure you want to change status to ${status.toUpperCase()}?`)) return;
 
     try {
@@ -5998,11 +6013,21 @@ async function openShopifyCancelModal() {
     if (!hubRequirePerm('edit_orders', 'cancel orders in Shopify')) return;
     if (selectedShoppers.size === 0) { showShipToast('Select some orders first', true); return; }
 
-    const eligible = allLoadedShoppers.filter(s =>
+    // Pool = records rendered on the page + records fetched by "Select All
+    // Matching Filters" — so bulk cancel is no longer limited to one 50-row page
+    const pool = new Map();
+    allLoadedShoppers.forEach(s => pool.set(s.id, s));
+    bulkMatchingShoppers.forEach(s => { if (!pool.has(s.id)) pool.set(s.id, s); });
+
+    const eligible = [...pool.values()].filter(s =>
         selectedShoppers.has(s.id) && s.status === 'cancelled'
     );
     if (eligible.length === 0) {
         showShipToast('No cancelled orders selected — open the Cancelled tab and select the orders to cancel in Shopify', true);
+        return;
+    }
+    if (eligible.length > MAX_BULK_CANCEL) {
+        showShipToast(`Bulk Shopify cancel is capped at ${MAX_BULK_CANCEL} orders per run — narrow the filters and split the batch`, true);
         return;
     }
 
@@ -6049,9 +6074,11 @@ async function startShopifyCancel() {
     startBtn.textContent = 'Cancelling...';
 
     let okCount = 0, failCount = 0, refundedCount = 0;
+    let done = 0;
     for (const id of ids) {
         const resultEl = document.getElementById(`sc-result-${id}`);
         if (resultEl) { resultEl.textContent = 'Cancelling...'; resultEl.className = 'bs-result run'; }
+        startBtn.textContent = `Cancelling ${done + 1} / ${ids.length}...`;
         try {
             // Sequential on purpose: keeps Shopify API rate limits happy
             const data = await apiCall(`/shoppers/${id}/shopify-cancel`, 'POST', { refundPrepaid });
@@ -6072,6 +6099,7 @@ async function startShopifyCancel() {
             failCount++;
             if (resultEl) { resultEl.textContent = '❌ Network error'; resultEl.className = 'bs-result err'; }
         }
+        done++;
     }
 
     shopifyCancelRunning = false;
@@ -6084,6 +6112,92 @@ async function startShopifyCancel() {
 window.openShopifyCancelModal = openShopifyCancelModal;
 window.closeShopifyCancelModal = closeShopifyCancelModal;
 window.startShopifyCancel = startShopifyCancel;
+
+// ==========================================
+// CANCELLATION REASONS (single + bulk)
+// Every manual cancel must carry a reason. Customer-initiated WhatsApp
+// cancels are stamped 'AUTO' by the bot; manual reasons are sent to the
+// customer via a WhatsApp cancellation template.
+// ==========================================
+let cancelReasonIds = [];
+let cancelReasonRunning = false;
+
+function openCancelReasonModal(ids) {
+    if (!ids || ids.length === 0) return;
+    if (ids.length > MAX_BULK_CANCEL) {
+        showShipToast(`Bulk cancel is capped at ${MAX_BULK_CANCEL} orders per run — narrow the filters and split the batch`, true);
+        return;
+    }
+    cancelReasonIds = ids;
+    document.getElementById('crOrderCount').textContent = ids.length === 1 ? '1 order' : `${ids.length} orders`;
+    document.getElementById('crReasonText').value = '';
+    document.querySelectorAll('.cr-chip').forEach(c => c.classList.remove('selected'));
+    const btn = document.getElementById('crConfirmBtn');
+    btn.disabled = false;
+    btn.textContent = ids.length === 1 ? 'Cancel Order' : `Cancel ${ids.length} Orders`;
+    document.getElementById('cancelReasonModal').classList.add('active');
+}
+
+function closeCancelReasonModal() {
+    if (cancelReasonRunning) { showShipToast('Cancellation in progress — wait for it to finish', true); return; }
+    document.getElementById('cancelReasonModal').classList.remove('active');
+    cancelReasonIds = [];
+}
+
+function selectCancelReason(chip) {
+    document.querySelectorAll('.cr-chip').forEach(c => c.classList.remove('selected'));
+    chip.classList.add('selected');
+    // A picked chip wins over any stale free text
+    document.getElementById('crReasonText').value = '';
+}
+
+function clearCancelReasonChips() {
+    // Typing a custom reason deselects the preset chips
+    document.querySelectorAll('.cr-chip').forEach(c => c.classList.remove('selected'));
+}
+
+async function confirmCancelWithReason() {
+    if (cancelReasonRunning) return;
+    const freeText = document.getElementById('crReasonText').value.trim();
+    const chip = document.querySelector('.cr-chip.selected');
+    const reason = freeText || chip?.dataset.reason || '';
+    if (!reason) { showShipToast('Pick or type a cancellation reason first', true); return; }
+
+    const ids = [...cancelReasonIds];
+    if (ids.length === 0) return;
+
+    cancelReasonRunning = true;
+    const btn = document.getElementById('crConfirmBtn');
+    btn.disabled = true;
+
+    let okCount = 0, failCount = 0;
+    // Batches of 5 — the server sends a WhatsApp notice per cancel, so keep
+    // concurrency modest to stay within Meta rate limits
+    for (let i = 0; i < ids.length; i += 5) {
+        const batch = ids.slice(i, i + 5);
+        btn.textContent = `Cancelling ${Math.min(i + 5, ids.length)} / ${ids.length}...`;
+        const results = await Promise.all(batch.map(id =>
+            apiCall(`/shoppers/${id}/status`, 'POST', { status: 'cancelled', reason })
+                .then(d => (d && d.success) ? true : false)
+                .catch(() => false)
+        ));
+        results.forEach(ok => { if (ok) okCount++; else failCount++; });
+    }
+
+    cancelReasonRunning = false;
+    document.getElementById('cancelReasonModal').classList.remove('active');
+    cancelReasonIds = [];
+    showShipToast(`${okCount} order(s) cancelled — customers notified on WhatsApp with the reason${failCount ? ` · ${failCount} failed` : ''}`, failCount > 0);
+    fetchShoppersData();
+    fetchInboxCounts();
+    if (typeof fetchMultiOrdersData === 'function') fetchMultiOrdersData();
+}
+
+window.openCancelReasonModal = openCancelReasonModal;
+window.closeCancelReasonModal = closeCancelReasonModal;
+window.selectCancelReason = selectCancelReason;
+window.clearCancelReasonChips = clearCancelReasonChips;
+window.confirmCancelWithReason = confirmCancelWithReason;
 
 // ==========================================
 // SHIPPED ORDERS VIEW - Full shipment history
@@ -6891,24 +7005,15 @@ function setupTeamEvents() {
 setupTeamEvents();
 
 // ==========================================
-// PREMIUM INVENTORY INTELLIGENCE
-// Reconciles Shopify on-hand stock with RTOs, open returns and
-// exchange pipelines to show true sellable stock per product/variant.
+// PREMIUM INVENTORY CONTROL TOWER
+// Data loading, rendering, filtering, sorting and CSV export are fully
+// delegated to the tower module (assets/shoppers-inventory-tower.js).
+// This block only owns view show/hide and the sidebar entry point.
 // ==========================================
-let invData = null;
-let invWindowDays = 90;
-const invExpandedProducts = new Set();
-
-const INV_LOADING_HTML = `
-    <div class="inv-loading">
-        <div class="inv-spinner"></div>
-        <span>Reconciling stock, RTOs, returns &amp; exchanges...</span>
-    </div>`;
-
 function showInventoryView() {
     document.querySelector('.dashboard-main').style.display = 'none';
     document.getElementById('inventoryView').style.display = 'block';
-    if (!invData) loadInventoryData();
+    window.InventoryTower?.open();
 }
 
 function hideInventoryView() {
@@ -6916,261 +7021,11 @@ function hideInventoryView() {
     document.querySelector('.dashboard-main').style.display = 'block';
 }
 
-async function loadInventoryData(force = false) {
-    const wrap = document.getElementById('invTableWrap');
-    if (wrap) wrap.innerHTML = INV_LOADING_HTML;
-    try {
-        const data = await apiCall(`/inventory?window=${invWindowDays}${force ? '&refresh=1' : ''}`);
-        if (!data || data.success === false) throw new Error(data?.error || 'Failed to load inventory');
-        invData = data;
-        renderInventory();
-    } catch (err) {
-        if (wrap) wrap.innerHTML = `<div class="inv-error">Could not load inventory intelligence — ${escapeHtml(err.message || 'unknown error')}</div>`;
-    }
-}
-
-function invMoney(n) {
-    return '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-}
-
-function renderInventorySummary(s) {
-    const cards = [
-        { label: 'Final Sellable Stock', value: s.final_available_units, sub: 'on-hand + returns inbound − exchange outbound', cls: 'inv-stat-hero' },
-        { label: 'On Hand', value: s.on_hand_units, sub: `value ${invMoney(s.stock_value)}` },
-        { label: 'In Circulation', value: s.in_circulation_units, sub: 'shipped, not yet delivered' },
-        { label: 'RTO Incoming', value: s.rto_incoming_units, sub: 'returning to warehouse' },
-        { label: 'Returns Incoming', value: s.return_incoming_units, sub: 'open customer returns' },
-        { label: 'Exchange Pipeline', value: `${s.exchange_incoming_units} / ${s.exchange_outgoing_units}`, sub: 'inbound / outbound units' },
-        { label: 'Low Stock Variants', value: s.low_stock_variants, sub: '≤ 3 units on hand', cls: s.low_stock_variants > 0 ? 'inv-stat-warn' : '' }
-    ];
-    document.getElementById('invSummaryRow').innerHTML = cards.map(c => `
-        <div class="inv-stat-card ${c.cls || ''}">
-            <span class="inv-stat-label">${c.label}</span>
-            <span class="inv-stat-value">${typeof c.value === 'number' ? c.value.toLocaleString('en-IN') : c.value}</span>
-            <span class="inv-stat-sub">${c.sub}</span>
-        </div>`).join('');
-}
-
-function invFilterProducts() {
-    if (!invData) return [];
-    const q = (document.getElementById('invSearchInput')?.value || '').trim().toLowerCase();
-    const lowOnly = document.getElementById('invLowStockOnly')?.checked;
-
-    let products = invData.products.map(p => {
-        let variants = p.variants;
-        if (q) {
-            const productHit = p.title.toLowerCase().includes(q);
-            variants = variants.filter(v =>
-                productHit
-                || v.title.toLowerCase().includes(q)
-                || (v.sku || '').toLowerCase().includes(q)
-            );
-            if (variants.length === 0) return null;
-        }
-        if (lowOnly) {
-            variants = variants.filter(v => v.low_stock);
-            if (variants.length === 0) return null;
-        }
-        return { ...p, variants };
-    }).filter(Boolean);
-
-    const sort = document.getElementById('invSortSelect')?.value || 'name';
-    const sorters = {
-        name: (a, b) => a.title.localeCompare(b.title),
-        final_asc: (a, b) => a.totals.final_available - b.totals.final_available,
-        final_desc: (a, b) => b.totals.final_available - a.totals.final_available,
-        value_desc: (a, b) => b.totals.stock_value - a.totals.stock_value,
-        rto_desc: (a, b) => b.rto_rate_pct - a.rto_rate_pct
-    };
-    products.sort(sorters[sort] || sorters.name);
-    return products;
-}
-
-function invNumCell(value, { strong = false, muted = false } = {}) {
-    const cls = strong ? 'inv-num inv-num-strong' : muted ? 'inv-num inv-num-muted' : 'inv-num';
-    return `<td class="${cls}">${Number(value || 0).toLocaleString('en-IN')}</td>`;
-}
-
-function invVariantCells(v) {
-    return [
-        invNumCell(v.on_hand, { strong: true }),
-        invNumCell(v.in_circulation, { muted: !v.in_circulation }),
-        invNumCell(v.rto_incoming, { muted: !v.rto_incoming }),
-        invNumCell(v.return_incoming, { muted: !v.return_incoming }),
-        invNumCell(v.exchange_incoming, { muted: !v.exchange_incoming }),
-        invNumCell(v.exchange_outgoing, { muted: !v.exchange_outgoing }),
-        invNumCell(v.final_available, { strong: true }),
-        `<td class="inv-num">${invMoney(v.stock_value)}</td>`,
-        `<td class="inv-num">${v.rto_rate_pct}%</td>`,
-        `<td class="inv-num">${v.low_stock ? '<span class="inv-badge inv-badge-low">Low</span>' : '<span class="inv-badge inv-badge-ok">OK</span>'}</td>`
-    ].join('');
-}
-
-function renderInventoryTable() {
-    const wrap = document.getElementById('invTableWrap');
-    const products = invFilterProducts();
-    const expandAll = document.getElementById('invExpandAll')?.checked;
-
-    document.getElementById('invCountsLabel').textContent =
-        `${products.length} of ${invData.products.length} products`;
-
-    if (products.length === 0) {
-        wrap.innerHTML = '<div class="inv-empty">No products match the current filters.</div>';
-        return;
-    }
-
-    const headerCells = [
-        '<th class="inv-col-left">Product / Variant</th>',
-        '<th>On Hand</th>', '<th>In Transit</th>', '<th>RTO Inbound</th>',
-        '<th>Returns Inbound</th>', '<th>Exch In</th>', '<th>Exch Out</th>',
-        '<th>Final Available</th>', '<th>Stock Value</th>', '<th>RTO %</th>', '<th>Status</th>'
-    ].join('');
-
-    const rows = products.map(p => {
-        const expanded = expandAll || invExpandedProducts.has(String(p.id));
-        const lowCount = p.variants.filter(v => v.low_stock).length;
-        const productCells = [
-            invNumCell(p.totals.on_hand, { strong: true }),
-            invNumCell(p.totals.in_circulation, { muted: !p.totals.in_circulation }),
-            invNumCell(p.totals.rto_incoming, { muted: !p.totals.rto_incoming }),
-            invNumCell(p.totals.return_incoming, { muted: !p.totals.return_incoming }),
-            invNumCell(p.totals.exchange_incoming, { muted: !p.totals.exchange_incoming }),
-            invNumCell(p.totals.exchange_outgoing, { muted: !p.totals.exchange_outgoing }),
-            invNumCell(p.totals.final_available, { strong: true }),
-            `<td class="inv-num">${invMoney(p.totals.stock_value)}</td>`,
-            `<td class="inv-num">${p.rto_rate_pct}%</td>`,
-            `<td class="inv-num">${lowCount > 0 ? `<span class="inv-badge inv-badge-low">${lowCount} Low</span>` : '<span class="inv-badge inv-badge-ok">OK</span>'}</td>`
-        ].join('');
-        const thumb = p.image
-            ? `<img class="inv-product-thumb" src="${escapeHtml(p.image)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=\\'inv-product-thumb-fallback\\'>◈</div>'">`
-            : '<div class="inv-product-thumb-fallback">◈</div>';
-        const productRow = `
-            <tr class="inv-product-row ${expanded ? 'expanded' : ''}" data-inv-product="${p.id}">
-                <td class="inv-col-left">
-                    <div class="inv-product-cell">
-                        <span class="inv-expand-icon">›</span>
-                        ${thumb}
-                        <div>
-                            <div class="inv-product-name">${escapeHtml(p.title)}</div>
-                            <div class="inv-product-meta">${p.variant_count} variant${p.variant_count === 1 ? '' : 's'} · RTO rate ${p.rto_rate_pct}%</div>
-                        </div>
-                    </div>
-                </td>
-                ${productCells}
-            </tr>`;
-        const variantRows = p.variants.map(v => `
-            <tr class="inv-variant-row ${expanded ? 'visible' : ''}" data-inv-variant-of="${p.id}">
-                <td class="inv-col-left">
-                    <div class="inv-variant-cell">
-                        <span>${escapeHtml(v.title)}</span>
-                        ${v.sku ? `<span class="inv-sku-chip">${escapeHtml(v.sku)}</span>` : ''}
-                    </div>
-                </td>
-                ${invVariantCells(v)}
-            </tr>`).join('');
-        return productRow + variantRows;
-    }).join('');
-
-    wrap.innerHTML = `<table class="inv-table"><thead><tr>${headerCells}</tr></thead><tbody>${rows}</tbody></table>`;
-
-    wrap.querySelectorAll('.inv-product-row').forEach(tr => {
-        tr.addEventListener('click', () => {
-            const id = tr.dataset.invProduct;
-            const isOpen = tr.classList.toggle('expanded');
-            wrap.querySelectorAll(`[data-inv-variant-of="${id}"]`).forEach(vr => vr.classList.toggle('visible', isOpen));
-            if (isOpen) invExpandedProducts.add(id); else invExpandedProducts.delete(id);
-        });
-    });
-}
-
-function renderInventoryUntracked() {
-    const wrap = document.getElementById('invUntrackedWrap');
-    const list = (invData.untracked || []).filter(u =>
-        ['rto_incoming', 'return_incoming', 'exchange_incoming', 'exchange_outgoing', 'in_circulation'].some(k => u[k] > 0));
-    if (list.length === 0) { wrap.innerHTML = ''; return; }
-    const fmtBuckets = (u) => [
-        u.in_circulation ? `${u.in_circulation} in transit` : null,
-        u.rto_incoming ? `${u.rto_incoming} RTO` : null,
-        u.return_incoming ? `${u.return_incoming} returns` : null,
-        u.exchange_incoming ? `${u.exchange_incoming} exch-in` : null,
-        u.exchange_outgoing ? `${u.exchange_outgoing} exch-out` : null
-    ].filter(Boolean).join(' · ');
-    wrap.innerHTML = `
-        <div class="inv-untracked">
-            <h3>⚠ Unmatched Items</h3>
-            <div class="inv-untracked-sub">These line items from orders, returns and exchanges could not be matched to a Shopify catalog variant — verify their SKUs/product titles.</div>
-            <div class="inv-untracked-list">
-                ${list.map(u => `
-                    <div class="inv-untracked-item">
-                        <span>${escapeHtml(u.title)}${u.size ? ` — ${escapeHtml(u.size)}` : ''}</span>
-                        <span class="inv-untracked-buckets">${fmtBuckets(u)}</span>
-                    </div>`).join('')}
-            </div>
-        </div>`;
-}
-
-function renderInventory() {
-    if (!invData) return;
-    const s = invData.summary;
-    renderInventorySummary(s);
-    const generatedAt = new Date(invData.generated_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-    const windowLabel = invData.window_days > 0 ? `last ${invData.window_days} days` : 'all time';
-    let rsLine = '';
-    const rs = invData.returns_server;
-    if (rs && rs.connected) {
-        const u = rs.units || {};
-        rsLine = ` · Portal returns server: ${rs.open_requests} open requests (${u.return_incoming || 0} returns · ${u.exchange_incoming || 0} exch-in · ${u.exchange_outgoing || 0} exch-out)`;
-    } else if (rs) {
-        rsLine = ` · Portal returns server: offline (${rs.reason || 'unreachable'})`;
-    }
-    document.getElementById('invStatusLine').textContent =
-        `${invData.cached ? 'Cached snapshot' : 'Live snapshot'} · generated ${generatedAt} IST · RTO / return / exchange pipeline: ${windowLabel}${rsLine}`;
-    renderInventoryTable();
-    renderInventoryUntracked();
-}
-
-function exportInventoryCsv() {
-    if (!invData) return;
-    const headers = ['Product', 'Variant', 'SKU', 'Price', 'On Hand', 'In Circulation', 'Delivered (window)',
-        'RTO Incoming', 'Returns Incoming', 'Exchange Incoming', 'Exchange Outgoing', 'Final Available',
-        'Stock Value', 'RTO Rate %', 'Return Rate %'];
-    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const lines = [headers.join(',')];
-    for (const p of invData.products) {
-        for (const v of p.variants) {
-            lines.push([p.title, v.title, v.sku, v.price, v.on_hand, v.in_circulation, v.delivered,
-                v.rto_incoming, v.return_incoming, v.exchange_incoming, v.exchange_outgoing,
-                v.final_available, v.stock_value, v.rto_rate_pct, v.return_rate_pct].map(esc).join(','));
-        }
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `inventory-intelligence-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-}
-
 (function setupInventoryEvents() {
     document.getElementById('inventoryBtn')?.addEventListener('click', showInventoryView);
     document.getElementById('backToShoppersFromInventory')?.addEventListener('click', hideInventoryView);
-    document.getElementById('invRefreshBtn')?.addEventListener('click', () => loadInventoryData(true));
-    document.getElementById('invExportBtn')?.addEventListener('click', exportInventoryCsv);
-    document.getElementById('invSearchInput')?.addEventListener('input', () => invData && renderInventoryTable());
-    document.getElementById('invLowStockOnly')?.addEventListener('change', () => invData && renderInventoryTable());
-    document.getElementById('invExpandAll')?.addEventListener('change', () => invData && renderInventoryTable());
-    document.getElementById('invSortSelect')?.addEventListener('change', () => invData && renderInventoryTable());
-    document.getElementById('invWindowPills')?.addEventListener('click', (e) => {
-        const pill = e.target.closest('.inv-pill');
-        if (!pill) return;
-        invWindowDays = parseInt(pill.dataset.window, 10) || 0;
-        document.querySelectorAll('#invWindowPills .inv-pill').forEach(b => b.classList.toggle('active', b === pill));
-        loadInventoryData();
-    });
 })();
+
 
 // ===== Premium sidebar: drawer toggle + active-state tracking =====
 (function initHubSidebar() {
