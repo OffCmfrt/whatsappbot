@@ -311,7 +311,7 @@ class ShopifyService {
 
         try {
             const rawProducts = [];
-            let apiUrl = `https://${cleanShopUrl}.myshopify.com/admin/api/2024-01/products.json?limit=250&status=active&fields=id,title,handle,image,variants`;
+            let apiUrl = `https://${cleanShopUrl}.myshopify.com/admin/api/2024-01/products.json?limit=250&status=active&fields=id,title,handle,image,created_at,variants`;
 
             // Follow Shopify cursor pagination (rel="next" Link header), hard cap for safety
             while (apiUrl && rawProducts.length < 2000) {
@@ -326,6 +326,7 @@ class ShopifyService {
                 id: p.id,
                 title: p.title,
                 image: p.image?.src || null,
+                created_at: p.created_at || null,
                 variants: (p.variants || []).map(v => ({
                     id: v.id,
                     title: v.title === 'Default Title' ? '' : (v.title || ''),

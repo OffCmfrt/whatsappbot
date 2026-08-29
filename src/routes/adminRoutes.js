@@ -5510,7 +5510,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
         // A) windowed history → delivered + RTO buckets
         // B) current in-circulation shipments (never window-trimmed — they are
         //    still out with couriers regardless of age)
-        const [historyRows, circulationRows, returnRows, exchangeRows, rsPipeline] = await Promise.all([
+        const [historyRows, circulationRows, returnRows, exchangeRows, rsPipeline, salesRows] = await Promise.all([
             dbAdapter.query(`
                 SELECT s.items_json, s.status AS shopper_status, o.status AS order_status, o.awb
                 FROM store_shoppers s
@@ -5530,7 +5530,18 @@ router.get('/inventory', verifyToken, async (req, res) => {
             `),
             dbAdapter.query(`SELECT items FROM returns WHERE status IN ('pending_approval','initiated','approved','pickup_scheduled') ${windowSql}`),
             dbAdapter.query(`SELECT old_items, new_items FROM exchanges WHERE status IN ('pending_approval','initiated','pickup_scheduled') ${windowSql}`),
-            fetchReturnsServerPipeline(windowDays)
+            fetchReturnsServerPipeline(windowDays),
+            // Trailing 84 days of shipped/delivered units for velocity & forecast
+            // series — always a fixed window, independent of the pipeline window.
+            dbAdapter.query(`
+                SELECT s.created_at, s.items_json
+                FROM store_shoppers s
+                LEFT JOIN orders o ON o.order_id = s.order_id
+                WHERE s.items_json IS NOT NULL
+                  AND s.created_at >= NOW() - INTERVAL '84 days'
+                  AND (o.status IN ('delivered','shipped') OR (s.status = 'confirmed' AND o.awb IS NOT NULL))
+                  AND COALESCE(o.status, '') NOT IN ('cancelled','failed')
+            `)
         ]);
 
         // ---------- Variant resolution indexes ----------
@@ -5672,18 +5683,115 @@ router.get('/inventory', verifyToken, async (req, res) => {
             }
         }
 
+        // ---------- 12-week sales velocity (fixed trailing 84 days) ----------
+        const VEL_DAYS = 84;
+        const nowTs = Date.now();
+        const salesByVariant = new Map(); // variantKey -> { days: number[84], lastSaleTs }
+        for (const row of salesRows) {
+            const ts = new Date(row.created_at).getTime();
+            if (!ts || isNaN(ts)) continue;
+            const ageDays = Math.floor((nowTs - ts) / 86400000);
+            if (ageDays < 0 || ageDays >= VEL_DAYS) continue;
+            for (const item of parseItems(row.items_json)) {
+                const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
+                const resolved = resolveItem(item);
+                if (!resolved || !resolved.v) continue; // unattributable units can't feed SKU velocity
+                const key = variantKey(resolved.p, resolved.v);
+                if (!salesByVariant.has(key)) salesByVariant.set(key, { days: new Array(VEL_DAYS).fill(0), lastSaleTs: 0 });
+                const entry = salesByVariant.get(key);
+                entry.days[ageDays] += qty;
+                if (ts > entry.lastSaleTs) entry.lastSaleTs = ts;
+            }
+        }
+
+        // Recency-weighted weekly forecast (same method as the control tower prototype):
+        // forecast the latest week off the prior 5 weeks so one bad week can't crater it.
+        const weightedMovingForecast = (weeks) => {
+            const recent = weeks.slice(6, 11);
+            const weights = [1, 1.2, 1.5, 1.8, 2.2];
+            const wsum = weights.reduce((a, b) => a + b, 0);
+            return recent.reduce((a, v, i) => a + v * weights[i], 0) / wsum;
+        };
+        const ageBucketOf = (d) => (d <= 30 ? '0-30' : d <= 60 ? '31-60' : d <= 90 ? '61-90' : d <= 120 ? '91-120' : d <= 180 ? '121-180' : '180+');
+
+        // Assumptions with no live data source (surfaced in the UI):
+        const LEAD_TIME_DAYS = 25;      // manufacturer lead time — fixed assumption
+        const DEAD_SALE_DAYS = 45;      // no sale for 45d => dead stock
+        const OVERSTOCK_COVER_DAYS = 90;
+        const TARGET_COVER_DAYS = 45;   // replenishment target cover
+        const SLOW_VELOCITY = 0.15;     // < ~1 unit/week
+
         // ---------- Assemble product/variant response ----------
         const money = (n) => Math.round((Number(n) || 0) * 100) / 100;
         let products = catalog.map(p => {
+            const productCreatedAt = p.created_at ? new Date(p.created_at).getTime() : null;
+            const ageingDays = productCreatedAt && !isNaN(productCreatedAt)
+                ? Math.max(0, Math.floor((nowTs - productCreatedAt) / 86400000))
+                : null;
             const variants = (p.variants || []).map(v => {
                 const s = stats.get(variantKey(p, v)) || Object.fromEntries(BUCKETS.map(b => [b, 0]));
                 const onHand = typeof v.inventory === 'number' ? v.inventory : 0;
                 const finalAvailable = onHand + s.rto_incoming + s.return_incoming + s.exchange_incoming - s.exchange_outgoing;
                 const shippedUnits = s.delivered + s.rto_incoming + s.in_circulation;
+
+                // ----- sales history derivations (trailing 84 days) -----
+                const sv = salesByVariant.get(variantKey(p, v));
+                const days = sv ? sv.days : new Array(VEL_DAYS).fill(0);
+                const weeklySales = Array.from({ length: 12 }, (_, w) => {
+                    const startAge = (11 - w) * 7; // w=0 oldest week, w=11 latest
+                    let sum = 0;
+                    for (let a = startAge; a < startAge + 7; a++) sum += days[a] || 0;
+                    return sum;
+                });
+                const sumDays = (n) => { let t = 0; for (let a = 0; a < n; a++) t += days[a] || 0; return t; };
+                const sales7 = sumDays(7), sales14 = sumDays(14), sales30 = sumDays(30), sales60 = sumDays(60), sales90 = sumDays(VEL_DAYS);
+                const mean = weeklySales.reduce((a, b) => a + b, 0) / weeklySales.length || 0.0001;
+                const variance = weeklySales.reduce((a, b) => a + (b - mean) ** 2, 0) / weeklySales.length;
+                const cv = Math.sqrt(variance) / (mean || 1);
+                const xyz = cv < 0.5 ? 'X' : cv < 1.0 ? 'Y' : 'Z';
+                const velocity = +(weightedMovingForecast(weeklySales) / 7).toFixed(2); // units/day
+                const lastSaleDaysAgo = sv ? Math.floor((nowTs - sv.lastSaleTs) / 86400000) : VEL_DAYS + 1;
+
+                // ----- cover, classification, replenishment -----
+                const daysOfCover = velocity > 0.05 ? +(finalAvailable / velocity).toFixed(1) : 999;
+                const incomingQty = s.rto_incoming + s.return_incoming + s.exchange_incoming;
+                const incomingEtaDays = incomingQty > 0 ? 7 : null; // returns pipeline has no ETA — assume ~1 week
+                const incomingArrivesInTime = incomingQty > 0 && incomingEtaDays <= daysOfCover + 3;
+                const isDead = lastSaleDaysAgo > DEAD_SALE_DAYS && onHand > 0;
+                const isOverstock = daysOfCover > OVERSTOCK_COVER_DAYS && velocity > SLOW_VELOCITY;
+                const isStockoutRisk = velocity > 0.05 && daysOfCover <= LEAD_TIME_DAYS && !incomingArrivesInTime;
+                const isSlowMover = !isDead && velocity > 0.05 && velocity < SLOW_VELOCITY;
+                const safetyStock = Math.round(velocity * (xyz === 'Z' ? 12 : xyz === 'Y' ? 8 : 5));
+                const reorderPoint = Math.round(velocity * LEAD_TIME_DAYS + safetyStock);
+                const recommendedQty = Math.max(0, Math.round(velocity * TARGET_COVER_DAYS + safetyStock - finalAvailable));
+
+                let bucket, reason, priority;
+                if (isDead) {
+                    bucket = 'DO NOT BUY'; reason = `No sale in ${lastSaleDaysAgo}d+ – capital better spent elsewhere`; priority = 'Low';
+                } else if (isOverstock) {
+                    bucket = 'OVERSTOCK – DO NOT REPLENISH'; reason = `${daysOfCover}d cover already on hand vs ${LEAD_TIME_DAYS}d lead time`; priority = 'Low';
+                } else if (isStockoutRisk) {
+                    bucket = 'BUY NOW'; reason = `Stocks out in ${Math.floor(daysOfCover)}d, replenishment takes ${LEAD_TIME_DAYS}d`; priority = 'Critical';
+                } else if (daysOfCover <= LEAD_TIME_DAYS + 14) {
+                    bucket = 'BUY SOON'; reason = `${daysOfCover}d cover approaching ${LEAD_TIME_DAYS}d lead time`; priority = 'High';
+                } else {
+                    bucket = 'MONITOR'; reason = `${daysOfCover === 999 ? 'No demand signal' : daysOfCover + 'd cover'} – healthy for now`; priority = 'Normal';
+                }
+
+                const status = isDead ? 'Dead'
+                    : onHand === 0 ? 'Out of stock'
+                    : isStockoutRisk ? 'Stockout risk'
+                    : isOverstock ? 'Overstock'
+                    : isSlowMover ? 'Slow mover'
+                    : 'Healthy';
+
+                const skuCode = (v.sku || `OC-${String(p.id).slice(-4)}-${String(v.title || 'DEF').replace(/[^A-Za-z0-9]+/g, '').slice(0, 6).toUpperCase() || 'DEF'}`).toUpperCase();
+
                 return {
                     id: v.id,
                     title: v.title || 'Default',
                     sku: v.sku || '',
+                    sku_code: skuCode,
                     price: v.price,
                     compare_at_price: v.compare_at_price,
                     on_hand: onHand,
@@ -5697,7 +5805,36 @@ router.get('/inventory', verifyToken, async (req, res) => {
                     stock_value: money(onHand * v.price),
                     rto_rate_pct: shippedUnits > 0 ? Math.round(s.rto_incoming / shippedUnits * 1000) / 10 : 0,
                     return_rate_pct: s.delivered > 0 ? Math.round(s.return_incoming / s.delivered * 1000) / 10 : 0,
-                    low_stock: onHand <= 3
+                    low_stock: onHand <= 3,
+                    // control-tower derivations
+                    weekly_sales: weeklySales,
+                    velocity,
+                    sales7, sales14, sales30, sales60, sales90,
+                    sell_through_30: onHand + sales30 > 0 ? +((sales30 / (onHand + sales30)) * 100).toFixed(1) : 0,
+                    days_of_cover: daysOfCover,
+                    weeks_of_supply: daysOfCover === 999 ? null : +(daysOfCover / 7).toFixed(1),
+                    last_sale_days_ago: lastSaleDaysAgo,
+                    xyz, cv: +cv.toFixed(2),
+                    lead_time_days: LEAD_TIME_DAYS,
+                    safety_stock: safetyStock,
+                    reorder_point: reorderPoint,
+                    incoming_qty: incomingQty,
+                    incoming_eta_days: incomingEtaDays,
+                    ageing_days: ageingDays,
+                    age_bucket: ageingDays != null ? ageBucketOf(ageingDays) : null,
+                    is_dead: isDead,
+                    is_overstock: isOverstock,
+                    is_stockout_risk: isStockoutRisk,
+                    is_slow_mover: isSlowMover,
+                    status,
+                    replenishment: {
+                        bucket, reason, priority,
+                        recommended_qty: recommendedQty,
+                        purchase_value: money(recommendedQty * v.price), // at selling price — no cost data
+                        target_cover_days: TARGET_COVER_DAYS
+                    },
+                    value_at_price: money(onHand * v.price),
+                    revenue_30: money(sales30 * v.price)
                 };
             });
             const sum = (key) => variants.reduce((acc, v) => acc + (v[key] || 0), 0);
@@ -5719,11 +5856,36 @@ router.get('/inventory', verifyToken, async (req, res) => {
                 image: p.image,
                 handle: p.handle,
                 variant_count: variants.length,
+                ageing_days: ageingDays,
                 totals,
                 rto_rate_pct: shippedUnits > 0 ? Math.round(totals.rto_incoming / shippedUnits * 1000) / 10 : 0,
                 variants
             };
         }).sort((a, b) => a.title.localeCompare(b.title));
+
+        // ---------- ABC classification (30-day revenue share) ----------
+        const flatVariants = products.flatMap(p => p.variants);
+        const rankedByRevenue = flatVariants
+            .map(v => ({ v, revenue30: v.revenue_30 }))
+            .sort((a, b) => b.revenue30 - a.revenue30);
+        const totalRevenue30 = rankedByRevenue.reduce((a, x) => a + x.revenue30, 0) || 1;
+        let cumRevenue = 0;
+        for (const x of rankedByRevenue) {
+            cumRevenue += x.revenue30;
+            const cumPct = cumRevenue / totalRevenue30;
+            x.v.abc = cumPct <= 0.7 ? 'A' : cumPct <= 0.9 ? 'B' : 'C';
+        }
+
+        // ---------- Forecast accuracy (WMAPE across variants) ----------
+        let errSum = 0, actualSum = 0, overBias = 0;
+        for (const v of flatVariants) {
+            const actual = v.weekly_sales[11] || 0;
+            const forecast = weightedMovingForecast(v.weekly_sales);
+            errSum += Math.abs(actual - forecast);
+            actualSum += actual;
+            if (forecast > actual) overBias += 1;
+        }
+        const wmape = actualSum > 0 ? (errSum / actualSum) * 100 : 0;
 
         // ---------- Portfolio summary ----------
         const agg = (key) => products.reduce((acc, p) => acc + p.totals[key], 0);
@@ -5740,7 +5902,29 @@ router.get('/inventory', verifyToken, async (req, res) => {
             exchange_outgoing_units: agg('exchange_outgoing'),
             final_available_units: onHandUnits + agg('rto_incoming') + agg('return_incoming') + agg('exchange_incoming') - agg('exchange_outgoing'),
             delivered_units: agg('delivered'),
-            low_stock_variants: products.reduce((acc, p) => acc + p.variants.filter(v => v.low_stock).length, 0)
+            low_stock_variants: products.reduce((acc, p) => acc + p.variants.filter(v => v.low_stock).length, 0),
+            // control-tower portfolio derivations (monetary figures at selling price — no cost data)
+            weekly_sales_total: Array.from({ length: 12 }, (_, w) => flatVariants.reduce((a, v) => a + (v.weekly_sales[w] || 0), 0)),
+            sales_30_total: flatVariants.reduce((a, v) => a + v.sales30, 0),
+            sales_7_total: flatVariants.reduce((a, v) => a + v.sales7, 0),
+            velocity_units_per_day: +(flatVariants.reduce((a, v) => a + v.velocity, 0)).toFixed(2),
+            lead_time_days: LEAD_TIME_DAYS,
+            counts: {
+                dead: flatVariants.filter(v => v.is_dead).length,
+                out_of_stock: flatVariants.filter(v => v.on_hand === 0).length,
+                stockout_risk: flatVariants.filter(v => v.is_stockout_risk).length,
+                overstock: flatVariants.filter(v => v.is_overstock).length,
+                slow_mover: flatVariants.filter(v => v.is_slow_mover).length,
+                healthy: flatVariants.filter(v => v.status === 'Healthy').length,
+                buy_now: flatVariants.filter(v => v.replenishment.bucket === 'BUY NOW').length,
+                buy_soon: flatVariants.filter(v => v.replenishment.bucket === 'BUY SOON').length
+            },
+            forecast: {
+                wmape_pct: +wmape.toFixed(1),
+                accuracy_pct: +Math.max(0, Math.min(100, 100 - wmape)).toFixed(1),
+                over_bias: overBias,
+                under_bias: flatVariants.length - overBias
+            }
         };
 
         const untrackedList = [...untracked.values()].filter(u => BUCKETS.some(b => u[b] > 0))

@@ -140,6 +140,8 @@ function requirePermission(key) {
 // Path-prefix → permission map for the permission gate.
 // Longest prefix wins. Admin bypasses the gate entirely.
 // key: null → admin-only section (operators always denied).
+// key: [...] → operator passes with ANY of the listed permissions
+// (e.g. the product catalog feeds both the edit and ship flows).
 const ROUTE_PERMISSIONS = [
     { prefix: '/shoppers/export', key: 'export' },
     { prefix: '/inbox/export', key: 'export' },
@@ -157,6 +159,10 @@ const ROUTE_PERMISSIONS = [
     { prefix: '/support-tickets', key: null },
     { prefix: '/upload', key: null },
     { prefix: '/shiprocket', key: null },
+    // Product catalog powers the order editor (size/product picker) inside
+    // the Edit modal and the Ship modal — anyone with EDITS or SHIP rights
+    // needs it, while the rest of /shopify stays admin-only.
+    { prefix: '/shopify/products', key: ['edit_orders', 'ship_orders'] },
     { prefix: '/shopify', key: null },
     { prefix: '/sync', key: null },
     { prefix: '/offers', key: null },
@@ -189,7 +195,8 @@ async function permissionGate(req, res, next) {
     }
 
     if (!matched) return next(); // unmapped routes stay open to any logged-in operator
-    if (hasPermission(identity, matched.key)) return next();
+    const keys = Array.isArray(matched.key) ? matched.key : [matched.key];
+    if (keys.some(k => hasPermission(identity, k))) return next();
     return res.status(403).json({ error: 'You do not have permission to access this section.' });
 }
 

@@ -104,7 +104,7 @@ function applyRolePermissions() {
     // CSS-level hiding of row/bulk actions the operator can't perform
     let css = '';
     if (!hubHasPerm('edit_orders')) {
-        css += `.btn-text-edit, button[onclick^="openEditModal"], button[onclick^="bulkUpdateStatus"], #bulkDeleteBtn, .bulk-btn-delete, button[onclick^="openShopifyCancelModal"] { display: none !important; }`;
+        css += `.btn-text-edit, button[onclick^="openEditModal"], button[onclick^="bulkUpdateStatus"], #bulkDeleteBtn, .bulk-btn-delete, button[onclick^="openShopifyCancelModal"], .status-actions .status-pill, .row-status-pills .status-pill-mini, .multi-order-actions .btn { display: none !important; }`;
     }
     if (!hubHasPerm('send_messages')) {
         css += `#sendChatBtn, .btn-chat[onclick^="openChat"] { display: none !important; }`;
@@ -1443,6 +1443,7 @@ function parseItemsPreview(itemsJson) {
 }
 
 async function confirmMultiOrder(id) {
+    if (!hubRequirePerm('edit_orders', 'change order statuses')) return;
     if (!confirm('Are you sure you want to CONFIRM this order?')) return;
     try {
         const data = await apiCall(`/shoppers/${id}/status`, 'POST', { status: 'confirmed' });
@@ -1457,6 +1458,7 @@ async function confirmMultiOrder(id) {
 }
 
 async function cancelMultiOrder(id) {
+    if (!hubRequirePerm('edit_orders', 'change order statuses')) return;
     if (!confirm('Are you sure you want to CANCEL this order?')) return;
     try {
         const data = await apiCall(`/shoppers/${id}/status`, 'POST', { status: 'cancelled' });
@@ -1475,6 +1477,7 @@ async function cancelMultiOrder(id) {
 }
 
 function editMultiOrder(id, nameEnc, phone, orderId, addressEnc, itemsEnc, paymentEnc, orderTotal) {
+    if (!hubRequirePerm('edit_orders', 'edit order details')) return;
     document.getElementById('editShopperId').value = id;
     document.getElementById('editName').value = nameEnc ? decodeURIComponent(nameEnc) : '';
     document.getElementById('editPhone').value = phone || '';
@@ -3532,6 +3535,7 @@ function getOrderEditorState() {
 }
 
 async function updateStatus(id, status) {
+    if (!hubRequirePerm('edit_orders', 'change order statuses')) return;
     if (!confirm(`Are you sure you want to change status to ${status.toUpperCase()}?`)) return;
 
     try {
