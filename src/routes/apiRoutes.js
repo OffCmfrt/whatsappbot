@@ -139,17 +139,29 @@ router.post('/shoppers/auth', async (req, res) => {
             }
 
             const permissions = Array.isArray(operator.permissions) ? operator.permissions : [];
+
+            // Single-session enforcement: mint a unique session id and store it
+            // on the account. Any previously active session stops working the
+            // moment this login commits (newest login wins). Admin is exempt.
+            const crypto = require('crypto');
+            const sid = crypto.randomBytes(24).toString('hex');
             const token = jwt.sign(
-                { operatorId: operator.id, username: operator.username, role: 'operator', permissions },
+                { operatorId: operator.id, username: operator.username, role: 'operator', permissions, sid },
                 secret,
                 { expiresIn: '12h' }
             );
 
-            // Update last login + record activity
-            await dbAdapter.run('UPDATE hub_operators SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?', [operator.id]).catch(() => {});
+            const clientIp = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim().slice(0, 64);
+
+            // Update last login + claim the single-session slot. This must not
+            // fail silently — the token is useless unless the sid is stored.
+            await dbAdapter.run(
+                'UPDATE hub_operators SET last_login_at = CURRENT_TIMESTAMP, active_session_id = ?, session_ip = ?, session_started_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [sid, clientIp, operator.id]
+            );
             await dbAdapter.run(
                 'INSERT INTO hub_operator_activity (operator_id, username, action, detail, ip) VALUES (?, ?, ?, ?, ?)',
-                [operator.id, operator.username, 'login', 'Operator logged in', (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim().slice(0, 64)]
+                [operator.id, operator.username, 'login', operator.active_session_id ? 'Operator logged in (replaced an existing session)' : 'Operator logged in', clientIp]
             ).catch(() => {});
 
             return res.json({

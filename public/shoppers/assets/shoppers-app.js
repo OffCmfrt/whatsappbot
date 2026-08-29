@@ -181,8 +181,108 @@ let soTotal = 0;
 const SO_PAGE_SIZE = 25;
 let soSearchTimeout = null;
 
+// ============================================================
+// SINGLE-WINDOW LOCK — an operator may run Shoppers Hub in only
+// ONE window/tab per browser. The first window claims the lock and
+// heartbeats it; any later window shows a blocker screen instead of
+// the app and takes over automatically once the other window closes.
+// Admins are exempt; the server also enforces one login per account.
+// ============================================================
+let hubWindowLockId = null;
+let hubWindowLockChannel = null;
+let hubWindowIsHolder = false;
+let hubWindowLockHeartbeat = null;
+
+function acquireWindowLock(probeMs = 700) {
+    return new Promise(resolve => {
+        const identity = getHubIdentity();
+        if (!identity || identity.role !== 'operator' || typeof BroadcastChannel === 'undefined') {
+            return resolve(true);
+        }
+
+        hubWindowLockId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        hubWindowLockChannel = new BroadcastChannel('offcomfrt-hub-window-lock');
+        let answered = false;
+
+        hubWindowLockChannel.onmessage = (ev) => {
+            const msg = ev.data || {};
+            if (!msg.id || msg.id === hubWindowLockId) return;
+            if (msg.type === 'claim') {
+                if (hubWindowIsHolder) {
+                    // Two simultaneous holders — deterministic tie-break: the
+                    // lexicographically smaller id keeps the lock
+                    if (msg.id < hubWindowLockId) {
+                        hubWindowIsHolder = false;
+                        if (hubWindowLockHeartbeat) { clearInterval(hubWindowLockHeartbeat); hubWindowLockHeartbeat = null; }
+                        showWindowBlockedScreen();
+                    } else {
+                        hubWindowLockChannel.postMessage({ type: 'claim', id: hubWindowLockId });
+                    }
+                } else if (!answered) {
+                    answered = true;
+                    resolve(false);
+                }
+            } else if (msg.type === 'probe' && hubWindowIsHolder) {
+                hubWindowLockChannel.postMessage({ type: 'claim', id: hubWindowLockId });
+            }
+        };
+
+        hubWindowLockChannel.postMessage({ type: 'probe', id: hubWindowLockId });
+        setTimeout(() => {
+            if (answered) return;
+            hubWindowIsHolder = true;
+            hubWindowLockChannel.postMessage({ type: 'claim', id: hubWindowLockId });
+            hubWindowLockHeartbeat = setInterval(() => {
+                hubWindowLockChannel.postMessage({ type: 'claim', id: hubWindowLockId });
+            }, 3000);
+            window.addEventListener('pagehide', () => {
+                try { hubWindowLockChannel.postMessage({ type: 'release', id: hubWindowLockId }); } catch (_) {}
+            });
+            resolve(true);
+        }, probeMs);
+    });
+}
+
+// Full-screen blocker shown to a second window of the same operator session
+function showWindowBlockedScreen() {
+    if (document.getElementById('windowLockOverlay')) return;
+    document.body.innerHTML = '';
+    const overlay = document.createElement('div');
+    overlay.id = 'windowLockOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:999999;background:#0b0b0b;color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;font-family:inherit;';
+    overlay.innerHTML = `
+        <div style="max-width:420px;padding:32px;">
+            <div style="font-size:42px;margin-bottom:16px;">⚠️</div>
+            <h2 style="margin:0 0 12px;font-size:20px;letter-spacing:.5px;">ALREADY OPEN IN ANOTHER WINDOW</h2>
+            <p style="color:#999;font-size:14px;line-height:1.6;margin:0 0 8px;">
+                This operator account is active in another window or tab.<br>
+                Only one window is allowed at a time.
+            </p>
+            <p style="color:#666;font-size:12px;line-height:1.6;margin:0;">
+                Close the other window and this page will take over automatically.
+            </p>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    // Poll: if the holder stops answering, this window takes over via reload
+    setInterval(() => {
+        if (hubWindowIsHolder) return;
+        let gotClaim = false;
+        const onMsg = (ev) => {
+            const msg = ev.data || {};
+            if (msg.type === 'claim' && msg.id !== hubWindowLockId) gotClaim = true;
+        };
+        hubWindowLockChannel.addEventListener('message', onMsg);
+        hubWindowLockChannel.postMessage({ type: 'probe', id: hubWindowLockId });
+        setTimeout(() => {
+            hubWindowLockChannel.removeEventListener('message', onMsg);
+            if (!gotClaim) window.location.reload();
+        }, 1600);
+    }, 5000);
+}
+
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     try {
         console.log('🔄 DOM Content Loaded - Initializing Dashboard...');
         if (!authToken) {
@@ -204,6 +304,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         document.getElementById('loginView').style.display = 'none';
         document.getElementById('dashboardView').style.display = 'block';
+
+        // Single-window rule: block this window if the operator session is
+        // already open elsewhere in this browser (admin bypasses)
+        const hasWindowLock = await acquireWindowLock();
+        if (!hasWindowLock) {
+            showWindowBlockedScreen();
+            return;
+        }
+
         applyRolePermissions();
         setupEventListeners();
         setupModalEvents();
@@ -846,8 +955,14 @@ async function apiCall(endpoint, method = 'GET', body = null) {
     
     if (res.status === 401) {
         console.error('[API] Auth failed, clearing token');
+        let message = 'Session expired — please log in again.';
+        try {
+            const data = await res.json();
+            if (data && data.error) message = data.error;
+        } catch (_) { /* non-JSON 401 body */ }
         localStorage.removeItem('authToken');
         localStorage.removeItem('hubIdentity');
+        alert(message);
         window.location.reload();
         return;
     }
@@ -6481,7 +6596,7 @@ async function teamApiFetch(path, method = 'GET', body = null) {
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`${API_BASE}${path}`, opts);
     const data = await res.json().catch(() => ({}));
-    if (res.status === 401) { alert('Session expired — please log in again.'); location.reload(); throw new Error('unauthorized'); }
+    if (res.status === 401) { alert(data.error || 'Session expired — please log in again.'); location.reload(); throw new Error('unauthorized'); }
     if (!res.ok || data.success === false) throw new Error(data.error || `Request failed (${res.status})`);
     return data;
 }

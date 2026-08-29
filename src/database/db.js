@@ -441,6 +441,9 @@ async function initializeSupportPortalsTable() {
       )
     `);
 
+    // Single-session enforcement for portals (same scheme as hub_operators)
+    await addColumnIfNotExists('support_portals', 'active_session_id', 'VARCHAR(64)');
+
     // Add portal_id to support_tickets if missing
     await addColumnIfNotExists('support_tickets', 'portal_id', 'INTEGER');
     await addColumnIfNotExists('support_tickets', 'ticket_number', 'VARCHAR(50)');
@@ -631,6 +634,12 @@ async function initializeHubOperatorsTable() {
       )
     `);
     await pool.query('CREATE INDEX IF NOT EXISTS idx_hub_operators_username ON hub_operators(username)');
+
+    // Single-session enforcement: only the login whose session id matches may
+    // use the account. A new login overwrites this and instantly kills the old one.
+    await addColumnIfNotExists('hub_operators', 'active_session_id', 'VARCHAR(64)');
+    await addColumnIfNotExists('hub_operators', 'session_ip', 'VARCHAR(64)');
+    await addColumnIfNotExists('hub_operators', 'session_started_at', 'TIMESTAMP');
 
     // Activity log: every operator action the admin wants to audit
     await pool.query(`

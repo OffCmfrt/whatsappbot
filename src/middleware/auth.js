@@ -21,13 +21,37 @@ function hubCredentialFingerprint() {
 
 // Verify a JWT and enforce credential-fingerprint checks for admin tokens.
 // Throws on any failure so callers can return a single 401 path.
-function verifyJwtOrThrow(token) {
+async function verifyJwtOrThrow(token) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     if (decoded.role === 'admin') {
         const current = [adminCredentialFingerprint(), hubCredentialFingerprint()];
         if (!decoded.credFp || !current.includes(decoded.credFp)) {
             const err = new Error('Credentials changed');
             err.sessionExpired = true;
+            throw err;
+        }
+        return decoded;
+    }
+    if (decoded.role === 'operator') {
+        // Single-session enforcement: an operator may hold exactly ONE live
+        // session across all platforms. Every login overwrites the account's
+        // active_session_id, so the newest login wins and any earlier token
+        // (other device, other window, stale tab) fails here. Admin is exempt.
+        const { dbAdapter } = require('../database/db');
+        const rows = await dbAdapter.query(
+            'SELECT is_active, active_session_id FROM hub_operators WHERE id = ?',
+            [decoded.operatorId]
+        );
+        const op = rows && rows[0];
+        if (!op || !op.is_active) {
+            const err = new Error('Account deactivated');
+            err.sessionExpired = true;
+            throw err;
+        }
+        if (!decoded.sid || !op.active_session_id || decoded.sid !== op.active_session_id) {
+            const err = new Error('Session superseded');
+            err.sessionExpired = true;
+            err.loggedElsewhere = true;
             throw err;
         }
     }
@@ -63,7 +87,7 @@ const ALL_PERMISSION_KEYS = [
 ];
 
 // Middleware to verify JWT token
-function verifyToken(req, res, next) {
+async function verifyToken(req, res, next) {
     const token = req.headers['authorization']?.split(' ')[1]; // Bearer TOKEN
 
     if (!token) {
@@ -71,14 +95,21 @@ function verifyToken(req, res, next) {
     }
 
     try {
-        req.admin = verifyJwtOrThrow(token);
+        req.admin = await verifyJwtOrThrow(token);
         next();
     } catch (error) {
-        const message = error.sessionExpired
-            ? 'Session expired. Password was changed — please log in again.'
-            : 'Invalid token.';
-        return res.status(401).json({ error: message });
+        return res.status(401).json({ error: sessionErrorMessage(error) });
     }
+}
+
+// Human-readable 401 message for expired/superseded sessions
+function sessionErrorMessage(error) {
+    if (error.loggedElsewhere) {
+        return 'Your session was ended — this account is logged in somewhere else. Only one active session is allowed.';
+    }
+    return error.sessionExpired
+        ? 'Session expired. Password was changed — please log in again.'
+        : 'Invalid token.';
 }
 
 // Middleware: only the master admin (env-based login) passes.
@@ -135,17 +166,14 @@ const ROUTE_PERMISSIONS = [
 // Router-level gate mounted once in adminRoutes (after /login).
 // Maps the request path to a page/function permission.
 // Self-contained: verifies the JWT itself if verifyToken hasn't run yet.
-function permissionGate(req, res, next) {
+async function permissionGate(req, res, next) {
     if (!req.admin) {
         const token = req.headers['authorization']?.split(' ')[1];
         if (!token) return res.status(401).json({ error: 'Access denied. No token provided.' });
         try {
-            req.admin = verifyJwtOrThrow(token);
+            req.admin = await verifyJwtOrThrow(token);
         } catch (error) {
-            const message = error.sessionExpired
-                ? 'Session expired. Password was changed — please log in again.'
-                : 'Invalid token.';
-            return res.status(401).json({ error: message });
+            return res.status(401).json({ error: sessionErrorMessage(error) });
         }
     }
 

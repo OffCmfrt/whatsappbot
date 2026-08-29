@@ -6,7 +6,7 @@ const whatsappService = require('../services/whatsappService');
 const { dbAdapter } = require('../database/db');
 
 // Portal auth middleware
-function verifyPortalToken(req, res, next) {
+async function verifyPortalToken(req, res, next) {
     const token = req.headers['authorization']?.split(' ')[1];
 
     if (!token) {
@@ -18,6 +18,19 @@ function verifyPortalToken(req, res, next) {
         if (!decoded.portalId || !decoded.slug) {
             return res.status(401).json({ error: 'Invalid portal token.' });
         }
+
+        // Single-session enforcement: only the newest portal login is valid.
+        // Tokens missing a sid (issued before this enforcement) are rejected
+        // so every portal must re-login once.
+        const portals = await dbAdapter.query(
+            'SELECT active_session_id FROM support_portals WHERE id = ?',
+            [decoded.portalId]
+        );
+        const portal = portals && portals[0];
+        if (!portal || !decoded.sid || decoded.sid !== portal.active_session_id) {
+            return res.status(401).json({ error: 'Your session was ended — this portal is logged in somewhere else. Only one active session is allowed.' });
+        }
+
         req.portal = decoded;
         next();
     } catch (error) {
@@ -161,8 +174,17 @@ router.post('/auth', async (req, res) => {
             return res.status(401).json({ success: false, error: 'Invalid portal credentials' });
         }
 
+        // Single-session enforcement: mint a session id and store it on the
+        // portal — any earlier portal session stops working immediately.
+        const crypto = require('crypto');
+        const sid = crypto.randomBytes(24).toString('hex');
+        await dbAdapter.run(
+            'UPDATE support_portals SET active_session_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [sid, portal.id]
+        );
+
         const token = jwt.sign(
-            { portalId: portal.id, slug: portal.slug, type: portal.type, config: portal.config },
+            { portalId: portal.id, slug: portal.slug, type: portal.type, config: portal.config, sid },
             process.env.JWT_SECRET,
             { expiresIn: '8h' }
         );

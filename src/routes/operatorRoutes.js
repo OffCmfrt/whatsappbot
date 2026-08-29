@@ -167,8 +167,11 @@ router.put('/operators/:id', verifyToken, requireAdmin, async (req, res) => {
         const newPermissions = permissions !== undefined ? sanitizePermissions(permissions) : existing[0].permissions;
         const newActive = is_active !== undefined ? !!is_active : existing[0].is_active;
 
+        // Deactivating the account also clears its single-session slot so any
+        // live session dies immediately (verifyToken re-checks this per request)
+        const sessionClear = newActive ? '' : ', active_session_id = NULL';
         await dbAdapter.run(
-            'UPDATE hub_operators SET name = ?, permissions = ?::jsonb, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            `UPDATE hub_operators SET name = ?, permissions = ?::jsonb, is_active = ?${sessionClear}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
             [newName, JSON.stringify(newPermissions), newActive, id]
         );
 
@@ -195,8 +198,9 @@ router.post('/operators/:id/reset-password', verifyToken, requireAdmin, async (r
         }
 
         const passwordHash = await bcrypt.hash(newPassword, 10);
+        // Clear the session slot too — the old session must not survive a reset
         await dbAdapter.run(
-            'UPDATE hub_operators SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            'UPDATE hub_operators SET password_hash = ?, active_session_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
             [passwordHash, id]
         );
 

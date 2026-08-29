@@ -18,6 +18,104 @@ function getSlugFromUrl() {
     return params.get('slug');
 }
 
+// ============================================================
+// SINGLE-WINDOW LOCK — a portal session may run in only ONE
+// window/tab per browser. The first window claims the lock and
+// heartbeats it; later windows show a blocker and take over once
+// the other window closes. The server additionally enforces one
+// active login per portal.
+// ============================================================
+let portalWindowLockId = null;
+let portalWindowLockChannel = null;
+let portalWindowIsHolder = false;
+let portalWindowLockHeartbeat = null;
+
+function acquirePortalWindowLock(probeMs = 700) {
+    return new Promise(resolve => {
+        if (typeof BroadcastChannel === 'undefined') return resolve(true);
+
+        portalWindowLockId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        portalWindowLockChannel = new BroadcastChannel(`offcomfrt-portal-lock-${portalSlug}`);
+        let answered = false;
+
+        portalWindowLockChannel.onmessage = (ev) => {
+            const msg = ev.data || {};
+            if (!msg.id || msg.id === portalWindowLockId) return;
+            if (msg.type === 'claim') {
+                if (portalWindowIsHolder) {
+                    // Simultaneous holders — smaller id keeps the lock
+                    if (msg.id < portalWindowLockId) {
+                        portalWindowIsHolder = false;
+                        if (portalWindowLockHeartbeat) { clearInterval(portalWindowLockHeartbeat); portalWindowLockHeartbeat = null; }
+                        showPortalBlockedScreen();
+                    } else {
+                        portalWindowLockChannel.postMessage({ type: 'claim', id: portalWindowLockId });
+                    }
+                } else if (!answered) {
+                    answered = true;
+                    resolve(false);
+                }
+            } else if (msg.type === 'probe' && portalWindowIsHolder) {
+                portalWindowLockChannel.postMessage({ type: 'claim', id: portalWindowLockId });
+            }
+        };
+
+        portalWindowLockChannel.postMessage({ type: 'probe', id: portalWindowLockId });
+        setTimeout(() => {
+            if (answered) return;
+            portalWindowIsHolder = true;
+            portalWindowLockChannel.postMessage({ type: 'claim', id: portalWindowLockId });
+            portalWindowLockHeartbeat = setInterval(() => {
+                portalWindowLockChannel.postMessage({ type: 'claim', id: portalWindowLockId });
+            }, 3000);
+            window.addEventListener('pagehide', () => {
+                try { portalWindowLockChannel.postMessage({ type: 'release', id: portalWindowLockId }); } catch (_) {}
+            });
+            resolve(true);
+        }, probeMs);
+    });
+}
+
+// Full-screen blocker shown to a second window of the same portal session
+function showPortalBlockedScreen() {
+    if (document.getElementById('portalWindowLockOverlay')) return;
+    if (chatPollingInterval) clearInterval(chatPollingInterval);
+    stopTicketPolling();
+    document.body.innerHTML = '';
+    const overlay = document.createElement('div');
+    overlay.id = 'portalWindowLockOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:999999;background:#0b0b0b;color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;';
+    overlay.innerHTML = `
+        <div style="max-width:420px;padding:32px;">
+            <div style="font-size:42px;margin-bottom:16px;">⚠️</div>
+            <h2 style="margin:0 0 12px;font-size:20px;letter-spacing:.5px;">ALREADY OPEN IN ANOTHER WINDOW</h2>
+            <p style="color:#999;font-size:14px;line-height:1.6;margin:0 0 8px;">
+                This portal is active in another window or tab.<br>
+                Only one window is allowed at a time.
+            </p>
+            <p style="color:#666;font-size:12px;line-height:1.6;margin:0;">
+                Close the other window and this page will take over automatically.
+            </p>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    // Poll: if the holder stops answering, this window takes over via reload
+    setInterval(() => {
+        if (portalWindowIsHolder) return;
+        let gotClaim = false;
+        const onMsg = (ev) => {
+            const msg = ev.data || {};
+            if (msg.type === 'claim' && msg.id !== portalWindowLockId) gotClaim = true;
+        };
+        portalWindowLockChannel.addEventListener('message', onMsg);
+        portalWindowLockChannel.postMessage({ type: 'probe', id: portalWindowLockId });
+        setTimeout(() => {
+            portalWindowLockChannel.removeEventListener('message', onMsg);
+            if (!gotClaim) window.location.reload();
+        }, 1600);
+    }, 5000);
+}
+
 // Initialize
 async function init() {
     portalSlug = getSlugFromUrl();
@@ -30,6 +128,10 @@ async function init() {
     if (portalToken) {
         const valid = await verifyToken();
         if (valid) {
+            if (!await acquirePortalWindowLock()) {
+                showPortalBlockedScreen();
+                return;
+            }
             showApp();
             loadTickets();
             startTicketPolling();
@@ -62,6 +164,10 @@ async function handleLogin(event) {
             portalToken = data.token;
             portalInfo = data.portal;
             localStorage.setItem('portalToken', portalToken);
+            if (!await acquirePortalWindowLock()) {
+                showPortalBlockedScreen();
+                return;
+            }
             showApp();
             loadTickets();
             startTicketPolling();
@@ -122,8 +228,15 @@ async function portalApi(endpoint, method = 'GET', body = null) {
     const response = await fetch(`${API_BASE}${endpoint}`, options);
 
     if (response.status === 401) {
+        let message = 'Session expired. Please log in again.';
+        try {
+            const data = await response.json();
+            if (data && data.error) message = data.error;
+        } catch (_) { /* non-JSON 401 body */ }
         logout();
-        throw new Error('Session expired. Please log in again.');
+        const errorEl = document.getElementById('loginError');
+        if (errorEl) errorEl.textContent = message;
+        throw new Error(message);
     }
 
     return response.json();
