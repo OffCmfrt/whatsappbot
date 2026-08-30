@@ -6170,7 +6170,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
                 units: rsUnits
             }
         };
-        setCache(cacheKey, response, 'stats', 3 * 60 * 1000);
+        setCache(cacheKey, response, 'stats', 15 * 60 * 1000); // 15 minutes — expensive computation, cache longer
         res.json(response);
     } catch (error) {
         console.error('Inventory intelligence error:', error);
