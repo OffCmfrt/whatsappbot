@@ -18,7 +18,8 @@ axios.defaults.httpAgent = sharedHttpAgent;
 
 const messageHandler = require('./src/handlers/messageHandler');
 const adminRoutes = require('./src/routes/adminRoutes');
-const { testConnection, initializeDatabase } = require('./src/database/db');
+const followUpService = require('./src/services/followUpService');
+const { testConnection, initializeDatabase, dbAdapter } = require('./src/database/db');
 const { startCacheStatsLogging, getCacheStats } = require('./src/utils/cache');
 
 // Safety net: keep the process alive on stray async failures (e.g. pg
@@ -336,8 +337,6 @@ app.post('/webhook', (req, res) => {
 
 // Helper function to handle WhatsApp status updates (sent, delivered, read, failed)
 async function handleStatusUpdate(statuses) {
-  const { dbAdapter } = require('./src/database/db');
-  const followUpService = require('./src/services/followUpService');
   
   for (const status of statuses) {
     const waMessageId = status.id;
@@ -546,13 +545,23 @@ async function startServer() {
         setInterval(warmInventoryTower, 150000); // refresh before the 3-min TTL lapses
 
         // ── Unified memory watchdog ─────────────────────────────────────
-        // One adaptive 60s timer replaces the previous stack of overlapping
+        // One adaptive 120s timer replaces the previous stack of overlapping
         // intervals (queue check, 2-min memory monitor, 2-min pg cleanup,
         // 60s native monitor, 30/10-min cache purges, 5-min settings purge).
         // Every tick: reap idle TLS sockets + drain idle pg clients — the
         // two native-memory growers. Every 5th tick: purge expired cache
         // entries + log memory. Pressure responses scale with RSS so we act
         // well before Render's 512MB OOM limit.
+        //
+        // Requires hoisted outside the interval to avoid repeated module
+        // resolution on every tick (Node caches modules but still pays the
+        // lookup cost + closure allocation each time).
+        const { pool } = require('./src/database/db');
+        const { invalidateCache, purgeAllExpired } = require('./src/utils/cache');
+        const SettingsModel = require('./src/models/Settings');
+        const followUpService = require('./src/services/followUpService');
+        const shiprocketService = require('./src/services/shiprocketService');
+
         let watchdogTick = 0;
         setInterval(() => {
             try {
@@ -564,7 +573,6 @@ async function startServer() {
                 if (reaped > 0) console.log(`[MEMORY] Reaped ${reaped} idle TLS socket(s)`);
 
                 // 2. Drain idle pg connections (~5-10MB native TLS each)
-                const { pool } = require('./src/database/db');
                 if ((pool.idleCount || 0) > 0) {
                     const closed = pool.endIdleClients();
                     if (closed > 0) console.log(`[MEMORY] Closed ${closed} idle pg connection(s) (total=${pool.totalCount})`);
@@ -576,12 +584,11 @@ async function startServer() {
                     taskQueue.length = 0;
                 }
 
-                // 4. Housekeeping every 5 min: expired cache + settings purge
+                // 4. Housekeeping every 10 min: expired cache + settings purge
                 if (every5) {
-                    const { purgeAllExpired } = require('./src/utils/cache');
                     const purged = purgeAllExpired();
                     if (purged > 0) console.log(`[MEMORY] Purged ${purged} expired cache entrie(s)`);
-                    try { require('./src/models/Settings').clearOldCache(); } catch (e) { /* ignore */ }
+                    try { SettingsModel.clearOldCache(); } catch (e) { /* ignore */ }
                 }
 
                 // 5. Memory pressure response (scaled by RSS)
@@ -599,14 +606,12 @@ async function startServer() {
                 // 400MB — native TLS buffers accumulate steadily)
                 if (memoryMB > 300) {
                     console.warn(`⚠️ MEMORY HIGH (${memoryMB}MB > 300MB) — running GC + cache cleanup...`);
-                    const { invalidateCache, purgeAllExpired } = require('./src/utils/cache');
                     invalidateCache();
                     purgeAllExpired();
-                    try { require('./src/models/Settings')._cache.clear(); } catch (e) { /* ignore */ }
+                    try { SettingsModel._cache.clear(); } catch (e) { /* ignore */ }
 
                     // Clear followUpService Maps (timeout handles can leak)
                     try {
-                        const followUpService = require('./src/services/followUpService');
                         for (const [id, timeoutId] of followUpService.activeQueues.entries()) {
                             clearTimeout(timeoutId);
                             followUpService.activeQueues.delete(id);
@@ -614,7 +619,7 @@ async function startServer() {
                         followUpService.isProcessing.clear();
                     } catch (e) { /* ignore */ }
 
-                    try { require('./src/services/shiprocketService').orderCache.clear(); } catch (e) { /* ignore */ }
+                    try { shiprocketService.orderCache.clear(); } catch (e) { /* ignore */ }
 
                     if (typeof global.gc === 'function') {
                         global.gc();
@@ -629,7 +634,7 @@ async function startServer() {
                     console.error(`🔥 CRITICAL RSS: ${memoryMB}MB / ${limitMB}MB (${usagePercent}%) — risk of OOM kill`);
                     if (typeof global.gc === 'function') global.gc();
                     try {
-                        require('./src/utils/cache').invalidateCache();
+                        invalidateCache();
                         taskQueue.length = 0;
                     } catch (e) { /* ignore */ }
                     try {
@@ -641,7 +646,7 @@ async function startServer() {
                 // The watchdog must never take the server down with it
                 console.error('[WATCHDOG] tick failed:', e.message);
             }
-        }, 60 * 1000);
+        }, 120 * 1000);
 
         // Start Express server
         app.listen(PORT, () => {
