@@ -1,0 +1,16 @@
+order,invoice_number,zoho_subtotal,zoho_tax,zoho_total,shopify_items_total,shopify_total,delta_total,notes
+47602,OFF/26-27/29601,0,64.95,1363.95,1299,1398,-34.05,total_mismatch|subtotal_vs_items
+47601,OFF/26-27/29600,0,64.95,1363.95,1299,1234.05,129.9,total_mismatch|subtotal_vs_items
+47600,OFF/26-27/29593,0,99.95,2098.95,1999,0,2098.95,total_mismatch|subtotal_vs_items
+47598,OFF/26-27/29592,0,64.95,1363.95,1299,1398,-34.05,total_mismatch|subtotal_vs_items
+47599,OFF/26-27/29591,0,64.95,1363.95,1299,1299,64.95,total_mismatch|subtotal_vs_items
+47597,OFF/26-27/29590,0,124.9,2622.9,2498,2597,25.9,total_mismatch|subtotal_vs_items
+47596,OFF/26-27/29589,0,59.95,1258.95,1199,1059.32,199.63,total_mismatch|subtotal_vs_items
+47595,OFF/26-27/29580,0,59.95,1258.95,1199,1298,-39.05,total_mismatch|subtotal_vs_items
+47594,OFF/26-27/29579,0,59.95,1258.95,1199,1298,-39.05,total_mismatch|subtotal_vs_items
+47593,OFF/26-27/29578,0,59.95,1258.95,1199,1298,-39.05,total_mismatch|subtotal_vs_items
+47592,OFF/26-27/29577,0,139.95,2938.95,2799,2898,40.95,total_mismatch|subtotal_vs_items
+47591,OFF/26-27/29576,0,99.95,2098.95,1999,2098,0.95,subtotal_vs_items
+47590,OFF/26-27/29575,0,139.95,2938.95,2799,2898,40.95,total_mismatch|subtotal_vs_items
+47589,OFF/26-27/29574,0,59.95,1258.95,1199,1139.05,119.9,total_mismatch|subtotal_vs_items
+47588,OFF/26-27/29573,0,99.95,2098.95,1999,2098,0.95,subtotal_vs_items

@@ -5655,17 +5655,33 @@ router.get('/inventory', verifyToken, async (req, res) => {
 
         const windowSql = windowDays > 0 ? `AND created_at >= NOW() - INTERVAL '${windowDays} days'` : '';
 
-        // Two lightweight per-row scans — the old CROSS JOIN LATERAL + jsonb_build_object
-        // + GROUP BY was rebuilding in SQL what JS can consume directly from items_json.
-        // A) windowed history → delivered + RTO buckets
+        // Cache bundle map separately (static config data, rarely changes)
+        const bundleCacheKey = 'zoho_bundle_map';
+        let bundleRows = getCached(bundleCacheKey);
+        if (!bundleRows || force) {
+            bundleRows = await dbAdapter.query(`SELECT bundle_sku, component_sku, component_qty FROM zoho_bundle_map`);
+            setCached(bundleCacheKey, bundleRows, 3600000); // Cache for 1 hour
+        }
+
+        // Two lightweight per-row scans — optimized for index usage.
+        // A) windowed history → delivered + RTO buckets (split into two queries to avoid OR)
         // B) current in-circulation shipments (never window-trimmed)
-        const [historyRows, circulationRows, returnRows, exchangeRows, rsPipeline, salesRows, bundleRows] = await Promise.all([
+        const [historyDelivered, historyRto, circulationRows, returnRows, exchangeRows, rsPipeline, salesRows] = await Promise.all([
+            // History: delivered orders
             dbAdapter.query(`
                 SELECT s.items_json, s.status AS shopper_status, o.status AS order_status
                 FROM store_shoppers s
-                LEFT JOIN orders o ON o.order_id = s.order_id
+                INNER JOIN orders o ON o.order_id = s.order_id
                 WHERE s.items_json IS NOT NULL
-                  AND (o.status IN ('delivered','rto') OR s.status = 'rto')
+                  AND o.status = 'delivered'
+                  ${windowDays > 0 ? `AND s.created_at >= NOW() - INTERVAL '${windowDays} days'` : ''}
+            `),
+            // History: RTO orders (order status OR shopper status)
+            dbAdapter.query(`
+                SELECT s.items_json, s.status AS shopper_status, 'rto' AS order_status
+                FROM store_shoppers s
+                WHERE s.items_json IS NOT NULL
+                  AND s.status = 'rto'
                   ${windowDays > 0 ? `AND s.created_at >= NOW() - INTERVAL '${windowDays} days'` : ''}
             `),
             dbAdapter.query(`
@@ -5685,13 +5701,11 @@ router.get('/inventory', verifyToken, async (req, res) => {
             dbAdapter.query(`
                 SELECT s.items_json, s.created_at
                 FROM store_shoppers s
-                LEFT JOIN orders o ON o.order_id = s.order_id
+                INNER JOIN orders o ON o.order_id = s.order_id
                 WHERE s.items_json IS NOT NULL
                   AND s.created_at >= NOW() - INTERVAL '84 days'
-                  AND (o.status IN ('delivered','shipped') OR (s.status = 'confirmed' AND o.awb IS NOT NULL))
-                  AND COALESCE(o.status, '') NOT IN ('cancelled','failed')
-            `),
-            dbAdapter.query(`SELECT bundle_sku, component_sku, component_qty FROM zoho_bundle_map`)
+                  AND o.status IN ('delivered','shipped')
+            `)
         ]);
 
         // ---------- Bundle / combo expansion (Zoho configuration) ----------
@@ -5848,11 +5862,12 @@ router.get('/inventory', verifyToken, async (req, res) => {
             const bucket = classifyRow(row);
             if (bucket) addItemUnits(parseItems(row.items_json), bucket);
         }
-        for (const row of historyRows) {
-            const bucket = classifyRow(row);
-            // In-circulation units already counted from the dedicated query above
-            if (!bucket || bucket === 'in_circulation') continue;
-            addItemUnits(parseItems(row.items_json), bucket);
+        // Process split history queries (delivered + RTO)
+        for (const row of historyDelivered) {
+            addItemUnits(parseItems(row.items_json), 'delivered');
+        }
+        for (const row of historyRto) {
+            addItemUnits(parseItems(row.items_json), 'rto_incoming');
         }
 
         // 2) Open customer returns → stock coming back

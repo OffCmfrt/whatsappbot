@@ -769,23 +769,23 @@ async function initializePerformanceIndexes() {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_status_updated ON store_shoppers(status, updated_at DESC)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_order_updated ON store_shoppers(order_id, updated_at DESC)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_created_at ON store_shoppers(created_at DESC)');
-    // Covering index for inventory intelligence JSONB queries (status + created_at filter, items_json payload)
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_inv_intel ON store_shoppers(status, created_at DESC) INCLUDE (items_json, order_id)');
+    // Composite index for inventory intelligence (status + created_at for filtering; items_json fetched from heap)
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_status_created ON store_shoppers(status, created_at DESC)');
     
     // Index for orders table (JOIN operations)
     await pool.query('CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id)');
-    // Covering index for inventory intelligence JOINs (status filter + awb/order_id payload)
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_orders_inv_intel ON orders(order_id) INCLUDE (status, awb)');
+    // Composite index for order status filtering (used in inventory JOINs)
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)');
     
     // Index for message_reads (EXISTS subquery in unread queries)
     await pool.query('CREATE INDEX IF NOT EXISTS idx_message_reads_message_id ON message_reads(message_id)');
 
-    // ── Returns & Exchanges: status-based scans (inventory endpoint) ──
+    // ── Returns & Exchanges: composite index for status + date filtering ──
     await pool.query('CREATE INDEX IF NOT EXISTS idx_returns_status_created ON returns(status, created_at DESC)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_exchanges_status_created ON exchanges(status, created_at DESC)');
 
-    // ── zoho_bundle_map: covering index for full-scan reads ──
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_zoho_bundle_map_cover ON zoho_bundle_map(bundle_sku) INCLUDE (component_sku, component_qty)');
+    // ── zoho_bundle_map: simple index for full-scan reads (covering index not needed for small tables) ──
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_zoho_bundle_map_sku ON zoho_bundle_map(bundle_sku)');
     
     console.log('✅ Performance indexes initialized');
   } catch (error) {
