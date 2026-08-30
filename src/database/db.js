@@ -469,6 +469,11 @@ async function initializeSupportPortalsTable() {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_tickets_sentiment ON support_tickets(sentiment) WHERE sentiment IS NOT NULL');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_tickets_ai_scenario ON support_tickets(ai_scenario) WHERE ai_scenario IS NOT NULL');
 
+    // Dashboard ticket list: default view is "newest first, status-filtered" —
+    // covering index lets Postgres walk the index instead of sorting the table
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_tickets_created_desc ON support_tickets(created_at DESC, id DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_tickets_status_created ON support_tickets(status, created_at DESC)');
+
     // Create re-engagement index
     await pool.query('CREATE INDEX IF NOT EXISTS idx_reengagement_pending ON support_tickets(reengagement_sent, status, created_at)');
 

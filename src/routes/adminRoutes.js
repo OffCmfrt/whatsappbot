@@ -1514,49 +1514,16 @@ function timeRangeSqlClause(config, col = 'created_at') {
 
 router.get('/support-tickets', verifyToken, async (req, res) => {
     try {
-        const { status, is_read, date_from, date_to, time_from, time_to } = req.query;
-        let query = 'SELECT * FROM support_tickets';
-        const params = [];
-        const conditions = [];
+        const { status, is_read, date_from, date_to, time_from, time_to, search, portal, sort, urgent, urgent_filter } = req.query;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 50));
+        const offset = (page - 1) * limit;
 
-        if (status) {
-            conditions.push('status = ?');
-            params.push(status);
-        }
+        // Urgent keywords live in the client's localStorage, so they arrive as a
+        // comma-separated list and are matched in SQL (bounded to avoid huge queries)
+        const urgentKeywords = String(urgent || '')
+            .split(',').map(k => k.trim()).filter(k => k && k.length <= 50).slice(0, 20);
 
-        if (is_read !== undefined) {
-            conditions.push('is_read = ?');
-            params.push(is_read === 'true');
-        }
-
-        if (date_from) {
-            conditions.push('DATE(created_at) >= ?');
-            params.push(date_from);
-        }
-
-        if (date_to) {
-            conditions.push('DATE(created_at) <= ?');
-            params.push(date_to);
-        }
-
-        if (time_from) {
-            conditions.push('TIME(created_at) >= ?');
-            params.push(time_from);
-        }
-
-        if (time_to) {
-            conditions.push('TIME(created_at) <= ?');
-            params.push(time_to);
-        }
-
-        if (conditions.length > 0) {
-            query += ' WHERE ' + conditions.join(' AND ');
-        }
-
-        query += ' ORDER BY created_at DESC';
-
-        const tickets = await dbAdapter.query(query, params);
-        
         // Get all portals to resolve portal names (manual/auto own tickets via portal_id;
         // time-based portals match tickets dynamically by their created time)
         const allPortalsForNames = await dbAdapter.query(
@@ -1577,31 +1544,153 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
                 }
             })
             .filter(Boolean);
-        
-        // Enrich tickets with portal information (no per-ticket logging — this runs
-        // for thousands of tickets on every dashboard load)
-        const enrichedTickets = tickets.map(ticket => {
-            // If ticket has explicit portal_id, it's from manual/auto assignment (incl. split/transfer)
+
+        // All filtering happens in SQL so we only ever pull one small page of rows
+        const conditions = [];
+        const params = [];
+
+        if (status) {
+            conditions.push('status = ?');
+            params.push(status);
+        }
+
+        if (is_read !== undefined) {
+            conditions.push('is_read = ?');
+            params.push(is_read === 'true');
+        }
+
+        if (date_from) {
+            conditions.push('created_at::date >= ?::date');
+            params.push(date_from);
+        }
+
+        if (date_to) {
+            conditions.push('created_at::date <= ?::date');
+            params.push(date_to);
+        }
+
+        if (time_from) {
+            conditions.push('created_at::time >= ?::time');
+            params.push(time_from);
+        }
+
+        if (time_to) {
+            conditions.push('created_at::time <= ?::time');
+            params.push(time_to);
+        }
+
+        if (search && String(search).trim()) {
+            const like = `%${String(search).trim()}%`;
+            conditions.push('(ticket_number ILIKE ? OR customer_name ILIKE ? OR customer_phone ILIKE ? OR message ILIKE ?)');
+            params.push(like, like, like, like);
+        }
+
+        if (portal === 'unassigned') {
+            const timeClauses = timeBasedPortals
+                .map(p => timeRangeSqlClause(p.config))
+                .filter(Boolean);
+            conditions.push(timeClauses.length
+                ? `portal_id IS NULL AND NOT (${timeClauses.join(' OR ')})`
+                : 'portal_id IS NULL');
+        } else if (portal) {
+            const pid = parseInt(portal, 10);
+            if (Number.isFinite(pid)) {
+                const tb = timeBasedPortals.find(p => p.id === pid);
+                const timeClause = tb ? timeRangeSqlClause(tb.config) : null;
+                if (timeClause) {
+                    // Explicit assignment wins; otherwise match the portal's IST time window
+                    conditions.push(`(portal_id = ? OR (portal_id IS NULL AND ${timeClause}))`);
+                } else {
+                    conditions.push('portal_id = ?');
+                }
+                params.push(pid);
+            }
+        }
+
+        // Urgent keywords arrive regardless of whether the urgent filter is on —
+        // they feed the "urgent" stat card, and filter the list only when urgent_filter=1
+        const urgentActive = urgent_filter === '1' || urgent_filter === 'true';
+        let urgentClause = null;
+        const urgentParams = urgentKeywords.map(k => `%${k}%`);
+        if (urgentKeywords.length) {
+            urgentClause = '(' + urgentKeywords.map(() => 'message ILIKE ?').join(' OR ') + ')';
+            if (urgentActive) {
+                conditions.push(urgentClause);
+                params.push(...urgentParams);
+            }
+        }
+
+        const whereSql = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+        const orderSql = sort === 'oldest' ? 'created_at ASC, id ASC' : 'created_at DESC, id DESC';
+
+        // Slim column set — message is truncated to a preview; the chat view loads
+        // the full conversation separately. Keeps each page well under the response cap.
+        const buildDataSql = (withOrderId) => `SELECT id, ticket_number, customer_phone, customer_name,
+                LEFT(message, 600) AS message, status, is_read, portal_id, sentiment,
+                ai_scenario, ai_confidence, source${withOrderId ? ', order_id' : ''}, created_at, updated_at
+            FROM support_tickets${whereSql}
+            ORDER BY ${orderSql}
+            LIMIT ? OFFSET ?`;
+
+        // Stat cards in one aggregation scan over the same filtered set
+        const statsSql = `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE is_read = false)::int AS unread,
+                COUNT(*) FILTER (WHERE status = 'open')::int AS open,
+                COUNT(*) FILTER (WHERE status = 'resolved')::int AS resolved,
+                COUNT(*) FILTER (WHERE ${urgentClause || 'false'})::int AS urgent
+            FROM support_tickets${whereSql}`;
+
+        let tickets;
+        let statsRow;
+        const statsParams = urgentClause ? [...params, ...urgentParams] : params;
+        try {
+            const [dataRows, statsRows] = await Promise.all([
+                dbAdapter.query(buildDataSql(true), [...params, limit, offset]),
+                dbAdapter.query(statsSql, statsParams)
+            ]);
+            tickets = dataRows;
+            statsRow = statsRows[0] || {};
+        } catch (err) {
+            // order_id may not exist on older schemas — retry without it
+            if (!/order_id/.test(err.message || '')) throw err;
+            const [dataRows, statsRows] = await Promise.all([
+                dbAdapter.query(buildDataSql(false), [...params, limit, offset]),
+                dbAdapter.query(statsSql, statsParams)
+            ]);
+            tickets = dataRows;
+            statsRow = statsRows[0] || {};
+        }
+
+        // Enrich only this page with portal information (explicit portal_id from
+        // manual/auto assignment wins; otherwise the first matching time-based portal)
+        tickets.forEach(ticket => {
             if (ticket.portal_id) {
                 ticket.portal_name = portalNameById[ticket.portal_id] || null;
-                return ticket;
+                return;
             }
-            
-            // For time-based tickets, find matching portal
-            for (const portal of timeBasedPortals) {
-                if (isTicketInTimeRangeForAdmin(ticket, portal.config)) {
-                    ticket.portal_id = portal.id;
-                    ticket.portal_name = portal.name;
-                    return ticket;
+            for (const p of timeBasedPortals) {
+                if (isTicketInTimeRangeForAdmin(ticket, p.config)) {
+                    ticket.portal_id = p.id;
+                    ticket.portal_name = p.name;
+                    return;
                 }
             }
-            
-            return ticket;
         });
-        
-        console.log(`✅ Enriched ${enrichedTickets.filter(t => t.portal_name).length}/${tickets.length} tickets with portal names (${timeBasedPortals.length} time-based portals)`);
-        
-        res.json({ success: true, tickets: enrichedTickets });
+
+        res.json({
+            success: true,
+            tickets,
+            meta: {
+                total: statsRow.total || 0,
+                unread: statsRow.unread || 0,
+                open: statsRow.open || 0,
+                resolved: statsRow.resolved || 0,
+                urgent: statsRow.urgent || 0,
+                page,
+                limit,
+                has_more: offset + tickets.length < (statsRow.total || 0)
+            }
+        });
     } catch (error) {
         console.error('Error fetching support tickets:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch support tickets' });

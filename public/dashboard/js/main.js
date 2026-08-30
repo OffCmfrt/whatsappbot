@@ -816,6 +816,12 @@ let displayedTickets = [];
 let selectedTickets = new Set();
 let ticketsPerPage = 50;
 let currentDisplayCount = 0;
+// Server-side pagination state — the server filters/sorts/paginates, so the
+// client only ever holds one small page of tickets instead of thousands
+let ticketMeta = { total: 0, unread: 0, open: 0, resolved: 0, urgent: 0, has_more: false };
+let currentTicketPage = 1;
+let isLoadingTickets = false;
+let ticketSearchDebounce = null;
 
 // Quick reply templates for faster responses
 const quickReplyTemplates = [
@@ -831,39 +837,59 @@ const quickReplyTemplates = [
     { label: 'Close', text: 'We\'re closing this ticket now. If you need further assistance, feel free to reach out anytime. Have a great day!' }
 ];
 
-// Load Support Tickets
-async function loadSupportTickets() {
+// Build the query string carrying every filter to the server
+function buildTicketQueryParams(page) {
+    const statusFilter = document.getElementById('ticketStatusFilter')?.value || '';
+    const unreadOnly = document.getElementById('unreadFilterBtn')?.classList.contains('active') || false;
+    const urgentOnly = document.getElementById('urgentFilterBtn')?.classList.contains('active') || false;
+    const searchQuery = (document.getElementById('ticketSearchInput')?.value || '').trim();
+    const portalFilterVal = document.getElementById('portalFilter')?.value || '';
+    const dateFrom = document.getElementById('dateFromFilter')?.value || '';
+    const dateTo = document.getElementById('dateToFilter')?.value || '';
+    const timeFrom = document.getElementById('timeFromFilter')?.value || '';
+    const timeTo = document.getElementById('timeToFilter')?.value || '';
+    const sortBy = document.getElementById('ticketSortBy')?.value || 'newest';
+
+    const params = new URLSearchParams();
+    if (statusFilter) params.append('status', statusFilter);
+    if (unreadOnly) params.append('is_read', 'false');
+    if (dateFrom) params.append('date_from', dateFrom);
+    if (dateTo) params.append('date_to', dateTo);
+    if (timeFrom) params.append('time_from', timeFrom);
+    if (timeTo) params.append('time_to', timeTo);
+    if (searchQuery) params.append('search', searchQuery);
+    if (portalFilterVal) params.append('portal', portalFilterVal);
+    if (sortBy) params.append('sort', sortBy);
+    // Keywords always go up (they feed the urgent stat card); they only filter
+    // the list when the urgent toggle is active
+    if (urgentKeywords.length) params.append('urgent', urgentKeywords.join(','));
+    if (urgentOnly) params.append('urgent_filter', '1');
+    params.append('page', String(page));
+    params.append('limit', String(ticketsPerPage));
+    return params.toString();
+}
+
+// Load Support Tickets (one server-side page at a time)
+async function loadSupportTickets(page = 1, append = false) {
+    if (isLoadingTickets) return;
+    isLoadingTickets = true;
     try {
-        const filter = document.getElementById('ticketStatusFilter')?.value || '';
-        const isReadFilter = document.getElementById('unreadFilterBtn')?.classList.contains('active') ? 'false' : undefined;
-        const dateFrom = document.getElementById('dateFromFilter')?.value || '';
-        const dateTo = document.getElementById('dateToFilter')?.value || '';
-        const timeFrom = document.getElementById('timeFromFilter')?.value || '';
-        const timeTo = document.getElementById('timeToFilter')?.value || '';
-
-        // Build query parameters
-        const params = new URLSearchParams();
-        if (filter) params.append('status', filter);
-        if (isReadFilter) params.append('is_read', isReadFilter);
-        if (dateFrom) params.append('date_from', dateFrom);
-        if (dateTo) params.append('date_to', dateTo);
-        if (timeFrom) params.append('time_from', timeFrom);
-        if (timeTo) params.append('time_to', timeTo);
-
-        const queryString = params.toString();
-        const response = await apiCall(`/support-tickets${queryString ? `?${queryString}` : ''}`);
+        const response = await apiCall(`/support-tickets?${buildTicketQueryParams(page)}`);
 
         if (response.success) {
-            allTickets = response.tickets || [];
-            
-            // Add orderId from order_id if available
-            allTickets = allTickets.map(t => ({
+            const fetched = (response.tickets || []).map(t => ({
                 ...t,
                 orderId: t.order_id || null
             }));
-            
+
+            allTickets = append ? [...allTickets, ...fetched] : fetched;
+            filteredTickets = allTickets;
+            currentTicketPage = page;
+            ticketMeta = response.meta || ticketMeta;
+
             updateTicketStats();
-            applyFiltersAndSort();
+            renderTicketsList();
+            updateActiveFiltersCount();
         }
     } catch (error) {
         console.error('Failed to load support tickets:', error);
@@ -877,22 +903,18 @@ async function loadSupportTickets() {
                 <div class="tickets-empty-text">Please try refreshing the page</div>
             </div>
         `;
+    } finally {
+        isLoadingTickets = false;
     }
 }
 
-// Update statistics
+// Update statistics — counts come from the server's single aggregation query
 function updateTicketStats() {
-    const total = allTickets.length;
-    const unread = allTickets.filter(t => !t.is_read).length;
-    const urgent = allTickets.filter(t => isUrgentTicket(t.message)).length;
-    const open = allTickets.filter(t => t.status === 'open').length;
-    const resolved = allTickets.filter(t => t.status === 'resolved').length;
-    
-    document.getElementById('totalTicketsCount').textContent = total;
-    document.getElementById('unreadTicketsCount').textContent = unread;
-    document.getElementById('urgentTicketsCount').textContent = urgent;
-    document.getElementById('openTicketsCount').textContent = open;
-    document.getElementById('resolvedTicketsCount').textContent = resolved;
+    document.getElementById('totalTicketsCount').textContent = ticketMeta.total ?? allTickets.length;
+    document.getElementById('unreadTicketsCount').textContent = ticketMeta.unread ?? 0;
+    document.getElementById('urgentTicketsCount').textContent = ticketMeta.urgent ?? 0;
+    document.getElementById('openTicketsCount').textContent = ticketMeta.open ?? 0;
+    document.getElementById('resolvedTicketsCount').textContent = ticketMeta.resolved ?? 0;
 }
 
 // Update active filters count display
@@ -922,77 +944,10 @@ function updateActiveFiltersCount() {
     }
 }
 
-// Apply filters and sorting
+// Apply filters and sorting — everything is filtered server-side now, so this
+// simply refetches page 1 with the current filter state
 function applyFiltersAndSort() {
-    const statusFilter = document.getElementById('ticketStatusFilter')?.value || '';
-    const sortBy = document.getElementById('ticketSortBy')?.value || 'newest';
-    const searchQuery = document.getElementById('ticketSearchInput')?.value.toLowerCase() || '';
-    const unreadOnly = document.getElementById('unreadFilterBtn')?.classList.contains('active') || false;
-    const urgentOnly = document.getElementById('urgentFilterBtn')?.classList.contains('active') || false;
-    const dateFrom = document.getElementById('dateFromFilter')?.value || '';
-    const dateTo = document.getElementById('dateToFilter')?.value || '';
-    const timeFrom = document.getElementById('timeFromFilter')?.value || '';
-    const timeTo = document.getElementById('timeToFilter')?.value || '';
-    const portalFilterVal = document.getElementById('portalFilter')?.value || '';
-    
-    // Filter
-    filteredTickets = allTickets.filter(t => {
-        if (statusFilter && t.status !== statusFilter) return false;
-        if (unreadOnly && t.is_read) return false;
-        if (urgentOnly && !isUrgentTicket(t.message)) return false;
-        
-        // Portal filter
-        if (portalFilterVal) {
-            if (portalFilterVal === 'unassigned') {
-                if (t.portal_id || t.portal_name) return false;
-            } else {
-                const ticketPortalId = t.portal_id ? String(t.portal_id) : null;
-                if (ticketPortalId !== portalFilterVal) return false;
-            }
-        }
-        
-        // Enhanced search across multiple fields
-        if (searchQuery) {
-            const searchText = `${t.ticket_number || ''} ${t.customer_name || ''} ${t.customer_phone || ''} ${t.message || ''} ${t.orderId || ''}`.toLowerCase();
-            if (!searchText.includes(searchQuery)) return false;
-        }
-        
-        // Date filtering
-        if (dateFrom || dateTo) {
-            const ticketDate = new Date(t.created_at);
-            const ticketDateStr = ticketDate.toISOString().split('T')[0];
-            
-            if (dateFrom && ticketDateStr < dateFrom) return false;
-            if (dateTo && ticketDateStr > dateTo) return false;
-        }
-        
-        // Time filtering (IST)
-        if (timeFrom || timeTo) {
-            const ticketTime = new Date(t.created_at);
-            const ticketTimeStr = ticketTime.toTimeString().split(' ')[0].substring(0, 5);
-            
-            if (timeFrom && ticketTimeStr < timeFrom) return false;
-            if (timeTo && ticketTimeStr > timeTo) return false;
-        }
-        
-        return true;
-    });
-    
-    // Sort
-    filteredTickets.sort((a, b) => {
-        switch(sortBy) {
-            case 'oldest':
-                return new Date(a.created_at) - new Date(b.created_at);
-            case 'newest':
-            default:
-                return new Date(b.created_at) - new Date(a.created_at);
-        }
-    });
-    
-    // Reset display count and render
-    currentDisplayCount = Math.min(ticketsPerPage, filteredTickets.length);
-    renderTicketsList();
-    updateActiveFiltersCount();
+    loadSupportTickets(1, false);
 }
 
 // Render tickets list
@@ -1024,25 +979,26 @@ function renderTicketsList() {
         return;
     }
     
-    // Get tickets to display
-    displayedTickets = filteredTickets.slice(0, currentDisplayCount);
+    // Render every loaded ticket (all fetched pages so far)
+    displayedTickets = filteredTickets;
     
     container.innerHTML = displayedTickets.map(t => renderTicketItem(t)).join('');
     
-    // Update pagination info
-    document.getElementById('showingStart').textContent = filteredTickets.length > 0 ? 1 : 0;
-    document.getElementById('showingEnd').textContent = currentDisplayCount;
-    document.getElementById('showingTotal').textContent = filteredTickets.length;
+    // Update pagination info — totals come from the server
+    const serverTotal = ticketMeta.total || displayedTickets.length;
+    document.getElementById('showingStart').textContent = displayedTickets.length > 0 ? 1 : 0;
+    document.getElementById('showingEnd').textContent = displayedTickets.length;
+    document.getElementById('showingTotal').textContent = serverTotal;
     
     // Show/hide pagination
     pagination.style.display = 'flex';
     
     // Update show more button
     const showMoreBtn = document.getElementById('showMoreBtn');
-    if (currentDisplayCount >= filteredTickets.length) {
-        showMoreBtn.style.display = 'none';
-    } else {
+    if (ticketMeta.has_more) {
         showMoreBtn.style.display = 'inline-flex';
+    } else {
+        showMoreBtn.style.display = 'none';
     }
     
     // Add event listeners
@@ -1221,15 +1177,17 @@ function attachTicketEventListeners() {
     });
 }
 
-// Show more tickets
+// Show more tickets — fetch the next server page and append it
 function showMoreTickets() {
-    currentDisplayCount = Math.min(currentDisplayCount + ticketsPerPage, filteredTickets.length);
-    renderTicketsList();
+    if (ticketMeta.has_more && !isLoadingTickets) {
+        loadSupportTickets(currentTicketPage + 1, true);
+    }
 }
 
-// Search tickets
+// Search tickets — debounced since filtering now hits the server
 function searchTickets() {
-    applyFiltersAndSort();
+    clearTimeout(ticketSearchDebounce);
+    ticketSearchDebounce = setTimeout(() => loadSupportTickets(1, false), 300);
 }
 
 // Sort tickets
@@ -1615,12 +1573,18 @@ async function markTicketAsRead(ticketId) {
     try {
         await apiCall(`/support-tickets/${ticketId}/mark-read`, 'PATCH');
         
-        // Update local state
+        // Update local state without a full refetch
         const ticket = allTickets.find(t => t.id == ticketId);
-        if (ticket) {
+        if (ticket && !ticket.is_read) {
             ticket.is_read = 1;
+            if (ticketMeta.unread > 0) ticketMeta.unread -= 1;
             updateTicketStats();
-            applyFiltersAndSort();
+            // Only re-render when the unread filter is active (row must disappear)
+            if (document.getElementById('unreadFilterBtn')?.classList.contains('active')) {
+                loadSupportTickets(1, false);
+            } else {
+                renderTicketsList();
+            }
         }
     } catch (error) {
         console.error('Failed to mark ticket as read:', error);
