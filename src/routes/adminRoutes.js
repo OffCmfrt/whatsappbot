@@ -2001,8 +2001,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         const countRes = await dbAdapter.query(countSql, params);
         const total = countRes[0]?.total || 0;
 
-        // Use LEFT JOIN instead of correlated subqueries for better performance
-        // Always apply LIMIT to prevent unbounded queries (max 2000)
+        // Cleanup script ran 2026-04-29 — duplicates eliminated, skip expensive self-join
         const sql = `
             SELECT s.id, s.phone, s.name, s.email, s.order_id, s.address, s.city, s.province, s.zip,
                    s.payment_method, s.order_total, s.delivery_type, s.source,
@@ -2016,11 +2015,6 @@ router.get('/shoppers', verifyToken, async (req, res) => {
                    o.status as order_status,
                    o.tracking_url
             FROM store_shoppers s
-            INNER JOIN (
-                SELECT order_id, MAX(updated_at) as max_updated
-                FROM store_shoppers
-                GROUP BY order_id
-            ) latest_s ON s.order_id = latest_s.order_id AND s.updated_at = latest_s.max_updated
             LEFT JOIN orders o ON o.order_id = s.order_id
             ${whereClause} 
             ${orderByClause}
@@ -2044,7 +2038,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         
         // Cache the response (only if no search)
         if (!search) {
-            setCache(cacheKey, response, 'shoppers', 2 * 60 * 1000); // 2 minutes TTL
+            setCache(cacheKey, response, 'shoppers', 10 * 60 * 1000); // 10 minutes TTL
         }
     } catch (error) {
         console.error('Shoppers fetch error:', error);
@@ -2909,6 +2903,13 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
     try {
         const { limit = 20, offset = 0, startDate, endDate, search, actionType } = req.query;
 
+        // Cache unread chat list (2 min TTL) — heavy query with JOINs + NOT EXISTS
+        const chatCacheKey = `chat_unread:${limit}:${offset}:${startDate || 'all'}:${endDate || 'all'}:${search || 'none'}:${actionType || 'all'}`;
+        if (!search) {
+            const cached = getCached(chatCacheKey);
+            if (cached) return res.json(cached);
+        }
+
         // Build date filter for messages
         let dateClause = '';
         const dateParams = [];
@@ -2994,12 +2995,18 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
         const countRes = await dbAdapter.query(countSql, dateParams);
         const total = countRes[0]?.total || 0;
 
-        res.json({
+        const result = {
             success: true,
             shoppers,
             total,
             page: Math.floor(offset / limit) + 1
-        });
+        };
+
+        if (!search) {
+            setCache(chatCacheKey, result, 'shoppers', 2 * 60 * 1000); // 2 minutes TTL
+        }
+
+        res.json(result);
     } catch (error) {
         console.error('Unread messages fetch error:', error);
         res.status(500).json({ error: 'Failed to fetch unread messages' });
@@ -3234,6 +3241,7 @@ router.get('/shoppers/recent-confirmed', verifyToken, async (req, res) => {
             dateParams.push(searchParam, searchParam, searchParam);
         }
 
+        // Cleanup script ran 2026-04-29 — duplicates eliminated, skip expensive self-join
         const confirmedSql = `
             SELECT s.id, s.phone, s.name, s.order_id, s.status, s.customer_message,
                    s.last_response_at, s.created_at, s.updated_at, s.order_total, s.delivery_type,
@@ -3242,12 +3250,6 @@ router.get('/shoppers/recent-confirmed', verifyToken, async (req, res) => {
                    o.awb, o.courier_name, o.status as order_status, o.tracking_url,
                    COALESCE(s.order_total, o.total) as order_total
             FROM store_shoppers s
-            INNER JOIN (
-                SELECT order_id, MAX(updated_at) as max_updated
-                FROM store_shoppers
-                WHERE status = 'confirmed'
-                GROUP BY order_id
-            ) latest ON s.order_id = latest.order_id AND s.updated_at = latest.max_updated
             LEFT JOIN orders o ON s.order_id = o.order_id
             WHERE s.status = 'confirmed'
               ${dateClause}
@@ -3424,8 +3426,8 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
             daily: dailyStats
         };
         
-        // Cache for 3 minutes
-        setCache(analyticsCacheKey, response, 'stats', 3 * 60 * 1000);
+        // Cache for 15 minutes — analytics queries are expensive
+        setCache(analyticsCacheKey, response, 'stats', 15 * 60 * 1000);
         
         res.json(response);
     } catch (error) {

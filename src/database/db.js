@@ -786,6 +786,14 @@ async function initializePerformanceIndexes() {
 
     // ── zoho_bundle_map: simple index for full-scan reads (covering index not needed for small tables) ──
     await pool.query('CREATE INDEX IF NOT EXISTS idx_zoho_bundle_map_sku ON zoho_bundle_map(bundle_sku)');
+
+    // ── Chat / messages: composite index for unread queries ──
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_messages_phone_type_created ON messages(customer_phone, message_type, created_at DESC)');
+
+    // ── store_shoppers: composite for order_id dedup self-join ──
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_orderid_updated ON store_shoppers(order_id, updated_at DESC)');
+    // ── store_shoppers: composite for phone dedup (chat unread JOIN) ──
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_phone_created ON store_shoppers(phone, created_at DESC)');
     
     console.log('✅ Performance indexes initialized');
   } catch (error) {
