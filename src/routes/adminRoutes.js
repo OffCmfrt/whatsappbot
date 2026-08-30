@@ -5655,31 +5655,27 @@ router.get('/inventory', verifyToken, async (req, res) => {
 
         const windowSql = windowDays > 0 ? `AND created_at >= NOW() - INTERVAL '${windowDays} days'` : '';
 
-        // Two simple, index-friendly scans instead of one OR-heavy scan:
+        // Two lightweight per-row scans — the old CROSS JOIN LATERAL + jsonb_build_object
+        // + GROUP BY was rebuilding in SQL what JS can consume directly from items_json.
         // A) windowed history → delivered + RTO buckets
-        // B) current in-circulation shipments (never window-trimmed — they are
-        //    still out with couriers regardless of age)
+        // B) current in-circulation shipments (never window-trimmed)
         const [historyRows, circulationRows, returnRows, exchangeRows, rsPipeline, salesRows, bundleRows] = await Promise.all([
             dbAdapter.query(`
-                SELECT jsonb_agg(jsonb_build_object('quantity', it->>'quantity', 'qty', it->>'qty', 'sku', it->>'sku', 'title', it->>'title', 'size', it->>'size', 'variant', it->>'variant', 'variant_title', it->>'variant_title', 'variant_size', it->>'variant_size', 'product_size', it->>'product_size')) AS items_json, s.status AS shopper_status, o.status AS order_status
+                SELECT s.items_json, s.status AS shopper_status, o.status AS order_status
                 FROM store_shoppers s
                 LEFT JOIN orders o ON o.order_id = s.order_id
-                CROSS JOIN LATERAL jsonb_array_elements(s.items_json::jsonb) it
                 WHERE s.items_json IS NOT NULL
                   AND (o.status IN ('delivered','rto') OR s.status = 'rto')
                   ${windowDays > 0 ? `AND s.created_at >= NOW() - INTERVAL '${windowDays} days'` : ''}
-                GROUP BY s.id, o.status
             `),
             dbAdapter.query(`
-                SELECT jsonb_agg(jsonb_build_object('quantity', it->>'quantity', 'qty', it->>'qty', 'sku', it->>'sku', 'title', it->>'title', 'size', it->>'size', 'variant', it->>'variant', 'variant_title', it->>'variant_title', 'variant_size', it->>'variant_size', 'product_size', it->>'product_size')) AS items_json, s.status AS shopper_status, o.status AS order_status, o.awb
+                SELECT s.items_json, s.status AS shopper_status, o.status AS order_status, o.awb
                 FROM store_shoppers s
                 INNER JOIN orders o ON o.order_id = s.order_id
-                CROSS JOIN LATERAL jsonb_array_elements(s.items_json::jsonb) it
                 WHERE s.items_json IS NOT NULL
                   AND s.status = 'confirmed'
                   AND (o.awb IS NOT NULL OR o.status = 'shipped')
                   AND COALESCE(o.status, '') NOT IN ('delivered','rto','cancelled','failed')
-                GROUP BY s.id, o.status, o.awb
             `),
             dbAdapter.query(`SELECT items FROM returns WHERE status IN ('pending_approval','initiated','approved','pickup_scheduled') ${windowSql}`),
             dbAdapter.query(`SELECT old_items, new_items FROM exchanges WHERE status IN ('pending_approval','initiated','pickup_scheduled') ${windowSql}`),
@@ -5687,15 +5683,13 @@ router.get('/inventory', verifyToken, async (req, res) => {
             // Trailing 84 days of shipped/delivered units for velocity & forecast
             // series — always a fixed window, independent of the pipeline window.
             dbAdapter.query(`
-                SELECT jsonb_agg(jsonb_build_object('quantity', it->>'quantity', 'qty', it->>'qty', 'sku', it->>'sku', 'title', it->>'title', 'size', it->>'size', 'variant', it->>'variant', 'variant_title', it->>'variant_title', 'variant_size', it->>'variant_size', 'product_size', it->>'product_size')) AS items_json, MAX(s.created_at) AS created_at
+                SELECT s.items_json, s.created_at
                 FROM store_shoppers s
                 LEFT JOIN orders o ON o.order_id = s.order_id
-                CROSS JOIN LATERAL jsonb_array_elements(s.items_json::jsonb) it
                 WHERE s.items_json IS NOT NULL
                   AND s.created_at >= NOW() - INTERVAL '84 days'
                   AND (o.status IN ('delivered','shipped') OR (s.status = 'confirmed' AND o.awb IS NOT NULL))
                   AND COALESCE(o.status, '') NOT IN ('cancelled','failed')
-                GROUP BY s.id
             `),
             dbAdapter.query(`SELECT bundle_sku, component_sku, component_qty FROM zoho_bundle_map`)
         ]);
