@@ -5660,7 +5660,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
         let bundleRows = getCached(bundleCacheKey);
         if (!bundleRows || force) {
             bundleRows = await dbAdapter.query(`SELECT bundle_sku, component_sku, component_qty FROM zoho_bundle_map`);
-            setCached(bundleCacheKey, bundleRows, 3600000); // Cache for 1 hour
+            setCache(bundleCacheKey, bundleRows, 'stats', 3600000); // Cache for 1 hour
         }
 
         // Two lightweight per-row scans — optimized for index usage.
