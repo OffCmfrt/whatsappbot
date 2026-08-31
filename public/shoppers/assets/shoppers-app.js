@@ -1443,6 +1443,21 @@ function parseItemsPreview(itemsJson) {
     }
 }
 
+function parseItemsWithQty(itemsJson) {
+    try {
+        const items = JSON.parse(itemsJson);
+        const arr = Array.isArray(items) ? items : (items && typeof items === 'object' ? Object.values(items) : []);
+        if (arr.length === 0) return String(itemsJson).substring(0, 80);
+        return arr.map(i => {
+            const name = i.name || i.product || i.title || 'Item';
+            const qty = i.quantity || i.qty || 1;
+            return qty > 1 ? `${name} ×${qty}` : name;
+        }).join(', ');
+    } catch {
+        return String(itemsJson).substring(0, 80) || 'N/A';
+    }
+}
+
 async function confirmMultiOrder(id) {
     if (!hubRequirePerm('edit_orders', 'change order statuses')) return;
     if (!confirm('Are you sure you want to CONFIRM this order?')) return;
@@ -6388,7 +6403,7 @@ function renderShippedOrders(data) {
         const isShiprocket = sh.carrier === 'shiprocket';
         const isCod = (sh.payment_mode || '').toUpperCase() === 'COD';
         const canPickup = active && ['created', 'awb_assigned'].includes(sh.status);
-        const items = sh.items_json ? parseItemsPreview(sh.items_json) : (sh.product_name || '—');
+        const items = sh.items_json ? parseItemsWithQty(sh.items_json) : (sh.product_name || '—');
         const dims = sh.weight_grams ? `${sh.weight_grams}g · ${sh.length_cm}×${sh.breadth_cm}×${sh.height_cm} cm` : '—';
         const addr = [sh.customer_address, sh.customer_city, sh.customer_state, sh.customer_pincode].filter(Boolean).join(', ');
         const waPhone = (sh.customer_phone || '').replace(/[^0-9]/g, '');
@@ -6654,14 +6669,17 @@ async function exportShippedCsv() {
         const shipments = data.shipments || [];
         if (shipments.length === 0) { showShipToast('Nothing to export for current filters', true); return; }
 
-        const cols = ['Order ID', 'Customer', 'Phone', 'Address', 'City', 'State', 'Pincode', 'Carrier', 'Courier', 'AWB', 'Status', 'Payment', 'COD Amount', 'Order Total', 'Weight (g)', 'Freight', 'Pickup Date', 'Tracking URL', 'Shipped By', 'Created At'];
+        const cols = ['Order ID', 'Customer', 'Phone', 'Address', 'City', 'State', 'Pincode', 'Products', 'Carrier', 'Courier', 'AWB', 'Status', 'Payment', 'COD Amount', 'Order Total', 'Weight (g)', 'Freight', 'Pickup Date', 'Tracking URL', 'Shipped By', 'Created At'];
         const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-        const rows = shipments.map(sh => [
-            sh.order_id, sh.customer_name, sh.customer_phone, sh.customer_address, sh.customer_city,
-            sh.customer_state, sh.customer_pincode, sh.carrier, sh.courier_name, sh.awb, sh.status,
-            sh.payment_mode, sh.cod_amount, sh.order_total, sh.weight_grams, sh.freight_charge,
-            sh.pickup_date, sh.tracking_url, sh.shipped_by, sh.created_at
-        ].map(esc).join(','));
+        const rows = shipments.map(sh => {
+            const products = sh.items_json ? parseItemsWithQty(sh.items_json) : (sh.product_name || '');
+            return [
+                sh.order_id, sh.customer_name, sh.customer_phone, sh.customer_address, sh.customer_city,
+                sh.customer_state, sh.customer_pincode, products, sh.carrier, sh.courier_name, sh.awb, sh.status,
+                sh.payment_mode, sh.cod_amount, sh.order_total, sh.weight_grams, sh.freight_charge,
+                sh.pickup_date, sh.tracking_url, sh.shipped_by, sh.created_at
+            ].map(esc).join(',');
+        });
 
         const csv = [cols.map(esc).join(','), ...rows].join('\n');
         const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
