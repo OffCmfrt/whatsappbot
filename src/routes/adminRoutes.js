@@ -3907,11 +3907,14 @@ router.get('/support-portals', verifyToken, async (req, res) => {
                         // Count ALL unassigned tickets whose IST created-time falls in the range.
                         // Done in SQL so the count reflects every matching ticket, not just the
                         // newest 500 rows (which severely undercounted with thousands of tickets).
+                        // Count tickets belonging to this portal: explicitly assigned (from split/transfer)
+                        // PLUS unassigned tickets in the time window (dynamic pool).
                         const [row] = await dbAdapter.query(
                             `SELECT COUNT(*) AS ticket_count,
                                     COUNT(*) FILTER (WHERE status = 'open') AS open_count
                              FROM support_tickets
-                             WHERE portal_id IS NULL AND ${rangeClause}`
+                             WHERE portal_id = ? OR (portal_id IS NULL AND ${rangeClause})`,
+                            [portal.id]
                         );
 
                         return {
@@ -4031,11 +4034,11 @@ async function getPortalTicketRows(portal, onlyOpen = true) {
             ? (typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config)
             : {};
         const rangeClause = timeRangeSqlClause(config);
-        // Only unassigned tickets are part of a time-based portal's shared pool. Filter the
-        // time window in SQL so a split distributes ALL matching tickets, not just recent rows.
         const rangeSql = rangeClause ? ` AND (${rangeClause})` : '';
+        // Include both explicitly-assigned tickets AND unassigned tickets in the time window
         return await dbAdapter.query(
-            `SELECT id, created_at, status, portal_id FROM support_tickets WHERE portal_id IS NULL${statusClause}${rangeSql} ORDER BY created_at DESC`
+            `SELECT id, created_at, status, portal_id FROM support_tickets WHERE (portal_id = ? OR (portal_id IS NULL${rangeSql}))${statusClause} ORDER BY created_at DESC`,
+            [portal.id]
         );
     }
     return await dbAdapter.query(
@@ -4068,8 +4071,11 @@ router.post('/support-portals/:id/split', verifyToken, async (req, res) => {
             return res.status(400).json({ success: false, error: 'Source portal has no tickets to split' });
         }
 
-        // Create N new portals that own tickets explicitly via portal_id
+        // Create N new portals inheriting the source portal's type and time config
         const prefix = (namePrefix && String(namePrefix).trim()) || source.name;
+        const isTimeBased = source.type === 'time_based';
+        const newType = isTimeBased ? 'time_based' : 'manual';
+        const newConfig = isTimeBased ? (typeof source.config === 'string' ? source.config : JSON.stringify(source.config || {})) : null;
         const createdPortals = [];
         for (let i = 0; i < splitCount; i++) {
             const name = `${prefix} ${i + 1}`;
@@ -4078,9 +4084,9 @@ router.post('/support-portals/:id/split', verifyToken, async (req, res) => {
             const passwordHash = await bcrypt.hash(password, 10);
 
             const rows = await dbAdapter.query(
-                `INSERT INTO support_portals (name, slug, password_hash, type, is_active, assigned_count)
-                 VALUES (?, ?, ?, 'manual', true, 0) RETURNING id`,
-                [name, slug, passwordHash]
+                `INSERT INTO support_portals (name, slug, password_hash, type, config, shift_start, shift_end, is_active, assigned_count)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, true, 0) RETURNING id`,
+                [name, slug, passwordHash, newType, newConfig, source.shift_start, source.shift_end]
             );
             const newId = rows[0].id;
             portalPasswords.set(String(newId), password);
