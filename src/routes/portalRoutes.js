@@ -100,12 +100,6 @@ async function getPortalTickets(portalId, portalType, portalConfig) {
         const config = portalConfig
             ? (typeof portalConfig === 'string' ? JSON.parse(portalConfig) : portalConfig)
             : {};
-        // Ownership rule: explicitly-assigned tickets (split/transfer) belong ONLY to their
-        // portal and always show there regardless of time; unassigned tickets belong to this
-        // time-based portal's shared pool if their created time falls within the range.
-        // The time filter runs in SQL so ALL matching tickets are considered — not just the
-        // newest N rows (which previously hid a portal's tickets when recent traffic clustered
-        // in another portal's window).
         const rangeClause = timeRangeSqlClause(config);
         if (!rangeClause) {
             return await dbAdapter.query(
@@ -113,12 +107,22 @@ async function getPortalTickets(portalId, portalType, portalConfig) {
                 [portalId]
             );
         }
+        // If this portal has explicitly-assigned tickets (from split/transfer), only show those.
+        // Otherwise fall back to the unassigned dynamic pool in the time window.
+        const [assignedCheck] = await dbAdapter.query(
+            'SELECT COUNT(*) AS cnt FROM support_tickets WHERE portal_id = ?',
+            [portalId]
+        );
+        if (assignedCheck && assignedCheck.cnt > 0) {
+            return await dbAdapter.query(
+                'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC LIMIT 200',
+                [portalId]
+            );
+        }
         return await dbAdapter.query(
             `SELECT * FROM support_tickets
-             WHERE portal_id = ?
-                OR (portal_id IS NULL AND ${rangeClause})
-             ORDER BY created_at DESC LIMIT 200`,
-            [portalId]
+             WHERE portal_id IS NULL AND ${rangeClause}
+             ORDER BY created_at DESC LIMIT 200`
         );
     } else {
         // manual or auto
