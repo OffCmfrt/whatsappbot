@@ -2686,6 +2686,7 @@ function copyPortalLink(url) {
 // Split Portal (even distribution)
 // ===================================
 let splitPortalId = null;
+let isSplitSubmitting = false;
 
 function openSplitPortalModal(id) {
     splitPortalId = id;
@@ -2711,7 +2712,7 @@ function closeSplitPortalModal() {
 
 async function submitSplitPortal(event) {
     event.preventDefault();
-    if (!splitPortalId) return;
+    if (!splitPortalId || isSplitSubmitting) return;
 
     const count = parseInt(document.getElementById('splitCount').value);
     const namePrefix = document.getElementById('splitNamePrefix').value.trim();
@@ -2722,6 +2723,12 @@ async function submitSplitPortal(event) {
         showToast('Number of portals must be between 2 and 10', 'error');
         return;
     }
+
+    isSplitSubmitting = true;
+    const submitBtn = event.target.querySelector('button[type="submit"]');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Splitting...';
+    submitBtn.disabled = true;
 
     try {
         const response = await apiCall(`/support-portals/${splitPortalId}/split`, 'POST', {
@@ -2744,6 +2751,10 @@ async function submitSplitPortal(event) {
         }
     } catch (error) {
         showToast(error.message || 'Failed to split portal', 'error');
+    } finally {
+        isSplitSubmitting = false;
+        submitBtn.textContent = originalText;
+        submitBtn.disabled = false;
     }
 }
 

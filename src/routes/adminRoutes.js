@@ -4095,14 +4095,27 @@ router.post('/support-portals/:id/split', verifyToken, async (req, res) => {
             });
         }
 
-        // Distribute tickets evenly (round-robin)
+        // Distribute tickets evenly (round-robin) - BATCHED for performance
+        const ticketGroups = new Map();
         for (let i = 0; i < tickets.length; i++) {
             const target = createdPortals[i % splitCount];
-            await dbAdapter.run('UPDATE support_tickets SET portal_id = ? WHERE id = ?', [target.id, tickets[i].id]);
+            if (!ticketGroups.has(target.id)) {
+                ticketGroups.set(target.id, []);
+            }
+            ticketGroups.get(target.id).push(tickets[i].id);
             target.ticketCount++;
         }
 
-        // Persist assigned counts
+        // Batch update: one query per portal instead of one per ticket
+        for (const [portalId, ticketIds] of ticketGroups) {
+            const placeholders = ticketIds.map(() => '?').join(',');
+            await dbAdapter.run(
+                `UPDATE support_tickets SET portal_id = ? WHERE id IN (${placeholders})`,
+                [portalId, ...ticketIds]
+            );
+        }
+
+        // Batch update assigned_count for all new portals
         for (const p of createdPortals) {
             await dbAdapter.run('UPDATE support_portals SET assigned_count = ? WHERE id = ?', [p.ticketCount, p.id]);
         }
