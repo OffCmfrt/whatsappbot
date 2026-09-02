@@ -42,6 +42,8 @@ class ShiprocketAdapter extends BaseCarrier {
         this._pickupPincode = null; // cached after first lookup
         this._channelId = null;     // cached after first lookup
         this._channels = [];        // full channel list, cached by resolveChannelId
+        this._listingCache = null;  // cached order listing { orders, fetchedAt }
+        this.LISTING_CACHE_TTL = 60 * 1000; // 1 min — reused within a single ship attempt
     }
 
     get capabilities() {
@@ -134,14 +136,36 @@ class ShiprocketAdapter extends BaseCarrier {
     // CRITICAL: The Shiprocket GET /orders?search= API does NOT search by
     // channel_order_id — it returns unrelated orders. We must paginate the
     // listing endpoint and match channel_order_id directly.
+    // Uses a short-lived listing cache so repeated calls within a single
+    // ship attempt (Route 1 + recovery) share the same fetched pages.
     async findSyncedOrder(headers, orderId, channelId) {
         const bare = String(orderId).replace(/^#/, '').trim();
         const normalize = v => String(v ?? '').replace(/^#/, '').trim().toLowerCase();
         const targetLower = normalize(bare);
-    
-        // Paginate through the listing (most-recent-first) and match channel_order_id.
-        // Stop early if we see channel_order_ids numerically below our target
-        // (listing is sorted by recency, and our IDs are sequential).
+        const targetNum = parseInt(bare);
+
+        // Reuse cached listing if fresh (avoids re-fetching pages on recovery)
+        const now = Date.now();
+        const cache = this._listingCache;
+        const cachedOrders = cache && (now - cache.fetchedAt) < this.LISTING_CACHE_TTL ? cache.orders : null;
+
+        // If we have a fresh cache, scan it directly — no API calls
+        if (cachedOrders) {
+            for (const o of cachedOrders) {
+                const coi = normalize(o.channel_order_id);
+                if (coi === targetLower) {
+                    if (String(o.channel_id) === String(channelId)) return o;
+                    if (!this.isCustomChannelId(o.channel_id)) {
+                        console.warn(`⚠️ Shiprocket: order ${bare} matched on channel ${o.channel_id} (expected ${channelId}) — reusing it anyway`);
+                        return o;
+                    }
+                }
+            }
+            return null; // scanned all cached orders, no match
+        }
+
+        // No cache — paginate and build one
+        const allOrders = [];
         const maxPages = 30; // up to 3000 orders
         for (let page = 1; page <= maxPages; page++) {
             try {
@@ -152,19 +176,19 @@ class ShiprocketAdapter extends BaseCarrier {
                 });
                 const orders = response.data?.data || [];
                 if (orders.length === 0) break;
-    
+                allOrders.push(...orders);
+
                 // Early termination: if all channel_order_ids on this page are
                 // numerically below our target, we've gone too far back
                 const coiValues = orders.map(o => parseInt(String(o.channel_order_id || '').replace(/^#/, '')));
                 const maxCoi = Math.max(...coiValues.filter(Number.isFinite));
-                const targetNum = parseInt(bare);
                 if (Number.isFinite(maxCoi) && Number.isFinite(targetNum) && maxCoi < targetNum - 100) break;
-    
+
+                // Check for match on this page
                 for (const o of orders) {
                     const coi = normalize(o.channel_order_id);
-                    const oid = normalize(o.order_id); // may be undefined in listing
-                    if (coi === targetLower || oid === targetLower) {
-                        // Prefer the Shopify channel; skip Custom duplicates
+                    if (coi === targetLower) {
+                        this._listingCache = { orders: allOrders, fetchedAt: now };
                         if (String(o.channel_id) === String(channelId)) return o;
                         if (!this.isCustomChannelId(o.channel_id)) {
                             console.warn(`⚠️ Shiprocket: order ${bare} matched on channel ${o.channel_id} (expected ${channelId}) — reusing it anyway`);
@@ -176,6 +200,10 @@ class ShiprocketAdapter extends BaseCarrier {
                 console.warn(`⚠️ Shiprocket: listing page ${page} failed (${this.describeAxiosError(error)})`);
                 break;
             }
+        }
+        // Cache whatever we fetched so recovery calls don't re-fetch
+        if (allOrders.length > 0) {
+            this._listingCache = { orders: allOrders, fetchedAt: Date.now() };
         }
         return null;
     }
