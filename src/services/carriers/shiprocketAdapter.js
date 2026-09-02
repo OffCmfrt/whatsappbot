@@ -612,6 +612,7 @@ class ShiprocketAdapter extends BaseCarrier {
                                 });
                                 const orders = resp.data?.data || [];
                                 const bare = String(ctx.orderId).replace(/^#/, '').trim().toLowerCase();
+                                // Exact match on order_id
                                 const match = orders.find(o =>
                                     String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase() === bare ||
                                     String(o.order_id || '').replace(/^#/, '').trim().toLowerCase() === bare
@@ -621,9 +622,56 @@ class ShiprocketAdapter extends BaseCarrier {
                                     existing = match;
                                     break;
                                 }
+                                // Fuzzy match: order_id contains our number, or our number contains order_id
+                                const fuzzy = orders.find(o => {
+                                    const coi = String(o.channel_order_id || '').replace(/\D/g, '');
+                                    return coi && (coi.includes(bare.replace(/\D/g, '')) || bare.replace(/\D/g, '').includes(coi));
+                                });
+                                if (fuzzy) {
+                                    console.log(`📦 Shiprocket: fuzzy-matched order ${ctx.orderId} → SR channel_order_id "${fuzzy.channel_order_id}" via phone (${phone})`);
+                                    existing = fuzzy;
+                                    break;
+                                }
+                                // Diagnostic: log what the phone search returned so we can see the format
+                                if (orders.length > 0) {
+                                    const sample = orders.slice(0, 3).map(o => ({ id: o.id, coi: o.channel_order_id, ch: o.channel_id, awb: o.awb_code }));
+                                    console.log(`📦 Shiprocket: phone search (${phone}) returned ${orders.length} orders but none matched ${ctx.orderId}. Sample: ${JSON.stringify(sample)}`);
+                                }
                             } catch (e) {
                                 console.warn(`⚠️ Shiprocket: phone-search fallback for ${phone} failed`);
                             }
+                        }
+                    }
+
+                    // Last resort: list recent orders (no search filter) and look for
+                    // one matching our payload (same amount, same customer, no AWB yet).
+                    if (!existing) {
+                        try {
+                            const resp = await axios.get(`${this.baseURL}/orders`, {
+                                headers,
+                                params: { per_page: 20, page: 1 },
+                                timeout: 20000
+                            });
+                            const recent = resp.data?.data || [];
+                            const bare = String(ctx.orderId).replace(/^#/, '').trim().toLowerCase();
+                            const subTotal = orderPayload.sub_total;
+                            const match = recent.find(o => {
+                                // Match by order_id variants
+                                const coi = String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase();
+                                const oid = String(o.order_id || '').replace(/^#/, '').trim().toLowerCase();
+                                if (coi === bare || oid === bare) return true;
+                                // Match by sub_total + customer name + no AWB (likely our orphaned order)
+                                const nameMatch = String(o.billing_customer_name || '').toLowerCase() === (orderPayload.billing_customer_name || '').toLowerCase();
+                                const amountMatch = Math.abs(Number(o.total || 0) - subTotal) < 1;
+                                if (nameMatch && amountMatch && !o.awb_code) return true;
+                                return false;
+                            });
+                            if (match) {
+                                console.log(`📦 Shiprocket: found orphaned order via recent-orders scan — SR id ${match.id}, channel_order_id "${match.channel_order_id}"`);
+                                existing = match;
+                            }
+                        } catch (e) {
+                            console.warn(`⚠️ Shiprocket: recent-orders scan failed`);
                         }
                     }
 
