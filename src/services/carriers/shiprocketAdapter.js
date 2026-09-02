@@ -586,6 +586,76 @@ class ShiprocketAdapter extends BaseCarrier {
                 const suffix = fieldDetail && fieldDetail !== this.describeAxiosError(channelError)
                     ? ` Details: ${fieldDetail}`
                     : '';
+
+                // "order_id already taken" — the order exists at Shiprocket but
+                // findSyncedOrder missed it on the first pass (search API lag,
+                // different channel, etc.). Re-search and proceed with AWB
+                // assignment instead of failing — the order is already there.
+                const orderIdTaken = httpStatus === 422 && /already been taken/i.test(fieldDetail || srBody?.message || '');
+                if (orderIdTaken) {
+                    console.log(`📦 Shiprocket: order ${ctx.orderId} already exists — re-searching to reuse it`);
+                    const existing = await this.findSyncedOrder(headers, ctx.orderId, channelId);
+                    if (existing) {
+                        const srOrderId = String(existing.id);
+                        let shipmentId = this.extractShipmentId(existing);
+                        if (!shipmentId) {
+                            try {
+                                const detail = await axios.get(`${this.baseURL}/orders/show/${srOrderId}`, { headers, timeout: 20000 });
+                                const d = detail.data?.data || detail.data || {};
+                                shipmentId = this.extractShipmentId(d);
+                            } catch (e) {
+                                console.warn(`⚠️ Shiprocket: shipment-id lookup for existing order ${existing.channel_order_id} failed`);
+                            }
+                        }
+                        // If it already has an AWB, just return it
+                        if (existing.awb_code) {
+                            console.log(`📦 Shiprocket: existing order ${existing.channel_order_id} already has AWB ${existing.awb_code}`);
+                            return this.ok({
+                                awb: String(existing.awb_code),
+                                courierName: existing.courier_name || 'Shiprocket Courier',
+                                carrierShipmentId: shipmentId,
+                                carrierOrderId: srOrderId,
+                                trackingUrl: `https://shiprocket.co/tracking/${existing.awb_code}`,
+                                reusedSyncedOrder: true,
+                                requestPayload: { channel_order_id: existing.channel_order_id, channel_id: existing.channel_id }
+                            }, { order: existing });
+                        }
+                        // Assign AWB to the existing order
+                        const awbBody = {};
+                        if (shipmentId) awbBody.shipment_id = Number(shipmentId);
+                        else awbBody.order_id = Number(srOrderId);
+                        if (ctx.courierId && ctx.courierId !== 'auto') awbBody.courier_id = ctx.courierId;
+                        try {
+                            const awbAssigned = await this.assignAwbAndAwait(headers, awbBody, srOrderId, existing.channel_order_id);
+                            if (awbAssigned?.awb) {
+                                console.log(`📦 Shiprocket: assigned AWB ${awbAssigned.awb} to existing order ${existing.channel_order_id}`);
+                                return this.ok({
+                                    awb: awbAssigned.awb,
+                                    courierName: awbAssigned.courierName || 'Shiprocket Courier',
+                                    carrierShipmentId: shipmentId || String(awbAssigned.raw?.shipment_id || ''),
+                                    carrierOrderId: srOrderId,
+                                    freightCharge: awbAssigned.raw?.response?.data?.freight_charges || awbAssigned.raw?.response?.data?.applied_weight_amount || null,
+                                    trackingUrl: `https://shiprocket.co/tracking/${awbAssigned.awb}`,
+                                    reusedSyncedOrder: true,
+                                    requestPayload: { channel_order_id: existing.channel_order_id, channel_id: existing.channel_id, awb: awbBody }
+                                }, { order: existing, awb: awbAssigned.raw });
+                            }
+                            // AWB assignment failed — fall through to the error below
+                            return this.fail(
+                                `Shiprocket order ${existing.channel_order_id} exists but AWB assignment failed: ${this.describeAwbFailure(awbAssigned?.raw)}`,
+                                { order: existing, awb: awbAssigned?.raw }
+                            );
+                        } catch (awbError) {
+                            return this.fail(
+                                `Shiprocket order ${existing.channel_order_id} exists but AWB assignment failed: ${this.describeAxiosError(awbError)}`,
+                                { order: existing, awbError: awbError.response?.data }
+                            );
+                        }
+                    }
+                    // Re-search also missed it — fail with context
+                    console.warn(`⚠️ Shiprocket: order ${ctx.orderId} rejected as duplicate but re-search found nothing — cannot recover`);
+                }
+
                 console.error(`❌ Shiprocket: order ${ctx.orderId} creation payload rejected — payload keys: ${Object.keys(orderPayload).join(', ')}; response: ${JSON.stringify(srBody).substring(0, 600)}`);
                 // Never fall back to /orders/create/adhoc — that endpoint ALWAYS files
                 // under the "Custom" channel. Fail loudly with the raw response so the
