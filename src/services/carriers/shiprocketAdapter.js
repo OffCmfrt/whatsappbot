@@ -573,14 +573,25 @@ class ShiprocketAdapter extends BaseCarrier {
                 });
             } catch (channelError) {
                 const httpStatus = channelError.response?.status;
+                // Extract field-level validation errors from the Shiprocket response
+                // (422 body typically has { message: "Oops! Invalid Data.", data: { ...field errors... } })
+                const srBody = channelError.response?.data;
+                const fieldErrors = srBody?.data || srBody?.errors;
+                const fieldDetail = fieldErrors
+                    ? (typeof fieldErrors === 'string' ? fieldErrors : JSON.stringify(fieldErrors).substring(0, 500))
+                    : '';
+                const suffix = fieldDetail && fieldDetail !== this.describeAxiosError(channelError)
+                    ? ` Details: ${fieldDetail}`
+                    : '';
+                console.error(`❌ Shiprocket: order ${ctx.orderId} creation payload rejected — payload keys: ${Object.keys(orderPayload).join(', ')}; response: ${JSON.stringify(srBody).substring(0, 600)}`);
                 // Never fall back to /orders/create/adhoc — that endpoint ALWAYS files
                 // under the "Custom" channel. Fail loudly with the raw response so the
                 // rejection reason is diagnosable (if the order already exists at
                 // Shiprocket it will be found by the synced-order lookup next attempt).
                 return this.fail(
-                    `Shiprocket rejected channel ${channelId} order creation (HTTP ${httpStatus || 'n/a'}: ${this.describeAxiosError(channelError)}). ` +
+                    `Shiprocket rejected channel ${channelId} order creation (HTTP ${httpStatus || 'n/a'}: ${this.describeAxiosError(channelError)}${suffix}). ` +
                     `Not retrying under another channel — check the Shiprocket panel before shipping again.`,
-                    channelError.response?.data
+                    srBody
                 );
             }
 
