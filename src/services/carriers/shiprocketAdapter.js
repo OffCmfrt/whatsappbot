@@ -42,6 +42,26 @@ class ShiprocketAdapter extends BaseCarrier {
         this._pickupPincode = null; // cached after first lookup
         this._channelId = null;     // cached after first lookup
         this._channels = [];        // full channel list, cached by resolveChannelId
+
+        // --- Listing & lookup caches ----------------------------------------
+        // Single source of truth for the GET /orders listing endpoint. Every
+        // call site (findSyncedOrder + phone/email/recent-orders scans) reads
+        // through _fetchListingPage so pages are shared within a ship attempt.
+        this._listingPageCache = new Map();    // key: `${per_page}|${page}` -> { orders, fetchedAt }
+        this._listingInFlight = new Map();     // same key -> Promise (dedupes parallel fetches)
+        this.LISTING_PAGE_TTL = 90 * 1000;    // 90s — covers full createShipment + recovery
+
+        // Order-ID lookup cache: result of "does our orderId exist in the
+        // listing?" (positive hit, negative miss, or partial scan). Reused
+        // across Route 1 + recovery so we never re-scan the same listing.
+        this._orderLookupCache = new Map();    // key: orderId -> { hit: order|null, scannedUpTo: page, fetchedAt }
+        this.ORDER_LOOKUP_TTL = 90 * 1000;    // 90s
+
+        // Direct order-by-id cache: when we resolve our orderId -> SR numeric
+        // id, the next lookup can hit GET /orders/show/{id} (1 call) instead
+        // of paginating the listing again.
+        this._directOrderCache = new Map();   // key: orderId -> { srOrderId, fetchedAt }
+        this.DIRECT_ORDER_TTL = 5 * 60 * 1000; // 5 min — SR id rarely changes
     }
 
     get capabilities() {
@@ -133,43 +153,181 @@ class ShiprocketAdapter extends BaseCarrier {
     // Find the order that Shiprocket already has for our order ID.
     // The GET /orders?search= API does NOT match channel_order_id — it returns
     // unrelated orders. We paginate the listing endpoint and match directly.
+    //
+    // All page fetches go through _fetchListingPage so the cache is shared
+    // with the recovery flows (phone/email/recent-orders scans) and a second
+    // findSyncedOrder call in the same ship attempt is essentially free.
     async findSyncedOrder(headers, orderId, channelId) {
         const bare = String(orderId).replace(/^#/, '').trim();
         const normalize = v => String(v ?? '').replace(/^#/, '').trim().toLowerCase();
         const targetLower = normalize(bare);
         const targetNum = parseInt(bare);
-    
+
+        // 1. Fast path: we recently resolved this exact orderId -> SR order.
+        //    /orders/show/{id} is a single API call instead of paginating.
+        const direct = this._directOrderCache.get(bare);
+        if (direct && (Date.now() - direct.fetchedAt) < this.DIRECT_ORDER_TTL) {
+            try {
+                const detail = await axios.get(`${this.baseURL}/orders/show/${direct.srOrderId}`, { headers, timeout: 20000 });
+                const order = detail.data?.data || detail.data || {};
+                if (order && order.id && normalize(order.channel_order_id) === targetLower) {
+                    if (String(order.channel_id) === String(channelId) || !this.isCustomChannelId(order.channel_id)) {
+                        this._orderLookupCache.set(bare, { hit: order, scannedUpTo: 0, fetchedAt: Date.now() });
+                        return order;
+                    }
+                }
+                // Stale: SR no longer reports this id under our channel — fall through
+                this._directOrderCache.delete(bare);
+            } catch (error) {
+                // Detail call failed (rate limit, network) — clear cache, fall through
+                this._directOrderCache.delete(bare);
+            }
+        }
+
+        // 2. Main path: paginate via the shared, cached listing fetcher.
         const maxPages = 30;
         for (let page = 1; page <= maxPages; page++) {
+            const orders = await this._fetchListingPage(headers, 100, page);
+            if (orders === null) break; // fetch failed
+            if (orders.length === 0) {
+                this._orderLookupCache.set(bare, { hit: null, scannedUpTo: page, fetchedAt: Date.now() });
+                break;
+            }
+
+            // Early termination: listing is most-recent-first, IDs are sequential
+            const coiValues = orders.map(o => parseInt(String(o.channel_order_id || '').replace(/^#/, '')));
+            const maxCoi = Math.max(...coiValues.filter(Number.isFinite));
+            if (Number.isFinite(maxCoi) && Number.isFinite(targetNum) && maxCoi < targetNum - 100) {
+                this._orderLookupCache.set(bare, { hit: null, scannedUpTo: page, fetchedAt: Date.now() });
+                break;
+            }
+
+            for (const o of orders) {
+                if (normalize(o.channel_order_id) === targetLower) {
+                    if (String(o.channel_id) === String(channelId)) {
+                        this._directOrderCache.set(bare, { srOrderId: String(o.id), fetchedAt: Date.now() });
+                        this._orderLookupCache.set(bare, { hit: o, scannedUpTo: page, fetchedAt: Date.now() });
+                        return o;
+                    }
+                    if (!this.isCustomChannelId(o.channel_id)) {
+                        console.warn(`⚠️ Shiprocket: order ${bare} matched on channel ${o.channel_id} (expected ${channelId}) — reusing it anyway`);
+                        this._directOrderCache.set(bare, { srOrderId: String(o.id), fetchedAt: Date.now() });
+                        this._orderLookupCache.set(bare, { hit: o, scannedUpTo: page, fetchedAt: Date.now() });
+                        return o;
+                    }
+                }
+            }
+            this._orderLookupCache.set(bare, { hit: null, scannedUpTo: page, fetchedAt: Date.now() });
+        }
+        return null;
+    }
+
+    // Cached listing-page fetcher. Keyed by `${per_page}|${page}` so all
+    // call sites (findSyncedOrder, phone/email/recent-orders scans) share
+    // the same data within a single ship attempt. Dedupes concurrent
+    // requests for the same page via the in-flight map.
+    //
+    // Returns the orders array, or null when the fetch failed (caller
+    // should treat null as "transient — break out of the loop").
+    async _fetchListingPage(headers, perPage, page) {
+        const key = `${perPage}|${page}`;
+        const now = Date.now();
+
+        // Cache hit?
+        const cached = this._listingPageCache.get(key);
+        if (cached && (now - cached.fetchedAt) < this.LISTING_PAGE_TTL) {
+            return cached.orders;
+        }
+
+        // In-flight dedup — if another caller is already fetching this page,
+        // wait for their result instead of issuing a parallel request.
+        const inFlight = this._listingInFlight.get(key);
+        if (inFlight) return inFlight;
+
+        const promise = (async () => {
             try {
                 const response = await axios.get(`${this.baseURL}/orders`, {
                     headers,
-                    params: { per_page: 100, page },
+                    params: { per_page: perPage, page },
                     timeout: 20000
                 });
                 const orders = response.data?.data || [];
-                if (orders.length === 0) break;
-    
-                // Early termination: listing is most-recent-first, IDs are sequential
-                const coiValues = orders.map(o => parseInt(String(o.channel_order_id || '').replace(/^#/, '')));
-                const maxCoi = Math.max(...coiValues.filter(Number.isFinite));
-                if (Number.isFinite(maxCoi) && Number.isFinite(targetNum) && maxCoi < targetNum - 100) break;
-    
-                for (const o of orders) {
-                    if (normalize(o.channel_order_id) === targetLower) {
-                        if (String(o.channel_id) === String(channelId)) return o;
-                        if (!this.isCustomChannelId(o.channel_id)) {
-                            console.warn(`⚠️ Shiprocket: order ${bare} matched on channel ${o.channel_id} (expected ${channelId}) — reusing it anyway`);
-                            return o;
-                        }
-                    }
-                }
+                this._listingPageCache.set(key, { orders, fetchedAt: Date.now() });
+                return orders;
             } catch (error) {
-                console.warn(`⚠️ Shiprocket: listing page ${page} failed (${this.describeAxiosError(error)})`);
-                break;
+                console.warn(`⚠️ Shiprocket: listing page ${key} failed (${this.describeAxiosError(error)})`);
+                return null;
+            } finally {
+                this._listingInFlight.delete(key);
             }
+        })();
+        this._listingInFlight.set(key, promise);
+        return promise;
+    }
+
+    // Cached /orders/show/{id} lookup. Lets the recovery path skip the
+    // listing pagination entirely once we know the SR numeric id.
+    async _fetchOrderById(headers, srOrderId) {
+        try {
+            const detail = await axios.get(`${this.baseURL}/orders/show/${srOrderId}`, { headers, timeout: 20000 });
+            return detail.data?.data || detail.data || null;
+        } catch (error) {
+            console.warn(`⚠️ Shiprocket: orders/show/${srOrderId} failed (${this.describeAxiosError(error)})`);
+            return null;
         }
-        return null;
+    }
+
+    // Cached search-page fetcher. Same shape as _fetchListingPage but keyed
+    // by the search term (phone, email, etc.) so the phone-search fallback
+    // doesn't issue duplicate requests on retries or overlapping scans.
+    // Returns the orders array, or null when the fetch failed.
+    async _fetchSearchPage(headers, searchTerm, perPage, page) {
+        const key = `search:${searchTerm}|${perPage}|${page}`;
+        const now = Date.now();
+        const cached = this._listingPageCache.get(key);
+        if (cached && (now - cached.fetchedAt) < this.LISTING_PAGE_TTL) {
+            return cached.orders;
+        }
+        const inFlight = this._listingInFlight.get(key);
+        if (inFlight) return inFlight;
+        const promise = (async () => {
+            try {
+                const response = await axios.get(`${this.baseURL}/orders`, {
+                    headers,
+                    params: { search: searchTerm, per_page: perPage, page },
+                    timeout: 20000
+                });
+                const orders = response.data?.data || [];
+                this._listingPageCache.set(key, { orders, fetchedAt: Date.now() });
+                return orders;
+            } catch (error) {
+                console.warn(`⚠️ Shiprocket: search page ${key} failed (${this.describeAxiosError(error)})`);
+                return null;
+            } finally {
+                this._listingInFlight.delete(key);
+            }
+        })();
+        this._listingInFlight.set(key, promise);
+        return promise;
+    }
+
+    // Drop expired entries from the in-memory caches. Bounded work — runs
+    // at most once per minute and only when the cache is non-empty, so
+    // the long-term footprint stays at "recent active order IDs only"
+    // rather than "every order ever queried this process lifetime".
+    _pruneExpiredCache() {
+        const now = Date.now();
+        const last = this._lastPruneAt || 0;
+        if (now - last < 60 * 1000) return; // throttle: once per minute
+        this._lastPruneAt = now;
+        const ttl = (map, ttlMs) => {
+            for (const [k, v] of map) {
+                if (v && typeof v.fetchedAt === 'number' && (now - v.fetchedAt) >= ttlMs) map.delete(k);
+            }
+        };
+        ttl(this._listingPageCache, this.LISTING_PAGE_TTL);
+        ttl(this._orderLookupCache, this.ORDER_LOOKUP_TTL);
+        ttl(this._directOrderCache, this.DIRECT_ORDER_TTL);
     }
 
     // True when the cached channel list says this channel id is a "Custom" one
@@ -396,6 +554,10 @@ class ShiprocketAdapter extends BaseCarrier {
             const deliveryPin = this.normalizePincode(ctx.consignee.pincode);
             if (!deliveryPin) return this.fail('Invalid delivery pincode (must be 6 digits)');
 
+            // Drop expired cache entries (throttled to once/minute) so long-
+            // running processes don't accumulate stale order lookups.
+            this._pruneExpiredCache();
+
             const headers = await this.authHeaders();
 
             // Without a Shopify channel we refuse to ship — the old adhoc
@@ -612,100 +774,87 @@ class ShiprocketAdapter extends BaseCarrier {
                         for (const phone of searchPhones) {
                             if (existing) break;
                             for (let page = 1; page <= 3; page++) {
-                                try {
-                                    const resp = await axios.get(`${this.baseURL}/orders`, {
-                                        headers,
-                                        params: { search: phone, per_page: 50, page },
-                                        timeout: 20000
-                                    });
-                                    const orders = resp.data?.data || [];
-                                    if (orders.length === 0) break;
+                                // Cached: avoids duplicate fetches if a prior
+                                // search with the same phone+page already ran
+                                const orders = await this._fetchSearchPage(headers, phone, 50, page);
+                                if (orders === null) break; // fetch failed
+                                if (orders.length === 0) break;
 
-                                    // 1. Exact match on order_id (our internal ID or Shopify #)
-                                    const exact = orders.find(o =>
-                                        String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase() === bare ||
-                                        String(o.order_id || '').replace(/^#/, '').trim().toLowerCase() === bare
-                                    );
-                                    if (exact) {
-                                        console.log(`📦 Shiprocket: found existing order ${ctx.orderId} via phone search (${phone})`);
-                                        existing = exact;
-                                        break;
-                                    }
-                                    // 2. Fuzzy match: digits of our order_id appear in channel_order_id
-                                    const fuzzy = orders.find(o => {
-                                        const coi = String(o.channel_order_id || '').replace(/\D/g, '');
-                                        return coi && coi.length >= 4 && (coi.includes(bare.replace(/\D/g, '')) || bare.replace(/\D/g, '').includes(coi));
-                                    });
-                                    if (fuzzy) {
-                                        console.log(`📦 Shiprocket: fuzzy-matched order ${ctx.orderId} → SR channel_order_id "${fuzzy.channel_order_id}" via phone (${phone})`);
-                                        existing = fuzzy;
-                                        break;
-                                    }
-                                    // 3. Match by customer name + amount (catches Shopify-synced orders
-                                    //    where channel_order_id is the Shopify #, not our internal ID).
-                                    //    Lenient: first-name match only, wide amount tolerance, skip shipped.
-                                    const unshipped = orders.filter(o => !o.awb_code);
-                                    const byNameAndAmount = unshipped.find(o => {
-                                        const srFirst = String(o.billing_customer_name || '').toLowerCase().trim();
-                                        // First name must match (lenient: allows empty last name on either side)
-                                        if (srFirst !== custFirst) return false;
-                                        // Amount: compare against multiple Shiprocket fields (total may be
-                                        // the grand total, sub_total may exclude tax, etc.) — wide tolerance
-                                        const srTotal = Number(o.total || o.sub_total || o.total_amount || 0);
-                                        const amountMatch = Math.abs(srTotal - subTotal) < 50;
-                                        return amountMatch;
-                                    });
-                                    if (byNameAndAmount) {
-                                        console.log(`📦 Shiprocket: matched order ${ctx.orderId} → SR id ${byNameAndAmount.id}, channel_order_id "${byNameAndAmount.channel_order_id}" by name+amount via phone (${phone}, page ${page})`);
-                                        existing = byNameAndAmount;
-                                        break;
-                                    }
-                                    // 4. Name-only match (last resort within phone results — if exactly one
-                                    //    unshipped order has the same first name, it's almost certainly ours)
-                                    const nameOnly = unshipped.filter(o =>
-                                        String(o.billing_customer_name || '').toLowerCase().trim() === custFirst
-                                    );
-                                    if (nameOnly.length === 1) {
-                                        console.log(`📦 Shiprocket: name-only match for order ${ctx.orderId} → SR id ${nameOnly[0].id}, channel_order_id "${nameOnly[0].channel_order_id}" (sole unshipped order with name "${custFirst}" on page ${page})`);
-                                        existing = nameOnly[0];
-                                        break;
-                                    }
-                                    // Diagnostic: show what we're comparing
-                                    if (page === 1 && unshipped.length > 0) {
-                                        const sample = unshipped.slice(0, 5).map(o => ({
-                                            id: o.id,
-                                            coi: o.channel_order_id,
-                                            name: `${o.billing_customer_name} ${o.billing_last_name || ''}`.trim(),
-                                            total: o.total,
-                                            sub: o.sub_total
-                                        }));
-                                        console.log(`📦 Shiprocket: phone search (${phone}, page ${page}) — ${orders.length} orders (${unshipped.length} unshipped). Looking for name="${custFirst} ${custLast}" amount=${subTotal}. Sample unshipped: ${JSON.stringify(sample)}`);
-                                    }
-                                    if (orders.length < 50) break; // no more pages
-                                } catch (e) {
-                                    console.warn(`⚠️ Shiprocket: phone-search fallback for ${phone} page ${page} failed`);
+                                // 1. Exact match on order_id (our internal ID or Shopify #)
+                                const exact = orders.find(o =>
+                                    String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase() === bare ||
+                                    String(o.order_id || '').replace(/^#/, '').trim().toLowerCase() === bare
+                                );
+                                if (exact) {
+                                    console.log(`📦 Shiprocket: found existing order ${ctx.orderId} via phone search (${phone})`);
+                                    existing = exact;
                                     break;
                                 }
+                                // 2. Fuzzy match: digits of our order_id appear in channel_order_id
+                                const fuzzy = orders.find(o => {
+                                    const coi = String(o.channel_order_id || '').replace(/\D/g, '');
+                                    return coi && coi.length >= 4 && (coi.includes(bare.replace(/\D/g, '')) || bare.replace(/\D/g, '').includes(coi));
+                                });
+                                if (fuzzy) {
+                                    console.log(`📦 Shiprocket: fuzzy-matched order ${ctx.orderId} → SR channel_order_id "${fuzzy.channel_order_id}" via phone (${phone})`);
+                                    existing = fuzzy;
+                                    break;
+                                }
+                                // 3. Match by customer name + amount (catches Shopify-synced orders
+                                //    where channel_order_id is the Shopify #, not our internal ID).
+                                //    Lenient: first-name match only, wide amount tolerance, skip shipped.
+                                const unshipped = orders.filter(o => !o.awb_code);
+                                const byNameAndAmount = unshipped.find(o => {
+                                    const srFirst = String(o.billing_customer_name || '').toLowerCase().trim();
+                                    // First name must match (lenient: allows empty last name on either side)
+                                    if (srFirst !== custFirst) return false;
+                                    // Amount: compare against multiple Shiprocket fields (total may be
+                                    // the grand total, sub_total may exclude tax, etc.) — wide tolerance
+                                    const srTotal = Number(o.total || o.sub_total || o.total_amount || 0);
+                                    const amountMatch = Math.abs(srTotal - subTotal) < 50;
+                                    return amountMatch;
+                                });
+                                if (byNameAndAmount) {
+                                    console.log(`📦 Shiprocket: matched order ${ctx.orderId} → SR id ${byNameAndAmount.id}, channel_order_id "${byNameAndAmount.channel_order_id}" by name+amount via phone (${phone}, page ${page})`);
+                                    existing = byNameAndAmount;
+                                    break;
+                                }
+                                // 4. Name-only match (last resort within phone results — if exactly one
+                                //    unshipped order has the same first name, it's almost certainly ours)
+                                const nameOnly = unshipped.filter(o =>
+                                    String(o.billing_customer_name || '').toLowerCase().trim() === custFirst
+                                );
+                                if (nameOnly.length === 1) {
+                                    console.log(`📦 Shiprocket: name-only match for order ${ctx.orderId} → SR id ${nameOnly[0].id}, channel_order_id "${nameOnly[0].channel_order_id}" (sole unshipped order with name "${custFirst}" on page ${page})`);
+                                    existing = nameOnly[0];
+                                    break;
+                                }
+                                // Diagnostic: show what we're comparing (first page only)
+                                if (page === 1 && unshipped.length > 0) {
+                                    const sample = unshipped.slice(0, 5).map(o => ({
+                                        id: o.id,
+                                        coi: o.channel_order_id,
+                                        name: `${o.billing_customer_name} ${o.billing_last_name || ''}`.trim(),
+                                        total: o.total,
+                                        sub: o.sub_total
+                                    }));
+                                    console.log(`📦 Shiprocket: phone search (${phone}, page ${page}) — ${orders.length} orders (${unshipped.length} unshipped). Looking for name="${custFirst} ${custLast}" amount=${subTotal}. Sample unshipped: ${JSON.stringify(sample)}`);
+                                }
+                                if (orders.length < 50) break; // no more pages
                             }
                         }
                         // Also try email search if phone didn't find it
                         if (!existing && custEmail && custEmail !== 'noreply@offcomfrt.com') {
-                            try {
-                                const resp = await axios.get(`${this.baseURL}/orders`, {
-                                    headers,
-                                    params: { search: custEmail, per_page: 50 },
-                                    timeout: 20000
-                                });
-                                const orders = (resp.data?.data || []).filter(o => !o.awb_code);
-                                const match = orders.find(o =>
+                            const orders = await this._fetchSearchPage(headers, custEmail, 50, 1);
+                            if (orders) {
+                                const unshipped = orders.filter(o => !o.awb_code);
+                                const match = unshipped.find(o =>
                                     String(o.billing_customer_name || '').toLowerCase().trim() === custFirst
                                 );
                                 if (match) {
                                     console.log(`📦 Shiprocket: matched order ${ctx.orderId} → SR id ${match.id}, channel_order_id "${match.channel_order_id}" by email+name`);
                                     existing = match;
                                 }
-                            } catch (e) {
-                                console.warn(`⚠️ Shiprocket: email-search fallback failed`);
                             }
                         }
                         // Diagnostic if still not found
@@ -717,41 +866,34 @@ class ShiprocketAdapter extends BaseCarrier {
                     // Last resort: scan recent orders (no search filter) and look for
                     // one matching our payload (same amount, same customer, no AWB yet).
                     // Checks up to 5 pages of 50 to cast a wider net.
+                    // Reuses the shared listing-page cache so concurrent/repeated
+                    // ship attempts don't re-fetch pages already seen.
                     if (!existing) {
                         const bare = String(ctx.orderId).replace(/^#/, '').trim().toLowerCase();
                         const subTotal = orderPayload.sub_total;
                         const custName = (orderPayload.billing_customer_name || '').toLowerCase();
                         const custLastName = (orderPayload.billing_last_name || '').toLowerCase();
                         for (let page = 1; page <= 5; page++) {
-                            try {
-                                const resp = await axios.get(`${this.baseURL}/orders`, {
-                                    headers,
-                                    params: { per_page: 50, page },
-                                    timeout: 20000
-                                });
-                                const recent = resp.data?.data || [];
-                                if (recent.length === 0) break;
-                                const match = recent.find(o => {
-                                    const coi = String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase();
-                                    const oid = String(o.order_id || '').replace(/^#/, '').trim().toLowerCase();
-                                    if (coi === bare || oid === bare) return true;
-                                    if (o.awb_code) return false;
-                                    const firstName = String(o.billing_customer_name || '').toLowerCase().trim();
-                                    const lastName = String(o.billing_last_name || '').toLowerCase().trim();
-                                    const nameMatch = firstName === custName && (!custLastName || lastName === custLastName || !lastName);
-                                    const amountMatch = Math.abs(Number(o.total || 0) - subTotal) < 2;
-                                    return nameMatch && amountMatch;
-                                });
-                                if (match) {
-                                    console.log(`📦 Shiprocket: found orphaned order via recent-orders scan (page ${page}) — SR id ${match.id}, channel_order_id "${match.channel_order_id}"`);
-                                    existing = match;
-                                    break;
-                                }
-                                if (recent.length < 50) break;
-                            } catch (e) {
-                                console.warn(`⚠️ Shiprocket: recent-orders scan page ${page} failed`);
+                            const recent = await this._fetchListingPage(headers, 50, page);
+                            if (recent === null) break; // fetch failed
+                            if (recent.length === 0) break;
+                            const match = recent.find(o => {
+                                const coi = String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase();
+                                const oid = String(o.order_id || '').replace(/^#/, '').trim().toLowerCase();
+                                if (coi === bare || oid === bare) return true;
+                                if (o.awb_code) return false;
+                                const firstName = String(o.billing_customer_name || '').toLowerCase().trim();
+                                const lastName = String(o.billing_last_name || '').toLowerCase().trim();
+                                const nameMatch = firstName === custName && (!custLastName || lastName === custLastName || !lastName);
+                                const amountMatch = Math.abs(Number(o.total || 0) - subTotal) < 2;
+                                return nameMatch && amountMatch;
+                            });
+                            if (match) {
+                                console.log(`📦 Shiprocket: found orphaned order via recent-orders scan (page ${page}) — SR id ${match.id}, channel_order_id "${match.channel_order_id}"`);
+                                existing = match;
                                 break;
                             }
+                            if (recent.length < 50) break;
                         }
                     }
 
