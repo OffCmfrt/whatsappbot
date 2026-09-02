@@ -609,8 +609,9 @@ class ShiprocketAdapter extends BaseCarrier {
                         const searchPhones = rawPhone.length === 10 ? [`91${rawPhone}`, rawPhone] : [rawPhone];
                         const bare = String(ctx.orderId).replace(/^#/, '').trim().toLowerCase();
                         const subTotal = orderPayload.sub_total;
-                        const custName = (orderPayload.billing_customer_name || '').toLowerCase();
-                        const custLastName = (orderPayload.billing_last_name || '').toLowerCase();
+                        const custFirst = (orderPayload.billing_customer_name || '').toLowerCase().trim();
+                        const custLast = (orderPayload.billing_last_name || '').toLowerCase().trim();
+                        const custEmail = (orderPayload.billing_email || '').toLowerCase().trim();
 
                         for (const phone of searchPhones) {
                             if (existing) break;
@@ -645,19 +646,44 @@ class ShiprocketAdapter extends BaseCarrier {
                                         break;
                                     }
                                     // 3. Match by customer name + amount (catches Shopify-synced orders
-                                    //    where channel_order_id is the Shopify #, not our internal ID)
-                                    const byNameAndAmount = orders.find(o => {
-                                        if (o.awb_code) return false; // skip orders already shipped
-                                        const firstName = String(o.billing_customer_name || '').toLowerCase().trim();
-                                        const lastName = String(o.billing_last_name || '').toLowerCase().trim();
-                                        const nameMatch = firstName === custName && (!custLastName || lastName === custLastName || !lastName);
-                                        const amountMatch = Math.abs(Number(o.total || 0) - subTotal) < 2;
-                                        return nameMatch && amountMatch;
+                                    //    where channel_order_id is the Shopify #, not our internal ID).
+                                    //    Lenient: first-name match only, wide amount tolerance, skip shipped.
+                                    const unshipped = orders.filter(o => !o.awb_code);
+                                    const byNameAndAmount = unshipped.find(o => {
+                                        const srFirst = String(o.billing_customer_name || '').toLowerCase().trim();
+                                        // First name must match (lenient: allows empty last name on either side)
+                                        if (srFirst !== custFirst) return false;
+                                        // Amount: compare against multiple Shiprocket fields (total may be
+                                        // the grand total, sub_total may exclude tax, etc.) — wide tolerance
+                                        const srTotal = Number(o.total || o.sub_total || o.total_amount || 0);
+                                        const amountMatch = Math.abs(srTotal - subTotal) < 50;
+                                        return amountMatch;
                                     });
                                     if (byNameAndAmount) {
                                         console.log(`📦 Shiprocket: matched order ${ctx.orderId} → SR id ${byNameAndAmount.id}, channel_order_id "${byNameAndAmount.channel_order_id}" by name+amount via phone (${phone}, page ${page})`);
                                         existing = byNameAndAmount;
                                         break;
+                                    }
+                                    // 4. Name-only match (last resort within phone results — if exactly one
+                                    //    unshipped order has the same first name, it's almost certainly ours)
+                                    const nameOnly = unshipped.filter(o =>
+                                        String(o.billing_customer_name || '').toLowerCase().trim() === custFirst
+                                    );
+                                    if (nameOnly.length === 1) {
+                                        console.log(`📦 Shiprocket: name-only match for order ${ctx.orderId} → SR id ${nameOnly[0].id}, channel_order_id "${nameOnly[0].channel_order_id}" (sole unshipped order with name "${custFirst}" on page ${page})`);
+                                        existing = nameOnly[0];
+                                        break;
+                                    }
+                                    // Diagnostic: show what we're comparing
+                                    if (page === 1 && unshipped.length > 0) {
+                                        const sample = unshipped.slice(0, 5).map(o => ({
+                                            id: o.id,
+                                            coi: o.channel_order_id,
+                                            name: `${o.billing_customer_name} ${o.billing_last_name || ''}`.trim(),
+                                            total: o.total,
+                                            sub: o.sub_total
+                                        }));
+                                        console.log(`📦 Shiprocket: phone search (${phone}, page ${page}) — ${orders.length} orders (${unshipped.length} unshipped). Looking for name="${custFirst} ${custLast}" amount=${subTotal}. Sample unshipped: ${JSON.stringify(sample)}`);
                                     }
                                     if (orders.length < 50) break; // no more pages
                                 } catch (e) {
@@ -666,9 +692,29 @@ class ShiprocketAdapter extends BaseCarrier {
                                 }
                             }
                         }
+                        // Also try email search if phone didn't find it
+                        if (!existing && custEmail && custEmail !== 'noreply@offcomfrt.com') {
+                            try {
+                                const resp = await axios.get(`${this.baseURL}/orders`, {
+                                    headers,
+                                    params: { search: custEmail, per_page: 50 },
+                                    timeout: 20000
+                                });
+                                const orders = (resp.data?.data || []).filter(o => !o.awb_code);
+                                const match = orders.find(o =>
+                                    String(o.billing_customer_name || '').toLowerCase().trim() === custFirst
+                                );
+                                if (match) {
+                                    console.log(`📦 Shiprocket: matched order ${ctx.orderId} → SR id ${match.id}, channel_order_id "${match.channel_order_id}" by email+name`);
+                                    existing = match;
+                                }
+                            } catch (e) {
+                                console.warn(`⚠️ Shiprocket: email-search fallback failed`);
+                            }
+                        }
                         // Diagnostic if still not found
-                        if (!existing && ctx.consignee?.phone) {
-                            console.log(`📦 Shiprocket: phone search for ${ctx.consignee.phone} exhausted all pages without matching order ${ctx.orderId} (name="${orderPayload.billing_customer_name} ${orderPayload.billing_last_name}", amount=${subTotal})`);
+                        if (!existing) {
+                            console.log(`📦 Shiprocket: all phone/email searches exhausted without matching order ${ctx.orderId} (looking for name="${custFirst} ${custLast}", email="${custEmail}", amount=${subTotal})`);
                         }
                     }
 
