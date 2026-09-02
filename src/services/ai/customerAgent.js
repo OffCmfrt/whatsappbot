@@ -18,6 +18,7 @@ const { chatCompletion, isConfigured, estimateTokens } = require('./aiClient');
 const { getTool } = require('./tools');
 const { dbAdapter } = require('../../database/db');
 const { detectLanguage } = require('./autoSupportAgent');
+const { getPortalIdForNewTicket } = require('../../utils/portalAssignment');
 
 // ---------- Session store (in-memory, 30-min TTL) ----------
 
@@ -398,6 +399,9 @@ function buildReturnCard(result) {
 async function createWidgetTicket({ name, phone, email, message, orderId }) {
     const ticketNumber = 'WDG-' + Date.now().toString(36).toUpperCase();
 
+    // Assign portal via round-robin so every portal gets its fair share of widget tickets
+    const portalId = await getPortalIdForNewTicket();
+
     await dbAdapter.insert('support_tickets', {
         ticket_number: ticketNumber,
         customer_name: name || 'Widget Customer',
@@ -405,6 +409,7 @@ async function createWidgetTicket({ name, phone, email, message, orderId }) {
         customer_email: email || '',
         message: message || '',
         order_id: orderId || null,
+        portal_id: portalId,
         status: 'open',
         source: 'widget',
         created_at: new Date().toISOString(),

@@ -102,8 +102,9 @@ function selectPortalForAssignment(portals) {
  * High-level helper: round-robin across the portals active *right now* and
  * decide how a new ticket is assigned.
  *   - auto portal picked       → return its id (ticket is stamped with portal_id)
- *   - time-based portal picked → return null   (ticket stays unassigned and is
- *                                               claimed dynamically by its window)
+ *   - time-based portal picked → return its id (ticket is ALSO stamped so the
+ *         portal directly owns its fair share; getPortalTickets additionally
+ *         shows unassigned tickets in the time window for full coverage)
  * Returns null when no portal matches / all are at capacity.
  */
 async function getPortalIdForNewTicket() {
@@ -114,13 +115,10 @@ async function getPortalIdForNewTicket() {
         const selected = selectPortalForAssignment(activePortals);
         if (!selected) return null;
 
-        // Time-based portals do not take explicit ownership — leaving portal_id NULL lets the
-        // created-time matcher assign the ticket and keeps its dynamic count correct.
-        if (selected.type !== 'auto') {
-            return null;
-        }
-
-        // Increment assigned_count so the next call sees updated load
+        // Both auto and time-based portals get their portal_id stamped on the
+        // ticket so they directly own their round-robin share.  Time-based
+        // portals also continue to pick up unassigned tickets via time-range
+        // matching in getPortalTickets().
         await dbAdapter.run(
             'UPDATE support_portals SET assigned_count = assigned_count + 1 WHERE id = ?',
             [selected.id]

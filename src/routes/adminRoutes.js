@@ -1598,19 +1598,9 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
                 const tb = timeBasedPortals.find(p => p.id === pid);
                 const timeClause = tb ? timeRangeSqlClause(tb.config) : null;
                 if (timeClause) {
-                    // Only include the unassigned dynamic pool if this portal has NO
-                    // explicitly-assigned tickets. Once tickets are assigned (from split/transfer),
-                    // the portal owns them exclusively — sharing the pool with sibling portals
-                    // that have the same time window would cause duplicate tickets.
-                    const [hasAssigned] = await dbAdapter.query(
-                        `SELECT COUNT(*) AS cnt FROM support_tickets WHERE portal_id = ?`,
-                        [pid]
-                    );
-                    if (hasAssigned && hasAssigned.cnt > 0) {
-                        conditions.push('portal_id = ?');
-                    } else {
-                        conditions.push(`(portal_id = ? OR (portal_id IS NULL AND ${timeClause}))`);
-                    }
+                    // Show BOTH explicitly-assigned tickets and unassigned tickets in the
+                    // portal's time window so the portal always sees its full share.
+                    conditions.push(`(portal_id = ? OR (portal_id IS NULL AND ${timeClause}))`);
                 } else {
                     conditions.push('portal_id = ?');
                 }
@@ -3908,33 +3898,22 @@ router.get('/support-portals', verifyToken, async (req, res) => {
             ORDER BY p.created_at DESC
         `);
 
-        // For time-based portals, calculate dynamic ticket count
+        // For time-based portals, calculate combined ticket count:
+        // explicitly-assigned (round-robin / split / transfer) + unassigned in time window
         const enrichedPortals = await Promise.all(portals.map(async (portal) => {
             if (portal.type === 'time_based' && portal.config) {
                 try {
                     const config = typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config;
                     const rangeClause = timeRangeSqlClause(config);
                     if (rangeClause) {
-                        // If this portal has explicitly-assigned tickets (from split/transfer),
-                        // count only those — don't overlap with the shared unassigned pool.
-                        // Otherwise, count unassigned tickets in the time window (dynamic pool).
-                        const [assignedRow] = await dbAdapter.query(
-                            `SELECT COUNT(*) AS cnt FROM support_tickets WHERE portal_id = ?`,
-                            [portal.id]
-                        );
-                        const hasAssigned = assignedRow && assignedRow.cnt > 0;
-
+                        // Count BOTH: tickets explicitly assigned to this portal PLUS
+                        // unassigned tickets whose created_at falls in the time window.
                         const [row] = await dbAdapter.query(
-                            hasAssigned
-                                ? `SELECT COUNT(*) AS ticket_count,
-                                          COUNT(*) FILTER (WHERE status = 'open') AS open_count
-                                   FROM support_tickets
-                                   WHERE portal_id = ?`
-                                : `SELECT COUNT(*) AS ticket_count,
-                                          COUNT(*) FILTER (WHERE status = 'open') AS open_count
-                                   FROM support_tickets
-                                   WHERE portal_id IS NULL AND ${rangeClause}`,
-                            hasAssigned ? [portal.id] : []
+                            `SELECT COUNT(*) AS ticket_count,
+                                      COUNT(*) FILTER (WHERE status = 'open') AS open_count
+                               FROM support_tickets
+                               WHERE portal_id = ? OR (portal_id IS NULL AND ${rangeClause})`,
+                            [portal.id]
                         );
 
                         return {
@@ -4045,8 +4024,8 @@ router.post('/support-portals/:id/clear', verifyToken, async (req, res) => {
 });
 
 // Helper: resolve the tickets that currently belong to a portal (returns row objects).
-// Works for all portal types: manual/auto own tickets via portal_id, time-based match by
-// created time (excluding tickets already assigned elsewhere).
+// Works for all portal types: manual/auto own tickets via portal_id, time-based portals
+// see BOTH their explicitly-assigned tickets AND unassigned tickets in their time window.
 async function getPortalTicketRows(portal, onlyOpen = true) {
     const statusClause = onlyOpen ? " AND status = 'open'" : "";
     if (portal.type === 'time_based') {
@@ -4054,21 +4033,20 @@ async function getPortalTicketRows(portal, onlyOpen = true) {
             ? (typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config)
             : {};
         const rangeClause = timeRangeSqlClause(config);
-        const rangeSql = rangeClause ? ` AND (${rangeClause})` : '';
-        // If this portal has explicitly-assigned tickets (from split/transfer), only show those.
-        // Otherwise fall back to the unassigned dynamic pool in the time window.
-        const [assignedCheck] = await dbAdapter.query(
-            `SELECT COUNT(*) AS cnt FROM support_tickets WHERE portal_id = ?${statusClause}`,
-            [portal.id]
-        );
-        if (assignedCheck && assignedCheck.cnt > 0) {
+        if (!rangeClause) {
+            // No time window — fall back to explicitly-assigned only
             return await dbAdapter.query(
-                `SELECT id, created_at, status, portal_id FROM support_tickets WHERE portal_id = ?${statusClause} ORDER BY created_at DESC`,
+                `SELECT id, created_at, status, portal_id FROM support_tickets WHERE portal_id = ?${statusClause} ORDER BY created_at DESC LIMIT 1000`,
                 [portal.id]
             );
         }
+        // Show BOTH: explicitly-assigned tickets (round-robin / split / transfer)
+        // AND unassigned tickets whose created_at falls in the portal's time window.
         return await dbAdapter.query(
-            `SELECT id, created_at, status, portal_id FROM support_tickets WHERE portal_id IS NULL${rangeSql}${statusClause} ORDER BY created_at DESC`
+            `SELECT id, created_at, status, portal_id FROM support_tickets
+             WHERE (portal_id = ? OR (portal_id IS NULL AND (${rangeClause})))${statusClause}
+             ORDER BY created_at DESC LIMIT 1000`,
+            [portal.id]
         );
     }
     return await dbAdapter.query(
@@ -4723,6 +4701,162 @@ router.post('/support-portals/rebalance', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Rebalance error:', error);
         res.status(500).json({ success: false, error: 'Failed to rebalance tickets' });
+    }
+});
+
+// Portal analytics — single endpoint returning all stats via aggregated SQL.
+// Memory-smart: never loads full ticket rows, only COUNT(*) aggregations.
+router.get('/support-portals/analytics', verifyToken, async (req, res) => {
+    try {
+        // 1) Per-portal stats + unassigned stats in ONE query using GROUPING SETS
+        const portalStats = await dbAdapter.query(`
+            SELECT
+                CASE WHEN GROUPING(p.id) = 1 THEN -1 ELSE COALESCE(p.id, 0) END AS portal_id,
+                CASE WHEN GROUPING(p.id) = 1 THEN '__grand_total__' ELSE COALESCE(p.name, 'Unassigned') END AS portal_name,
+                COALESCE(p.type, 'unassigned') AS portal_type,
+                p.config                     AS portal_config,
+                p.shift_start,
+                p.shift_end,
+                p.is_active,
+                p.max_tickets,
+                COUNT(*)::int                AS total,
+                COUNT(*) FILTER (WHERE t.status = 'open')::int      AS open_cnt,
+                COUNT(*) FILTER (WHERE t.status = 'resolved')::int  AS resolved_cnt,
+                COUNT(*) FILTER (WHERE t.is_read = false)::int      AS unread_cnt,
+                COUNT(*) FILTER (WHERE t.created_at >= CURRENT_DATE)::int AS today_cnt
+            FROM support_tickets t
+            LEFT JOIN support_portals p ON t.portal_id = p.id
+            GROUP BY GROUPING SETS ((p.id, p.name, p.type, p.config, p.shift_start, p.shift_end, p.is_active, p.max_tickets), ())
+            ORDER BY MIN(p.created_at) DESC NULLS LAST
+        `);
+
+        // Separate the grand-total row (portal_id = -1) from per-portal rows
+        let globalTotals = null;
+        const portals = [];
+        for (const row of portalStats) {
+            if (row.portal_name === '__grand_total__') {
+                globalTotals = { total_cnt: row.total, open_cnt: row.open_cnt, resolved_cnt: row.resolved_cnt, unread_cnt: row.unread_cnt, today_cnt: row.today_cnt };
+            } else {
+                portals.push(row);
+            }
+        }
+
+        // 2) Unassigned ticket breakdown by IST hour — single lightweight query
+        const hourlyUnassigned = await dbAdapter.query(`
+            SELECT
+                EXTRACT(HOUR FROM (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'))::int AS ist_hour,
+                COUNT(*)::int AS cnt,
+                COUNT(*) FILTER (WHERE status = 'open')::int AS open_cnt
+            FROM support_tickets
+            WHERE portal_id IS NULL
+            GROUP BY 1
+            ORDER BY 1
+        `);
+
+        // 3) Today's ticket volume by IST hour (all tickets) — single query
+        const hourlyToday = await dbAdapter.query(`
+            SELECT
+                EXTRACT(HOUR FROM (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'))::int AS ist_hour,
+                COUNT(*)::int AS cnt
+            FROM support_tickets
+            WHERE created_at >= (CURRENT_DATE AT TIME ZONE 'Asia/Kolkata')
+            GROUP BY 1
+            ORDER BY 1
+        `);
+
+        // 4) Unassigned by date (last 7 days) — single query
+        const dailyUnassigned = await dbAdapter.query(`
+            SELECT
+                DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') AS ist_date,
+                COUNT(*)::int AS cnt,
+                COUNT(*) FILTER (WHERE status = 'open')::int AS open_cnt
+            FROM support_tickets
+            WHERE portal_id IS NULL AND created_at >= NOW() - INTERVAL '7 days'
+            GROUP BY 1
+            ORDER BY 1
+        `);
+
+        res.json({
+            success: true,
+            global: globalTotals,
+            portals: portals.map(p => ({
+                id: p.portal_id,
+                name: p.portal_name,
+                type: p.portal_type,
+                config: p.portal_config ? (typeof p.portal_config === 'string' ? JSON.parse(p.portal_config) : p.portal_config) : null,
+                shift_start: p.shift_start,
+                shift_end: p.shift_end,
+                is_active: p.is_active,
+                max_tickets: p.max_tickets,
+                total: p.total,
+                open: p.open_cnt,
+                resolved: p.resolved_cnt,
+                unread: p.unread_cnt,
+                today: p.today_cnt
+            })),
+            unassigned: {
+                byHour: hourlyUnassigned,
+                daily: dailyUnassigned
+            },
+            todayByHour: hourlyToday
+        });
+    } catch (error) {
+        console.error('Portal analytics error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch portal analytics' });
+    }
+});
+
+// Bulk-assign unassigned tickets to a portal (optionally filtered by status / time window)
+router.post('/support-portals/assign-unassigned', verifyToken, async (req, res) => {
+    try {
+        const { portalId, status = 'open', limit } = req.body;
+        if (!portalId) {
+            return res.status(400).json({ success: false, error: 'portalId is required' });
+        }
+
+        // Verify target portal exists
+        const [portal] = await dbAdapter.query('SELECT id, name FROM support_portals WHERE id = ?', [portalId]);
+        if (!portal) {
+            return res.status(404).json({ success: false, error: 'Portal not found' });
+        }
+
+        let sql = 'UPDATE support_tickets SET portal_id = ? WHERE portal_id IS NULL';
+        const params = [portalId];
+
+        if (status) {
+            sql += ' AND status = ?';
+            params.push(status);
+        }
+
+        if (limit && Number.isFinite(limit)) {
+            sql = `UPDATE support_tickets SET portal_id = ? WHERE id IN (SELECT id FROM support_tickets WHERE portal_id IS NULL${status ? ' AND status = ?' : ''} ORDER BY created_at DESC LIMIT ?)`;
+            params.length = 0;
+            params.push(portalId);
+            if (status) params.push(status);
+            params.push(limit);
+        }
+
+        const result = await dbAdapter.run(sql, params);
+
+        // Update assigned_count for the target portal
+        const [countRow] = await dbAdapter.query(
+            "SELECT COUNT(*) as cnt FROM support_tickets WHERE portal_id = ? AND status = 'open'",
+            [portalId]
+        );
+        await dbAdapter.run(
+            'UPDATE support_portals SET assigned_count = ? WHERE id = ?',
+            [countRow?.cnt || 0, portalId]
+        );
+
+        invalidateCache('stats');
+        res.json({
+            success: true,
+            message: `Unassigned tickets transferred to ${portal.name}`,
+            transferred: result?.changes || 0
+        });
+    } catch (error) {
+        console.error('Assign unassigned error:', error);
+        res.status(500).json({ success: false, error: 'Failed to assign unassigned tickets' });
     }
 });
 

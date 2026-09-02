@@ -439,6 +439,82 @@
                         <div class="portals-list" id="portalsList">
                             <div class="portals-empty">Loading portals...</div>
                         </div>
+
+                        <!-- Portal Analytics Panel -->
+                        <div class="portal-analytics-panel" id="portalAnalyticsPanel">
+                            <div class="analytics-header">
+                                <h4 class="analytics-title">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+                                    Portal Analytics
+                                </h4>
+                                <button class="btn btn-secondary btn-sm" id="refreshAnalyticsBtn" title="Refresh analytics">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                                    Refresh
+                                </button>
+                            </div>
+
+                            <!-- Global Summary Cards -->
+                            <div class="analytics-summary" id="analyticsSummary">
+                                <div class="analytics-card">
+                                    <div class="analytics-card-value" id="analyticsTotal">—</div>
+                                    <div class="analytics-card-label">Total Tickets</div>
+                                </div>
+                                <div class="analytics-card analytics-open">
+                                    <div class="analytics-card-value" id="analyticsOpen">—</div>
+                                    <div class="analytics-card-label">Open</div>
+                                </div>
+                                <div class="analytics-card analytics-resolved">
+                                    <div class="analytics-card-value" id="analyticsResolved">—</div>
+                                    <div class="analytics-card-label">Resolved</div>
+                                </div>
+                                <div class="analytics-card analytics-unread">
+                                    <div class="analytics-card-value" id="analyticsUnread">—</div>
+                                    <div class="analytics-card-label">Unread</div>
+                                </div>
+                                <div class="analytics-card analytics-unassigned">
+                                    <div class="analytics-card-value" id="analyticsUnassigned">—</div>
+                                    <div class="analytics-card-label">Unassigned</div>
+                                </div>
+                                <div class="analytics-card analytics-today">
+                                    <div class="analytics-card-value" id="analyticsToday">—</div>
+                                    <div class="analytics-card-label">Today</div>
+                                </div>
+                            </div>
+
+                            <!-- Per-Portal Breakdown -->
+                            <div class="analytics-portal-grid" id="analyticsPortalGrid">
+                                <!-- Populated by JS -->
+                            </div>
+
+                            <!-- Unassigned Tickets Section -->
+                            <div class="analytics-unassigned-section" id="analyticsUnassignedSection">
+                                <div class="unassigned-header">
+                                    <h5>
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+                                        Unassigned Tickets
+                                    </h5>
+                                    <div class="unassigned-actions">
+                                        <select class="analytics-portal-select" id="unassignedTargetPortal">
+                                            <option value="">Select portal...</option>
+                                        </select>
+                                        <button class="btn btn-primary btn-sm" id="transferUnassignedBtn">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/></svg>
+                                            Transfer Open
+                                        </button>
+                                        <button class="btn btn-secondary btn-sm" id="distributeUnassignedBtn" title="Distribute evenly across all portals">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                                            Distribute Evenly
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="unassigned-chart" id="unassignedHourlyChart">
+                                    <!-- Hourly bar chart rendered by JS -->
+                                </div>
+                                <div class="unassigned-daily" id="unassignedDailyChart">
+                                    <!-- Daily trend rendered by JS -->
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Toolbar -->

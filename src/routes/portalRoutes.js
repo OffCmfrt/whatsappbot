@@ -102,27 +102,20 @@ async function getPortalTickets(portalId, portalType, portalConfig) {
             : {};
         const rangeClause = timeRangeSqlClause(config);
         if (!rangeClause) {
+            // No time window configured — fall back to explicitly-assigned tickets only
             return await dbAdapter.query(
                 'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC LIMIT 200',
                 [portalId]
             );
         }
-        // If this portal has explicitly-assigned tickets (from split/transfer), only show those.
-        // Otherwise fall back to the unassigned dynamic pool in the time window.
-        const [assignedCheck] = await dbAdapter.query(
-            'SELECT COUNT(*) AS cnt FROM support_tickets WHERE portal_id = ?',
-            [portalId]
-        );
-        if (assignedCheck && assignedCheck.cnt > 0) {
-            return await dbAdapter.query(
-                'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC LIMIT 200',
-                [portalId]
-            );
-        }
+        // Show BOTH explicitly-assigned tickets (from round-robin or split/transfer)
+        // AND unassigned tickets whose created_at falls within the portal's time window.
+        // This ensures the portal sees its full fair share regardless of how tickets arrived.
         return await dbAdapter.query(
             `SELECT * FROM support_tickets
-             WHERE portal_id IS NULL AND ${rangeClause}
-             ORDER BY created_at DESC LIMIT 200`
+             WHERE portal_id = ? OR (portal_id IS NULL AND ${rangeClause})
+             ORDER BY created_at DESC LIMIT 200`,
+            [portalId]
         );
     } else {
         // manual or auto

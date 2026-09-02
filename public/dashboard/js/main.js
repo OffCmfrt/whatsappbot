@@ -97,6 +97,11 @@ function setupEventListeners() {
     // Support tickets
     document.getElementById('openCreatePortalBtn')?.addEventListener('click', openCreatePortalModal);
     document.getElementById('openAutoDistributeBtn')?.addEventListener('click', openAutoDistributeModal);
+
+    // Portal Analytics
+    document.getElementById('refreshAnalyticsBtn')?.addEventListener('click', loadPortalAnalytics);
+    document.getElementById('transferUnassignedBtn')?.addEventListener('click', transferUnassignedToPortal);
+    document.getElementById('distributeUnassignedBtn')?.addEventListener('click', distributeUnassignedEvenly);
     document.getElementById('ticketSearchInput')?.addEventListener('input', searchTickets);
     document.getElementById('ticketStatusFilter')?.addEventListener('change', filterSupportTickets);
     document.getElementById('ticketSortBy')?.addEventListener('change', sortTickets);
@@ -1605,6 +1610,7 @@ async function loadPortals() {
             renderPortals();
             updateAssignPortalDropdown();
             updatePortalFilterDropdown();
+            loadPortalAnalytics();
         }
     } catch (error) {
         console.error('Failed to load portals:', error);
@@ -1728,6 +1734,198 @@ function renderPortals() {
             </div>
         `;
     }).join('');
+}
+
+// ── Portal Analytics ──
+let analyticsData = null;
+
+async function loadPortalAnalytics() {
+    try {
+        const data = await apiCall('/support-portals/analytics');
+        if (!data.success) return;
+        analyticsData = data;
+        renderAnalyticsSummary(data);
+        renderAnalyticsPortalGrid(data);
+        renderUnassignedHourlyChart(data);
+        renderUnassignedDailyTrend(data);
+        populateUnassignedTargetPortal(data);
+    } catch (e) {
+        console.error('Analytics load error:', e);
+    }
+}
+
+function renderAnalyticsSummary(data) {
+    const g = data.global || {};
+    // Find unassigned row from portals array
+    const unassignedRow = (data.portals || []).find(p => p.id === 0 || p.name === 'Unassigned');
+    const unassignedTotal = unassignedRow ? unassignedRow.total : 0;
+
+    setText('analyticsTotal', fmtNum(g.total_cnt || 0));
+    setText('analyticsOpen', fmtNum(g.open_cnt || 0));
+    setText('analyticsResolved', fmtNum(g.resolved_cnt || 0));
+    setText('analyticsUnread', fmtNum(g.unread_cnt || 0));
+    setText('analyticsUnassigned', fmtNum(unassignedTotal));
+    setText('analyticsToday', fmtNum(g.today_cnt || 0));
+}
+
+function renderAnalyticsPortalGrid(data) {
+    const grid = document.getElementById('analyticsPortalGrid');
+    if (!grid) return;
+    // Filter out the "Unassigned" pseudo-portal
+    const portals = (data.portals || []).filter(p => p.id !== 0 && p.name !== 'Unassigned' && p.id !== -1);
+    if (portals.length === 0) { grid.innerHTML = ''; return; }
+
+    grid.innerHTML = portals.map(p => {
+        const cfg = p.config || {};
+        const timeWindow = cfg.time_start && cfg.time_end ? `${cfg.time_start} – ${cfg.time_end}` : (p.shift_start && p.shift_end ? `${p.shift_start} – ${p.shift_end}` : 'Always active');
+        const isActive = p.is_active !== 0 && p.is_active !== false;
+        return `
+            <div class="analytics-portal-card">
+                <div class="apc-header">
+                    <span class="apc-name">${escapeHtml(p.name)}</span>
+                    <span class="apc-badge ${isActive ? 'badge-active' : 'badge-inactive'}">${isActive ? 'Active' : 'Inactive'}</span>
+                </div>
+                <div class="apc-time">${escapeHtml(timeWindow)} IST</div>
+                <div class="apc-stats-row">
+                    <div class="apc-stat"><div class="apc-stat-val">${fmtNum(p.total)}</div><div class="apc-stat-lbl">Total</div></div>
+                    <div class="apc-stat"><div class="apc-stat-val clr-open">${fmtNum(p.open)}</div><div class="apc-stat-lbl">Open</div></div>
+                    <div class="apc-stat"><div class="apc-stat-val clr-resolved">${fmtNum(p.resolved)}</div><div class="apc-stat-lbl">Resolved</div></div>
+                    <div class="apc-stat"><div class="apc-stat-val clr-unread">${fmtNum(p.unread)}</div><div class="apc-stat-lbl">Unread</div></div>
+                    <div class="apc-stat"><div class="apc-stat-val clr-today">${fmtNum(p.today)}</div><div class="apc-stat-lbl">Today</div></div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderUnassignedHourlyChart(data) {
+    const container = document.getElementById('unassignedHourlyChart');
+    if (!container) return;
+    const hours = data.unassigned?.byHour || [];
+    if (hours.length === 0) { container.innerHTML = '<p style="font-size:12px;color:var(--text-secondary)">No unassigned ticket data</p>'; return; }
+
+    // Build full 24-hour array
+    const hourMap = {};
+    hours.forEach(h => { hourMap[h.ist_hour] = h; });
+    const maxCnt = Math.max(1, ...hours.map(h => h.open_cnt || h.cnt));
+
+    let barsHtml = '';
+    let labelsHtml = '';
+    for (let h = 0; h < 24; h++) {
+        const d = hourMap[h] || { cnt: 0, open_cnt: 0 };
+        const pct = Math.round(((d.open_cnt || d.cnt) / maxCnt) * 100);
+        const color = d.open_cnt > 0 ? '#ef4444' : '#6b728044';
+        barsHtml += `<div class="hourly-bar" style="height:${Math.max(pct, 2)}%;background:${color}"><div class="bar-tooltip">${h}:00 IST — ${d.cnt} total, ${d.open_cnt} open</div></div>`;
+        labelsHtml += `<span>${h % 3 === 0 ? h : ''}</span>`;
+    }
+    container.innerHTML = `
+        <div class="daily-trend-title">Unassigned by Hour (IST)</div>
+        <div class="hourly-chart">${barsHtml}</div>
+        <div class="hourly-labels">${labelsHtml}</div>
+    `;
+}
+
+function renderUnassignedDailyTrend(data) {
+    const container = document.getElementById('unassignedDailyChart');
+    if (!container) return;
+    const daily = data.unassigned?.daily || [];
+    if (daily.length === 0) { container.innerHTML = ''; return; }
+
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    container.innerHTML = `
+        <div class="daily-trend">
+            <div class="daily-trend-title">Last 7 Days — Unassigned</div>
+            <div class="daily-trend-row">
+                ${daily.map(d => {
+                    const dt = new Date(d.ist_date + 'T00:00:00');
+                    const lbl = dayNames[dt.getUTCDay()];
+                    return `<div class="daily-trend-day"><div class="dt-val">${fmtNum(d.open_cnt)}</div><div class="dt-lbl">${lbl}</div></div>`;
+                }).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function populateUnassignedTargetPortal(data) {
+    const sel = document.getElementById('unassignedTargetPortal');
+    if (!sel) return;
+    const portals = (data.portals || []).filter(p => p.id !== 0 && p.name !== 'Unassigned' && p.id !== -1);
+    sel.innerHTML = '<option value="">Select portal...</option>' +
+        portals.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+}
+
+// Helpers
+function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
+function fmtNum(n) { return Number(n || 0).toLocaleString('en-IN'); }
+
+async function transferUnassignedToPortal() {
+    const sel = document.getElementById('unassignedTargetPortal');
+    const portalId = sel ? sel.value : '';
+    if (!portalId) return alert('Please select a target portal');
+
+    if (!confirm('Transfer all open unassigned tickets to the selected portal?')) return;
+
+    try {
+        const btn = document.getElementById('transferUnassignedBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Transferring...'; }
+
+        const result = await apiCall('/support-portals/assign-unassigned', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ portalId: parseInt(portalId), status: 'open' })
+        });
+
+        if (result.success) {
+            alert(`Transferred ${result.transferred} tickets successfully`);
+            loadPortalAnalytics();
+            loadSupportTickets();
+        } else {
+            alert('Transfer failed: ' + (result.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Transfer failed: ' + e.message);
+    } finally {
+        const btn = document.getElementById('transferUnassignedBtn');
+        if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/></svg> Transfer Open'; }
+    }
+}
+
+async function distributeUnassignedEvenly() {
+    const portals = (analyticsData?.portals || []).filter(p => p.id !== 0 && p.name !== 'Unassigned' && p.id !== -1);
+    if (portals.length === 0) return alert('No portals available');
+
+    if (!confirm(`Distribute all open unassigned tickets evenly across ${portals.length} portals?`)) return;
+
+    try {
+        const btn = document.getElementById('distributeUnassignedBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Distributing...'; }
+
+        // Get open unassigned count first
+        const unassignedRow = (analyticsData?.portals || []).find(p => p.id === 0 || p.name === 'Unassigned');
+        const totalOpen = unassignedRow ? unassignedRow.open : 0;
+        if (totalOpen === 0) return alert('No open unassigned tickets to distribute');
+
+        const perPortal = Math.ceil(totalOpen / portals.length);
+        const results = [];
+
+        for (const portal of portals) {
+            const result = await apiCall('/support-portals/assign-unassigned', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ portalId: portal.id, status: 'open', limit: perPortal })
+            });
+            if (result.success) results.push(`${portal.name}: ${result.transferred}`);
+        }
+
+        alert('Distribution complete:\n' + results.join('\n'));
+        loadPortalAnalytics();
+        loadSupportTickets();
+    } catch (e) {
+        alert('Distribution failed: ' + e.message);
+    } finally {
+        const btn = document.getElementById('distributeUnassignedBtn');
+        if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13 4 4a4 4 0 0 0 0 7.75"/></svg> Distribute Evenly'; }
+    }
 }
 
 function initCustomDropdowns() {
