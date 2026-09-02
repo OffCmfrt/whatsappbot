@@ -5863,10 +5863,11 @@ router.get('/inventory', verifyToken, async (req, res) => {
             `),
             // History: RTO orders (order status OR shopper status)
             dbAdapter.query(`
-                SELECT s.items_json, s.status AS shopper_status, 'rto' AS order_status
+                SELECT s.items_json, s.status AS shopper_status, COALESCE(o.status, '') AS order_status
                 FROM store_shoppers s
+                LEFT JOIN orders o ON o.order_id = s.order_id
                 WHERE s.items_json IS NOT NULL
-                  AND s.status = 'rto'
+                  AND (s.status = 'rto' OR o.status = 'rto')
                   ${windowDays > 0 ? `AND s.created_at >= NOW() - INTERVAL '${windowDays} days'` : ''}
             `),
             dbAdapter.query(`
