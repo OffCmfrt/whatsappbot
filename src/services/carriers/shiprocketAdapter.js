@@ -594,7 +594,39 @@ class ShiprocketAdapter extends BaseCarrier {
                 const orderIdTaken = httpStatus === 422 && /already been taken/i.test(fieldDetail || srBody?.message || '');
                 if (orderIdTaken) {
                     console.log(`📦 Shiprocket: order ${ctx.orderId} already exists — re-searching to reuse it`);
-                    const existing = await this.findSyncedOrder(headers, ctx.orderId, channelId);
+                    // Brief pause for search-index propagation (Shopify sync may have just created it)
+                    await new Promise(r => setTimeout(r, 2000));
+                    let existing = await this.findSyncedOrder(headers, ctx.orderId, channelId);
+
+                    // Fallback: search by customer phone — different search index,
+                    // catches orders the order-id search misses (search API lag/format mismatch)
+                    if (!existing && ctx.consignee?.phone) {
+                        const rawPhone = String(ctx.consignee.phone).replace(/\D/g, '');
+                        const searchPhones = rawPhone.length === 10 ? [`91${rawPhone}`, rawPhone] : [rawPhone];
+                        for (const phone of searchPhones) {
+                            try {
+                                const resp = await axios.get(`${this.baseURL}/orders`, {
+                                    headers,
+                                    params: { search: phone, per_page: 50 },
+                                    timeout: 20000
+                                });
+                                const orders = resp.data?.data || [];
+                                const bare = String(ctx.orderId).replace(/^#/, '').trim().toLowerCase();
+                                const match = orders.find(o =>
+                                    String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase() === bare ||
+                                    String(o.order_id || '').replace(/^#/, '').trim().toLowerCase() === bare
+                                );
+                                if (match) {
+                                    console.log(`📦 Shiprocket: found existing order ${ctx.orderId} via phone search (${phone})`);
+                                    existing = match;
+                                    break;
+                                }
+                            } catch (e) {
+                                console.warn(`⚠️ Shiprocket: phone-search fallback for ${phone} failed`);
+                            }
+                        }
+                    }
+
                     if (existing) {
                         const srOrderId = String(existing.id);
                         let shipmentId = this.extractShipmentId(existing);
