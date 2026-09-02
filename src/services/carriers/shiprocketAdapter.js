@@ -130,47 +130,51 @@ class ShiprocketAdapter extends BaseCarrier {
         return null;
     }
 
-    // Find the order that Shiprocket already synced from the Shopify channel.
-    // When the Shopify integration is active, orders land in Shiprocket under
-    // the Shopify channel automatically — creating another one via the API is
-    // rejected (or worse, duplicates it under Custom), so we reuse this row
-    // and only assign an AWB to it.
+    // Find the order that Shiprocket already has for our order ID.
+    // CRITICAL: The Shiprocket GET /orders?search= API does NOT search by
+    // channel_order_id — it returns unrelated orders. We must paginate the
+    // listing endpoint and match channel_order_id directly.
     async findSyncedOrder(headers, orderId, channelId) {
-        // Shopify order names carry a "#" prefix; our rows usually don't.
-        // Search every plausible spelling of the same order number.
         const bare = String(orderId).replace(/^#/, '').trim();
-        const candidates = [...new Set([bare, `#${bare}`])];
-
         const normalize = v => String(v ?? '').replace(/^#/, '').trim().toLowerCase();
-
-        for (const candidate of candidates) {
+        const targetLower = normalize(bare);
+    
+        // Paginate through the listing (most-recent-first) and match channel_order_id.
+        // Stop early if we see channel_order_ids numerically below our target
+        // (listing is sorted by recency, and our IDs are sequential).
+        const maxPages = 30; // up to 3000 orders
+        for (let page = 1; page <= maxPages; page++) {
             try {
                 const response = await axios.get(`${this.baseURL}/orders`, {
                     headers,
-                    params: { search: candidate, per_page: 20 },
+                    params: { per_page: 100, page },
                     timeout: 20000
                 });
-
                 const orders = response.data?.data || [];
-                const matches = orders.filter(o =>
-                    normalize(o.channel_order_id) === normalize(bare) ||
-                    normalize(o.order_id) === normalize(bare)
-                );
-                if (matches.length === 0) continue;
-
-                // Prefer the copy living on the Shopify channel; skip stale
-                // duplicates that earlier adhoc runs filed under "Custom"
-                const onShopify = matches.find(o => String(o.channel_id) === String(channelId));
-                if (onShopify) return onShopify;
-
-                const nonCustom = matches.find(o => !this.isCustomChannelId(o.channel_id));
-                if (nonCustom) {
-                    console.warn(`⚠️ Shiprocket: order ${bare} matched on channel ${nonCustom.channel_id} (expected ${channelId}) — reusing it anyway`);
-                    return nonCustom;
+                if (orders.length === 0) break;
+    
+                // Early termination: if all channel_order_ids on this page are
+                // numerically below our target, we've gone too far back
+                const coiValues = orders.map(o => parseInt(String(o.channel_order_id || '').replace(/^#/, '')));
+                const maxCoi = Math.max(...coiValues.filter(Number.isFinite));
+                const targetNum = parseInt(bare);
+                if (Number.isFinite(maxCoi) && Number.isFinite(targetNum) && maxCoi < targetNum - 100) break;
+    
+                for (const o of orders) {
+                    const coi = normalize(o.channel_order_id);
+                    const oid = normalize(o.order_id); // may be undefined in listing
+                    if (coi === targetLower || oid === targetLower) {
+                        // Prefer the Shopify channel; skip Custom duplicates
+                        if (String(o.channel_id) === String(channelId)) return o;
+                        if (!this.isCustomChannelId(o.channel_id)) {
+                            console.warn(`⚠️ Shiprocket: order ${bare} matched on channel ${o.channel_id} (expected ${channelId}) — reusing it anyway`);
+                            return o;
+                        }
+                    }
                 }
-                console.warn(`⚠️ Shiprocket: order ${bare} only exists on the Custom channel — ignoring it so shipping stays on Shopify`);
             } catch (error) {
-                console.warn(`⚠️ Shiprocket: synced-order lookup for "${candidate}" failed (${this.describeAxiosError(error)})`);
+                console.warn(`⚠️ Shiprocket: listing page ${page} failed (${this.describeAxiosError(error)})`);
+                break;
             }
         }
         return null;
