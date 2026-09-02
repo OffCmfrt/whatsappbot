@@ -599,79 +599,117 @@ class ShiprocketAdapter extends BaseCarrier {
                     let existing = await this.findSyncedOrder(headers, ctx.orderId, channelId);
 
                     // Fallback: search by customer phone — different search index,
-                    // catches orders the order-id search misses (search API lag/format mismatch)
+                    // catches orders the order-id search misses (search API lag/format mismatch).
+                    // The Shopify sync files orders under the Shopify order number as
+                    // channel_order_id (e.g. "7379"), NOT our internal order ID (e.g.
+                    // "48969"). So we must also match by customer name + amount within
+                    // the phone search results.
                     if (!existing && ctx.consignee?.phone) {
                         const rawPhone = String(ctx.consignee.phone).replace(/\D/g, '');
                         const searchPhones = rawPhone.length === 10 ? [`91${rawPhone}`, rawPhone] : [rawPhone];
+                        const bare = String(ctx.orderId).replace(/^#/, '').trim().toLowerCase();
+                        const subTotal = orderPayload.sub_total;
+                        const custName = (orderPayload.billing_customer_name || '').toLowerCase();
+                        const custLastName = (orderPayload.billing_last_name || '').toLowerCase();
+
                         for (const phone of searchPhones) {
-                            try {
-                                const resp = await axios.get(`${this.baseURL}/orders`, {
-                                    headers,
-                                    params: { search: phone, per_page: 50 },
-                                    timeout: 20000
-                                });
-                                const orders = resp.data?.data || [];
-                                const bare = String(ctx.orderId).replace(/^#/, '').trim().toLowerCase();
-                                // Exact match on order_id
-                                const match = orders.find(o =>
-                                    String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase() === bare ||
-                                    String(o.order_id || '').replace(/^#/, '').trim().toLowerCase() === bare
-                                );
-                                if (match) {
-                                    console.log(`📦 Shiprocket: found existing order ${ctx.orderId} via phone search (${phone})`);
-                                    existing = match;
+                            if (existing) break;
+                            for (let page = 1; page <= 3; page++) {
+                                try {
+                                    const resp = await axios.get(`${this.baseURL}/orders`, {
+                                        headers,
+                                        params: { search: phone, per_page: 50, page },
+                                        timeout: 20000
+                                    });
+                                    const orders = resp.data?.data || [];
+                                    if (orders.length === 0) break;
+
+                                    // 1. Exact match on order_id (our internal ID or Shopify #)
+                                    const exact = orders.find(o =>
+                                        String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase() === bare ||
+                                        String(o.order_id || '').replace(/^#/, '').trim().toLowerCase() === bare
+                                    );
+                                    if (exact) {
+                                        console.log(`📦 Shiprocket: found existing order ${ctx.orderId} via phone search (${phone})`);
+                                        existing = exact;
+                                        break;
+                                    }
+                                    // 2. Fuzzy match: digits of our order_id appear in channel_order_id
+                                    const fuzzy = orders.find(o => {
+                                        const coi = String(o.channel_order_id || '').replace(/\D/g, '');
+                                        return coi && coi.length >= 4 && (coi.includes(bare.replace(/\D/g, '')) || bare.replace(/\D/g, '').includes(coi));
+                                    });
+                                    if (fuzzy) {
+                                        console.log(`📦 Shiprocket: fuzzy-matched order ${ctx.orderId} → SR channel_order_id "${fuzzy.channel_order_id}" via phone (${phone})`);
+                                        existing = fuzzy;
+                                        break;
+                                    }
+                                    // 3. Match by customer name + amount (catches Shopify-synced orders
+                                    //    where channel_order_id is the Shopify #, not our internal ID)
+                                    const byNameAndAmount = orders.find(o => {
+                                        if (o.awb_code) return false; // skip orders already shipped
+                                        const firstName = String(o.billing_customer_name || '').toLowerCase().trim();
+                                        const lastName = String(o.billing_last_name || '').toLowerCase().trim();
+                                        const nameMatch = firstName === custName && (!custLastName || lastName === custLastName || !lastName);
+                                        const amountMatch = Math.abs(Number(o.total || 0) - subTotal) < 2;
+                                        return nameMatch && amountMatch;
+                                    });
+                                    if (byNameAndAmount) {
+                                        console.log(`📦 Shiprocket: matched order ${ctx.orderId} → SR id ${byNameAndAmount.id}, channel_order_id "${byNameAndAmount.channel_order_id}" by name+amount via phone (${phone}, page ${page})`);
+                                        existing = byNameAndAmount;
+                                        break;
+                                    }
+                                    if (orders.length < 50) break; // no more pages
+                                } catch (e) {
+                                    console.warn(`⚠️ Shiprocket: phone-search fallback for ${phone} page ${page} failed`);
                                     break;
                                 }
-                                // Fuzzy match: order_id contains our number, or our number contains order_id
-                                const fuzzy = orders.find(o => {
-                                    const coi = String(o.channel_order_id || '').replace(/\D/g, '');
-                                    return coi && (coi.includes(bare.replace(/\D/g, '')) || bare.replace(/\D/g, '').includes(coi));
-                                });
-                                if (fuzzy) {
-                                    console.log(`📦 Shiprocket: fuzzy-matched order ${ctx.orderId} → SR channel_order_id "${fuzzy.channel_order_id}" via phone (${phone})`);
-                                    existing = fuzzy;
-                                    break;
-                                }
-                                // Diagnostic: log what the phone search returned so we can see the format
-                                if (orders.length > 0) {
-                                    const sample = orders.slice(0, 3).map(o => ({ id: o.id, coi: o.channel_order_id, ch: o.channel_id, awb: o.awb_code }));
-                                    console.log(`📦 Shiprocket: phone search (${phone}) returned ${orders.length} orders but none matched ${ctx.orderId}. Sample: ${JSON.stringify(sample)}`);
-                                }
-                            } catch (e) {
-                                console.warn(`⚠️ Shiprocket: phone-search fallback for ${phone} failed`);
                             }
+                        }
+                        // Diagnostic if still not found
+                        if (!existing && ctx.consignee?.phone) {
+                            console.log(`📦 Shiprocket: phone search for ${ctx.consignee.phone} exhausted all pages without matching order ${ctx.orderId} (name="${orderPayload.billing_customer_name} ${orderPayload.billing_last_name}", amount=${subTotal})`);
                         }
                     }
 
-                    // Last resort: list recent orders (no search filter) and look for
+                    // Last resort: scan recent orders (no search filter) and look for
                     // one matching our payload (same amount, same customer, no AWB yet).
+                    // Checks up to 5 pages of 50 to cast a wider net.
                     if (!existing) {
-                        try {
-                            const resp = await axios.get(`${this.baseURL}/orders`, {
-                                headers,
-                                params: { per_page: 20, page: 1 },
-                                timeout: 20000
-                            });
-                            const recent = resp.data?.data || [];
-                            const bare = String(ctx.orderId).replace(/^#/, '').trim().toLowerCase();
-                            const subTotal = orderPayload.sub_total;
-                            const match = recent.find(o => {
-                                // Match by order_id variants
-                                const coi = String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase();
-                                const oid = String(o.order_id || '').replace(/^#/, '').trim().toLowerCase();
-                                if (coi === bare || oid === bare) return true;
-                                // Match by sub_total + customer name + no AWB (likely our orphaned order)
-                                const nameMatch = String(o.billing_customer_name || '').toLowerCase() === (orderPayload.billing_customer_name || '').toLowerCase();
-                                const amountMatch = Math.abs(Number(o.total || 0) - subTotal) < 1;
-                                if (nameMatch && amountMatch && !o.awb_code) return true;
-                                return false;
-                            });
-                            if (match) {
-                                console.log(`📦 Shiprocket: found orphaned order via recent-orders scan — SR id ${match.id}, channel_order_id "${match.channel_order_id}"`);
-                                existing = match;
+                        const bare = String(ctx.orderId).replace(/^#/, '').trim().toLowerCase();
+                        const subTotal = orderPayload.sub_total;
+                        const custName = (orderPayload.billing_customer_name || '').toLowerCase();
+                        const custLastName = (orderPayload.billing_last_name || '').toLowerCase();
+                        for (let page = 1; page <= 5; page++) {
+                            try {
+                                const resp = await axios.get(`${this.baseURL}/orders`, {
+                                    headers,
+                                    params: { per_page: 50, page },
+                                    timeout: 20000
+                                });
+                                const recent = resp.data?.data || [];
+                                if (recent.length === 0) break;
+                                const match = recent.find(o => {
+                                    const coi = String(o.channel_order_id || '').replace(/^#/, '').trim().toLowerCase();
+                                    const oid = String(o.order_id || '').replace(/^#/, '').trim().toLowerCase();
+                                    if (coi === bare || oid === bare) return true;
+                                    if (o.awb_code) return false;
+                                    const firstName = String(o.billing_customer_name || '').toLowerCase().trim();
+                                    const lastName = String(o.billing_last_name || '').toLowerCase().trim();
+                                    const nameMatch = firstName === custName && (!custLastName || lastName === custLastName || !lastName);
+                                    const amountMatch = Math.abs(Number(o.total || 0) - subTotal) < 2;
+                                    return nameMatch && amountMatch;
+                                });
+                                if (match) {
+                                    console.log(`📦 Shiprocket: found orphaned order via recent-orders scan (page ${page}) — SR id ${match.id}, channel_order_id "${match.channel_order_id}"`);
+                                    existing = match;
+                                    break;
+                                }
+                                if (recent.length < 50) break;
+                            } catch (e) {
+                                console.warn(`⚠️ Shiprocket: recent-orders scan page ${page} failed`);
+                                break;
                             }
-                        } catch (e) {
-                            console.warn(`⚠️ Shiprocket: recent-orders scan failed`);
                         }
                     }
 
