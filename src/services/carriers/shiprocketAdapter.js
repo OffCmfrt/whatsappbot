@@ -527,9 +527,12 @@ class ShiprocketAdapter extends BaseCarrier {
 
             // --- Route 2: not synced yet — create under the Shopify channel ---
             const isCod = ctx.payment.mode === 'COD';
+            // Shiprocket only allows alphabets and spaces in name fields —
+            // strip digits, punctuation, emojis etc. before sending.
+            const stripNonAlpha = s => (s || '').replace(/[^a-zA-Z ]/g, '').trim();
             const nameParts = (ctx.consignee.name || 'Customer').trim().split(/\s+/);
-            const firstName = nameParts[0];
-            const lastName = nameParts.slice(1).join(' ') || '';
+            const firstName = stripNonAlpha(nameParts[0]) || 'Customer';
+            const lastName = stripNonAlpha(nameParts.slice(1).join(' '));
 
             const orderItems = (ctx.items.length > 0 ? ctx.items : [{ name: 'Product', quantity: 1, price: ctx.payment.declaredValue || 0 }])
                 .map((item, idx) => ({
