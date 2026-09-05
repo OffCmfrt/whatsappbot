@@ -159,7 +159,7 @@
                     reorderPoint: v.reorder_point,
                     xyz: v.xyz, cv: v.cv, abc: v.abc || 'C',
                     lastSaleDaysAgo: v.last_sale_days_ago,
-                    lastSaleDate: v.last_sale_days_ago <= 84 ? fmtDate(Date.now() - v.last_sale_days_ago * 86400000) : '>84d ago',
+                    lastSaleDate: v.last_sale_days_ago != null ? (v.last_sale_days_ago <= 84 ? fmtDate(Date.now() - v.last_sale_days_ago * 86400000) : '>84d ago') : 'Never sold',
                     stockoutEta,
                     isStockoutRisk: v.is_stockout_risk,
                     isOverstock: v.is_overstock,
@@ -665,7 +665,7 @@
                 <td>${esc(s.product)} <span class="ict-dim">· ${esc(s.color)}${s.size ? ' · ' + esc(s.size) : ''}</span></td>
                 <td class="ict-num">${num(s.currentStock)}</td>
                 <td class="ict-num ict-critical-text">${fmtInr(s.value)}</td>
-                <td class="ict-num ict-muted">${s.lastSaleDaysAgo > 84 ? '>84d ago' : s.lastSaleDaysAgo + 'd ago'}</td>
+                <td class="ict-num ict-muted">${s.lastSaleDaysAgo == null ? 'Never sold' : s.lastSaleDaysAgo > 84 ? '>84d ago' : s.lastSaleDaysAgo + 'd ago'}</td>
                 <td>${pill('critical', (s.ageBucket || '–') + (s.ageBucket ? 'd since launch' : ''))}</td>
                 <td class="ict-muted">Bundle, markdown, or write off – see Ageing &amp; Cash tab</td>
             </tr>`).join('')}</tbody></table></div>`;
@@ -790,7 +790,7 @@
                 ${field('Forecast (30d, base)', `${Math.round(s.velocity * 30)}u`)}
                 ${field('ABC / XYZ', `${s.abc}${s.xyz} · CV ${s.cv}`)}
                 ${field('Ageing (since launch)', s.ageingDays != null ? `${num(s.ageingDays)}d · bucket ${s.ageBucket}` : '–')}
-                ${field('Last sale', s.lastSaleDaysAgo > 84 ? '>84 days ago' : `${s.lastSaleDate} (${s.lastSaleDaysAgo}d ago)`)}
+                ${field('Last sale', s.lastSaleDaysAgo == null ? 'Never sold' : s.lastSaleDaysAgo > 84 ? '>84 days ago' : `${s.lastSaleDate} (${s.lastSaleDaysAgo}d ago)`)}
                 ${field('RTO / return rate', `${s.rtoRatePct}% / ${s.returnRatePct}%`)}
                 ${field('Replenishment call', esc(s.rep.bucket))}
                 ${field('Stock value', `${fmtInr(s.currentStock * s.landedCost)} · ${AT_PRICE_NOTE}`)}

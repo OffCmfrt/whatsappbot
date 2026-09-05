@@ -6181,14 +6181,16 @@ router.get('/inventory', verifyToken, async (req, res) => {
                 const cv = Math.sqrt(variance) / (mean || 1);
                 const xyz = cv < 0.5 ? 'X' : cv < 1.0 ? 'Y' : 'Z';
                 const velocity = +(weightedMovingForecast(weeklySales) / 7).toFixed(2); // units/day
-                const lastSaleDaysAgo = sv ? Math.floor((nowTs - sv.lastSaleTs) / 86400000) : VEL_DAYS + 1;
+                const lastSaleDaysAgo = sv ? Math.floor((nowTs - sv.lastSaleTs) / 86400000) : null;
+                const everSold = sv && sales90 > 0; // has at least one sale in trailing 84 days
 
                 // ----- cover, classification, replenishment -----
                 const daysOfCover = velocity > 0.05 ? +(finalAvailable / velocity).toFixed(1) : 999;
                 const incomingQty = s.in_circulation + s.rto_incoming + s.return_incoming + s.exchange_incoming;
                 const incomingEtaDays = incomingQty > 0 ? (s.in_circulation > 0 ? 3 : 7) : null; // in-transit ~3d, returns pipeline ~7d
                 const incomingArrivesInTime = incomingQty > 0 && incomingEtaDays <= daysOfCover + 3;
-                const isDead = lastSaleDaysAgo > DEAD_SALE_DAYS && onHand > 0 && (ageingDays === null || ageingDays > DEAD_SALE_DAYS);
+                // Dead = had sales but stopped for 45d+. Never-sold variants are NOT dead — they have no demand signal yet.
+                const isDead = everSold && lastSaleDaysAgo > DEAD_SALE_DAYS && onHand > 0 && (ageingDays === null || ageingDays > DEAD_SALE_DAYS);
                 const isOverstock = daysOfCover > OVERSTOCK_COVER_DAYS && velocity > SLOW_VELOCITY;
                 const isStockoutRisk = velocity > 0.05 && daysOfCover <= LEAD_TIME_DAYS && !incomingArrivesInTime;
                 const isSlowMover = !isDead && velocity > 0.05 && velocity < SLOW_VELOCITY;
