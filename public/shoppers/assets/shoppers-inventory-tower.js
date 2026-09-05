@@ -1502,7 +1502,9 @@
         if (ICT.loading) return;
         ICT.loading = true;
         const main = document.getElementById('ictMain');
-        if (main) main.innerHTML = `<div class="inv-loading"><div class="inv-spinner"></div><span>Reconciling stock, sales velocity, RTOs, returns &amp; exchanges...</span></div>`;
+        // Don't overwrite Stock Room if user already navigated there while loading
+        const isStockroomActive = ICT.tab === 'stockroom';
+        if (main && !isStockroomActive) main.innerHTML = `<div class="inv-loading"><div class="inv-spinner"></div><span>Reconciling stock, sales velocity, RTOs, returns &amp; exchanges...</span></div>`;
         try {
             if (typeof apiCall !== 'function') throw new Error('Hub API client unavailable');
             const data = await apiCall(`/inventory?window=${ICT.windowDays}${force ? '&refresh=1' : ''}`);
@@ -1511,9 +1513,10 @@
             ICT.skus = mapSkus(data);
             ICT.sample = buildSampleData(ICT.skus);
             ICT.agg = computeAggregates(ICT.skus, ICT.sample.pos, ICT.sample.prod);
-            renderCurrentTab();
+            // Only render if user hasn't switched to Stock Room while we were loading
+            if (ICT.tab !== 'stockroom') renderCurrentTab();
         } catch (err) {
-            if (main) main.innerHTML = `<div class="ict-error">Could not load the inventory control tower — ${esc(err.message || 'unknown error')}</div>`;
+            if (main && ICT.tab !== 'stockroom') main.innerHTML = `<div class="ict-error">Could not load the inventory control tower — ${esc(err.message || 'unknown error')}</div>`;
         } finally {
             ICT.loading = false;
         }
@@ -1666,7 +1669,7 @@
 
     /* --------------------------------- public API --------------------------------- */
     window.InventoryTower = {
-        open() { if (!ICT.data) loadTower(); else renderCurrentTab(); },
+        open() { if (!ICT.data && ICT.tab !== 'stockroom') loadTower(); else renderCurrentTab(); },
         refresh: loadTower,
     };
 })();

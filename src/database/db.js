@@ -826,6 +826,10 @@ async function initializePerformanceIndexes() {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id)');
     // Composite index for order status filtering (used in inventory JOINs)
     await pool.query('CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)');
+    // Covering index for inventory intelligence JOINs — avoids heap lookups for status/awb/delivered_at
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_orders_status_oid_cover ON orders(status, order_id) INCLUDE (awb, delivered_at)');
+    // Covering index for store_shoppers inventory queries (status + items_json + order_id)
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_ss_inv_cover ON store_shoppers(status, created_at DESC) INCLUDE (items_json, order_id)');
     
     // Index for message_reads (EXISTS subquery in unread queries)
     await pool.query('CREATE INDEX IF NOT EXISTS idx_message_reads_message_id ON message_reads(message_id)');
