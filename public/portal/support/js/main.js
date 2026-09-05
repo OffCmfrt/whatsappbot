@@ -12,6 +12,85 @@ let unreadMessageCount = 0;
 let lastChatMessageCount = 0;
 let lastAiSuggestedReply = null;
 
+// ============================================================
+// INACTIVITY TIMEOUT — log out after 10 minutes of no user
+// interaction (mouse, keyboard, scroll, touch).  A 60-second
+// warning overlay is shown before the actual logout so the user
+// can extend the session by interacting.
+// ============================================================
+const INACTIVITY_LIMIT_MS  = 10 * 60 * 1000;  // 10 minutes
+const INACTIVITY_WARN_MS   = 9  * 60 * 1000;  // warn at 9 minutes
+let inactivityTimer     = null;
+let inactivityWarnTimer = null;
+let inactivityWarnOverlay = null;
+let lastInactivityReset = 0;
+const INACTIVITY_RESET_THROTTLE_MS = 30 * 1000; // throttle resets to once per 30s
+
+function resetInactivityTimer() {
+    if (!portalToken) return;
+    const now = Date.now();
+    if (now - lastInactivityReset < INACTIVITY_RESET_THROTTLE_MS) return;
+    lastInactivityReset = now;
+    // Clear existing timers
+    if (inactivityTimer)     { clearTimeout(inactivityTimer);     inactivityTimer = null; }
+    if (inactivityWarnTimer) { clearTimeout(inactivityWarnTimer); inactivityWarnTimer = null; }
+    dismissInactivityWarning();
+    // Schedule warning
+    inactivityWarnTimer = setTimeout(() => {
+        showInactivityWarning();
+    }, INACTIVITY_WARN_MS);
+    // Schedule hard logout
+    inactivityTimer = setTimeout(() => {
+        logout();
+        showToast('You were logged out due to inactivity.', 'info');
+    }, INACTIVITY_LIMIT_MS);
+}
+
+function showInactivityWarning() {
+    if (inactivityWarnOverlay) return;
+    let remaining = Math.ceil((INACTIVITY_LIMIT_MS - INACTIVITY_WARN_MS) / 1000);
+    inactivityWarnOverlay = document.createElement('div');
+    inactivityWarnOverlay.id = 'inactivityWarnOverlay';
+    inactivityWarnOverlay.style.cssText = 'position:fixed;inset:0;z-index:999998;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;';
+    inactivityWarnOverlay.innerHTML = `
+        <div style="background:#1a1a2e;border:1px solid #333;border-radius:12px;padding:32px 40px;text-align:center;color:#fff;max-width:380px;">
+            <div style="font-size:36px;margin-bottom:12px;">⏱️</div>
+            <h3 style="margin:0 0 8px;font-size:18px;">Session Expiring</h3>
+            <p style="color:#aaa;font-size:14px;margin:0 0 16px;">Your portal session will expire in <span id="inactivityCountdown">${remaining}</span>s due to inactivity.</p>
+            <button id="inactivityStayBtn" style="background:#6c5ce7;color:#fff;border:none;border-radius:8px;padding:10px 28px;font-size:14px;cursor:pointer;font-weight:600;">Stay Logged In</button>
+        </div>`;
+    document.body.appendChild(inactivityWarnOverlay);
+    const countdownEl = document.getElementById('inactivityCountdown');
+    const countdownInterval = setInterval(() => {
+        remaining--;
+        if (countdownEl) countdownEl.textContent = Math.max(remaining, 0);
+        if (remaining <= 0) clearInterval(countdownInterval);
+    }, 1000);
+    document.getElementById('inactivityStayBtn').addEventListener('click', () => {
+        resetInactivityTimer();
+    });
+}
+
+function dismissInactivityWarning() {
+    if (inactivityWarnOverlay) {
+        inactivityWarnOverlay.remove();
+        inactivityWarnOverlay = null;
+    }
+}
+
+function clearInactivityTimer() {
+    if (inactivityTimer)     { clearTimeout(inactivityTimer);     inactivityTimer = null; }
+    if (inactivityWarnTimer) { clearTimeout(inactivityWarnTimer); inactivityWarnTimer = null; }
+    dismissInactivityWarning();
+}
+
+function attachInactivityListeners() {
+    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    events.forEach(evt => {
+        document.addEventListener(evt, () => resetInactivityTimer(), { passive: true });
+    });
+}
+
 // Get slug from URL
 function getSlugFromUrl() {
     const params = new URLSearchParams(window.location.search);
@@ -135,6 +214,7 @@ async function init() {
             showApp();
             loadTickets();
             startTicketPolling();
+            resetInactivityTimer();
         } else {
             portalToken = null;
             localStorage.removeItem('portalToken');
@@ -171,6 +251,7 @@ async function handleLogin(event) {
             showApp();
             loadTickets();
             startTicketPolling();
+            resetInactivityTimer();
         } else {
             errorEl.textContent = data.error || 'Invalid password';
         }
@@ -195,6 +276,7 @@ function logout() {
     localStorage.removeItem('portalToken');
     if (chatPollingInterval) clearInterval(chatPollingInterval);
     stopTicketPolling();
+    clearInactivityTimer();
     showLogin();
 }
 
@@ -841,6 +923,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // AI reply suggestions (✨ button in the chat input area)
     injectAiSuggestButton();
+
+    // Inactivity timeout (10-min auto-logout)
+    attachInactivityListeners();
     
     // View All Orders button
     document.getElementById('viewAllOrdersBtn')?.addEventListener('click', () => {
