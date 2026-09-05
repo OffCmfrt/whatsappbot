@@ -1585,11 +1585,12 @@
     /* ------------------------------ event wiring ------------------------------ */
     // All interactions are delegated (no inline handlers — CSP-safe).
     document.addEventListener('click', (e) => {
-        const view = document.getElementById('inventoryView');
-        if (!view || view.style.display === 'none') return;
-
+        // Tab clicks must work even before inventoryView is rendered (e.g. Stock Room)
         const tab = e.target.closest('#ictTabs .ict-tab');
         if (tab) { ICT.tab = tab.dataset.tab; renderCurrentTab(); return; }
+
+        const view = document.getElementById('inventoryView');
+        if (!view || view.style.display === 'none') return;
 
         const el = e.target.closest('[data-ict]');
         if (!el || !ICT.data) return;
