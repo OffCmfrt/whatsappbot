@@ -4903,6 +4903,18 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
 }
 .sr-bulk-in-btn:hover { background: #e0e0e0; }
 
+/* Bulk Out button — monochrome inverted */
+.sr-bulk-out-btn {
+    background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.15);
+    display: flex; align-items: center; gap: 6px;
+    font-family: 'Archivo Narrow', sans-serif; font-weight: 600; letter-spacing: 1px;
+}
+.sr-bulk-out-btn:hover { background: rgba(255,255,255,0.15); }
+
+/* Bulk Out max hint + zero projection */
+.sr-bulk-max { font-size: 0.72rem; color: rgba(255,255,255,0.35); margin-left: 4px; }
+.sr-bulk-projected.sr-zero { color: #ff4757; font-weight: 700; }
+
 /* Loading & empty */
 .sr-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; padding: 4rem; color: rgba(255,255,255,0.5); }
 

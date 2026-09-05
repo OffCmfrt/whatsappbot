@@ -6563,6 +6563,78 @@ router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
     }
 });
 
+// POST /api/admin/inventory/bulk-out - Bulk inventory-out (subtract stock from existing quantities)
+router.post('/inventory/bulk-out', verifyToken, async (req, res) => {
+    try {
+        const { items, reference, notes, performed_by } = req.body;
+
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, error: 'items array is required' });
+        }
+
+        for (const item of items) {
+            if (!item.sku_key || !item.product_name || !item.size || typeof item.quantity !== 'number' || item.quantity <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Each item requires sku_key, product_name, size, and positive quantity (number)'
+                });
+            }
+        }
+
+        const results = [];
+        const adjustmentRecords = [];
+        const timestamp = new Date().toISOString();
+
+        for (const item of items) {
+            const { sku_key, product_name, size, quantity } = item;
+
+            const current = await dbAdapter.query(
+                'SELECT * FROM manual_inventory WHERE sku_key = $1',
+                [sku_key]
+            );
+
+            if (current.length === 0) {
+                return res.status(400).json({ success: false, error: `SKU ${sku_key} not found in inventory — cannot subtract from zero` });
+            }
+
+            const quantityBefore = current[0].quantity || 0;
+            const quantityAfter = Math.max(0, quantityBefore - quantity);
+            const actualChange = quantityAfter - quantityBefore;
+
+            await dbAdapter.query(
+                'UPDATE manual_inventory SET quantity = $1, updated_at = $2 WHERE sku_key = $3',
+                [quantityAfter, timestamp, sku_key]
+            );
+
+            await dbAdapter.query(
+                `INSERT INTO inventory_adjustments
+                 (sku_key, product_name, size, adjustment_type, quantity_change, quantity_before, quantity_after, reference, notes, performed_by, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [sku_key, product_name, size, 'bulk_out', actualChange, quantityBefore, quantityAfter, reference || null, notes || null, performed_by || 'admin', timestamp]
+            );
+
+            results.push({ sku_key, product_name, size, quantity_removed: Math.abs(actualChange), quantity_before: quantityBefore, quantity_after: quantityAfter });
+            adjustmentRecords.push({ sku_key, product_name, size, adjustment_type: 'bulk_out', quantity_change: actualChange, quantity_before: quantityBefore, quantity_after: quantityAfter });
+        }
+
+        const { invalidateCache } = require('../utils/cache');
+        invalidateCache();
+
+        res.json({
+            success: true,
+            message: `Bulk inventory-out completed for ${results.length} SKU(s)`,
+            processed: results.length,
+            items: results,
+            adjustment_records: adjustmentRecords,
+            reference: reference || null,
+            timestamp
+        });
+    } catch (error) {
+        console.error('Bulk inventory-out error:', error);
+        res.status(500).json({ success: false, error: 'Failed to process bulk inventory-out' });
+    }
+});
+
 // POST /api/admin/inventory/sync - Sync inventory from sheet data (set absolute quantities)
 // This replaces existing quantities with the provided values and logs as 'sync' adjustment
 router.post('/inventory/sync', verifyToken, async (req, res) => {

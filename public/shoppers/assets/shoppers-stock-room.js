@@ -35,6 +35,7 @@
         bulkItems: [],
         bulkReference: '',
         bulkNotes: '',
+        bulkOutMode: false,   // false = Bulk In (add), true = Bulk Out (subtract)
     };
 
     /* ── API ── */
@@ -119,21 +120,50 @@
 
     function updateBulkQty(skuKey, qty) {
         const item = SR.bulkItems.find(b => b.sku_key === skuKey);
-        if (item) { item.qty = Math.max(0, parseInt(qty) || 0); if (item.qty === 0) removeFromBulk(skuKey); else renderBulkModal(); }
+        if (item) {
+            let q = Math.max(0, parseInt(qty) || 0);
+            // In Bulk Out mode, cap at current stock
+            if (SR.bulkOutMode) {
+                const current = SR.inventory.find(i => i.sku_key === skuKey);
+                const maxQty = current ? current.quantity : 0;
+                q = Math.min(q, maxQty);
+            }
+            item.qty = q;
+            if (item.qty === 0) removeFromBulk(skuKey); else renderBulkModal();
+        }
     }
 
-    function openBulkModal() { SR.bulkItems = []; SR.bulkReference = ''; SR.bulkNotes = ''; renderBulkModal(); const m = document.getElementById('srBulkModal'); if (m) m.style.display = 'flex'; }
+    function openBulkModal(outMode = false) { SR.bulkItems = []; SR.bulkReference = ''; SR.bulkNotes = ''; SR.bulkOutMode = !!outMode; renderBulkModal(); updateBulkModalChrome(); const m = document.getElementById('srBulkModal'); if (m) m.style.display = 'flex'; }
     function closeBulkModal() { const m = document.getElementById('srBulkModal'); if (m) m.style.display = 'none'; }
+
+    function updateBulkModalChrome() {
+        const modal = document.getElementById('srBulkModal');
+        if (!modal) return;
+        const isOut = SR.bulkOutMode;
+        const h3 = modal.querySelector('.sr-bulk-modal-header h3');
+        if (h3) h3.textContent = isOut ? 'Bulk Inventory-Out' : 'Bulk Inventory-In';
+        const btn = modal.querySelector('.sr-confirm-bulk-btn');
+        if (btn) {
+            btn.innerHTML = isOut
+                ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14"/></svg> Apply Bulk Out`
+                : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg> Apply Bulk In`;
+            btn.classList.toggle('sr-bulk-out-btn', isOut);
+            btn.classList.toggle('sr-bulk-in-btn', !isOut);
+        }
+    }
 
     function renderBulkModal() {
         const modal = document.getElementById('srBulkModal');
         if (!modal) return;
         const totalItems = SR.bulkItems.length;
         const totalQty = SR.bulkItems.reduce((s, b) => s + b.qty, 0);
+        const isOut = SR.bulkOutMode;
+        const qtyLabel = isOut ? 'Qty to Remove' : 'Qty to Add';
+        const emptyMsg = isOut ? 'No SKUs selected yet. Search above to remove items.' : 'No SKUs selected yet. Search above to add items.';
 
         modal.querySelector('.sr-bulk-body').innerHTML = `
             <div class="sr-bulk-search">
-                <input type="text" id="srBulkSearch" placeholder="Search SKU or product name to add..." class="sr-bulk-search-input" autocomplete="off">
+                <input type="text" id="srBulkSearch" placeholder="Search SKU or product name..." class="sr-bulk-search-input" autocomplete="off">
                 <div id="srBulkSearchResults" class="sr-bulk-search-results"></div>
             </div>
             <div class="sr-bulk-selected">
@@ -146,22 +176,24 @@
                         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1.5">
                             <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
                         </svg>
-                        <p>No SKUs selected yet. Search above to add items.</p>
+                        <p>${emptyMsg}</p>
                     </div>
                 ` : `
                     <table class="sr-bulk-table">
-                        <thead><tr><th>Product</th><th>Size</th><th>Current</th><th>Qty to Add</th><th>Projected</th><th></th></tr></thead>
+                        <thead><tr><th>Product</th><th>Size</th><th>Current</th><th>${qtyLabel}</th><th>Projected</th><th></th></tr></thead>
                         <tbody>
                             ${SR.bulkItems.map(b => {
                                 const current = SR.inventory.find(i => i.sku_key === b.sku_key);
                                 const curQty = current ? current.quantity : 0;
-                                const proj = curQty + b.qty;
+                                const proj = isOut ? curQty - b.qty : curQty + b.qty;
+                                const projClass = proj <= 0 ? 'sr-bulk-projected sr-zero' : proj <= (current?.reorder_level || 0) ? 'sr-bulk-projected sr-reorder' : '';
+                                const maxHint = isOut ? `<span class="sr-bulk-max" title="Max: ${curQty}">max ${curQty}</span>` : '';
                                 return `<tr>
                                     <td class="sr-bulk-product">${esc(b.product_name)}</td>
                                     <td class="sr-bulk-size">${esc(b.size)}</td>
                                     <td class="sr-bulk-current">${num(curQty)}</td>
-                                    <td><input type="number" min="1" value="${b.qty}" class="sr-bulk-qty-input" data-sr-bulk-qty="${esc(b.sku_key)}"></td>
-                                    <td class="${proj <= (current?.reorder_level || 0) ? 'sr-bulk-projected sr-reorder' : ''}">${num(proj)}</td>
+                                    <td><input type="number" min="1" ${isOut ? `max="${curQty}"` : ''} value="${b.qty}" class="sr-bulk-qty-input" data-sr-bulk-qty="${esc(b.sku_key)}">${maxHint}</td>
+                                    <td class="${projClass}">${num(proj)}</td>
                                     <td><button class="sr-bulk-remove" data-sr="bulk-remove" data-sku="${esc(b.sku_key)}" title="Remove">&times;</button></td>
                                 </tr>`;
                             }).join('')}
@@ -172,11 +204,11 @@
             <div class="sr-bulk-meta">
                 <div class="sr-bulk-field">
                     <label>Reference (optional)</label>
-                    <input type="text" id="srBulkRef" placeholder="e.g. PO-2026-091, Batch #42" value="${esc(SR.bulkReference)}">
+                    <input type="text" id="srBulkRef" placeholder="${isOut ? 'e.g. Damage log, Audit #12' : 'e.g. PO-2026-091, Batch #42'}" value="${esc(SR.bulkReference)}">
                 </div>
                 <div class="sr-bulk-field">
                     <label>Notes (optional)</label>
-                    <input type="text" id="srBulkNotes" placeholder="e.g. September restock from vendor" value="${esc(SR.bulkNotes)}">
+                    <input type="text" id="srBulkNotes" placeholder="${isOut ? 'e.g. Damaged goods, Audit correction' : 'e.g. September restock from vendor'}" value="${esc(SR.bulkNotes)}">
                 </div>
             </div>`;
 
@@ -204,10 +236,15 @@
 
     async function confirmBulkIn() {
         if (SR.bulkItems.length === 0) return;
+        const isOut = SR.bulkOutMode;
         const totalQty = SR.bulkItems.reduce((s, b) => s + b.qty, 0);
-        if (!window.confirm(`Confirm Bulk Inventory-In\n\n${SR.bulkItems.length} SKU(s) · ${totalQty} total units\nReference: ${SR.bulkReference || 'None'}\n\nThis will ADD the specified quantities to existing stock.`)) return;
+        const verb = isOut ? 'REMOVE' : 'ADD';
+        const endpoint = isOut ? '/api/admin/inventory/bulk-out' : '/api/admin/inventory/bulk-in';
+        const label = isOut ? 'Bulk Inventory-Out' : 'Bulk Inventory-In';
+
+        if (!window.confirm(`Confirm ${label}\n\n${SR.bulkItems.length} SKU(s) · ${totalQty} total units\nReference: ${SR.bulkReference || 'None'}\n\nThis will ${verb} the specified quantities ${isOut ? 'from' : 'to'} existing stock.`)) return;
         try {
-            const result = await apiFetch('/api/admin/inventory/bulk-in', {
+            const result = await apiFetch(endpoint, {
                 method: 'POST',
                 body: JSON.stringify({
                     items: SR.bulkItems.map(b => ({ sku_key: b.sku_key, product_name: b.product_name, size: b.size, category: b.category, quantity: b.qty })),
@@ -215,13 +252,13 @@
                 })
             });
             if (result.success) {
-                showToast(`Bulk-in complete: ${result.processed} SKU(s), ${totalQty} units added`, 'success');
+                showToast(`${isOut ? 'Bulk-out' : 'Bulk-in'} complete: ${result.processed} SKU(s), ${totalQty} units ${isOut ? 'removed' : 'added'}`, 'success');
                 closeBulkModal();
                 SR.loaded = false;
                 await loadInventory(true);
                 await loadAdjustments();
-            } else { showToast(result.error || 'Bulk-in failed', 'error'); }
-        } catch (e) { showToast('Bulk-in failed: ' + e.message, 'error'); }
+            } else { showToast(result.error || `${label} failed`, 'error'); }
+        } catch (e) { showToast(`${label} failed: ` + e.message, 'error'); }
     }
 
     /* ── toast ── */
@@ -263,7 +300,7 @@
         const sevenDaysAgo = Date.now() - 7 * 86400000;
         const recentAdj = SR.adjustments.filter(a => new Date(a.created_at).getTime() > sevenDaysAgo);
         const recentIn = recentAdj.filter(a => a.adjustment_type === 'stock_in' || a.adjustment_type === 'bulk_in').reduce((s, a) => s + Math.abs(a.quantity_change), 0);
-        const recentOut = recentAdj.filter(a => a.adjustment_type === 'stock_out').reduce((s, a) => s + Math.abs(a.quantity_change), 0);
+        const recentOut = recentAdj.filter(a => a.adjustment_type === 'stock_out' || a.adjustment_type === 'bulk_out').reduce((s, a) => s + Math.abs(a.quantity_change), 0);
 
         main.innerHTML = `
             <div class="sr-container">
@@ -309,9 +346,13 @@
                     </select>
                     <span class="ict-toolbar-count">${num(total)} matching</span>
                     <div style="margin-left:auto;display:flex;gap:6px">
-                        <button class="btn sr-bulk-in-btn" data-sr="bulk-open">
+                        <button class="btn sr-bulk-in-btn" data-sr="bulk-open" title="Add stock to multiple SKUs">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
                             Bulk In
+                        </button>
+                        <button class="btn sr-bulk-out-btn" data-sr="bulk-out-open" title="Remove stock from multiple SKUs">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14"/></svg>
+                            Bulk Out
                         </button>
                         <button class="ict-chip" data-sr="refresh" title="Refresh">
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -378,7 +419,7 @@
                                         <td class="ict-mono ict-muted"><code>${esc(a.sku_key)}</code></td>
                                         <td>${esc(a.product_name)}</td>
                                         <td class="ict-muted">${esc(a.size)}</td>
-                                        <td>${pill(a.adjustment_type === 'stock_in' || a.adjustment_type === 'bulk_in' ? 'healthy' : a.adjustment_type === 'stock_out' ? 'critical' : 'info', a.adjustment_type.replace('_', ' '))}</td>
+                                        <td>${pill(a.adjustment_type === 'stock_in' || a.adjustment_type === 'bulk_in' ? 'healthy' : a.adjustment_type === 'stock_out' || a.adjustment_type === 'bulk_out' ? 'critical' : 'info', a.adjustment_type.replace('_', ' '))}</td>
                                         <td class="ict-num ${a.quantity_change >= 0 ? 'ict-healthy-text' : 'ict-critical-text'}" style="font-weight:600">${a.quantity_change >= 0 ? '+' : ''}${num(a.quantity_change)}</td>
                                         <td class="ict-num ict-muted">${num(a.quantity_before)}</td>
                                         <td class="ict-num ict-strong">${num(a.quantity_after)}</td>
@@ -440,7 +481,9 @@
             const key = el.dataset.key;
             if (key) toggleSort(key);
         } else if (action === 'bulk-open') {
-            openBulkModal();
+            openBulkModal(false);
+        } else if (action === 'bulk-out-open') {
+            openBulkModal(true);
         } else if (action === 'bulk-close') {
             closeBulkModal();
         } else if (action === 'bulk-confirm') {
