@@ -6169,7 +6169,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
                 const incomingQty = s.in_circulation + s.rto_incoming + s.return_incoming + s.exchange_incoming;
                 const incomingEtaDays = incomingQty > 0 ? (s.in_circulation > 0 ? 3 : 7) : null; // in-transit ~3d, returns pipeline ~7d
                 const incomingArrivesInTime = incomingQty > 0 && incomingEtaDays <= daysOfCover + 3;
-                const isDead = lastSaleDaysAgo > DEAD_SALE_DAYS && onHand > 0;
+                const isDead = lastSaleDaysAgo > DEAD_SALE_DAYS && onHand > 0 && (ageingDays === null || ageingDays > DEAD_SALE_DAYS);
                 const isOverstock = daysOfCover > OVERSTOCK_COVER_DAYS && velocity > SLOW_VELOCITY;
                 const isStockoutRisk = velocity > 0.05 && daysOfCover <= LEAD_TIME_DAYS && !incomingArrivesInTime;
                 const isSlowMover = !isDead && velocity > 0.05 && velocity < SLOW_VELOCITY;
@@ -6197,7 +6197,9 @@ router.get('/inventory', verifyToken, async (req, res) => {
                     : isSlowMover ? 'Slow mover'
                     : 'Healthy';
 
-                const skuCode = (v.sku || `OC-${String(p.id).slice(-4)}-${String(v.title || 'DEF').replace(/[^A-Za-z0-9]+/g, '').slice(0, 6).toUpperCase() || 'DEF'}`).toUpperCase();
+                const rawSku = v.sku || '';
+                const skuLooksReal = rawSku && !/^\d+$/.test(rawSku.trim()) && rawSku.trim().length > 1;
+                const skuCode = (skuLooksReal ? rawSku : `OC-${String(p.id).slice(-4)}-${String(v.title || 'DEF').replace(/[^A-Za-z0-9]+/g, '').slice(0, 6).toUpperCase() || 'DEF'}`).toUpperCase();
 
                 return {
                     id: v.id,

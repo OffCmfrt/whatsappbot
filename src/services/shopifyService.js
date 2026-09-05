@@ -289,6 +289,8 @@ class ShopifyService {
 
     // Fetch the full active product catalog (variants, price, stock) for the admin product picker.
     // Paginated via Link headers and cached in-memory for 10 minutes.
+    // Uses Shopify InventoryLevel API for accurate stock (inventory_quantity in the
+    // Products API returns 0 for stores with location-based inventory tracking).
     async getProductCatalog(forceRefresh = false) {
         const CATALOG_TTL = 10 * 60 * 1000;
         if (!forceRefresh && this._catalogCache && (Date.now() - this._catalogCacheAt) < CATALOG_TTL) {
@@ -299,7 +301,7 @@ class ShopifyService {
         const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
 
         if (!shopUrl || !accessToken) {
-            console.error('❌ Shopify credentials not configured');
+            console.error(' Shopify credentials not configured');
             return this._catalogCache || [];
         }
 
@@ -308,12 +310,13 @@ class ShopifyService {
             'X-Shopify-Access-Token': accessToken,
             'Content-Type': 'application/json'
         };
+        const baseUrl = `https://${cleanShopUrl}.myshopify.com/admin/api/2024-01`;
 
         try {
+            // 1) Fetch products with variants (includes inventory_item_id per variant)
             const rawProducts = [];
-            let apiUrl = `https://${cleanShopUrl}.myshopify.com/admin/api/2024-01/products.json?limit=250&status=active&fields=id,title,handle,image,created_at,variants`;
+            let apiUrl = `${baseUrl}/products.json?limit=250&status=active&fields=id,title,handle,image,created_at,variants`;
 
-            // Follow Shopify cursor pagination (rel="next" Link header), hard cap for safety
             while (apiUrl && rawProducts.length < 2000) {
                 const response = await axios.get(apiUrl, { headers, timeout: 20000 });
                 rawProducts.push(...(response.data?.products || []));
@@ -322,28 +325,76 @@ class ShopifyService {
                 apiUrl = nextMatch ? nextMatch[1] : null;
             }
 
+            // 2) Collect all inventory_item_ids from variants
+            const allInventoryItemIds = [];
+            const variantInventoryMap = new Map(); // variantId -> inventory_item_id
+            for (const p of rawProducts) {
+                for (const v of (p.variants || [])) {
+                    if (v.inventory_item_id) {
+                        allInventoryItemIds.push(v.inventory_item_id);
+                        variantInventoryMap.set(v.id, v.inventory_item_id);
+                    }
+                }
+            }
+
+            // 3) Fetch real stock levels from InventoryLevel API
+            //    (sum across all locations per inventory_item_id)
+            const stockByInventoryItemId = new Map();
+            if (allInventoryItemIds.length > 0) {
+                // Shopify allows up to 100 IDs per request
+                const batches = [];
+                for (let i = 0; i < allInventoryItemIds.length; i += 100) {
+                    batches.push(allInventoryItemIds.slice(i, i + 100));
+                }
+                for (const batch of batches) {
+                    try {
+                        const ilRes = await axios.get(`${baseUrl}/inventory_levels.json`, {
+                            headers,
+                            params: { inventory_item_ids: batch.join(',') },
+                            timeout: 20000
+                        });
+                        for (const level of (ilRes.data?.inventory_levels || [])) {
+                            const iid = level.inventory_item_id;
+                            const qty = level.available || 0;
+                            stockByInventoryItemId.set(iid, (stockByInventoryItemId.get(iid) || 0) + qty);
+                        }
+                    } catch (err) {
+                        console.warn(`️ InventoryLevel API batch failed: ${err.message}`);
+                    }
+                }
+            }
+
+            // 4) Build catalog with real stock from InventoryLevel API,
+            //    falling back to inventory_quantity if InventoryLevel returned nothing
             const catalog = rawProducts.map(p => ({
                 id: p.id,
                 title: p.title,
                 image: p.image?.src || null,
                 created_at: p.created_at || null,
-                variants: (p.variants || []).map(v => ({
-                    id: v.id,
-                    title: v.title === 'Default Title' ? '' : (v.title || ''),
-                    price: parseFloat(v.price) || 0,
-                    compare_at_price: v.compare_at_price ? parseFloat(v.compare_at_price) : null,
-                    sku: v.sku || '',
-                    inventory: (typeof v.inventory_quantity === 'number') ? v.inventory_quantity : null,
-                    available: v.inventory_policy === 'continue' || (v.inventory_quantity || 0) > 0
-                }))
+                variants: (p.variants || []).map(v => {
+                    const iid = v.inventory_item_id;
+                    const realStock = iid != null ? stockByInventoryItemId.get(iid) : undefined;
+                    const stock = realStock !== undefined
+                        ? realStock
+                        : (typeof v.inventory_quantity === 'number' ? v.inventory_quantity : 0);
+                    return {
+                        id: v.id,
+                        title: v.title === 'Default Title' ? '' : (v.title || ''),
+                        price: parseFloat(v.price) || 0,
+                        compare_at_price: v.compare_at_price ? parseFloat(v.compare_at_price) : null,
+                        sku: v.sku || '',
+                        inventory: stock,
+                        available: v.inventory_policy === 'continue' || stock > 0
+                    };
+                })
             }));
 
             this._catalogCache = catalog;
             this._catalogCacheAt = Date.now();
-            console.log(`✅ Shopify product catalog loaded: ${catalog.length} products`);
+            console.log(`✅ Shopify product catalog loaded: ${catalog.length} products, ${allInventoryItemIds.length} variants, ${stockByInventoryItemId.size} with InventoryLevel data`);
             return catalog;
         } catch (error) {
-            console.error('❌ Error fetching Shopify product catalog:', error.message);
+            console.error(' Error fetching Shopify product catalog:', error.message);
             // Serve stale cache rather than failing the picker outright
             return this._catalogCache || [];
         }
