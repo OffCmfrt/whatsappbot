@@ -6403,4 +6403,620 @@ router.get('/inventory', verifyToken, async (req, res) => {
     }
 });
 
+// ── Manual Inventory Management Endpoints ──
+// These endpoints manage the manual inventory system independent of Shopify.
+// Used for bulk inventory-in operations and syncing from external inventory sheets.
+
+// GET /api/admin/inventory/manual - Get all manual inventory items
+router.get('/inventory/manual', verifyToken, async (req, res) => {
+    try {
+        const { product, category, size, reorder_only } = req.query;
+        let sql = 'SELECT * FROM manual_inventory';
+        const conditions = [];
+        const params = [];
+        let paramIdx = 1;
+
+        if (product) {
+            conditions.push(`product_name ILIKE $${paramIdx++}`);
+            params.push(`%${product}%`);
+        }
+        if (category) {
+            conditions.push(`category = $${paramIdx++}`);
+            params.push(category);
+        }
+        if (size) {
+            conditions.push(`size = $${paramIdx++}`);
+            params.push(size);
+        }
+        if (reorder_only === '1' || reorder_only === 'true') {
+            conditions.push('quantity <= reorder_level');
+        }
+
+        if (conditions.length > 0) {
+            sql += ' WHERE ' + conditions.join(' AND ');
+        }
+        sql += ' ORDER BY product_name, size';
+
+        const items = await dbAdapter.query(sql, params);
+        
+        // Compute summary stats
+        const totalSkus = items.length;
+        const totalUnits = items.reduce((sum, i) => sum + (i.quantity || 0), 0);
+        const reorderCount = items.filter(i => i.quantity <= (i.reorder_level || 0)).length;
+        const zeroStock = items.filter(i => i.quantity === 0).length;
+
+        res.json({
+            success: true,
+            items,
+            summary: {
+                total_skus: totalSkus,
+                total_units: totalUnits,
+                reorder_needed: reorderCount,
+                zero_stock: zeroStock
+            }
+        });
+    } catch (error) {
+        console.error('Manual inventory fetch error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch manual inventory' });
+    }
+});
+
+// POST /api/admin/inventory/bulk-in - Bulk inventory-in (add stock to existing quantities)
+router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
+    try {
+        const { items, reference, notes, performed_by } = req.body;
+        
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, error: 'items array is required' });
+        }
+
+        // Validate each item
+        for (const item of items) {
+            if (!item.sku_key || !item.product_name || !item.size || typeof item.quantity !== 'number' || item.quantity <= 0) {
+                return res.status(400).json({ 
+                    success: false, 
+                    error: 'Each item requires sku_key, product_name, size, and positive quantity (number)' 
+                });
+            }
+        }
+
+        const results = [];
+        const adjustmentRecords = [];
+        const timestamp = new Date().toISOString();
+
+        for (const item of items) {
+            const { sku_key, product_name, size, quantity, category } = item;
+            
+            // Get current inventory (or create if doesn't exist)
+            let current = await dbAdapter.query(
+                'SELECT * FROM manual_inventory WHERE sku_key = $1',
+                [sku_key]
+            );
+            
+            let quantityBefore = 0;
+            let quantityAfter;
+            
+            if (current.length > 0) {
+                quantityBefore = current[0].quantity || 0;
+                quantityAfter = quantityBefore + quantity;
+                
+                // Update existing inventory
+                await dbAdapter.query(
+                    'UPDATE manual_inventory SET quantity = $1, updated_at = $2 WHERE sku_key = $3',
+                    [quantityAfter, timestamp, sku_key]
+                );
+            } else {
+                quantityAfter = quantity;
+                
+                // Insert new inventory record
+                await dbAdapter.query(
+                    `INSERT INTO manual_inventory (product_name, category, size, sku_key, quantity, reorder_level, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                    [product_name, category || null, size, sku_key, quantity, 0, timestamp]
+                );
+            }
+            
+            // Log the adjustment
+            await dbAdapter.query(
+                `INSERT INTO inventory_adjustments 
+                 (sku_key, product_name, size, adjustment_type, quantity_change, quantity_before, quantity_after, reference, notes, performed_by, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [sku_key, product_name, size, 'bulk_in', quantity, quantityBefore, quantityAfter, reference || null, notes || null, performed_by || 'admin', timestamp]
+            );
+            
+            results.push({
+                sku_key,
+                product_name,
+                size,
+                quantity_added: quantity,
+                quantity_before,
+                quantity_after
+            });
+            
+            adjustmentRecords.push({
+                sku_key,
+                product_name,
+                size,
+                adjustment_type: 'bulk_in',
+                quantity_change: quantity,
+                quantity_before,
+                quantity_after
+            });
+        }
+
+        // Invalidate inventory cache
+        const { invalidateCache } = require('../utils/cache');
+        invalidateCache();
+
+        res.json({
+            success: true,
+            message: `Bulk inventory-in completed for ${results.length} SKU(s)`,
+            processed: results.length,
+            items: results,
+            adjustment_records: adjustmentRecords,
+            reference: reference || null,
+            timestamp
+        });
+    } catch (error) {
+        console.error('Bulk inventory-in error:', error);
+        res.status(500).json({ success: false, error: 'Failed to process bulk inventory-in' });
+    }
+});
+
+// POST /api/admin/inventory/sync - Sync inventory from sheet data (set absolute quantities)
+// This replaces existing quantities with the provided values and logs as 'sync' adjustment
+router.post('/inventory/sync', verifyToken, async (req, res) => {
+    try {
+        const { items, reference, notes, performed_by, dry_run } = req.body;
+        
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, error: 'items array is required' });
+        }
+
+        const results = [];
+        const mismatches = [];
+        const missing_in_hub = [];
+        const timestamp = new Date().toISOString();
+
+        // First pass: validate and collect existing SKUs
+        const existingSkus = await dbAdapter.query('SELECT sku_key FROM manual_inventory');
+        const existingSkuSet = new Set(existingSkus.map(r => r.sku_key));
+        const incomingSkuSet = new Set(items.map(i => i.sku_key));
+
+        // Check for SKUs in hub but not in sheet
+        for (const sku of existingSkuSet) {
+            if (!incomingSkuSet.has(sku)) {
+                mismatches.push({ sku_key: sku, issue: 'present_in_hub_missing_in_sheet' });
+            }
+        }
+
+        for (const item of items) {
+            const { sku_key, product_name, size, quantity, category, reorder_level } = item;
+            
+            if (!sku_key || !product_name || !size || typeof quantity !== 'number') {
+                mismatches.push({ item, issue: 'invalid_data' });
+                continue;
+            }
+
+            const current = await dbAdapter.query(
+                'SELECT * FROM manual_inventory WHERE sku_key = $1',
+                [sku_key]
+            );
+            
+            const quantityBefore = current.length > 0 ? (current[0].quantity || 0) : 0;
+            const quantityAfter = quantity;
+            const change = quantityAfter - quantityBefore;
+
+            if (!dry_run) {
+                if (current.length > 0) {
+                    await dbAdapter.query(
+                        'UPDATE manual_inventory SET quantity = $1, category = COALESCE($2, category), reorder_level = COALESCE($3, reorder_level), updated_at = $4 WHERE sku_key = $5',
+                        [quantityAfter, category || null, reorder_level || 0, timestamp, sku_key]
+                    );
+                } else {
+                    await dbAdapter.query(
+                        `INSERT INTO manual_inventory (product_name, category, size, sku_key, quantity, reorder_level, updated_at)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                        [product_name, category || null, size, sku_key, quantityAfter, reorder_level || 0, timestamp]
+                    );
+                    missing_in_hub.push({ sku_key, product_name, size, quantity: quantityAfter });
+                }
+
+                // Log the sync adjustment
+                await dbAdapter.query(
+                    `INSERT INTO inventory_adjustments 
+                     (sku_key, product_name, size, adjustment_type, quantity_change, quantity_before, quantity_after, reference, notes, performed_by, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                    [sku_key, product_name, size, 'sync', change, quantityBefore, quantityAfter, reference || 'sheet_sync', notes || null, performed_by || 'admin', timestamp]
+                );
+            }
+
+            results.push({
+                sku_key,
+                product_name,
+                size,
+                quantity_before: quantityBefore,
+                quantity_after: quantityAfter,
+                change
+            });
+        }
+
+        if (!dry_run) {
+            const { invalidateCache } = require('../utils/cache');
+            invalidateCache();
+        }
+
+        res.json({
+            success: true,
+            dry_run: !!dry_run,
+            message: dry_run 
+                ? `Dry run: ${results.length} SKU(s) would be synced` 
+                : `Sync completed for ${results.length} SKU(s)`,
+            processed: results.length,
+            items: results,
+            mismatches,
+            missing_in_hub,
+            summary: {
+                total_synced: results.length,
+                new_skus: missing_in_hub.length,
+                mismatches: mismatches.length,
+                total_quantity_change: results.reduce((sum, r) => sum + r.change, 0)
+            },
+            reference: reference || 'sheet_sync',
+            timestamp
+        });
+    } catch (error) {
+        console.error('Inventory sync error:', error);
+        res.status(500).json({ success: false, error: 'Failed to sync inventory' });
+    }
+});
+
+// GET /api/admin/inventory/adjustments - Get inventory adjustment history
+router.get('/inventory/adjustments', verifyToken, async (req, res) => {
+    try {
+        const { sku_key, type, limit, offset } = req.query;
+        let sql = 'SELECT * FROM inventory_adjustments';
+        const conditions = [];
+        const params = [];
+        let paramIdx = 1;
+
+        if (sku_key) {
+            conditions.push(`sku_key = $${paramIdx++}`);
+            params.push(sku_key);
+        }
+        if (type) {
+            conditions.push(`adjustment_type = $${paramIdx++}`);
+            params.push(type);
+        }
+
+        if (conditions.length > 0) {
+            sql += ' WHERE ' + conditions.join(' AND ');
+        }
+        sql += ' ORDER BY created_at DESC';
+        
+        const lim = Math.min(parseInt(limit) || 100, 500);
+        const off = parseInt(offset) || 0;
+        sql += ` LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
+        params.push(lim, off);
+
+        const adjustments = await dbAdapter.query(sql, params);
+        
+        // Get total count
+        let countSql = 'SELECT COUNT(*) as total FROM inventory_adjustments';
+        const countConditions = [];
+        const countParams = [];
+        let countIdx = 1;
+        if (sku_key) {
+            countConditions.push(`sku_key = $${countIdx++}`);
+            countParams.push(sku_key);
+        }
+        if (type) {
+            countConditions.push(`adjustment_type = $${countIdx++}`);
+            countParams.push(type);
+        }
+        if (countConditions.length > 0) {
+            countSql += ' WHERE ' + countConditions.join(' AND ');
+        }
+        const countResult = await dbAdapter.query(countSql, countParams);
+
+        res.json({
+            success: true,
+            adjustments,
+            pagination: {
+                total: countResult[0]?.total || 0,
+                limit: lim,
+                offset: off
+            }
+        });
+    } catch (error) {
+        console.error('Adjustments fetch error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch adjustment history' });
+    }
+});
+
+// ==========================================
+// DATE-WISE INVENTORY MOVEMENTS
+// Returns per-SKU inventory IN and OUT for a
+// specific date or date range. Combines manual
+// adjustments (inventory_adjustments) with
+// order-derived movements (delivered = OUT,
+// RTO/returns = IN, exchanges split both ways).
+// ==========================================
+router.get('/inventory/movements', verifyToken, async (req, res) => {
+    try {
+        const { from, to } = req.query;
+        if (!from) return res.status(400).json({ success: false, error: 'from date is required (YYYY-MM-DD)' });
+
+        const fromDate = new Date(from);
+        const toDate = to ? new Date(to) : new Date(from);
+        if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+            return res.status(400).json({ success: false, error: 'Invalid date format — use YYYY-MM-DD' });
+        }
+        // Normalize: from = start of day, to = end of day
+        const fromIso = fromDate.toISOString();
+        const toEndIso = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate(), 23, 59, 59, 999).toISOString();
+
+        const { extractItemSize } = require('../utils/orderItems');
+        const shopifyService = require('../services/shopifyService');
+        const catalog = await shopifyService.getProductCatalog(false);
+
+        // Build variant resolution indexes (same logic as /inventory endpoint)
+        const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const skuIndex = new Map();
+        const titleIndex = new Map();
+        for (const p of catalog) {
+            titleIndex.set(norm(p.title), p);
+            for (const v of (p.variants || [])) {
+                if (v.sku) skuIndex.set(norm(v.sku), { p, v });
+            }
+        }
+        const resolveItem = (item) => {
+            if (!item || typeof item !== 'object') return null;
+            const sku = norm(item.sku);
+            if (sku && skuIndex.has(sku)) return skuIndex.get(sku);
+            const title = norm(item.title || item.product_name || item.name);
+            if (!title) return null;
+            let product = titleIndex.get(title) || null;
+            if (!product) {
+                for (const [pTitle, p] of titleIndex) {
+                    if (!pTitle) continue;
+                    if (title.startsWith(pTitle) || pTitle.startsWith(title)) { product = p; break; }
+                }
+            }
+            if (!product) return null;
+            const variants = product.variants || [];
+            if (variants.length === 1) return { p: product, v: variants[0] };
+            const size = norm(extractItemSize(item));
+            if (size) {
+                const hit = variants.find(v => norm(v.title) && norm(v.title).split(' ').includes(size));
+                if (hit) return { p: product, v: hit };
+            }
+            return { p: product, v: null };
+        };
+        const parseItems = (raw) => {
+            if (!raw) return [];
+            try { const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; return Array.isArray(parsed) ? parsed : []; } catch (_) { return []; }
+        };
+
+        // Aggregate per SKU: variantKey -> { sku, product, color, size, in: {delivered, rto, returns, exchange_out, manual_out}, out: {...} }
+        const movements = new Map();
+        const ensureMov = (key, sku, product, color, size) => {
+            if (!movements.has(key)) {
+                movements.set(key, { sku, product, color, size, qty_in: 0, qty_out: 0, in_breakdown: { rto: 0, returns: 0, exchange_in: 0, manual_in: 0 }, out_breakdown: { delivered: 0, exchange_out: 0, manual_out: 0 } });
+            }
+            return movements.get(key);
+        };
+
+        // 1) Manual adjustments (inventory_adjustments table)
+        const adjRows = await dbAdapter.query(
+            `SELECT sku_key, product_name, size, adjustment_type, quantity_change, created_at
+             FROM inventory_adjustments
+             WHERE created_at >= $1 AND created_at <= $2
+             ORDER BY created_at DESC`,
+            [fromIso, toEndIso]
+        );
+        for (const row of adjRows) {
+            const key = norm(row.sku_key);
+            const m = ensureMov(key, row.sku_key, row.product_name, '', row.size || '');
+            const qty = Math.abs(parseInt(row.quantity_change, 10) || 0);
+            if (row.adjustment_type === 'stock_in') { m.qty_in += qty; m.in_breakdown.manual_in += qty; }
+            else if (row.adjustment_type === 'stock_out') { m.qty_out += qty; m.out_breakdown.manual_out += qty; }
+        }
+
+        // 2) Order-derived movements: delivered (OUT), RTO (IN), returns (IN), exchanges (IN/OUT)
+        const [deliveredRows, rtoRows, returnRows, exchangeRows] = await Promise.all([
+            dbAdapter.query(`
+                SELECT s.items_json FROM store_shoppers s
+                INNER JOIN orders o ON o.order_id = s.order_id
+                WHERE s.items_json IS NOT NULL AND o.status = 'delivered'
+                  AND s.updated_at >= $1 AND s.updated_at <= $2
+            `, [fromIso, toEndIso]),
+            dbAdapter.query(`
+                SELECT s.items_json FROM store_shoppers s
+                LEFT JOIN orders o ON o.order_id = s.order_id
+                WHERE s.items_json IS NOT NULL
+                  AND (s.status = 'rto' OR o.status = 'rto')
+                  AND s.updated_at >= $1 AND s.updated_at <= $2
+            `, [fromIso, toEndIso]),
+            dbAdapter.query(`
+                SELECT items FROM returns
+                WHERE status IN ('pending_approval','initiated','approved','pickup_scheduled','completed')
+                  AND updated_at >= $1 AND updated_at <= $2
+            `, [fromIso, toEndIso]),
+            dbAdapter.query(`
+                SELECT old_items, new_items FROM exchanges
+                WHERE status IN ('pending_approval','initiated','pickup_scheduled','completed')
+                  AND updated_at >= $1 AND updated_at <= $2
+            `, [fromIso, toEndIso]),
+        ]);
+
+        // Delivered = stock OUT
+        for (const row of deliveredRows) {
+            for (const item of parseItems(row.items_json)) {
+                const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
+                const resolved = resolveItem(item);
+                if (resolved && resolved.v) {
+                    const vKey = `${resolved.p.id}:${resolved.v.id}`;
+                    const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
+                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    m.qty_out += qty; m.out_breakdown.delivered += qty;
+                }
+            }
+        }
+        // RTO = stock IN (coming back)
+        for (const row of rtoRows) {
+            for (const item of parseItems(row.items_json)) {
+                const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
+                const resolved = resolveItem(item);
+                if (resolved && resolved.v) {
+                    const vKey = `${resolved.p.id}:${resolved.v.id}`;
+                    const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
+                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    m.qty_in += qty; m.in_breakdown.rto += qty;
+                }
+            }
+        }
+        // Returns = stock IN
+        for (const row of returnRows) {
+            for (const item of parseItems(row.items)) {
+                const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
+                const resolved = resolveItem(item);
+                if (resolved && resolved.v) {
+                    const vKey = `${resolved.p.id}:${resolved.v.id}`;
+                    const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
+                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    m.qty_in += qty; m.in_breakdown.returns += qty;
+                }
+            }
+        }
+        // Exchanges: old_items = IN, new_items = OUT
+        for (const row of exchangeRows) {
+            for (const item of parseItems(row.old_items)) {
+                const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
+                const resolved = resolveItem(item);
+                if (resolved && resolved.v) {
+                    const vKey = `${resolved.p.id}:${resolved.v.id}`;
+                    const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
+                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    m.qty_in += qty; m.in_breakdown.exchange_in += qty;
+                }
+            }
+            for (const item of parseItems(row.new_items)) {
+                const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
+                const resolved = resolveItem(item);
+                if (resolved && resolved.v) {
+                    const vKey = `${resolved.p.id}:${resolved.v.id}`;
+                    const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
+                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    m.qty_out += qty; m.out_breakdown.exchange_out += qty;
+                }
+            }
+        }
+
+        // Convert map to sorted array
+        const result = Array.from(movements.values())
+            .filter(m => m.qty_in > 0 || m.qty_out > 0)
+            .sort((a, b) => (a.product + a.sku).localeCompare(b.product + b.sku));
+
+        const totals = result.reduce((acc, m) => ({ in: acc.in + m.qty_in, out: acc.out + m.qty_out }), { in: 0, out: 0 });
+
+        res.json({
+            success: true,
+            from: fromDate.toISOString().slice(0, 10),
+            to: toDate.toISOString().slice(0, 10),
+            movements: result,
+            totals,
+            sku_count: result.length
+        });
+    } catch (error) {
+        console.error('Inventory movements error:', error);
+        res.status(500).json({ success: false, error: 'Failed to compute inventory movements' });
+    }
+});
+
+// POST /api/admin/inventory/reconcile - Verify inventory matches expected values
+router.post('/inventory/reconcile', verifyToken, async (req, res) => {
+    try {
+        const { expected_items } = req.body;
+        
+        if (!expected_items || !Array.isArray(expected_items)) {
+            return res.status(400).json({ success: false, error: 'expected_items array is required' });
+        }
+
+        const currentInventory = await dbAdapter.query('SELECT * FROM manual_inventory ORDER BY sku_key');
+        const currentMap = new Map(currentInventory.map(i => [i.sku_key, i]));
+        
+        const expectedMap = new Map(expected_items.map(i => [i.sku_key, i]));
+        
+        const matched = [];
+        const mismatched = [];
+        const missing_in_hub = [];
+        const extra_in_hub = [];
+
+        // Check each expected item against current inventory
+        for (const expected of expected_items) {
+            const current = currentMap.get(expected.sku_key);
+            if (!current) {
+                missing_in_hub.push({
+                    sku_key: expected.sku_key,
+                    product_name: expected.product_name,
+                    size: expected.size,
+                    expected_quantity: expected.quantity,
+                    actual_quantity: 0
+                });
+            } else if (current.quantity !== expected.quantity) {
+                mismatched.push({
+                    sku_key: expected.sku_key,
+                    product_name: expected.product_name || current.product_name,
+                    size: expected.size || current.size,
+                    expected_quantity: expected.quantity,
+                    actual_quantity: current.quantity,
+                    difference: expected.quantity - current.quantity
+                });
+            } else {
+                matched.push({
+                    sku_key: expected.sku_key,
+                    product_name: current.product_name,
+                    size: current.size,
+                    quantity: current.quantity
+                });
+            }
+        }
+
+        // Check for items in hub that aren't in expected list
+        for (const [skuKey, current] of currentMap) {
+            if (!expectedMap.has(skuKey)) {
+                extra_in_hub.push({
+                    sku_key: skuKey,
+                    product_name: current.product_name,
+                    size: current.size,
+                    quantity: current.quantity
+                });
+            }
+        }
+
+        const isReconciled = mismatched.length === 0 && missing_in_hub.length === 0;
+
+        res.json({
+            success: true,
+            reconciled: isReconciled,
+            summary: {
+                total_expected: expected_items.length,
+                matched: matched.length,
+                mismatched: mismatched.length,
+                missing_in_hub: missing_in_hub.length,
+                extra_in_hub: extra_in_hub.length
+            },
+            matched,
+            mismatched,
+            missing_in_hub,
+            extra_in_hub,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('Reconciliation error:', error);
+        res.status(500).json({ success: false, error: 'Failed to reconcile inventory' });
+    }
+});
+
 module.exports = router;

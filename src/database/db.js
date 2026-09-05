@@ -246,6 +246,9 @@ async function initializeDatabase() {
     // Initialize AI Copilot Tables (pending actions, chat history, usage log)
     await initializeAiTables();
     
+    // Initialize Manual Inventory Tables (bulk inventory-in tracking)
+    await initializeManualInventoryTables();
+    
     // Initialize Performance Indexes
     await initializePerformanceIndexes();
     
@@ -755,6 +758,53 @@ async function initializeAiTables() {
     console.log('✅ AI copilot tables initialized');
   } catch (error) {
     console.error('❌ Failed to initialize AI copilot tables:', error.message);
+  }
+}
+
+// ── Manual Inventory Tracking Tables ──
+// Tracks manually-managed inventory (bulk inventory-in operations) independent
+// of Shopify. Used for the Shopper Hub bulk inventory-in feature.
+async function initializeManualInventoryTables() {
+  try {
+    // Manual inventory: current stock levels per SKU
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS manual_inventory (
+        id SERIAL PRIMARY KEY,
+        product_name VARCHAR(255) NOT NULL,
+        category VARCHAR(100),
+        size VARCHAR(10) NOT NULL,
+        sku_key VARCHAR(255) UNIQUE NOT NULL,
+        quantity INTEGER DEFAULT 0,
+        reorder_level INTEGER DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_manual_inventory_sku ON manual_inventory(sku_key)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_manual_inventory_product ON manual_inventory(product_name)');
+
+    // Inventory adjustment history: logs every inventory-in/out action
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS inventory_adjustments (
+        id SERIAL PRIMARY KEY,
+        sku_key VARCHAR(255) NOT NULL,
+        product_name VARCHAR(255) NOT NULL,
+        size VARCHAR(10) NOT NULL,
+        adjustment_type VARCHAR(20) NOT NULL,
+        quantity_change INTEGER NOT NULL,
+        quantity_before INTEGER NOT NULL DEFAULT 0,
+        quantity_after INTEGER NOT NULL DEFAULT 0,
+        reference VARCHAR(100),
+        notes TEXT,
+        performed_by VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_inv_adjustments_sku ON inventory_adjustments(sku_key, created_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_inv_adjustments_type ON inventory_adjustments(adjustment_type, created_at DESC)');
+
+    console.log('✅ Manual inventory tables initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize manual inventory tables:', error.message);
   }
 }
 

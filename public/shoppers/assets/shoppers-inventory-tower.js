@@ -93,6 +93,8 @@
         skus: [],            // flat SKU records
         agg: null,           // portfolio aggregates
         sample: null,        // { pos, prod, rawMaterials, suppliers, campaigns }
+        movements: null,     // date-wise movement data
+        movementsLoading: false,
         tab: 'home',
         windowDays: 90,
         loading: false,
@@ -101,7 +103,7 @@
             rep: 'buy',
             repFilter: 'BUY NOW',
             poFilter: 'All',
-            master: { q: '', product: 'All', status: 'All', abc: 'All', page: 0, expanded: null },
+            master: { q: '', product: 'All', status: 'All', abc: 'All', page: 0, expanded: null, dateFrom: '', dateTo: '', showMovements: false },
             forecast: { productId: '__all', horizon: 30, scenario: 'Base' },
             size: { productId: null },
             feQty: 1000,
@@ -754,6 +756,104 @@
     }
 
     /* ============================ TAB 3 — MASTER INVENTORY ============================ */
+    async function loadMovements() {
+        const m = ICT.ui.master;
+        if (!m.dateFrom) { ICT.movements = null; renderCurrentTab(); return; }
+        ICT.movementsLoading = true;
+        renderCurrentTab();
+        try {
+            if (typeof apiCall !== 'function') throw new Error('Hub API client unavailable');
+            const params = `from=${m.dateFrom}${m.dateTo ? '&to=' + m.dateTo : ''}`;
+            const data = await apiCall(`/inventory/movements?${params}`);
+            if (!data || data.success === false) throw new Error((data && data.error) || 'Failed to load movements');
+            ICT.movements = data;
+        } catch (err) {
+            console.error('Movement load error:', err);
+            ICT.movements = { error: err.message || 'Failed to load', movements: [], totals: { in: 0, out: 0 }, sku_count: 0 };
+        } finally {
+            ICT.movementsLoading = false;
+            renderCurrentTab();
+        }
+    }
+
+    function movementsSection() {
+        const m = ICT.ui.master;
+        const today = new Date().toISOString().slice(0, 10);
+        const loading = ICT.movementsLoading;
+        const data = ICT.movements;
+
+        let bodyHtml = '';
+        if (!m.dateFrom) {
+            bodyHtml = `<div class="ict-empty">Select a date to view inventory movements.</div>`;
+        } else if (loading) {
+            bodyHtml = `<div class="inv-loading"><div class="inv-spinner"></div><span>Loading movements...</span></div>`;
+        } else if (data && data.error) {
+            bodyHtml = `<div class="ict-error">${esc(data.error)}</div>`;
+        } else if (data && data.movements && data.movements.length === 0) {
+            bodyHtml = `<div class="ict-empty">No inventory movements recorded for ${esc(m.dateFrom)}${m.dateTo && m.dateTo !== m.dateFrom ? ' — ' + esc(m.dateTo) : ''}.</div>`;
+        } else if (data && data.movements) {
+            const dateLabel = m.dateTo && m.dateTo !== m.dateFrom ? `${esc(m.dateFrom)} → ${esc(m.dateTo)}` : esc(m.dateFrom);
+            const mvRows = data.movements.map((mv) => {
+                const inParts = [];
+                if (mv.in_breakdown.rto) inParts.push(`${num(mv.in_breakdown.rto)} RTO`);
+                if (mv.in_breakdown.returns) inParts.push(`${num(mv.in_breakdown.returns)} returns`);
+                if (mv.in_breakdown.exchange_in) inParts.push(`${num(mv.in_breakdown.exchange_in)} exch`);
+                if (mv.in_breakdown.manual_in) inParts.push(`${num(mv.in_breakdown.manual_in)} manual`);
+                const outParts = [];
+                if (mv.out_breakdown.delivered) outParts.push(`${num(mv.out_breakdown.delivered)} sold`);
+                if (mv.out_breakdown.exchange_out) outParts.push(`${num(mv.out_breakdown.exchange_out)} exch`);
+                if (mv.out_breakdown.manual_out) outParts.push(`${num(mv.out_breakdown.manual_out)} manual`);
+                return `<tr>
+                    <td class="ict-mono ict-muted">${esc(mv.sku || '–')}</td>
+                    <td>${esc(mv.product)}${mv.color ? ' <span class="ict-dim">· ${esc(mv.color)}</span>' : ''}${mv.size ? ' <span class="ict-dim">· ${esc(mv.size)}</span>' : ''}</td>
+                    <td class="ict-num ict-healthy-text" style="font-weight:600">${num(mv.qty_in)}</td>
+                    <td class="ict-num ict-muted" style="font-size:0.8em">${inParts.join(' · ') || '–'}</td>
+                    <td class="ict-num ict-critical-text" style="font-weight:600">${num(mv.qty_out)}</td>
+                    <td class="ict-num ict-muted" style="font-size:0.8em">${outParts.join(' · ') || '–'}</td>
+                    <td class="ict-num" style="font-weight:600">${mv.qty_in - mv.qty_out > 0 ? '+' : ''}${num(mv.qty_in - mv.qty_out)}</td>
+                </tr>`;
+            }).join('');
+
+            bodyHtml = `
+                <div class="ict-mini-stats">
+                    ${statCard('Total IN', num(data.totals.in), `${data.sku_count} SKUs with movement`, 'healthy')}
+                    ${statCard('Total OUT', num(data.totals.out), `${data.sku_count} SKUs`, 'critical')}
+                    ${statCard('Net movement', `${data.totals.in - data.totals.out > 0 ? '+' : ''}${num(data.totals.in - data.totals.out)}`, `for ${dateLabel}`, data.totals.in - data.totals.out >= 0 ? 'healthy' : 'critical')}
+                </div>
+                <div class="ict-table-wrap"><table class="ict-table">
+                    <thead><tr>
+                        ${plainTh('SKU')}${plainTh('Product')}
+                        <th class="ict-th-right">Qty IN</th>${plainTh('IN breakdown')}
+                        <th class="ict-th-right">Qty OUT</th>${plainTh('OUT breakdown')}
+                        ${plainTh('Net', 'right')}
+                    </tr></thead>
+                    <tbody>${mvRows}</tbody>
+                </table></div>
+                <div class="ict-foot-note">IN = RTO + customer returns + exchange replacements + manual stock-in · OUT = delivered orders + exchange outgoing + manual stock-out</div>`;
+        }
+
+        return `
+            <div class="ict-card" style="margin-top:16px">
+                <div style="padding:16px 20px 0">
+                    <h3 style="margin:0 0 4px;font-size:1rem;font-weight:600;color:var(--ict-text)">SKU-wise Inventory Movements</h3>
+                    <p style="margin:0 0 12px;font-size:0.82rem;color:var(--ict-text-muted)">View stock IN and OUT for each SKU on a specific date or date range.</p>
+                    <div class="ict-toolbar" style="padding:0 0 12px">
+                        <label style="font-size:0.82rem;color:var(--ict-text-muted);display:flex;align-items:center;gap:6px">
+                            From
+                            <input type="date" class="ict-input" style="width:auto" data-ict-input="mv-from" value="${esc(m.dateFrom)}" max="${today}">
+                        </label>
+                        <label style="font-size:0.82rem;color:var(--ict-text-muted);display:flex;align-items:center;gap:6px">
+                            To
+                            <input type="date" class="ict-input" style="width:auto" data-ict-input="mv-to" value="${esc(m.dateTo || '')}" min="${esc(m.dateFrom || '')}" max="${today}">
+                        </label>
+                        <button class="ict-chip ${m.dateFrom ? 'active' : ''}" data-ict="load-movements" style="margin-left:4px">Load movements</button>
+                        ${m.dateFrom ? `<button class="ict-chip" data-ict="clear-movements" style="margin-left:2px">Clear</button>` : ''}
+                    </div>
+                </div>
+                ${bodyHtml}
+            </div>`;
+    }
+
     function renderMaster() {
         const { skus } = ICT;
         const m = ICT.ui.master;
@@ -848,7 +948,8 @@
                 </table></div>
                 ${paginationHtml('master', page, filtered.length, pageSize)}
             </div>
-            ${untrackedHtml}`;
+            ${untrackedHtml}
+            ${movementsSection()}`;
     }
 
 
@@ -1343,6 +1444,7 @@
         home: renderCommandCenter,
         attention: renderNeedsAttention,
         master: renderMaster,
+        stockroom: function() { return '<div id="srMain"><div class="sr-loading"><div class="inv-spinner"></div><span>Loading stock room...</span></div></div>'; },
         buy: renderBuy,
         forecast: renderForecast,
         ageing: renderAgeing,
@@ -1352,12 +1454,24 @@
     function renderCurrentTab() {
         const main = document.getElementById('ictMain');
         if (!main) return;
-        if (!ICT.data) return;
+        // Stock Room tab doesn't require ICT.data
+        if (!ICT.data && ICT.tab !== 'stockroom') return;
         const renderer = TAB_RENDERERS[ICT.tab];
         main.innerHTML = renderer ? renderer() : '';
         document.querySelectorAll('#ictTabs .ict-tab').forEach((b) =>
             b.classList.toggle('active', b.dataset.tab === ICT.tab));
-        renderStatusLine();
+        // Activate/deactivate Stock Room module
+        if (ICT.tab === 'stockroom') {
+            if (window.StockRoom) window.StockRoom.activate();
+            // Hide status line/footer for stock room
+            const sl = document.getElementById('ictStatusLine');
+            const ft = document.getElementById('ictFooter');
+            if (sl) sl.textContent = '';
+            if (ft) ft.innerHTML = '';
+        } else {
+            if (window.StockRoom) window.StockRoom.deactivate();
+            renderStatusLine();
+        }
     }
 
     function renderStatusLine() {
@@ -1473,6 +1587,10 @@
             const state = ICT.ui.master;
             state.page = Math.max(0, state.page + (parseInt(el.dataset.dir, 10) || 0));
             renderCurrentTab();
+        } else if (action === 'load-movements') {
+            loadMovements();
+        } else if (action === 'clear-movements') {
+            ICT.ui.master.dateFrom = ''; ICT.ui.master.dateTo = ''; ICT.movements = null; renderCurrentTab();
         }
     });
 
@@ -1491,6 +1609,8 @@
         if (key === 'master-product') { ICT.ui.master.product = el.value; ICT.ui.master.page = 0; }
         else if (key === 'master-status') { ICT.ui.master.status = el.value; ICT.ui.master.page = 0; }
         else if (key === 'master-abc') { ICT.ui.master.abc = el.value; ICT.ui.master.page = 0; }
+        else if (key === 'mv-from') { ICT.ui.master.dateFrom = el.value; ICT.ui.master.page = 0; }
+        else if (key === 'mv-to') { ICT.ui.master.dateTo = el.value; }
         else if (key === 'forecast-product') { ICT.ui.forecast.productId = el.value; }
         else if (key === 'size-product') { ICT.ui.size.productId = el.value; }
         else return;
