@@ -187,6 +187,7 @@
         const inventoryValue = sum((s) => s.currentStock * s.landedCost);
         const sellableValue = sum((s) => Math.max(0, s.finalAvailable) * s.landedCost);
         const reservedUnits = sum((s) => s.reserved);
+        const inTransitUnits = sum((s) => s.inTransit);
         const rtoUnits = sum((s) => s.rtoIncoming);
         const returnUnits = sum((s) => s.returnIncoming);
         const exchangeInUnits = sum((s) => s.exchangeIncoming);
@@ -243,7 +244,7 @@
         const rtoRateAgg = shippedUnits > 0 ? rtoUnits / shippedUnits * 100 : 0;
 
         return {
-            totalUnits, inventoryValue, sellableValue, reservedUnits, rtoUnits, returnUnits,
+            totalUnits, inventoryValue, sellableValue, reservedUnits, inTransitUnits, rtoUnits, returnUnits,
             exchangeInUnits, exchangeOutUnits, sales30Total, sales7Total, annualRevenue,
             daysOfInventory, turnover, weeksOfSupply, sellThroughAgg, stockoutRate, stockoutSkuCount,
             deadStockValue, deadStockPct, ageingPct, ageingValue90plus, overstockValue, overstockSkus,
@@ -521,9 +522,10 @@
             statCard('Inventory value', fmtInr(agg.inventoryValue), AT_PRICE_NOTE, 'brand'),
             statCard('Final sellable stock', num(ICT.data.summary.final_available_units), 'on hand + pipeline inbound − exchange outbound', 'healthy'),
             statCard('In circulation', num(agg.reservedUnits), 'shipped, not yet delivered', 'info'),
-            statCard('RTO incoming', num(agg.rtoUnits), 'returning to warehouse', counts.stockout_risk > 0 ? 'attention' : 'neutral'),
-            statCard('Returns incoming', num(agg.returnUnits), 'open customer returns', 'info'),
-            statCard('Exchange pipeline', `${num(agg.exchangeInUnits)} / ${num(agg.exchangeOutUnits)}`, 'inbound / outbound units', 'neutral'),
+            statCard('In transit', num(inTransitUnits), 'shipped to customers, en route', 'info'),
+            statCard('RTO incoming', num(rtoUnits), 'returning to warehouse', counts.stockout_risk > 0 ? 'attention' : 'neutral'),
+            statCard('Returns incoming', num(returnUnits), 'open customer returns', 'info'),
+            statCard('Exchange pipeline', `${num(exchangeInUnits)} / ${num(exchangeOutUnits)}`, 'inbound / outbound units', 'neutral'),
             statCard('Low stock variants', num(ICT.data.summary.low_stock_variants), '≤ 3 units on hand', ICT.data.summary.low_stock_variants > 0 ? 'critical' : 'healthy'),
         ].join('');
 
@@ -568,11 +570,11 @@
 
         const stages = [
             { name: 'On hand (sellable)', units: ICT.data.summary.on_hand_units, cls: 'bar-brand' },
-            { name: 'In circulation', units: agg.reservedUnits, cls: 'bar-info' },
-            { name: 'RTO incoming', units: agg.rtoUnits, cls: 'bar-attention' },
-            { name: 'Returns incoming', units: agg.returnUnits, cls: 'bar-info' },
-            { name: 'Exchange incoming', units: agg.exchangeInUnits, cls: 'bar-info' },
-            { name: 'Exchange outgoing (reserved)', units: agg.exchangeOutUnits, cls: 'bar-critical' },
+            { name: 'In transit', units: inTransitUnits, cls: 'bar-info' },
+            { name: 'RTO incoming', units: rtoUnits, cls: 'bar-attention' },
+            { name: 'Returns incoming', units: returnUnits, cls: 'bar-info' },
+            { name: 'Exchange incoming', units: exchangeInUnits, cls: 'bar-info' },
+            { name: 'Exchange outgoing (reserved)', units: exchangeOutUnits, cls: 'bar-critical' },
         ];
         const maxStage = Math.max(1, ...stages.map((s) => s.units));
         const byStage = stages.map((s) => `

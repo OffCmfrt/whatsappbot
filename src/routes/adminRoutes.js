@@ -6166,8 +6166,8 @@ router.get('/inventory', verifyToken, async (req, res) => {
 
                 // ----- cover, classification, replenishment -----
                 const daysOfCover = velocity > 0.05 ? +(finalAvailable / velocity).toFixed(1) : 999;
-                const incomingQty = s.rto_incoming + s.return_incoming + s.exchange_incoming;
-                const incomingEtaDays = incomingQty > 0 ? 7 : null; // returns pipeline has no ETA — assume ~1 week
+                const incomingQty = s.in_circulation + s.rto_incoming + s.return_incoming + s.exchange_incoming;
+                const incomingEtaDays = incomingQty > 0 ? (s.in_circulation > 0 ? 3 : 7) : null; // in-transit ~3d, returns pipeline ~7d
                 const incomingArrivesInTime = incomingQty > 0 && incomingEtaDays <= daysOfCover + 3;
                 const isDead = lastSaleDaysAgo > DEAD_SALE_DAYS && onHand > 0;
                 const isOverstock = daysOfCover > OVERSTOCK_COVER_DAYS && velocity > SLOW_VELOCITY;
