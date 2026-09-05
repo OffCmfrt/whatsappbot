@@ -103,7 +103,7 @@
             rep: 'buy',
             repFilter: 'BUY NOW',
             poFilter: 'All',
-            master: { q: '', product: 'All', status: 'All', abc: 'All', page: 0, expanded: null, dateFrom: '', dateTo: '', showMovements: false },
+            master: { q: '', product: 'All', status: 'All', abc: 'All', page: 0, expanded: null, dateFrom: '', dateTo: '', datePreset: '', showMovements: false },
             forecast: { productId: '__all', horizon: 30, scenario: 'Base' },
             size: { productId: null },
             feQty: 1000,
@@ -778,19 +778,60 @@
 
     function movementsSection() {
         const m = ICT.ui.master;
-        const today = new Date().toISOString().slice(0, 10);
+        const today = new Date();
+        const todayStr = today.toISOString().slice(0, 10);
         const loading = ICT.movementsLoading;
         const data = ICT.movements;
+        const activePreset = m.datePreset || 'custom';
+
+        // Date preset definitions
+        const fmtIso = (d) => d.toISOString().slice(0, 10);
+        const presets = {
+            today: { label: 'Today', from: todayStr, to: todayStr },
+            yesterday: { label: 'Yesterday', from: fmtIso(new Date(today.getTime() - 86400000)), to: fmtIso(new Date(today.getTime() - 86400000)) },
+            last7: { label: 'Last 7 days', from: fmtIso(new Date(today.getTime() - 6 * 86400000)), to: todayStr },
+            last30: { label: 'Last 30 days', from: fmtIso(new Date(today.getTime() - 29 * 86400000)), to: todayStr },
+            thisMonth: { label: 'This month', from: fmtIso(new Date(today.getFullYear(), today.getMonth(), 1)), to: todayStr },
+            lastMonth: { label: 'Last month', from: fmtIso(new Date(today.getFullYear(), today.getMonth() - 1, 1)), to: fmtIso(new Date(today.getFullYear(), today.getMonth(), 0)) },
+            custom: { label: 'Custom', from: m.dateFrom, to: m.dateTo },
+        };
+
+        // Calendar icon SVG
+        const calIcon = `<svg class="mv-cal-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 2v2M10.5 2v2"/></svg>`;
+
+        // Preset chips HTML
+        const presetChips = Object.entries(presets).filter(([k]) => k !== 'custom').map(([key, p]) => {
+            const isActive = activePreset === key && m.dateFrom === p.from && m.dateTo === p.to;
+            return `<button class="mv-preset-chip ${isActive ? 'active' : ''}" data-mv-preset="${key}">${p.label}</button>`;
+        }).join('');
+
+        // Selected range display
+        let rangeDisplay = '';
+        if (m.dateFrom) {
+            const fromD = new Date(m.dateFrom + 'T00:00:00');
+            const toD = m.dateTo ? new Date(m.dateTo + 'T00:00:00') : fromD;
+            const fmtPretty = (d) => d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+            const days = Math.round((toD - fromD) / 86400000) + 1;
+            rangeDisplay = `<div class="mv-range-display">
+                <span class="mv-range-icon">${calIcon}</span>
+                <span class="mv-range-text">${fmtPretty(fromD)}${m.dateTo && m.dateTo !== m.dateFrom ? ` → ${fmtPretty(toD)}` : ''}</span>
+                <span class="mv-range-days">${days} day${days > 1 ? 's' : ''}</span>
+            </div>`;
+        }
 
         let bodyHtml = '';
         if (!m.dateFrom) {
-            bodyHtml = `<div class="ict-empty">Select a date to view inventory movements.</div>`;
+            bodyHtml = `<div class="mv-empty-state">
+                <div class="mv-empty-icon">${calIcon}</div>
+                <div class="mv-empty-title">Select a date range to view movements</div>
+                <div class="mv-empty-sub">Choose a quick preset above or pick a custom range below</div>
+            </div>`;
         } else if (loading) {
             bodyHtml = `<div class="inv-loading"><div class="inv-spinner"></div><span>Loading movements...</span></div>`;
         } else if (data && data.error) {
             bodyHtml = `<div class="ict-error">${esc(data.error)}</div>`;
         } else if (data && data.movements && data.movements.length === 0) {
-            bodyHtml = `<div class="ict-empty">No inventory movements recorded for ${esc(m.dateFrom)}${m.dateTo && m.dateTo !== m.dateFrom ? ' — ' + esc(m.dateTo) : ''}.</div>`;
+            bodyHtml = `<div class="ict-empty">No inventory movements recorded for this period.</div>`;
         } else if (data && data.movements) {
             const dateLabel = m.dateTo && m.dateTo !== m.dateFrom ? `${esc(m.dateFrom)} → ${esc(m.dateTo)}` : esc(m.dateFrom);
             const mvRows = data.movements.map((mv) => {
@@ -833,25 +874,35 @@
         }
 
         return `
-            <div class="ict-card" style="margin-top:16px">
-                <div style="padding:16px 20px 0">
-                    <h3 style="margin:0 0 4px;font-size:1rem;font-weight:600;color:var(--ict-text)">SKU-wise Inventory Movements</h3>
-                    <p style="margin:0 0 12px;font-size:0.82rem;color:var(--ict-text-muted)">View stock IN and OUT for each SKU on a specific date or date range.</p>
-                    <div class="ict-toolbar" style="padding:0 0 12px">
-                        <label style="font-size:0.82rem;color:var(--ict-text-muted);display:flex;align-items:center;gap:6px">
-                            From
-                            <input type="date" class="ict-input" style="width:auto" data-ict-input="mv-from" value="${esc(m.dateFrom)}" max="${today}">
-                        </label>
-                        <label style="font-size:0.82rem;color:var(--ict-text-muted);display:flex;align-items:center;gap:6px">
-                            To
-                            <input type="date" class="ict-input" style="width:auto" data-ict-input="mv-to" value="${esc(m.dateTo || '')}" min="${esc(m.dateFrom || '')}" max="${today}">
-                        </label>
-                        <button class="ict-chip ${m.dateFrom ? 'active' : ''}" data-ict="load-movements" style="margin-left:4px">Load movements</button>
-                        ${m.dateFrom ? `<button class="ict-chip" data-ict="clear-movements" style="margin-left:2px">Clear</button>` : ''}
-                        ${data && data.movements && data.movements.length > 0 ? `<button class="ict-chip" data-ict="export-movements" style="margin-left:4px;background:#fff;color:#000;font-weight:600">↓ Export CSV</button>` : ''}
+            <div class="mv-movements-card">
+                <div class="mv-header">
+                    <div class="mv-header-text">
+                        <h3>SKU-wise Inventory Movements</h3>
+                        <p>Track stock IN and OUT for each SKU across any date range</p>
+                    </div>
+                    ${rangeDisplay}
+                </div>
+                <div class="mv-picker-panel">
+                    <div class="mv-presets-row">
+                        <span class="mv-presets-label">Quick select</span>
+                        <div class="mv-presets">${presetChips}</div>
+                    </div>
+                    <div class="mv-custom-row">
+                        <div class="mv-date-field">
+                            <label>From</label>
+                            <div class="mv-date-input-wrap">${calIcon}<input type="date" class="mv-date-input" data-ict-input="mv-from" value="${esc(m.dateFrom)}" max="${todayStr}"></div>
+                        </div>
+                        <div class="mv-date-sep">→</div>
+                        <div class="mv-date-field">
+                            <label>To</label>
+                            <div class="mv-date-input-wrap">${calIcon}<input type="date" class="mv-date-input" data-ict-input="mv-to" value="${esc(m.dateTo || '')}" min="${esc(m.dateFrom || '')}" max="${todayStr}"></div>
+                        </div>
+                        <button class="mv-load-btn" data-ict="load-movements" ${!m.dateFrom ? 'disabled' : ''}>Load movements</button>
+                        ${m.dateFrom ? `<button class="mv-clear-btn" data-ict="clear-movements">Clear</button>` : ''}
+                        ${data && data.movements && data.movements.length > 0 ? `<button class="mv-export-btn" data-ict="export-movements">↓ Export CSV</button>` : ''}
                     </div>
                 </div>
-                ${bodyHtml}
+                <div class="mv-body">${bodyHtml}</div>
             </div>`;
     }
 
@@ -1592,6 +1643,33 @@
         const tab = e.target.closest('#ictTabs .ict-tab');
         if (tab) { ICT.tab = tab.dataset.tab; renderCurrentTab(); return; }
 
+        // Date preset chip clicks
+        const presetChip = e.target.closest('[data-mv-preset]');
+        if (presetChip) {
+            const key = presetChip.dataset.mvPreset;
+            const today = new Date();
+            const fmtIso = (d) => d.toISOString().slice(0, 10);
+            const todayStr = fmtIso(today);
+            const presetMap = {
+                today: { from: todayStr, to: todayStr },
+                yesterday: { from: fmtIso(new Date(today.getTime() - 86400000)), to: fmtIso(new Date(today.getTime() - 86400000)) },
+                last7: { from: fmtIso(new Date(today.getTime() - 6 * 86400000)), to: todayStr },
+                last30: { from: fmtIso(new Date(today.getTime() - 29 * 86400000)), to: todayStr },
+                thisMonth: { from: fmtIso(new Date(today.getFullYear(), today.getMonth(), 1)), to: todayStr },
+                lastMonth: { from: fmtIso(new Date(today.getFullYear(), today.getMonth() - 1, 1)), to: fmtIso(new Date(today.getFullYear(), today.getMonth(), 0)) },
+            };
+            const p = presetMap[key];
+            if (p) {
+                ICT.ui.master.dateFrom = p.from;
+                ICT.ui.master.dateTo = p.to;
+                ICT.ui.master.datePreset = key;
+                renderCurrentTab();
+                // Auto-load after a short delay for better UX
+                setTimeout(() => loadMovements(), 150);
+            }
+            return;
+        }
+
         const view = document.getElementById('inventoryView');
         if (!view || view.style.display === 'none') return;
 
@@ -1627,7 +1705,7 @@
         } else if (action === 'load-movements') {
             loadMovements();
         } else if (action === 'clear-movements') {
-            ICT.ui.master.dateFrom = ''; ICT.ui.master.dateTo = ''; ICT.movements = null; renderCurrentTab();
+            ICT.ui.master.dateFrom = ''; ICT.ui.master.dateTo = ''; ICT.ui.master.datePreset = ''; ICT.movements = null; renderCurrentTab();
         } else if (action === 'export-movements') {
             exportMovementsCsv();
         }
@@ -1648,8 +1726,8 @@
         if (key === 'master-product') { ICT.ui.master.product = el.value; ICT.ui.master.page = 0; }
         else if (key === 'master-status') { ICT.ui.master.status = el.value; ICT.ui.master.page = 0; }
         else if (key === 'master-abc') { ICT.ui.master.abc = el.value; ICT.ui.master.page = 0; }
-        else if (key === 'mv-from') { ICT.ui.master.dateFrom = el.value; ICT.ui.master.page = 0; }
-        else if (key === 'mv-to') { ICT.ui.master.dateTo = el.value; }
+        else if (key === 'mv-from') { ICT.ui.master.dateFrom = el.value; ICT.ui.master.datePreset = 'custom'; ICT.ui.master.page = 0; }
+        else if (key === 'mv-to') { ICT.ui.master.dateTo = el.value; ICT.ui.master.datePreset = 'custom'; }
         else if (key === 'forecast-product') { ICT.ui.forecast.productId = el.value; }
         else if (key === 'size-product') { ICT.ui.size.productId = el.value; }
         else return;
