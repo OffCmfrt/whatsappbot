@@ -287,6 +287,24 @@ class ShopifyService {
         }
     }
 
+    // Shared axios instance for connection pooling — reuses TLS socket across
+    // pagination + inventory-level batches instead of opening a new handshake per request.
+    _shopifyAxios(baseUrl) {
+        if (!this._axiosInstance || this._axiosBase !== baseUrl) {
+            this._axiosInstance = axios.create({
+                baseURL: baseUrl,
+                headers: {
+                    'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 20000,
+                httpAgent: new (require('http').Agent)({ keepAlive: true, maxSockets: 4, freeSocketTimeout: 30000 })
+            });
+            this._axiosBase = baseUrl;
+        }
+        return this._axiosInstance;
+    }
+
     // Fetch the full active product catalog (variants, price, stock) for the admin product picker.
     // Paginated via Link headers and cached in-memory for 10 minutes.
     // Uses Shopify InventoryLevel API for accurate stock (inventory_quantity in the
@@ -301,24 +319,21 @@ class ShopifyService {
         const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
 
         if (!shopUrl || !accessToken) {
-            console.error(' Shopify credentials not configured');
+            console.error('⚠️ Shopify credentials not configured');
             return this._catalogCache || [];
         }
 
         const cleanShopUrl = shopUrl.replace('.myshopify.com', '');
-        const headers = {
-            'X-Shopify-Access-Token': accessToken,
-            'Content-Type': 'application/json'
-        };
         const baseUrl = `https://${cleanShopUrl}.myshopify.com/admin/api/2024-01`;
+        const http = this._shopifyAxios(baseUrl);
 
         try {
             // 1) Fetch products with variants (includes inventory_item_id per variant)
-            const rawProducts = [];
+            let rawProducts = [];
             let apiUrl = `${baseUrl}/products.json?limit=250&status=active&fields=id,title,handle,image,created_at,variants`;
 
             while (apiUrl && rawProducts.length < 2000) {
-                const response = await axios.get(apiUrl, { headers, timeout: 20000 });
+                const response = await http.get(apiUrl);
                 rawProducts.push(...(response.data?.products || []));
                 const linkHeader = response.headers?.link || '';
                 const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
@@ -327,12 +342,10 @@ class ShopifyService {
 
             // 2) Collect all inventory_item_ids from variants
             const allInventoryItemIds = [];
-            const variantInventoryMap = new Map(); // variantId -> inventory_item_id
             for (const p of rawProducts) {
                 for (const v of (p.variants || [])) {
                     if (v.inventory_item_id) {
                         allInventoryItemIds.push(v.inventory_item_id);
-                        variantInventoryMap.set(v.id, v.inventory_item_id);
                     }
                 }
             }
@@ -342,16 +355,11 @@ class ShopifyService {
             const stockByInventoryItemId = new Map();
             if (allInventoryItemIds.length > 0) {
                 // Shopify allows up to 100 IDs per request
-                const batches = [];
                 for (let i = 0; i < allInventoryItemIds.length; i += 100) {
-                    batches.push(allInventoryItemIds.slice(i, i + 100));
-                }
-                for (const batch of batches) {
+                    const batch = allInventoryItemIds.slice(i, i + 100);
                     try {
-                        const ilRes = await axios.get(`${baseUrl}/inventory_levels.json`, {
-                            headers,
-                            params: { inventory_item_ids: batch.join(',') },
-                            timeout: 20000
+                        const ilRes = await http.get('/inventory_levels.json', {
+                            params: { inventory_item_ids: batch.join(',') }
                         });
                         for (const level of (ilRes.data?.inventory_levels || [])) {
                             const iid = level.inventory_item_id;
@@ -359,13 +367,15 @@ class ShopifyService {
                             stockByInventoryItemId.set(iid, (stockByInventoryItemId.get(iid) || 0) + qty);
                         }
                     } catch (err) {
-                        console.warn(`️ InventoryLevel API batch failed: ${err.message}`);
+                        console.warn(`⚠️ InventoryLevel API batch failed: ${err.message}`);
                     }
                 }
             }
 
-            // 4) Build catalog with real stock from InventoryLevel API,
+            // 4) Build lean catalog with real stock from InventoryLevel API,
             //    falling back to inventory_quantity if InventoryLevel returned nothing
+            const invLevelCount = stockByInventoryItemId.size;
+            allInventoryItemIds.length = 0; // free ID list — no longer needed
             const catalog = rawProducts.map(p => ({
                 id: p.id,
                 title: p.title,
@@ -389,12 +399,20 @@ class ShopifyService {
                 })
             }));
 
+            // Free heavy intermediates
+            rawProducts = null;
+            stockByInventoryItemId.clear();
+
             this._catalogCache = catalog;
             this._catalogCacheAt = Date.now();
-            console.log(`✅ Shopify product catalog loaded: ${catalog.length} products, ${allInventoryItemIds.length} variants, ${stockByInventoryItemId.size} with InventoryLevel data`);
+
+            const totalVariants = catalog.reduce((s, p) => s + p.variants.length, 0);
+            const zeroStock = catalog.reduce((s, p) => s + p.variants.filter(v => v.inventory === 0).length, 0);
+            const memMB = (process.memoryUsage().heapUsed / 1048576).toFixed(1);
+            console.log(`✅ Shopify catalog loaded: ${catalog.length} products, ${totalVariants} variants, ${invLevelCount} with InventoryLevel data, ${zeroStock} zero-stock | heap: ${memMB}MB`);
             return catalog;
         } catch (error) {
-            console.error(' Error fetching Shopify product catalog:', error.message);
+            console.error('❌ Error fetching Shopify product catalog:', error.message);
             // Serve stale cache rather than failing the picker outright
             return this._catalogCache || [];
         }

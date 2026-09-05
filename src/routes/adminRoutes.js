@@ -5837,6 +5837,25 @@ router.get('/inventory', verifyToken, async (req, res) => {
         const { extractItemSize } = require('../utils/orderItems');
 
         const catalog = await shopifyService.getProductCatalog(force);
+        const debugMode = req.query.debug === '1';
+
+        // Debug: return raw catalog sample to verify InventoryLevel API data is flowing
+        if (debugMode && catalog.length > 0) {
+            const sample = catalog.slice(0, 5).map(p => ({
+                id: p.id, title: p.title,
+                variants: (p.variants || []).map(v => ({
+                    id: v.id, title: v.title, sku: v.sku,
+                    inventory: v.inventory, available: v.available
+                }))
+            }));
+            const totalVariants = catalog.reduce((s, p) => s + (p.variants?.length || 0), 0);
+            const variantsWithStock = catalog.reduce((s, p) => s + (p.variants || []).filter(v => v.inventory > 0).length, 0);
+            return res.json({
+                debug: true,
+                catalog_size: { products: catalog.length, variants: totalVariants, with_stock: variantsWithStock },
+                sample_products: sample
+            });
+        }
 
         const windowSql = windowDays > 0 ? `AND created_at >= NOW() - INTERVAL '${windowDays} days'` : '';
 
@@ -6344,6 +6363,16 @@ router.get('/inventory', verifyToken, async (req, res) => {
         const untrackedList = [...untracked.values()].filter(u => BUCKETS.some(b => u[b] > 0))
             .sort((a, b) => a.title.localeCompare(b.title));
 
+        // Diagnostic: verify catalog stock coverage (confirms InventoryLevel API is working)
+        let catalogWithStock = 0, catalogTotal = 0, catalogZeroVariants = 0;
+        for (const p of activeCatalog) {
+            catalogTotal++;
+            const hasAnyStock = (p.variants || []).some(v => typeof v.inventory === 'number' && v.inventory > 0);
+            const allZero = (p.variants || []).every(v => typeof v.inventory === 'number' && v.inventory === 0);
+            if (hasAnyStock) catalogWithStock++;
+            if (allZero && p.variants?.length) catalogZeroVariants++;
+        }
+
         const response = {
             success: true,
             window_days: windowDays,
@@ -6351,6 +6380,12 @@ router.get('/inventory', verifyToken, async (req, res) => {
             summary,
             products,
             untracked: untrackedList,
+            catalog_diagnostics: {
+                total_products: catalogTotal,
+                products_with_stock: catalogWithStock,
+                products_all_zero: catalogZeroVariants,
+                stock_coverage_pct: catalogTotal > 0 ? Math.round(catalogWithStock / catalogTotal * 100) : 0
+            },
             returns_server: {
                 connected: rsPipeline.connected,
                 reason: rsPipeline.connected ? null : (rsPipeline.reason || null),
