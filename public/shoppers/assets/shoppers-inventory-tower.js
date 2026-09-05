@@ -521,8 +521,7 @@
             statCard('Total inventory units', num(agg.totalUnits), 'On hand across catalog', 'brand'),
             statCard('Inventory value', fmtInr(agg.inventoryValue), AT_PRICE_NOTE, 'brand'),
             statCard('Final sellable stock', num(ICT.data.summary.final_available_units), 'on hand + pipeline inbound − exchange outbound', 'healthy'),
-            statCard('In circulation', num(agg.reservedUnits), 'shipped, not yet delivered', 'info'),
-            statCard('In transit', num(agg.inTransitUnits), 'shipped to customers, en route', 'info'),
+            statCard('In circulation', num(agg.reservedUnits), 'shipped to customers, en route', 'info'),
             statCard('RTO incoming', num(agg.rtoUnits), 'returning to warehouse', counts.stockout_risk > 0 ? 'attention' : 'neutral'),
             statCard('Returns incoming', num(agg.returnUnits), 'open customer returns', 'info'),
             statCard('Exchange pipeline', `${num(agg.exchangeInUnits)} / ${num(agg.exchangeOutUnits)}`, 'inbound / outbound units', 'neutral'),
@@ -570,7 +569,7 @@
 
         const stages = [
             { name: 'On hand (sellable)', units: ICT.data.summary.on_hand_units, cls: 'bar-brand' },
-            { name: 'In transit', units: agg.inTransitUnits, cls: 'bar-info' },
+            { name: 'In circulation', units: agg.inTransitUnits, cls: 'bar-info' },
             { name: 'RTO incoming', units: agg.rtoUnits, cls: 'bar-attention' },
             { name: 'Returns incoming', units: agg.returnUnits, cls: 'bar-info' },
             { name: 'Exchange incoming', units: agg.exchangeInUnits, cls: 'bar-info' },
