@@ -38,12 +38,12 @@
     };
 
     /* ── API ── */
-    const getToken = () => localStorage.getItem('hubToken') || '';
+    const getToken = () => localStorage.getItem('authToken') || '';
     const authHeaders = () => ({ 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' });
 
     async function apiFetch(url, opts = {}) {
         const res = await fetch(url, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
-        if (res.status === 401) { localStorage.removeItem('hubToken'); window.location.reload(); throw new Error('Session expired'); }
+        if (res.status === 401) { localStorage.removeItem('authToken'); localStorage.removeItem('hubIdentity'); window.location.reload(); throw new Error('Session expired'); }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
     }
