@@ -23,12 +23,12 @@ const { getPortalIdForNewTicket } = require('../../utils/portalAssignment');
 // ---------- Session store (in-memory, 30-min TTL) ----------
 
 const sessions = new Map();
-const SESSION_TTL_MS = 30 * 60 * 1000;
+const SESSION_TTL_MS = 15 * 60 * 1000;  // 15 min (was 30 — sessions are short-lived widget chats)
 const MAX_HISTORY_TURNS = 10;
 // Hard cap on concurrent sessions: TTL alone doesn't protect against
 // scanner/bot traffic minting a fresh sessionId on every hit — without a
 // cap the Map grows unbounded between cleanup ticks.
-const MAX_SESSIONS = 500;
+const MAX_SESSIONS = 200;  // lowered from 500 — widget sessions are short
 
 function getSession(sessionId) {
     const entry = sessions.get(sessionId);
@@ -53,13 +53,17 @@ function saveSession(sessionId, history, context) {
     }
 }
 
-// Periodic cleanup of expired sessions (every 10 min)
+// Periodic cleanup of expired sessions (every 5 min — was 10, too slow for bot traffic)
 setInterval(() => {
     const now = Date.now();
     for (const [key, entry] of sessions) {
         if (now - entry.lastAccess > SESSION_TTL_MS) sessions.delete(key);
     }
-}, 10 * 60 * 1000).unref();
+    // Also enforce hard cap: evict oldest sessions if over limit
+    while (sessions.size > MAX_SESSIONS) {
+        sessions.delete(sessions.keys().next().value);
+    }
+}, 5 * 60 * 1000).unref();
 
 // ---------- Entity extraction ----------
 

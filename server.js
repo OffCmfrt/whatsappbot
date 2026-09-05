@@ -536,6 +536,8 @@ async function startServer() {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                // Drain the response body so the socket can be reused / reaped
+                await res.arrayBuffer().catch(() => {});
                 console.log('✅ Inventory tower cache warmed');
             } catch (error) {
                 console.warn('⚠️ Inventory tower warm-up failed (non-critical):', error.message);
@@ -549,9 +551,9 @@ async function startServer() {
         // intervals (queue check, 2-min memory monitor, 2-min pg cleanup,
         // 60s native monitor, 30/10-min cache purges, 5-min settings purge).
         // Every tick: reap idle TLS sockets + drain idle pg clients — the
-        // two native-memory growers. Every 5th tick: purge expired cache
-        // entries + log memory. Pressure responses scale with RSS so we act
-        // well before Render's 512MB OOM limit.
+        // two native-memory growers. Every tick also prunes expired cache
+        // entries (proactive, not just on pressure). Pressure responses
+        // scale with RSS so we act well before Render's 512MB OOM limit.
         //
         // Requires hoisted outside the interval to avoid repeated module
         // resolution on every tick (Node caches modules but still pays the
@@ -561,6 +563,15 @@ async function startServer() {
         const SettingsModel = require('./src/models/Settings');
         const followUpService = require('./src/services/followUpService');
         const shiprocketService = require('./src/services/shiprocketService');
+        // Lazy-load zohoItemResolver — only needed for cache clearing on pressure
+        let _zohoItemResolver = null;
+        function getZohoItemResolver() {
+            if (!_zohoItemResolver) {
+                try { _zohoItemResolver = require('./src/services/zohoItemResolver'); }
+                catch (e) { /* module may not exist in all deploys */ }
+            }
+            return _zohoItemResolver;
+        }
 
         let watchdogTick = 0;
         setInterval(() => {
@@ -584,12 +595,11 @@ async function startServer() {
                     taskQueue.length = 0;
                 }
 
-                // 4. Housekeeping every 10 min: expired cache + settings purge
-                if (every5) {
-                    const purged = purgeAllExpired();
-                    if (purged > 0) console.log(`[MEMORY] Purged ${purged} expired cache entrie(s)`);
-                    try { SettingsModel.clearOldCache(); } catch (e) { /* ignore */ }
-                }
+                // 4. Proactive housekeeping EVERY tick: expired cache + settings purge
+                //    (was every 5th tick / 10 min — too slow for a steady leak)
+                const purged = purgeAllExpired();
+                if (purged > 0) console.log(`[MEMORY] Purged ${purged} expired cache entrie(s)`);
+                try { SettingsModel.clearOldCache(); } catch (e) { /* ignore */ }
 
                 // 5. Memory pressure response (scaled by RSS)
                 const used = process.memoryUsage();
@@ -603,9 +613,10 @@ async function startServer() {
                 }
 
                 // High: clear caches + GC to reclaim headroom (lowered from
-                // 400MB — native TLS buffers accumulate steadily)
-                if (memoryMB > 300) {
-                    console.warn(`⚠️ MEMORY HIGH (${memoryMB}MB > 300MB) — running GC + cache cleanup...`);
+                // 300MB → 250MB — native TLS buffers accumulate steadily and
+                // we want to act well before the 400MB danger zone)
+                if (memoryMB > 250) {
+                    console.warn(`⚠️ MEMORY HIGH (${memoryMB}MB > 250MB) — running GC + cache cleanup...`);
                     invalidateCache();
                     purgeAllExpired();
                     try { SettingsModel._cache.clear(); } catch (e) { /* ignore */ }
@@ -620,6 +631,15 @@ async function startServer() {
                     } catch (e) { /* ignore */ }
 
                     try { shiprocketService.orderCache.clear(); } catch (e) { /* ignore */ }
+
+                    // Clear zohoItemResolver caches (unbounded itemCache Map)
+                    try {
+                        const zir = getZohoItemResolver();
+                        // zohoItemResolver doesn't expose a clear() — the resolver
+                        // is created per-run by callers, so there's no global handle.
+                        // Instead, invalidate the LRU caches that feed it.
+                        invalidateCache('queries');
+                    } catch (e) { /* ignore */ }
 
                     if (typeof global.gc === 'function') {
                         global.gc();

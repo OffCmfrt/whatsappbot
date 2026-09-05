@@ -77,14 +77,15 @@ class ShiprocketService {
     }
 
     setCachedOrder(orderId, data) {
+        // Evict expired entry first so re-set moves it to the tail (LRU)
+        if (this.orderCache.has(orderId)) this.orderCache.delete(orderId);
         this.orderCache.set(orderId, {
             data,
             timestamp: Date.now()
         });
-        // Keep cache size manageable
-        if (this.orderCache.size > 100) {
-            const firstKey = this.orderCache.keys().next().value;
-            this.orderCache.delete(firstKey);
+        // LRU eviction: drop oldest entries when over cap
+        while (this.orderCache.size > 100) {
+            this.orderCache.delete(this.orderCache.keys().next().value);
         }
     }
 

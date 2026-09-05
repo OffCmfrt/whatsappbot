@@ -50,18 +50,21 @@ class ShiprocketAdapter extends BaseCarrier {
         this._listingPageCache = new Map();    // key: `${per_page}|${page}` -> { orders, fetchedAt }
         this._listingInFlight = new Map();     // same key -> Promise (dedupes parallel fetches)
         this.LISTING_PAGE_TTL = 90 * 1000;    // 90s — covers full createShipment + recovery
+        this.LISTING_PAGE_MAX = 60;            // hard cap: ~60 unique page keys max
 
         // Order-ID lookup cache: result of "does our orderId exist in the
         // listing?" (positive hit, negative miss, or partial scan). Reused
         // across Route 1 + recovery so we never re-scan the same listing.
         this._orderLookupCache = new Map();    // key: orderId -> { hit: order|null, scannedUpTo: page, fetchedAt }
         this.ORDER_LOOKUP_TTL = 90 * 1000;    // 90s
+        this.ORDER_LOOKUP_MAX = 200;           // hard cap: 200 unique order IDs
 
         // Direct order-by-id cache: when we resolve our orderId -> SR numeric
         // id, the next lookup can hit GET /orders/show/{id} (1 call) instead
         // of paginating the listing again.
         this._directOrderCache = new Map();   // key: orderId -> { srOrderId, fetchedAt }
         this.DIRECT_ORDER_TTL = 5 * 60 * 1000; // 5 min — SR id rarely changes
+        this.DIRECT_ORDER_MAX = 200;           // hard cap: 200 unique order IDs
     }
 
     get capabilities() {
@@ -328,6 +331,16 @@ class ShiprocketAdapter extends BaseCarrier {
         ttl(this._listingPageCache, this.LISTING_PAGE_TTL);
         ttl(this._orderLookupCache, this.ORDER_LOOKUP_TTL);
         ttl(this._directOrderCache, this.DIRECT_ORDER_TTL);
+
+        // Hard-cap enforcement: evict oldest entries (Map preserves insertion
+        // order) when a cache exceeds its max size — TTL alone doesn't protect
+        // against a burst of unique order IDs filling the Map between prunes.
+        const cap = (map, max) => {
+            while (map.size > max) map.delete(map.keys().next().value);
+        };
+        cap(this._listingPageCache, this.LISTING_PAGE_MAX);
+        cap(this._orderLookupCache, this.ORDER_LOOKUP_MAX);
+        cap(this._directOrderCache, this.DIRECT_ORDER_MAX);
     }
 
     // True when the cached channel list says this channel id is a "Custom" one
