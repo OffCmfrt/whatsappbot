@@ -805,7 +805,7 @@
                 if (mv.out_breakdown.manual_out) outParts.push(`${num(mv.out_breakdown.manual_out)} manual`);
                 return `<tr>
                     <td class="ict-mono ict-muted">${esc(mv.sku || '–')}</td>
-                    <td>${esc(mv.product)}${mv.color ? ' <span class="ict-dim">· ${esc(mv.color)}</span>' : ''}${mv.size ? ' <span class="ict-dim">· ${esc(mv.size)}</span>' : ''}</td>
+                    <td>${esc(mv.product)}${mv.color ? ` <span class="ict-dim">· ${esc(mv.color)}</span>` : ''}${mv.size ? ` <span class="ict-dim">· ${esc(mv.size)}</span>` : ''}</td>
                     <td class="ict-num ict-healthy-text" style="font-weight:600">${num(mv.qty_in)}</td>
                     <td class="ict-num ict-muted" style="font-size:0.8em">${inParts.join(' · ') || '–'}</td>
                     <td class="ict-num ict-critical-text" style="font-weight:600">${num(mv.qty_out)}</td>
@@ -848,6 +848,7 @@
                         </label>
                         <button class="ict-chip ${m.dateFrom ? 'active' : ''}" data-ict="load-movements" style="margin-left:4px">Load movements</button>
                         ${m.dateFrom ? `<button class="ict-chip" data-ict="clear-movements" style="margin-left:2px">Clear</button>` : ''}
+                        ${data && data.movements && data.movements.length > 0 ? `<button class="ict-chip" data-ict="export-movements" style="margin-left:4px;background:#fff;color:#000;font-weight:600">↓ Export CSV</button>` : ''}
                     </div>
                 </div>
                 ${bodyHtml}
@@ -1549,6 +1550,38 @@
         URL.revokeObjectURL(url);
     }
 
+    function exportMovementsCsv() {
+        const data = ICT.movements;
+        if (!data || !data.movements || data.movements.length === 0) return;
+        const csvEsc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        const headers = ['SKU', 'Product', 'Color', 'Size', 'Qty IN', 'IN: RTO', 'IN: Returns', 'IN: Exchange', 'IN: Manual',
+            'Qty OUT', 'OUT: Sold', 'OUT: Exchange', 'OUT: Manual', 'Net'];
+        const lines = [headers.join(',')];
+        for (const mv of data.movements) {
+            const net = mv.qty_in - mv.qty_out;
+            lines.push([
+                mv.sku, mv.product, mv.color, mv.size,
+                mv.qty_in, mv.in_breakdown.rto, mv.in_breakdown.returns, mv.in_breakdown.exchange_in, mv.in_breakdown.manual_in,
+                mv.qty_out, mv.out_breakdown.delivered, mv.out_breakdown.exchange_out, mv.out_breakdown.manual_out,
+                net
+            ].map(csvEsc).join(','));
+        }
+        // Add summary row
+        lines.push('');
+        lines.push(['SUMMARY', '', '', '', data.totals.in, '', '', '', '', data.totals.out, '', '', '', data.totals.in - data.totals.out].map(csvEsc).join(','));
+        lines.push(['', '', '', '', `${data.sku_count} SKUs`, '', '', '', '', `${data.sku_count} SKUs`, '', '', '', ''].map(csvEsc).join(','));
+        const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const dateRange = data.from === data.to ? data.from : `${data.from}_to_${data.to}`;
+        a.download = `inventory-movements-${dateRange}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    }
+
     /* ------------------------------ event wiring ------------------------------ */
     // All interactions are delegated (no inline handlers — CSP-safe).
     document.addEventListener('click', (e) => {
@@ -1591,6 +1624,8 @@
             loadMovements();
         } else if (action === 'clear-movements') {
             ICT.ui.master.dateFrom = ''; ICT.ui.master.dateTo = ''; ICT.movements = null; renderCurrentTab();
+        } else if (action === 'export-movements') {
+            exportMovementsCsv();
         }
     });
 

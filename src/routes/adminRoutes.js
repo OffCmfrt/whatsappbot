@@ -6829,7 +6829,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                 SELECT s.items_json FROM store_shoppers s
                 INNER JOIN orders o ON o.order_id = s.order_id
                 WHERE s.items_json IS NOT NULL AND o.status = 'delivered'
-                  AND s.updated_at >= $1 AND s.updated_at <= $2
+                  AND COALESCE(o.delivered_at, s.updated_at) >= $1 AND COALESCE(o.delivered_at, s.updated_at) <= $2
             `, [fromIso, toEndIso]),
             dbAdapter.query(`
                 SELECT s.items_json FROM store_shoppers s
@@ -6858,7 +6858,11 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                 if (resolved && resolved.v) {
                     const vKey = `${resolved.p.id}:${resolved.v.id}`;
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
-                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    const color = parts[0] || '';
+                    const size = parts.slice(1).join(' / ') || '';
+                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
+                    const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_out += qty; m.out_breakdown.delivered += qty;
                 }
             }
@@ -6871,7 +6875,11 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                 if (resolved && resolved.v) {
                     const vKey = `${resolved.p.id}:${resolved.v.id}`;
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
-                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    const color = parts[0] || '';
+                    const size = parts.slice(1).join(' / ') || '';
+                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
+                    const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_in += qty; m.in_breakdown.rto += qty;
                 }
             }
@@ -6884,7 +6892,11 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                 if (resolved && resolved.v) {
                     const vKey = `${resolved.p.id}:${resolved.v.id}`;
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
-                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    const color = parts[0] || '';
+                    const size = parts.slice(1).join(' / ') || '';
+                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
+                    const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_in += qty; m.in_breakdown.returns += qty;
                 }
             }
@@ -6897,7 +6909,11 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                 if (resolved && resolved.v) {
                     const vKey = `${resolved.p.id}:${resolved.v.id}`;
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
-                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    const color = parts[0] || '';
+                    const size = parts.slice(1).join(' / ') || '';
+                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
+                    const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_in += qty; m.in_breakdown.exchange_in += qty;
                 }
             }
@@ -6907,7 +6923,11 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                 if (resolved && resolved.v) {
                     const vKey = `${resolved.p.id}:${resolved.v.id}`;
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
-                    const m = ensureMov(vKey, resolved.v.sku || '', resolved.p.title, parts[0] || '', parts.slice(1).join(' / ') || '');
+                    const color = parts[0] || '';
+                    const size = parts.slice(1).join(' / ') || '';
+                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
+                    const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_out += qty; m.out_breakdown.exchange_out += qty;
                 }
             }
