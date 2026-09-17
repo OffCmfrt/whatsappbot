@@ -767,13 +767,19 @@
         showTyping();
 
         var ticketMessage = '[Website] [' + (flowContext.supportTopic || 'General') + '] ' + message;
+        
+        // Use looked-up customer details from order, fallback to widget config
+        var ticketName = flowContext.customerName || CUSTOMER_NAME || 'Customer';
+        var ticketPhone = flowContext.customerPhone || CUSTOMER_PHONE || '';
+        var ticketEmail = flowContext.customerEmail || '';
 
         fetch(API_URL + '/api/widget/ticket', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                name: CUSTOMER_NAME || 'Customer',
-                phone: CUSTOMER_PHONE || '',
+                name: ticketName,
+                phone: ticketPhone,
+                email: ticketEmail,
                 message: ticketMessage,
                 orderId: flowContext.orderId || null,
                 source: 'website',
@@ -945,15 +951,45 @@
             addUserMessage(text);
             var cleaned = text.replace(/^#/, '').replace(/\s/g, '').trim();
             flowContext.orderId = cleaned;
-            // Now ask for the topic
-            flowState = 'awaiting_support_topic';
-            setInputMode('text');
-            addBotMessage('Got it — Order *#' + cleaned + '*. What do you need help with?', [
-                { label: 'Order Issue', action: 'support_order_issue' },
-                { label: 'Product Question', action: 'support_product' },
-                { label: 'Delivery Problem', action: 'support_delivery' },
-                { label: 'Other', action: 'support_other' }
-            ]);
+            
+            // Lookup customer details from order number
+            showTyping();
+            fetch(API_URL + '/api/widget/lookup-order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ orderId: cleaned })
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                hideTyping();
+                if (data.success && data.name) {
+                    flowContext.customerName = data.name;
+                    flowContext.customerPhone = data.phone || '';
+                    flowContext.customerEmail = data.email || '';
+                }
+                // Now ask for the topic
+                flowState = 'awaiting_support_topic';
+                setInputMode('text');
+                var greeting = flowContext.customerName ? 'Thanks, ' + flowContext.customerName + '. ' : 'Got it. ';
+                addBotMessage(greeting + 'Order *#' + cleaned + '*. What do you need help with?', [
+                    { label: 'Order Issue', action: 'support_order_issue' },
+                    { label: 'Product Question', action: 'support_product' },
+                    { label: 'Delivery Problem', action: 'support_delivery' },
+                    { label: 'Other', action: 'support_other' }
+                ]);
+            })
+            .catch(function () {
+                hideTyping();
+                // Lookup failed, continue without customer details
+                flowState = 'awaiting_support_topic';
+                setInputMode('text');
+                addBotMessage('Got it — Order *#' + cleaned + '*. What do you need help with?', [
+                    { label: 'Order Issue', action: 'support_order_issue' },
+                    { label: 'Product Question', action: 'support_product' },
+                    { label: 'Delivery Problem', action: 'support_delivery' },
+                    { label: 'Other', action: 'support_other' }
+                ]);
+            });
         } else if (flowState === 'awaiting_order_id') {
             addUserMessage(text);
             doTrackOrder(text);

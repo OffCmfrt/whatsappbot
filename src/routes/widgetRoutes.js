@@ -402,6 +402,57 @@ router.post('/track-order', async (req, res) => {
     }
 });
 
+// ---------- POST /api/widget/lookup-order ----------
+// Look up customer details (name, phone, email) from order number
+
+router.post('/lookup-order', async (req, res) => {
+    try {
+        const { orderId } = req.body;
+        if (!orderId) {
+            return res.status(400).json({ error: 'Order ID is required' });
+        }
+
+        const { dbAdapter } = require('../database/db');
+        const cleanOrderId = String(orderId).replace(/^#/, '').trim();
+
+        // Look up customer details from store_shoppers table
+        const shopperRows = await dbAdapter.query(
+            `SELECT name, phone, email FROM store_shoppers
+             WHERE order_id = ?
+             ORDER BY created_at DESC LIMIT 1`,
+            [cleanOrderId]
+        );
+
+        if (shopperRows && shopperRows.length > 0) {
+            const row = shopperRows[0];
+            // Normalize phone to digits only
+            const rawPhone = row.phone || '';
+            const digitsOnly = rawPhone.replace(/\D/g, '');
+            // Remove leading 91 if present (country code)
+            const phone = digitsOnly.startsWith('91') && digitsOnly.length > 10
+                ? digitsOnly.substring(2)
+                : digitsOnly;
+
+            res.json({
+                success: true,
+                name: row.name || null,
+                phone: phone || null,
+                email: row.email || null
+            });
+        } else {
+            res.json({
+                success: false,
+                name: null,
+                phone: null,
+                email: null
+            });
+        }
+    } catch (error) {
+        console.error('[widget] lookup-order error:', error.message);
+        res.status(500).json({ error: 'Failed to lookup order details' });
+    }
+});
+
 // ---------- POST /api/widget/ticket ----------
 // Create a support ticket from the widget (escalation)
 
