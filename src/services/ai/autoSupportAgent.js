@@ -90,6 +90,8 @@ ${langInstruction}
 - NEVER invent order numbers, tracking data, or policies not listed above.
 - If the message doesn't match any scenario, use scenario "general" with confidence 0.3.
 - If sentiment is "frustrated", still classify the scenario but set confidence to max 0.5.
+- A standalone phone number (10 digits) is a MOBILE NUMBER, NOT an AWB or tracking number. Classify it as "general" and ask the customer how you can help.
+- NEVER treat a bare number in the customer message as an AWB/tracking number. AWB numbers are only known from the order context provided to you, never from what the customer types.
 - Reply in the SAME LANGUAGE as the customer's message.
 - Keep replies SHORT — WhatsApp chat style, 2-5 sentences max.
 - Use the order context provided (if any) to personalize the reply.
@@ -112,6 +114,21 @@ async function processCustomerMessage(phone, messageText, customerName = 'Custom
         const lowerText = text.toLowerCase();
         const digits = String(phone).replace(/\D/g, '');
         const phonePattern = `%${digits.slice(-10)}`;
+
+        // ── Pre-check: if the message is purely a mobile number, don't send to LLM ──
+        const strippedMsg = text.replace(/[\s\-+.]/g, '');
+        const isBareMobileNumber = /^\d{10,12}$/.test(strippedMsg);
+        if (isBareMobileNumber) {
+            console.log(`[AUTO AI] Message is a bare mobile number from ${phone}, skipping LLM — classifying as general`);
+            return {
+                handled: false,
+                reply: null,
+                scenario: 'general',
+                confidence: 0.2,
+                sentiment: 'neutral',
+                reason: 'Customer sent a mobile number — likely not a support query'
+            };
+        }
 
         // 1. Fetch customer context
         let orders = [];
