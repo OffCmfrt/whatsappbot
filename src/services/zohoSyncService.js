@@ -281,6 +281,38 @@ async function syncOrderToZoho(shopifyOrder) {
             ]
         );
 
+        // Step 7: Native-integration duplicate sweep — if the Zoho ↔ Shopify
+        // native integration is still active, it may have created a second
+        // invoice with the same reference_number. Detect and remove it now.
+        // This is a safety net; the real fix is disconnecting the native
+        // integration in Zoho Inventory settings.
+        try {
+            const allRefs = await zohoService.searchInvoice({ reference_number: orderId });
+            const others = allRefs.filter(
+                inv => inv.invoice_id !== zohoInvoice?.invoice_id
+                    && inv.status !== 'void' && inv.status !== 'deleted'
+            );
+            if (others.length > 0) {
+                console.warn(`⚠️ Zoho sync #${orderId}: found ${others.length} duplicate invoice(s) from native integration — removing`);
+                for (const dup of others) {
+                    try {
+                        // Delete any payments on the duplicate first
+                        const pmts = await zohoService.getPayments(null, dup.invoice_number);
+                        for (const p of pmts) {
+                            try { await zohoService.deletePayment(p.payment_id); } catch (_) { /* best effort */ }
+                        }
+                        if (dup.status !== 'void') await zohoService.voidInvoice(dup.invoice_id);
+                        await zohoService.deleteInvoice(dup.invoice_id);
+                        console.log(`✅ Zoho sync #${orderId}: removed native-integration duplicate ${dup.invoice_number}`);
+                    } catch (dupErr) {
+                        console.warn(`⚠️ Zoho sync #${orderId}: failed to remove duplicate ${dup.invoice_number}: ${dupErr.message}`);
+                    }
+                }
+            }
+        } catch (sweepErr) {
+            console.warn(`⚠️ Zoho sync #${orderId}: duplicate sweep failed (${sweepErr.message}) — non-critical`);
+        }
+
         console.log(`✅ Zoho sync: order #${orderId} → invoice ${zohoInvoice?.invoice_id || 'created'}`);
         return {
             success: true,

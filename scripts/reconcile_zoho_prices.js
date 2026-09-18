@@ -42,7 +42,7 @@ const SINCE = (args.find(a => a.startsWith('--since=')) || '').split('=')[1] || 
 const SINGLE_ORDER = (args.find(a => a.startsWith('--order=')) || '').split('=')[1] || null;
 
 const TOLERANCE = 1.00;
-const summary = { detected: 0, fixed: 0, skipped_paid: 0, skipped_credit: 0, duplicates_removed: 0, ok: 0, errors: [] };
+const summary = { detected: 0, fixed: 0, skipped_paid: 0, skipped_credit: 0, duplicates_removed: 0, duplicates_payments_deleted: 0, ok: 0, errors: [] };
 const startTime = Date.now();
 
 function log(msg) { console.log(`${APPLY ? '[APPLY]' : '[DRY-RUN]'} ${msg}`); }
@@ -317,6 +317,19 @@ async function phaseFix() {
 // ============================================================
 // Phase: DUPLICATES — find and remove extra invoices
 // ============================================================
+// Root cause: the native Zoho Inventory ↔ Shopify integration
+// (store j0yyii-uf) auto-creates invoices alongside the middleware
+// webhook pipeline. Both use the order number as reference_number,
+// producing 2 invoices per order. The middleware invoice is identified
+// by having prorated discount lines; the native one has none.
+//
+// Strategy:
+//   1. Group all active Zoho invoices by reference_number
+//   2. For each group with >1 invoice, keep the middleware one
+//      (has discounts) and void+delete the rest
+//   3. If the duplicate has payments, delete payments first
+//   4. Write a CSV report of every action taken
+// ============================================================
 
 async function phaseDuplicates() {
     const seenRefs = {};
@@ -343,50 +356,111 @@ async function phaseDuplicates() {
     const dupInvoices = Object.entries(seenRefs).filter(([, invs]) => invs.length > 1);
     log(`duplicates: ${dupInvoices.length} reference numbers with multiple invoices (${elapsed()}s)`);
 
+    // FAST PATH: bulk-load sync log to identify middleware invoices from DB
+    // instead of calling getInvoice for every single invoice (saves ~4000 API calls)
+    log('duplicates: loading sync log for middleware identification...');
+    const allOrderIds = dupInvoices.map(([ref]) => ref.replace(/^#/, ''));
+    const syncRows = await dbAdapter.query(
+        `SELECT shopify_order_id, zoho_invoice_id FROM zoho_sync_log
+         WHERE status = 'synced' AND zoho_invoice_id IS NOT NULL
+         AND shopify_order_id = ANY(?)`,
+        [allOrderIds]
+    );
+    const syncMap = {}; // orderNum → zoho_invoice_id (the middleware invoice)
+    for (const row of syncRows) {
+        syncMap[String(row.shopify_order_id).replace(/^#/, '')] = row.zoho_invoice_id;
+    }
+    log(`duplicates: ${Object.keys(syncMap).length} orders have sync log entries (${elapsed()}s)`);
+
+    // CSV report
+    const csvLines = ['order,action,kept_invoice,removed_invoice,reason,details'];
+
     await pool(dupInvoices, async ([ref, invoices]) => {
         const orderNum = ref.replace(/^#/, '');
+        const middlewareInvoiceId = syncMap[orderNum]; // may be null
 
-        // Sort: keep the one with discounts (our middleware), remove the rest
-        const fullInvoices = [];
-        for (const inv of invoices) {
-            try {
-                const full = await zohoService.getInvoice(inv.invoice_id);
-                if (full) fullInvoices.push(full);
-            } catch (e) { /* skip */ }
-        }
-        if (fullInvoices.length < 2) return;
-
-        fullInvoices.sort((a, b) => {
-            const aD = (a.line_items || []).some(l => parseFloat(l.discount || 0) > 0);
-            const bD = (b.line_items || []).some(l => parseFloat(l.discount || 0) > 0);
-            if (aD && !bD) return -1;
-            if (!aD && bD) return 1;
-            return new Date(b.created_at || 0) - new Date(a.created_at || 0);
-        });
-
-        const keep = fullInvoices[0];
-        const remove = fullInvoices.slice(1);
-
-        log(`  #${orderNum}: keeping ${keep.invoice_number}, removing ${remove.length} dup(s)`);
-        if (!APPLY) return;
-
-        for (const dup of remove) {
-            const payments = await zohoService.getPayments(null, dup.invoice_number);
-            if (payments.length > 0) {
-                log(`    ⚠️ ${dup.invoice_number} has payments — skip`);
-                continue;
+        // Decide which to keep using sync log (FAST — no API call)
+        let keepInv, removeInvs;
+        if (middlewareInvoiceId) {
+            const keep = invoices.find(i => i.invoice_id === middlewareInvoiceId);
+            if (keep) {
+                keepInv = keep;
+                removeInvs = invoices.filter(i => i.invoice_id !== middlewareInvoiceId);
             }
+        }
+        // Fallback: if no sync log entry or middleware invoice not in list,
+        // keep the newest one
+        if (!keepInv) {
+            const sorted = [...invoices].sort(
+                (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+            );
+            keepInv = sorted[0];
+            removeInvs = sorted.slice(1);
+        }
+
+        const reason = middlewareInvoiceId ? 'native_dup' : 'older_dup';
+        log(`  #${orderNum}: keeping ${keepInv.invoice_number} (${middlewareInvoiceId ? 'middleware' : 'newest'}), removing ${removeInvs.length} dup(s)`);
+
+        if (!APPLY) {
+            for (const dup of removeInvs) {
+                csvLines.push([orderNum, 'would_remove', keepInv.invoice_number, dup.invoice_number,
+                    reason, `status=${dup.status}`].join(','));
+            }
+            return;
+        }
+
+        for (const dup of removeInvs) {
             try {
-                await zohoService.voidInvoice(dup.invoice_id);
+                // Check for payments — must delete before voiding
+                const payments = await zohoService.getPayments(null, dup.invoice_number);
+                if (payments.length > 0) {
+                    log(`    💰 ${dup.invoice_number} has ${payments.length} payment(s) — deleting first`);
+                    for (const pmt of payments) {
+                        try {
+                            await zohoService.deletePayment(pmt.payment_id);
+                            summary.duplicates_payments_deleted++;
+                        } catch (pmtErr) {
+                            summary.errors.push(`payment ${pmt.payment_id}: ${pmtErr.message}`);
+                        }
+                    }
+                }
+
+                // Void then delete
+                if (dup.status !== 'void') {
+                    await zohoService.voidInvoice(dup.invoice_id);
+                }
                 await zohoService.deleteInvoice(dup.invoice_id);
                 summary.duplicates_removed++;
+
+                csvLines.push([orderNum, 'removed', keepInv.invoice_number, dup.invoice_number,
+                    reason, `payments_deleted=${payments.length}`].join(','));
+                log(`    ✅ removed ${dup.invoice_number}`);
             } catch (e) {
                 summary.errors.push(`dup ${dup.invoice_number}: ${e.message}`);
+                csvLines.push([orderNum, 'error', keepInv.invoice_number, dup.invoice_number,
+                    'delete_failed', e.message].join(','));
             }
         }
     });
 
-    log(`duplicates: ${summary.duplicates_removed} removed (${elapsed()}s)`);
+    // Write CSV report
+    const csvPath = path.join(__dirname, `../tmp/zoho_duplicates_${new Date().toISOString().slice(0, 10)}.csv`);
+    fs.mkdirSync(path.dirname(csvPath), { recursive: true });
+    fs.writeFileSync(csvPath, csvLines.join('\n'));
+
+    log(`\nduplicates: ${summary.duplicates_removed} removed, ${summary.duplicates_payments_deleted} payments deleted (${elapsed()}s)`);
+    log(`  report: ${csvPath}`);
+
+    // Warn if duplicates are very recent (native integration still active)
+    const recentThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const recentDups = dupInvoices.filter(([, invs]) =>
+        invs.some(inv => new Date(inv.created_at) > recentThreshold)
+    );
+    if (recentDups.length > 0) {
+        log(`\n  ⚠️  WARNING: ${recentDups.length} duplicate(s) created in the last 7 days!`);
+        log(`     The native Zoho ↔ Shopify integration is likely STILL ACTIVE.`);
+        log(`     Go to Zoho Inventory → Settings → Shopify → Disconnect to stop new duplicates.`);
+    }
 }
 
 // ============================================================
@@ -427,6 +501,7 @@ async function main() {
         console.log(`  skipped (paid): ${summary.skipped_paid}`);
         console.log(`  skipped (credit notes): ${summary.skipped_credit}`);
         console.log(`  duplicates removed: ${summary.duplicates_removed}`);
+        console.log(`  duplicate payments deleted: ${summary.duplicates_payments_deleted}`);
     }
     if (summary.errors.length) {
         console.log(`  ${summary.errors.length} error(s):`);
