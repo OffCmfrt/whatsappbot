@@ -22,6 +22,10 @@
     var TRIGGER_POSITION = config.triggerPosition || 'bottom-right'; // bottom-right | bottom-left | top-right | top-left
 
     // ---------- Session ----------
+    // Guard against duplicate initialization (e.g. loader + direct <script> tag)
+    if (window.__offcomfrt_tb_initialized) return;
+    window.__offcomfrt_tb_initialized = true;
+
     // Persistent visitor ID (survives tab close — links all sessions from same browser)
     var visitorId = localStorage.getItem('offcomfrt_tb_visitor');
     if (!visitorId) {
@@ -30,9 +34,11 @@
     }
 
     var sessionId = sessionStorage.getItem('offcomfrt_tb_session');
+    var welcomeShown = sessionStorage.getItem('offcomfrt_tb_welcome') === '1';
     if (!sessionId) {
         sessionId = 'tb_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 8);
         sessionStorage.setItem('offcomfrt_tb_session', sessionId);
+        // Fresh session — welcome will be shown below
     }
 
     var isOpen = false;
@@ -386,6 +392,9 @@
     // ---------- Welcome ----------
     function showWelcome() {
         var greeting = CUSTOMER_NAME ? 'Welcome back, ' + CUSTOMER_NAME + '.' : 'Welcome to ' + BRAND_NAME + '.';
+        // Render the welcome in the DOM but never persist it to the DB.
+        // A session is only registered once the customer actually interacts
+        // (sends a message or clicks a button).
         addBotMessage(
             greeting + '\n\nHow can we assist you today?',
             [
@@ -393,8 +402,13 @@
                 { label: 'Return / Exchange', action: 'file_return' },
                 { label: 'Track Your Request', action: 'track_request' },
                 { label: 'Contact Support', action: 'contact_support' }
-            ]
+            ],
+            false  // never persist welcome — session starts on first customer action
         );
+        if (!welcomeShown) {
+            welcomeShown = true;
+            sessionStorage.setItem('offcomfrt_tb_welcome', '1');
+        }
         flowState = 'idle';
     }
 
@@ -447,7 +461,9 @@
 
         chat.appendChild(wrapper);
         scrollToBottom();
-        if (persist !== false) recordWidgetEvent('bot', text);
+        // Bot messages never create sessions — only customer actions do.
+        // AI chat is persisted server-side; cards call recordWidgetEvent directly.
+        if (persist === true) recordWidgetEvent('bot', text);
     }
 
     function addUserMessage(text) {
