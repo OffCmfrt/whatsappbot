@@ -188,9 +188,11 @@ function breakBundleLineItems(lineItems, bundleMap) {
                 }))
             });
         } else {
-            // Not a bundle — pass through
+            // Not a bundle — pass through (preserve variant for size in Zoho)
+            const variant = String(item.variant || '').trim();
             result.push({
                 name: item.title || item.sku || 'Item',
+                variant: variant,
                 sku: item.sku || '',
                 quantity: parseInt(item.quantity || 1),
                 rate: parseFloat(item.price || 0),
@@ -358,14 +360,22 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
     const { lineItems: correctedItems, corrections, taxDecision } = correctTax(brokenItems, sellerState, customerState);
 
     // Step 3: Build Zoho invoice line items
-    const zohoLineItems = correctedItems.map(item => ({
-        name: item.name,
-        description: item.is_bundle_component ? `(from ${item.parent_bundle_name})` : (item.name || 'Item'),
-        item_id: item.sku, // Will be resolved to Zoho item_id at sync time
-        quantity: item.quantity,
-        rate: item.rate,
-        discount: item.discount || 0
-    }));
+    // Include variant/size in the description so Zoho invoices show what
+    // size was ordered (e.g. "Relaxed Tee (M)") — critical for Delhivery
+    // and all other carriers alike.
+    const zohoLineItems = correctedItems.map(item => {
+        const desc = item.variant
+            ? `${item.name} (${item.variant})`
+            : (item.is_bundle_component ? `(from ${item.parent_bundle_name})` : (item.name || 'Item'));
+        return {
+            name: item.name,
+            description: desc,
+            item_id: item.sku, // Will be resolved to Zoho item_id at sync time
+            quantity: item.quantity,
+            rate: item.rate,
+            discount: item.discount || 0
+        };
+    });
 
     // Step 4: Shipping line — Shopify's total_price includes shipping;
     // without this line the Zoho invoice total will always be lower.
