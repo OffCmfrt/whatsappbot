@@ -765,6 +765,7 @@ module.exports = {
     creditNoteReference,
     buildCodPaymentPayload,
     allocateOrderDiscounts,
+    taxFromInvoiceLine,
 
     // Constants
     INDIAN_STATES,
