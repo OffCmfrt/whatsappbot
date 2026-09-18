@@ -367,6 +367,71 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         discount: item.discount || 0
     }));
 
+    // Step 4: Shipping line — Shopify's total_price includes shipping;
+    // without this line the Zoho invoice total will always be lower.
+    const shippingAmount = round2(
+        (shopifyOrder.shipping_lines || []).reduce((s, sl) => s + (parseFloat(sl.price) || 0), 0)
+    );
+    if (shippingAmount > 0) {
+        // Use the dominant tax rate from the order items so shipping is
+        // taxed consistently (IGST for inter-state, CGST+SGST for intra)
+        const dominantGst = correctedItems.length > 0
+            ? correctedItems.reduce((best, item) => {
+                const lineGross = item.rate * item.quantity;
+                return lineGross > best.gross ? { rate: item.gst_rate || 5, gross: lineGross } : best;
+            }, { rate: 5, gross: 0 }).rate
+            : 5;
+        const shippingLine = {
+            name: 'Shipping',
+            description: `Shipping for Order #${shopifyOrder.order_number || shopifyOrder.id}`,
+            quantity: 1,
+            rate: shippingAmount,
+            discount: 0,
+            gst_rate: dominantGst
+        };
+        if (taxDecision.taxType === 'cgst_sgst') {
+            shippingLine.cgst_rate = dominantGst / 2;
+            shippingLine.sgst_rate = dominantGst / 2;
+        } else {
+            shippingLine.igst_rate = dominantGst;
+        }
+        zohoLineItems.push(shippingLine);
+    }
+
+    // Step 5: Rounding adjustment — ensures the Zoho net (before tax)
+    // matches Shopify's net EXACTLY. Catches any paise lost to proration
+    // rounding across discounts, bundle breaking, and shipping.
+    const shopifyNet = round2(
+        parseFloat(shopifyOrder.total_price || 0) -
+        (shopifyOrder.tax_lines || []).reduce((s, t) => s + (parseFloat(t.price) || 0), 0) -
+        (shopifyOrder.total_tax || 0)
+    );
+    // Recompute from Shopify's canonical fields:
+    // net = items_gross - total_discounts + shipping
+    const itemsGross = round2((shopifyOrder.line_items || [])
+        .reduce((s, li) => s + (parseFloat(li.price) || 0) * (parseInt(li.quantity) || 1), 0));
+    const shopifyNetCanonical = round2(
+        itemsGross - round2(parseFloat(shopifyOrder.total_discounts || 0)) + shippingAmount
+    );
+    const zohoNet = round2(zohoLineItems.reduce((s, li) => {
+        return s + (parseFloat(li.rate) || 0) * (parseInt(li.quantity) || 1) - (parseFloat(li.discount) || 0);
+    }, 0));
+    const roundingAdj = round2(shopifyNetCanonical - zohoNet);
+    if (Math.abs(roundingAdj) > 0.001) {
+        zohoLineItems.push({
+            name: 'Rounding Adjustment',
+            description: 'Price alignment with Shopify',
+            quantity: 1,
+            rate: Math.abs(roundingAdj),
+            discount: roundingAdj < 0 ? Math.abs(roundingAdj) : 0,
+            // No tax on rounding adjustment — it's a price correction, not a product
+            gst_rate: 0,
+            cgst_rate: 0,
+            sgst_rate: 0,
+            igst_rate: 0
+        });
+    }
+
     // Customer details
     const customer = {
         name: `${shopifyOrder.customer?.first_name || ''} ${shopifyOrder.customer?.last_name || ''}`.trim() || shopifyOrder.shipping_address?.name || 'Customer',
