@@ -1666,25 +1666,70 @@ async function loadLiveSessions() {
         countEl.textContent = sessions.length;
         container.innerHTML = sessions.map(s => {
             const sid = esc(s.session_id || '');
-            const shortSid = sid.length > 16 ? sid.substring(0, 16) + '...' : sid;
+            const shortSid = sid.length > 18 ? sid.substring(0, 18) + '…' : sid;
             const adminBadge = s.admin_active
                 ? '<span class="wc-live-admin-badge" title="Admin in control">Admin</span>'
                 : '<span class="wc-live-ai-badge">AI</span>';
             const ticketBadge = s.has_ticket
-                ? `<span class="wc-ticket-badge" style="font-size:10px">${esc(s.ticket_number || 'T')}</span>`
+                ? `<span class="wc-live-admin-badge" style="background:rgba(16,185,129,0.12);color:#10b981" title="Ticket ${esc(s.ticket_number || '')}">${esc(s.ticket_number || 'T')}</span>`
                 : '';
-            return `<div class="wc-live-session-item" onclick="openWidgetChat('${sid}')">
-                <div class="wc-live-item-left">
-                    <span class="wc-live-session-id" title="${sid}">${shortSid}</span>
-                    <span class="wc-live-item-meta">${s.message_count || 0} msgs · ${formatTimeAgo(s.last_message_at)}</span>
+            const msgs = s.preview_messages || [];
+            const adminClass = s.admin_active ? ' admin-active' : '';
+
+            // Build chat preview bubbles
+            let previewHTML = '';
+            if (msgs.length) {
+                previewHTML = msgs.map(m => {
+                    const sender = m.sender || 'bot';
+                    const bubbleClass = sender === 'customer' ? 'wc-live-bubble-customer' : sender === 'admin' ? 'wc-live-bubble-admin' : 'wc-live-bubble-bot';
+                    const text = esc((m.content || '').substring(0, 120));
+                    const time = formatTimeAgo(m.created_at);
+                    return `<div class="wc-live-bubble ${bubbleClass}">${text}</div>`;
+                }).join('');
+            } else {
+                previewHTML = '<div style="font-size:11px;color:var(--text-tertiary);padding:4px 0">No messages yet</div>';
+            }
+
+            const takeoverBtn = s.admin_active
+                ? `<button class="wc-live-takeover-btn" onclick="event.stopPropagation();openWidgetChat('${sid}')" title="Open chat"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Open</button>`
+                : `<button class="wc-live-takeover-btn" onclick="event.stopPropagation();quickTakeover('${sid}')" title="Take over this chat"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Takeover</button>`;
+
+            return `<div class="wc-live-card${adminClass}" onclick="openWidgetChat('${sid}')">
+                <div class="wc-live-card-header">
+                    <div class="wc-live-card-header-left">
+                        <span class="wc-live-card-session-id" title="${sid}">${shortSid}</span>
+                        <span class="wc-live-card-meta">${s.message_count || 0} msgs</span>
+                    </div>
+                    <div class="wc-live-card-badges">
+                        ${adminBadge}
+                        ${ticketBadge}
+                    </div>
                 </div>
-                <div class="wc-live-item-right">
-                    ${adminBadge}
-                    ${ticketBadge}
+                <div class="wc-live-card-preview">
+                    ${previewHTML}
+                </div>
+                <div class="wc-live-card-footer">
+                    <span class="wc-live-card-time">${formatTimeAgo(s.last_message_at)}</span>
+                    <div class="wc-live-card-actions">
+                        ${takeoverBtn}
+                        <button class="wc-live-expand-btn" onclick="event.stopPropagation();openWidgetChat('${sid}')" title="Expand full conversation">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                            Expand
+                        </button>
+                    </div>
                 </div>
             </div>`;
         }).join('');
     } catch { /* silent */ }
+}
+
+async function quickTakeover(sessionId) {
+    // Open the conversation modal and immediately focus the admin input
+    await openWidgetChat(sessionId);
+    setTimeout(() => {
+        const input = document.getElementById('wcAdminInput');
+        if (input) input.focus();
+    }, 300);
 }
 
 async function sendAdminMessage() {

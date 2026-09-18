@@ -7947,7 +7947,18 @@ router.get('/widget-chats/live', verifyToken, async (req, res) => {
             [cutoff]
         );
 
-        res.json({ success: true, sessions: sessions || [], activeCount: (sessions || []).length });
+        // Fetch last 4 messages per session for chat preview
+        const enriched = [];
+        for (const s of (sessions || [])) {
+            const msgs = await dbAdapter.query(
+                `SELECT id, sender, content, created_at FROM widget_chats
+                 WHERE session_id = $1 ORDER BY id DESC LIMIT 4`,
+                [s.session_id]
+            );
+            enriched.push({ ...s, preview_messages: (msgs || []).reverse() });
+        }
+
+        res.json({ success: true, sessions: enriched, activeCount: enriched.length });
     } catch (error) {
         console.error('widget-chats/live error:', error.message);
         res.status(500).json({ success: false, error: 'Failed to load live sessions' });
