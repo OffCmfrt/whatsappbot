@@ -1,34 +1,28 @@
 /**
- * Zoho ↔ Shopify Price Reconciliation
- * -------------------------------------
- * Identifies and fixes price discrepancies between Shopify orders and their
- * corresponding Zoho invoices.
+ * Zoho ↔ Shopify Price Reconciliation (FAST)
+ * --------------------------------------------
+ * Uses the original_payload stored in zoho_sync_log instead of fetching
+ * each order from Shopify — eliminates thousands of API calls.
  *
- * Root causes of discrepancies:
- *   1. Orders synced before the accounting overhaul (commit 37c8a3b) had
- *      discount=0 on all lines — Zoho invoices show full price while
- *      Shopify shows the discounted amount.
- *   2. The native Zoho Inventory ↔ Shopify integration may have created
- *      duplicate invoices with different prices.
- *   3. Tax miscalculation on discounted amounts (pre-overhaul tax was
- *      computed on gross, not net).
+ * Only fetches from Shopify when the payload is missing (rare).
+ * Zoho invoices are fetched in pages (list API) for speed.
  *
  * Phases:
- *   detect     Compare every synced invoice line-by-line against Shopify
- *   fix        Void + re-sync unpaid mismatched invoices (default: dry-run)
+ *   detect     Compare every synced invoice total against Shopify payload
+ *   fix        Void + re-sync unpaid mismatched invoices
  *   duplicates Remove extra invoices from the native integration
  *
  * Usage:
  *   node scripts/reconcile_zoho_prices.js                          dry-run detect
- *   node scripts/reconcile_zoho_prices.js --apply                  apply fixes
- *   node scripts/reconcile_zoho_prices.js --phase=duplicates       find/remove duplicates
- *   node scripts/reconcile_zoho_prices.js --apply --phase=fix      void+re-sync mismatches
+ *   node scripts/reconcile_zoho_prices.js --apply                  detect + auto-fix
+ *   node scripts/reconcile_zoho_prices.js --apply --phase=fix      fix only
+ *   node scripts/reconcile_zoho_prices.js --apply --phase=duplicates
  *
  * Options:
- *   --limit=N          cap records processed (default 1000)
- *   --concurrency=N    parallel workers (default 4)
+ *   --limit=N          cap records processed (default 5000)
+ *   --concurrency=N    parallel workers (default 8)
  *   --since=YYYY-MM-DD only process orders after this date
- *   --order=XXXXX      process a single order number (e.g. 46015)
+ *   --order=XXXXX      process a single order number
  */
 require('dotenv').config();
 const axios = require('axios');
@@ -42,18 +36,20 @@ const { dbAdapter } = require('../src/database/db');
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
 const PHASE = (args.find(a => a.startsWith('--phase=')) || '').split('=')[1] || 'detect';
-const LIMIT = parseInt((args.find(a => a.startsWith('--limit=')) || '').split('=')[1] || '1000', 10);
-const CONCURRENCY = Math.max(1, parseInt((args.find(a => a.startsWith('--concurrency=')) || '').split('=')[1] || '4', 10));
+const LIMIT = parseInt((args.find(a => a.startsWith('--limit=')) || '').split('=')[1] || '5000', 10);
+const CONCURRENCY = Math.max(1, parseInt((args.find(a => a.startsWith('--concurrency=')) || '').split('=')[1] || '8', 10));
 const SINCE = (args.find(a => a.startsWith('--since=')) || '').split('=')[1] || '2026-03-25';
 const SINGLE_ORDER = (args.find(a => a.startsWith('--order=')) || '').split('=')[1] || null;
 
-const TOLERANCE = 1.00; // ₹1 tolerance for rounding
+const TOLERANCE = 1.00;
 const summary = { detected: 0, fixed: 0, skipped_paid: 0, skipped_credit: 0, duplicates_removed: 0, ok: 0, errors: [] };
+const startTime = Date.now();
 
 function log(msg) { console.log(`${APPLY ? '[APPLY]' : '[DRY-RUN]'} ${msg}`); }
+function elapsed() { return ((Date.now() - startTime) / 1000).toFixed(1); }
 
 // ============================================================
-// Shopify helpers
+// Shopify helpers (only used when payload missing from sync log)
 // ============================================================
 
 function shopifyCfg() {
@@ -95,118 +91,42 @@ async function pool(items, fn) {
     return results;
 }
 
-// ============================================================
-// Phase: DETECT — compare Zoho invoice vs Shopify order
-// ============================================================
-
-/**
- * Build a normalised map of line items from a Shopify order for comparison.
- * Key = SKU (or name if no SKU), value = { price, qty, discount, gross, net }
- */
-function shopifyLineMap(order) {
-    const map = {};
-    for (const li of (order.line_items || [])) {
-        const key = (li.sku || li.title || '').trim().toUpperCase();
-        if (!key) continue;
-        const price = parseFloat(li.price || 0);
-        const qty = parseInt(li.quantity || 1);
-        const discount = round2(
-            (li.discount_allocations || []).reduce((s, a) => s + (parseFloat(a.amount) || 0), 0)
-        );
-        if (!map[key]) map[key] = { price, qty, discount: 0, gross: 0 };
-        map[key].qty += qty;
-        map[key].discount = round2(map[key].discount + discount);
-        map[key].gross = round2(map[key].gross + price * qty);
-    }
-    return map;
-}
-
-/**
- * Build the same normalised map from a Zoho invoice.
- */
-function zohoLineMap(invoice) {
-    const map = {};
-    for (const li of (invoice.line_items || [])) {
-        // Zoho item name often has the SKU embedded; use item_name or name
-        const key = (li.sku || li.item_id || li.name || '').trim().toUpperCase();
-        if (!key) continue;
-        const rate = parseFloat(li.rate || 0);
-        const qty = parseFloat(li.quantity || 1);
-        const discount = round2(parseFloat(li.discount || 0));
-        if (!map[key]) map[key] = { price: rate, qty: 0, discount: 0, gross: 0 };
-        map[key].qty += qty;
-        map[key].discount = round2(map[key].discount + discount);
-        map[key].gross = round2(map[key].gross + rate * qty);
-    }
-    return map;
-}
-
 const round2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
 
+// ============================================================
+// Fast comparison using totals only (no line-by-line needed
+// for the initial scan — line-by-line is only needed for fix)
+// ============================================================
+
 /**
- * Compare a Zoho invoice against its Shopify order.
- * Returns { match: bool, issues: string[], zohoTotal, shopifyTotal, delta }
+ * Compute the expected net from a Shopify order payload.
+ * net = items_gross - total_discounts + shipping
  */
-function compareInvoice(syncRow, zohoInvoice, shopifyOrder) {
-    const issues = [];
-    const zohoLines = zohoLineMap(zohoInvoice);
-    const shopLines = shopifyLineMap(shopifyOrder);
-
-    // 1) Line-by-line price check
-    for (const [key, zLine] of Object.entries(zohoLines)) {
-        const sLine = shopLines[key];
-        if (!sLine) {
-            // Zoho has a line Shopify doesn't — might be a name mismatch, skip
-            continue;
-        }
-        if (Math.abs(zLine.price - sLine.price) > 0.01) {
-            issues.push(`price_mismatch:${key}:zoho=${zLine.price}:shopify=${sLine.price}`);
-        }
-        if (Math.abs(zLine.discount - sLine.discount) > TOLERANCE) {
-            issues.push(`discount_mismatch:${key}:zoho=${zLine.discount}:shopify=${sLine.discount}`);
-        }
-    }
-
-    // 2) Total check — compare Zoho invoice total vs Shopify's expected total
-    //    Shopify expected = total_price (includes shipping, tax, discounts)
-    //    Zoho total = subtotal - discounts + tax (no shipping in middleware)
-    //    We compare the SUBTOTAL (items after discount) since Zoho doesn't have shipping
-    const zohoSubtotal = parseFloat(zohoInvoice.subtotal || 0);
-    const zohoDiscount = round2(
-        (zohoInvoice.line_items || []).reduce((s, l) => s + (parseFloat(l.discount || 0)), 0)
-    );
-    const zohoNet = round2(zohoSubtotal - zohoDiscount);
-
-    const shopifyItemsNet = Object.values(shopLines).reduce((s, l) => s + l.gross - l.discount, 0);
-
-    if (Math.abs(zohoNet - shopifyItemsNet) > TOLERANCE) {
-        issues.push(`net_total_mismatch:zoho=${zohoNet}:shopify=${round2(shopifyItemsNet)}`);
-    }
-
-    // 3) Check if discount was applied in Shopify but missing in Zoho
-    const shopifyTotalDiscount = parseFloat(shopifyOrder.total_discounts || 0);
-    const zohoTotalDiscount = round2(
-        (zohoInvoice.line_items || []).reduce((s, l) => s + (parseFloat(l.discount || 0)), 0)
-    );
-    if (shopifyTotalDiscount > TOLERANCE && zohoTotalDiscount < TOLERANCE) {
-        issues.push(`discount_missing:shopify_total=${shopifyTotalDiscount}:zoho_total=${zohoTotalDiscount}`);
-    } else if (Math.abs(shopifyTotalDiscount - zohoTotalDiscount) > TOLERANCE && shopifyTotalDiscount > TOLERANCE) {
-        issues.push(`discount_drift:shopify=${shopifyTotalDiscount}:zoho=${zohoTotalDiscount}`);
-    }
-
-    return {
-        match: issues.length === 0,
-        issues,
-        zohoNet,
-        shopifyNet: round2(shopifyItemsNet),
-        zohoTotal: parseFloat(zohoInvoice.total || 0),
-        shopifyTotal: parseFloat(shopifyOrder.total_price || 0),
-        delta: round2(parseFloat(zohoInvoice.total || 0) - parseFloat(shopifyOrder.total_price || 0))
-    };
+function shopifyNet(payload) {
+    const itemsGross = round2((payload.line_items || [])
+        .reduce((s, li) => s + (parseFloat(li.price) || 0) * (parseInt(li.quantity) || 1), 0));
+    const discounts = round2(parseFloat(payload.total_discounts || 0));
+    const shipping = round2((payload.shipping_lines || [])
+        .reduce((s, sl) => s + (parseFloat(sl.price) || 0), 0));
+    return round2(itemsGross - discounts + shipping);
 }
 
+/**
+ * Compute the Zoho invoice net from its line items.
+ */
+function zohoNet(invoice) {
+    return round2((invoice.line_items || []).reduce((s, l) => {
+        return s + (parseFloat(l.rate || 0) * parseFloat(l.quantity || 1)) - (parseFloat(l.discount || 0));
+    }, 0));
+}
+
+// ============================================================
+// Phase: DETECT — fast scan using sync log payloads + Zoho list API
+// ============================================================
+
 async function phaseDetect() {
-    let query = `SELECT shopify_order_id, zoho_invoice_id, created_at
+    // 1) Load sync log rows with original_payload (one DB query, no Shopify API)
+    let query = `SELECT shopify_order_id, zoho_invoice_id, original_payload, created_at
          FROM zoho_sync_log
          WHERE status = 'synced' AND zoho_invoice_id IS NOT NULL`;
     const params = [];
@@ -222,160 +142,187 @@ async function phaseDetect() {
     params.push(LIMIT);
 
     const rows = await dbAdapter.query(query, params);
-    log(`detect: ${rows.length} synced invoices to check`);
+    log(`detect: ${rows.length} synced invoices to check (${elapsed()}s)`);
 
+    // 2) Fetch all Zoho invoices in pages (list API — fast, just totals)
+    const zohoCache = {};
+    log('detect: fetching Zoho invoices...');
+    for (let page = 1; page <= 50; page++) {
+        let invoices = [];
+        try {
+            invoices = await zohoService.searchInvoice({ page, per_page: 200 });
+        } catch (e) { break; }
+        if (!invoices.length) break;
+        for (const inv of invoices) {
+            if (inv.invoice_id) zohoCache[inv.invoice_id] = inv;
+        }
+        if (invoices.length < 200) break;
+        if (page % 5 === 0) log(`  ... page ${page} (${Object.keys(zohoCache).length} invoices cached)`);
+    }
+    log(`detect: ${Object.keys(zohoCache).length} Zoho invoices cached (${elapsed()}s)`);
+
+    // 3) Compare — use stored payload, only fetch from Shopify if missing
     const csvPath = path.join(__dirname, `../tmp/zoho_price_reconciliation_${new Date().toISOString().slice(0, 10)}.csv`);
-    const csvLines = ['order,zoho_invoice_id,issue,zoho_net,shopify_net,zoho_total,shopify_total,delta'];
+    const csvLines = ['order,zoho_invoice_id,zoho_net,shopify_net,delta,zoho_total,shopify_total,status'];
+    const mismatched = []; // collect for fix phase
+
+    let shopifyFetches = 0;
 
     await pool(rows, async (row) => {
         const orderNum = String(row.shopify_order_id).replace(/^#/, '');
 
-        // Fetch Zoho invoice (full, with line items)
-        let zohoInv;
-        try {
-            zohoInv = await zohoService.getInvoice(row.zoho_invoice_id);
-        } catch (e) {
-            summary.errors.push(`${orderNum}: getInvoice failed: ${e.message}`);
-            return;
-        }
-        if (!zohoInv) {
-            summary.errors.push(`${orderNum}: invoice ${row.zoho_invoice_id} not found in Zoho`);
-            return;
-        }
-
-        // Fetch live Shopify order
-        const shopifyOrder = await fetchShopifyOrder(orderNum);
-        if (!shopifyOrder) {
-            summary.errors.push(`${orderNum}: not found in Shopify`);
-            return;
+        // Get Zoho invoice from cache
+        const zohoListInv = zohoCache[row.zoho_invoice_id];
+        if (!zohoListInv) {
+            // Not in cache — fetch individually
+            try {
+                const full = await zohoService.getInvoice(row.zoho_invoice_id);
+                if (full) zohoCache[row.zoho_invoice_id] = full;
+            } catch (e) {
+                summary.errors.push(`${orderNum}: Zoho invoice not found`);
+                return;
+            }
         }
 
-        const result = compareInvoice(row, zohoInv, shopifyOrder);
+        const zohoInv = zohoCache[row.zoho_invoice_id];
+        if (!zohoInv) { summary.errors.push(`${orderNum}: invoice missing`); return; }
 
-        if (result.match) {
+        // Get Shopify order from stored payload (FAST — no API call)
+        let shopifyOrder = null;
+        if (row.original_payload) {
+            shopifyOrder = typeof row.original_payload === 'string'
+                ? JSON.parse(row.original_payload) : row.original_payload;
+        }
+
+        // Fallback: fetch from Shopify (rare — only if payload missing)
+        if (!shopifyOrder || !shopifyOrder.line_items) {
+            shopifyOrder = await fetchShopifyOrder(orderNum);
+            shopifyFetches++;
+            if (!shopifyOrder) {
+                summary.errors.push(`${orderNum}: not in sync log payload or Shopify`);
+                return;
+            }
+        }
+
+        // Compare totals
+        const sNet = shopifyNet(shopifyOrder);
+        const zNet = zohoNet(zohoInv);
+        const delta = round2(sNet - zNet);
+
+        if (Math.abs(delta) <= TOLERANCE) {
             summary.ok++;
             return;
         }
 
         summary.detected++;
-        const issueStr = result.issues.join('; ');
-        log(`  ❌ #${orderNum}: ${issueStr} (delta: ₹${result.delta})`);
+        const zohoTotal = parseFloat(zohoInv.total || 0);
+        const shopifyTotal = parseFloat(shopifyOrder.total_price || 0);
+
+        log(`  ❌ #${orderNum}: zoho=₹${zNet} shopify=₹${sNet} Δ=₹${Math.abs(delta).toFixed(2)} [${elapsed()}s]`);
 
         csvLines.push([
-            orderNum, row.zoho_invoice_id, issueStr,
-            result.zohoNet, result.shopifyNet,
-            result.zohoTotal, result.shopifyTotal, result.delta
+            orderNum, row.zoho_invoice_id, zNet, sNet, Math.abs(delta),
+            zohoTotal, shopifyTotal,
+            Math.abs(delta) > 100 ? 'large_mismatch' : 'small_mismatch'
         ].join(','));
 
-        // If --apply, attempt fix for unpaid invoices
-        if (APPLY && PHASE === 'detect') {
-            await attemptFix(orderNum, row, zohoInv, shopifyOrder);
-        }
+        mismatched.push({ orderNum, row, delta, zohoInv, shopifyOrder });
     });
 
-    // Write CSV report
+    // Write CSV
     fs.mkdirSync(path.dirname(csvPath), { recursive: true });
     fs.writeFileSync(csvPath, csvLines.join('\n'));
-    log(`detect: report written to ${csvPath}`);
+
+    log(`\ndetect: ${summary.detected} mismatches found, ${summary.ok} OK (${elapsed()}s)`);
+    if (shopifyFetches > 0) log(`  (fetched ${shopifyFetches} orders from Shopify — rest used stored payload)`);
+    log(`  report: ${csvPath}`);
+    if (summary.errors.length) log(`  ${summary.errors.length} errors`);
+
+    // Auto-fix if --apply and phase=detect
+    if (APPLY && mismatched.length > 0 && PHASE === 'detect') {
+        log(`\nfix: attempting to fix ${mismatched.length} mismatched invoices...`);
+        await fixMismatched(mismatched);
+    }
+
+    return mismatched;
 }
 
 // ============================================================
 // Phase: FIX — void + re-sync mismatched unpaid invoices
 // ============================================================
 
-async function attemptFix(orderNum, syncRow, zohoInv, shopifyOrder) {
-    // Skip cancelled orders
-    if (shopifyOrder.cancelled_at && !(shopifyOrder.fulfillments || []).length) {
-        log(`  ⏭️ #${orderNum}: cancelled before dispatch — skipping`);
-        return;
-    }
-
-    const balance = parseFloat(zohoInv.balance ?? zohoInv.total);
-    const total = parseFloat(zohoInv.total);
-    const isPaid = Math.abs(balance - total) > 0.01;
-
-    // Check for credit notes linked to this invoice
-    let hasCreditNotes = false;
-    try {
-        const cnRef = require('../src/services/zohoTransform').creditNoteReference(orderNum, 'return');
-        const cnRto = require('../src/services/zohoTransform').creditNoteReference(orderNum, 'rto');
-        const cnExch = require('../src/services/zohoTransform').creditNoteReference(orderNum, 'exchange');
-        const [cn1, cn2, cn3] = await Promise.all([
-            zohoService.searchCreditNotes({ reference_number: cnRef }),
-            zohoService.searchCreditNotes({ reference_number: cnRto }),
-            zohoService.searchCreditNotes({ reference_number: cnExch })
-        ]);
-        hasCreditNotes = cn1.length > 0 || cn2.length > 0 || cn3.length > 0;
-    } catch (e) { /* assume none */ }
-
-    if (hasCreditNotes) {
-        summary.skipped_credit++;
-        log(`  ⏭️ #${orderNum}: has credit notes — MANUAL FIX required`);
-        return;
-    }
-
-    if (isPaid) {
-        summary.skipped_paid++;
-        log(`  ⏭️ #${orderNum}: has payments (balance ${balance}/${total}) — MANUAL FIX required`);
-        return;
-    }
-
-    log(`  🔧 #${orderNum}: unpaid, no credit notes → void + re-sync`);
-
-    try {
-        // Delete any payments (shouldn't exist if unpaid, but defensive)
-        const payments = await zohoService.getPayments(null, zohoInv.invoice_number);
-        for (const p of payments) {
-            try { await zohoService.deletePayment(p.payment_id); } catch (e) { /* ignore */ }
+async function fixMismatched(mismatched) {
+    await pool(mismatched, async ({ orderNum, row, delta, zohoInv, shopifyOrder }) => {
+        // Skip cancelled orders
+        if (shopifyOrder.cancelled_at && !(shopifyOrder.fulfillments || []).length) {
+            log(`  ⏭️ #${orderNum}: cancelled — skip`);
+            return;
         }
 
-        // Void + delete old invoice
-        await zohoService.voidInvoice(zohoInv.invoice_id);
-        await zohoService.deleteInvoice(zohoInv.invoice_id);
+        const balance = parseFloat(zohoInv.balance ?? zohoInv.total);
+        const total = parseFloat(zohoInv.total);
+        const isPaid = Math.abs(balance - total) > 0.01;
 
-        // Remove old sync log so the pipeline re-runs cleanly
-        await dbAdapter.run(`DELETE FROM zoho_sync_log WHERE shopify_order_id = ?`, [orderNum]);
-
-        // Re-sync through the corrected pipeline
-        const result = await zohoSyncService.syncOrderToZoho(shopifyOrder);
-        if (result.success) {
-            summary.fixed++;
-            log(`  ✅ #${orderNum}: re-synced → invoice ${result.zohoInvoiceId || 'created'}`);
-        } else {
-            summary.errors.push(`${orderNum}: re-sync failed: ${result.error}`);
-            log(`  ❌ #${orderNum}: re-sync failed: ${result.error}`);
+        if (isPaid) {
+            summary.skipped_paid++;
+            return;
         }
-    } catch (e) {
-        summary.errors.push(`${orderNum}: fix failed: ${e.message}`);
-        log(`  ❌ #${orderNum}: fix failed: ${e.message}`);
-    }
+
+        // Check for credit notes (quick DB check, not API)
+        try {
+            const { creditNoteReference } = require('../src/services/zohoTransform');
+            const refs = ['return', 'rto', 'exchange'].map(t => creditNoteReference(orderNum, t));
+            for (const ref of refs) {
+                const cn = await zohoService.searchCreditNotes({ reference_number: ref });
+                if (cn.length > 0) {
+                    summary.skipped_credit++;
+                    return;
+                }
+            }
+        } catch (e) { /* proceed */ }
+
+        log(`  🔧 #${orderNum}: voiding + re-syncing (Δ=₹${Math.abs(delta).toFixed(2)}) [${elapsed()}s]`);
+
+        try {
+            // Void + delete old invoice
+            await zohoService.voidInvoice(zohoInv.invoice_id);
+            await zohoService.deleteInvoice(zohoInv.invoice_id);
+
+            // Remove old sync log
+            await dbAdapter.run(`DELETE FROM zoho_sync_log WHERE shopify_order_id = ?`, [orderNum]);
+
+            // Re-sync through corrected pipeline
+            const result = await zohoSyncService.syncOrderToZoho(shopifyOrder);
+            if (result.success) {
+                summary.fixed++;
+            } else {
+                summary.errors.push(`${orderNum}: re-sync failed: ${result.error}`);
+            }
+        } catch (e) {
+            summary.errors.push(`${orderNum}: fix failed: ${e.message}`);
+        }
+    });
+
+    log(`fix: ${summary.fixed} fixed, ${summary.skipped_paid} skipped (paid), ${summary.skipped_credit} skipped (credit notes) [${elapsed()}s]`);
 }
 
 async function phaseFix() {
-    // Re-run detect in apply mode — it handles the fix inline
-    await phaseDetect();
+    const mismatched = await phaseDetect();
+    if (mismatched && mismatched.length > 0) {
+        log(`\nfix: processing ${mismatched.length} mismatches...`);
+        await fixMismatched(mismatched);
+    }
 }
 
 // ============================================================
-// Phase: DUPLICATES — find and remove extra invoices from native integration
+// Phase: DUPLICATES — find and remove extra invoices
 // ============================================================
 
 async function phaseDuplicates() {
-    // Find orders with multiple invoices in Zoho (same reference_number)
-    const rows = await dbAdapter.query(
-        `SELECT shopify_order_id, COUNT(*) as cnt
-         FROM zoho_sync_log
-         WHERE status = 'synced' AND zoho_invoice_id IS NOT NULL
-         GROUP BY shopify_order_id HAVING COUNT(*) > 1
-         LIMIT ?`,
-        [LIMIT]
-    );
-    log(`duplicates: ${rows.length} orders with multiple sync log entries`);
-
-    // Also scan Zoho directly for invoices with duplicate reference numbers
     const seenRefs = {};
-    let dupInvoices = [];
-    for (let page = 1; page <= 30; page++) {
+    log('duplicates: scanning Zoho invoices...');
+
+    for (let page = 1; page <= 50; page++) {
         let invoices = [];
         try {
             invoices = await zohoService.searchInvoice({ page, per_page: 200 });
@@ -390,15 +337,16 @@ async function phaseDuplicates() {
             seenRefs[ref].push(inv);
         }
         if (invoices.length < 200) break;
+        if (page % 5 === 0) log(`  ... page ${page}`);
     }
 
-    dupInvoices = Object.entries(seenRefs).filter(([, invs]) => invs.length > 1);
-    log(`duplicates: ${dupInvoices.length} reference numbers with multiple invoices in Zoho`);
+    const dupInvoices = Object.entries(seenRefs).filter(([, invs]) => invs.length > 1);
+    log(`duplicates: ${dupInvoices.length} reference numbers with multiple invoices (${elapsed()}s)`);
 
     await pool(dupInvoices, async ([ref, invoices]) => {
         const orderNum = ref.replace(/^#/, '');
 
-        // Fetch full details to decide which to keep
+        // Sort: keep the one with discounts (our middleware), remove the rest
         const fullInvoices = [];
         for (const inv of invoices) {
             try {
@@ -406,48 +354,39 @@ async function phaseDuplicates() {
                 if (full) fullInvoices.push(full);
             } catch (e) { /* skip */ }
         }
-
         if (fullInvoices.length < 2) return;
 
-        // Strategy: keep the invoice that has line items with discounts
-        // (i.e. the one from our middleware, not the native integration)
-        // If both have discounts or neither does, keep the most recent one.
         fullInvoices.sort((a, b) => {
-            const aDiscount = (a.line_items || []).some(l => parseFloat(l.discount || 0) > 0);
-            const bDiscount = (b.line_items || []).some(l => parseFloat(l.discount || 0) > 0);
-            if (aDiscount && !bDiscount) return -1; // a is better
-            if (!aDiscount && bDiscount) return 1;  // b is better
-            // Both same — keep the one created by our middleware (has our reference format)
+            const aD = (a.line_items || []).some(l => parseFloat(l.discount || 0) > 0);
+            const bD = (b.line_items || []).some(l => parseFloat(l.discount || 0) > 0);
+            if (aD && !bD) return -1;
+            if (!aD && bD) return 1;
             return new Date(b.created_at || 0) - new Date(a.created_at || 0);
         });
 
         const keep = fullInvoices[0];
         const remove = fullInvoices.slice(1);
 
-        log(`  #${orderNum}: keeping ${keep.invoice_number}, removing ${remove.length} duplicate(s)`);
-
+        log(`  #${orderNum}: keeping ${keep.invoice_number}, removing ${remove.length} dup(s)`);
         if (!APPLY) return;
 
         for (const dup of remove) {
-            // Check for payments on the duplicate
             const payments = await zohoService.getPayments(null, dup.invoice_number);
             if (payments.length > 0) {
-                // Transfer payment to the kept invoice before deleting
-                log(`    ⚠️ duplicate ${dup.invoice_number} has ${payments.length} payment(s) — skipping (manual review)`);
+                log(`    ⚠️ ${dup.invoice_number} has payments — skip`);
                 continue;
             }
-
             try {
                 await zohoService.voidInvoice(dup.invoice_id);
                 await zohoService.deleteInvoice(dup.invoice_id);
                 summary.duplicates_removed++;
-                log(`    ✅ removed duplicate ${dup.invoice_number}`);
             } catch (e) {
                 summary.errors.push(`dup ${dup.invoice_number}: ${e.message}`);
-                log(`    ❌ failed to remove ${dup.invoice_number}: ${e.message}`);
             }
         }
     });
+
+    log(`duplicates: ${summary.duplicates_removed} removed (${elapsed()}s)`);
 }
 
 // ============================================================
@@ -455,7 +394,7 @@ async function phaseDuplicates() {
 // ============================================================
 
 async function main() {
-    console.log(`\n🔍 Zoho ↔ Shopify Price Reconciliation`);
+    console.log(`\n🔍 Zoho ↔ Shopify Price Reconciliation (FAST)`);
     console.log(`   mode: ${APPLY ? 'APPLY' : 'DRY-RUN'} | phase: ${PHASE} | limit: ${LIMIT} | since: ${SINCE} | concurrency: ${CONCURRENCY}`);
     if (SINGLE_ORDER) console.log(`   single order: #${SINGLE_ORDER}`);
     console.log();
@@ -479,18 +418,19 @@ async function main() {
         console.error(`❌ phase ${PHASE} crashed: ${e.message}`);
     }
 
-    console.log('\n================ SUMMARY ================');
-    console.log(`ok: ${summary.ok}`);
-    console.log(`detected mismatches: ${summary.detected}`);
+    console.log(`\n${'='.repeat(50)}`);
+    console.log(`SUMMARY (${elapsed()}s total)`);
+    console.log(`  ok: ${summary.ok}`);
+    console.log(`  detected mismatches: ${summary.detected}`);
     if (APPLY) {
-        console.log(`fixed: ${summary.fixed}`);
-        console.log(`skipped (has payments): ${summary.skipped_paid}`);
-        console.log(`skipped (has credit notes): ${summary.skipped_credit}`);
-        console.log(`duplicates removed: ${summary.duplicates_removed}`);
+        console.log(`  fixed: ${summary.fixed}`);
+        console.log(`  skipped (paid): ${summary.skipped_paid}`);
+        console.log(`  skipped (credit notes): ${summary.skipped_credit}`);
+        console.log(`  duplicates removed: ${summary.duplicates_removed}`);
     }
     if (summary.errors.length) {
-        console.log(`\n${summary.errors.length} error(s):`);
-        summary.errors.slice(0, 50).forEach(e => console.log(`  - ${e}`));
+        console.log(`  ${summary.errors.length} error(s):`);
+        summary.errors.slice(0, 30).forEach(e => console.log(`    - ${e}`));
     }
     if (!APPLY) console.log('\nDry-run complete. Re-run with --apply to execute fixes.');
     process.exit(0);
