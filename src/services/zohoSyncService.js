@@ -134,7 +134,7 @@ async function syncOrderToZoho(shopifyOrder) {
             }),
             notes: invoice.notes,
             reference_number: invoice.reference_number,
-            is_inclusive_tax: false
+            is_inclusive_tax: true
         };
 
         // Ship-to address with state — together with the contact's billing

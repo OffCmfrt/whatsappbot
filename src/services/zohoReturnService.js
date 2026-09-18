@@ -222,7 +222,7 @@ async function createExchangeReplacementInvoice({ shopifyOrder, orderId, exchang
         line_items: zohoLines,
         notes: `Exchange replacement for Shopify Order #${orderId}`,
         reference_number: ref,
-        is_inclusive_tax: false,
+        is_inclusive_tax: true,
         gst_treatment: 'consumer'
     };
 

@@ -475,7 +475,7 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         notes: `Shopify Order #${shopifyOrder.order_number || shopifyOrder.id}`,
         reference_number: shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString() || '',
         terms: '',
-        is_inclusive_tax: false,
+        is_inclusive_tax: true,
         taxDecision,
         shipping_address: customer.shipping_address,
         // GST state code of the customer state — sent as place_of_supply on
@@ -700,7 +700,7 @@ function buildCreditNotePayload(shopifyOrder, returnItems, returnType = 'return'
         line_items: lineItems,
         notes: `${returnType.toUpperCase()} — Shopify Order #${orderId}${extraNotes ? ' | ' + extraNotes : ''}`,
         reference_number: creditNoteReference(orderId, returnType),
-        is_inclusive_tax: false,
+        is_inclusive_tax: true,
         return_type: returnType
     };
 }
