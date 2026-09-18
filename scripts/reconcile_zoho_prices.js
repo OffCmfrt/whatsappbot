@@ -411,16 +411,25 @@ async function phaseDuplicates() {
 
         for (const dup of removeInvs) {
             try {
-                // Check for payments — must delete before voiding
-                const payments = await zohoService.getPayments(null, dup.invoice_number);
-                if (payments.length > 0) {
-                    log(`    💰 ${dup.invoice_number} has ${payments.length} payment(s) — deleting first`);
-                    for (const pmt of payments) {
-                        try {
-                            await zohoService.deletePayment(pmt.payment_id);
-                            summary.duplicates_payments_deleted++;
-                        } catch (pmtErr) {
-                            summary.errors.push(`payment ${pmt.payment_id}: ${pmtErr.message}`);
+                // Skip getPayments if list API shows invoice is unpaid
+                // (balance === total means no payments received)
+                const dupBalance = parseFloat(dup.balance ?? dup.total);
+                const dupTotal = parseFloat(dup.total);
+                const hasPayments = Math.abs(dupBalance - dupTotal) > 0.01;
+                let paymentsDeleted = 0;
+
+                if (hasPayments) {
+                    const payments = await zohoService.getPayments(null, dup.invoice_number);
+                    if (payments.length > 0) {
+                        log(`    💰 ${dup.invoice_number} has ${payments.length} payment(s) — deleting first`);
+                        for (const pmt of payments) {
+                            try {
+                                await zohoService.deletePayment(pmt.payment_id);
+                                paymentsDeleted++;
+                                summary.duplicates_payments_deleted++;
+                            } catch (pmtErr) {
+                                summary.errors.push(`payment ${pmt.payment_id}: ${pmtErr.message}`);
+                            }
                         }
                     }
                 }
@@ -433,7 +442,7 @@ async function phaseDuplicates() {
                 summary.duplicates_removed++;
 
                 csvLines.push([orderNum, 'removed', keepInv.invoice_number, dup.invoice_number,
-                    reason, `payments_deleted=${payments.length}`].join(','));
+                    reason, `payments_deleted=${paymentsDeleted}`].join(','));
                 log(`    ✅ removed ${dup.invoice_number}`);
             } catch (e) {
                 summary.errors.push(`dup ${dup.invoice_number}: ${e.message}`);
