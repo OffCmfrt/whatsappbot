@@ -247,6 +247,54 @@ const abandonedCartCron = require('./src/services/abandonedCartCron');
 const reengagementCron = require('./src/services/reengagementCron');
 const shipmentSyncCron = require('./src/services/shipmentSyncCron');
 
+// Periodic duplicate invoice sweeper — runs every 10 min to catch any
+// invoices created by the native Zoho ↔ Shopify integration
+if (process.env.ZOHO_ORG_ID) {
+    const zohoService = require('./src/services/zohoService');
+    const { dbAdapter } = require('./src/database/db');
+
+    setInterval(async () => {
+        try {
+            // Get recent syncs (last 30 min) and check for duplicates
+            const recent = await dbAdapter.query(
+                `SELECT shopify_order_id, zoho_invoice_id FROM zoho_sync_log
+                 WHERE status = 'synced' AND created_at > NOW() - INTERVAL '30 minutes'
+                 LIMIT 50`
+            );
+            if (recent.length === 0) return;
+
+            let removed = 0;
+            for (const sync of recent) {
+                try {
+                    const orderId = String(sync.shopify_order_id).replace(/^#/, '');
+                    const allRefs = await zohoService.searchInvoice({ reference_number: orderId });
+                    const dups = allRefs.filter(
+                        inv => inv.invoice_id !== sync.zoho_invoice_id
+                            && inv.status !== 'void' && inv.status !== 'deleted'
+                    );
+                    for (const dup of dups) {
+                        try {
+                            const pmts = await zohoService.getPayments(dup.invoice_id);
+                            for (const p of pmts) {
+                                try { await zohoService.deletePayment(p.payment_id); } catch (_) {}
+                            }
+                            if (dup.status !== 'void') await zohoService.voidInvoice(dup.invoice_id);
+                            await zohoService.deleteInvoice(dup.invoice_id);
+                            removed++;
+                        } catch (_) {}
+                    }
+                } catch (_) {}
+            }
+            if (removed > 0) {
+                console.log(`🧹 Zoho duplicate sweeper: removed ${removed} duplicate(s) from ${recent.length} recent syncs`);
+            }
+        } catch (e) {
+            console.warn(`⚠️ Zoho duplicate sweeper error: ${e.message}`);
+        }
+    }, 10 * 60 * 1000).unref(); // 10 minutes
+    console.log('🧹 Zoho duplicate invoice sweeper started (10 min interval)');
+}
+
 // WhatsApp webhook verification (Meta Cloud API)
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
