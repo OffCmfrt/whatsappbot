@@ -57,6 +57,9 @@ router.post('/webhook/instagram', async (req, res) => {
     try {
         const body = req.body;
 
+        // ── DIAGNOSTIC LOGGING (safe, non-sensitive) ────────────────
+        console.log(`[IG WEBHOOK] Received | object=${body?.object} | entries=${body?.entry?.length || 0}`);
+
         // Verify this is an Instagram webhook
         if (body.object !== 'instagram') {
             console.log('[IG WEBHOOK] Non-instagram object:', body.object);
@@ -66,10 +69,23 @@ router.post('/webhook/instagram', async (req, res) => {
         const entries = body.entry || [];
 
         for (const entry of entries) {
+            // ── DIAGNOSTIC: Log entry structure ─────────────────────
+            const hasMessaging = !!entry.messaging;
+            const hasComments = !!entry.comments;
+            const hasChanges = !!entry.changes;
+            const messagingCount = entry.messaging?.length || 0;
+            console.log(`[IG WEBHOOK] Entry | messaging=${hasMessaging}(${messagingCount}) | comments=${hasComments} | changes=${hasChanges}`);
+
             // Handle messaging events (DMs)
             const messagingEvents = entry.messaging || [];
 
             for (const event of messagingEvents) {
+                // ── DIAGNOSTIC: Log event type ──────────────────────
+                const senderId = event.sender?.id;
+                const hasMessage = !!event.message;
+                const eventType = hasMessage ? 'message' : (event.referral ? 'referral' : (event.postback ? 'postback' : 'unknown'));
+                console.log(`[IG WEBHOOK] DM event | type=${eventType} | sender=${senderId ? String(senderId).substring(0, 8) + '...' : 'none'}`);
+
                 // Process in background to avoid blocking the response
                 processInstagramEvent(event).catch(err => {
                     console.error('[IG WEBHOOK] Event processing error:', err.message);
@@ -79,15 +95,18 @@ router.post('/webhook/instagram', async (req, res) => {
             // Handle comment events — two payload shapes exist:
             //   - entry.comments[] (direct comment objects)
             //   - entry.changes[] with field 'comments' (Graph webhook format)
+            // FIX: Added null-safety check (c && c.field) to prevent throws on null entries
             const commentEvents = [
                 ...(entry.comments || []),
                 ...(entry.changes || [])
-                    .filter(c => c.field === 'comments')
+                    .filter(c => c && c.field === 'comments')  // ← FIXED: null-safe
                     .map(c => c.value)
             ].filter(Boolean);
 
             for (const comment of commentEvents) {
                 if (!comment?.id) continue;
+                // ── DIAGNOSTIC: Log comment event ───────────────────
+                console.log(`[IG WEBHOOK] Comment event | id=${comment.id.substring(0, 12)}... | from=${comment.from?.username || 'unknown'}`);
                 // Process in background — pipeline dedups, classifies,
                 // private-replies and records the comment
                 igCommentService.processCommentEvent(comment).catch(err => {
