@@ -267,14 +267,27 @@ async function recordPayment(paymentPayload) {
 }
 
 async function getPayments(invoiceId, invoiceNumber = null) {
+    // If we have the invoice_id, use the direct endpoint — the list API's
+    // invoice_number filter is silently ignored by Books
+    if (invoiceId) {
+        const url = `${BOOKS_BASE()}/invoices/${invoiceId}/payments`;
+        try {
+            const result = await zohoRequest('get', url);
+            return result.payments || result.customerpayments || [];
+        } catch (e) {
+            // Fallback: some invoice statuses don't support this endpoint
+            if (!invoiceNumber) return [];
+        }
+    }
     const url = `${BOOKS_BASE()}/customerpayments`;
-    // NOTE: Books silently ignores the invoice_id filter here, so filter by
-    // invoice_number and re-check client-side to be safe
     const params = invoiceNumber ? { invoice_number: invoiceNumber } : {};
     const result = await zohoRequest('get', url, null, params);
     let payments = result.customerpayments || result.payments || [];
     if (invoiceNumber) {
-        payments = payments.filter(p => (p.invoice_numbers || '').includes(invoiceNumber));
+        payments = payments.filter(p => {
+            const nums = p.invoice_numbers || p.invoices || '';
+            return String(nums).includes(invoiceNumber);
+        });
     }
     return payments;
 }

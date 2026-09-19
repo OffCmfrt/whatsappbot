@@ -102,10 +102,9 @@ async function main() {
 
         for (const dup of removeInvs) {
             try {
-                // Always delete payments first (unconditional — status field
-                // from list API is unreliable for detecting paid invoices)
+                // Always delete payments first (unconditional)
                 await pace();
-                const pmts = await zohoService.getPayments(null, dup.invoice_number);
+                const pmts = await zohoService.getPayments(dup.invoice_id);
                 for (const p of pmts) {
                     await pace();
                     try { await zohoService.deletePayment(p.payment_id); } catch (_) {}
