@@ -134,7 +134,7 @@ async function syncOrderToZoho(shopifyOrder) {
             }),
             notes: invoice.notes,
             reference_number: invoice.reference_number,
-            is_inclusive_tax: false
+            is_inclusive_tax: true
         };
 
         // Ship-to address with state — together with the contact's billing
@@ -189,6 +189,65 @@ async function syncOrderToZoho(shopifyOrder) {
             }
         }
 
+        // Step 4.2: Price validation + auto-fix — verify Zoho invoice totals
+        // match Shopify EXACTLY. If Zoho Books computed a different net (native
+        // integration override, rounding drift, etc.), patch the invoice with
+        // a rounding adjustment line so totals align to the paise.
+        try {
+            const freshInvoice = await zohoService.getInvoice(zohoInvoice.invoice_id);
+            if (freshInvoice) {
+                const r2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+                // Shopify canonical net: items gross - discounts + shipping
+                const itemsGross = r2((shopifyOrder.line_items || [])
+                    .reduce((s, li) => s + (parseFloat(li.price) || 0) * (parseInt(li.quantity) || 1), 0));
+                const totalDiscounts = r2(parseFloat(shopifyOrder.total_discounts || 0));
+                const shipping = r2((shopifyOrder.shipping_lines || [])
+                    .reduce((s, sl) => s + (parseFloat(sl.price) || 0), 0));
+                const shopifyNet = r2(itemsGross - totalDiscounts + shipping);
+        
+                const zohoNet = r2((freshInvoice.line_items || []).reduce((s, l) => {
+                    return s + (parseFloat(l.rate || 0) * parseFloat(l.quantity || 1)) - (parseFloat(l.discount || 0));
+                }, 0));
+        
+                const delta = r2(shopifyNet - zohoNet);
+        
+                if (Math.abs(delta) > 0.01) {
+                    console.warn(`⚠️ Zoho sync #${orderId}: net mismatch ₹${Math.abs(delta).toFixed(2)} — auto-fixing with adjustment line`);
+                    try {
+                        // Patch the invoice: add a rounding adjustment line
+                        const existingLines = (freshInvoice.line_items || []).map(l => ({
+                            name: l.name,
+                            description: l.description || l.name,
+                            quantity: parseFloat(l.quantity || 1),
+                            rate: parseFloat(l.rate || 0),
+                            discount: parseFloat(l.discount || 0),
+                            item_id: l.item_id || undefined
+                        }));
+                        existingLines.push({
+                            name: 'Rounding Adjustment',
+                            description: 'Price alignment with Shopify',
+                            quantity: 1,
+                            rate: Math.abs(delta),
+                            discount: delta < 0 ? Math.abs(delta) : 0
+                        });
+                        await zohoService.updateInvoice(zohoInvoice.invoice_id, { line_items: existingLines });
+                        transformations.price_validation = { delta: 0, auto_fixed: true, original_delta: delta };
+                        console.log(`✅ Zoho sync #${orderId}: price auto-fixed (adjustment ₹${Math.abs(delta).toFixed(2)})`);
+                    } catch (fixErr) {
+                        console.warn(`⚠️ Zoho sync #${orderId}: auto-fix failed (${fixErr.message}) — flagged for review`);
+                        transformations.price_validation = {
+                            zoho_net: zohoNet, shopify_net: shopifyNet,
+                            delta: Math.abs(delta), flagged: true, auto_fix_failed: fixErr.message
+                        };
+                    }
+                } else {
+                    transformations.price_validation = { delta: Math.abs(delta), flagged: false };
+                }
+            }
+        } catch (valErr) {
+            console.warn(`⚠️ Zoho sync #${orderId}: price validation skipped (${valErr.message})`);
+        }
+
         // Step 4.5: Mark sent — activates stock deduction and allows payments
         try {
             await zohoService.markInvoiceSent(zohoInvoice.invoice_id);
@@ -221,6 +280,44 @@ async function syncOrderToZoho(shopifyOrder) {
                 logId
             ]
         );
+
+        // Step 7: Native-integration duplicate sweep — the native Zoho ↔ Shopify
+        // integration may create a second invoice with the same reference_number.
+        // Run an immediate sweep AND a delayed sweep (60s later) to catch both
+        // timing cases: native faster than middleware, and native slower.
+        const sweepDuplicates = async (label) => {
+            try {
+                const allRefs = await zohoService.searchInvoice({ reference_number: orderId });
+                const others = allRefs.filter(
+                    inv => inv.invoice_id !== zohoInvoice?.invoice_id
+                        && inv.status !== 'void' && inv.status !== 'deleted'
+                );
+                if (others.length > 0) {
+                    console.warn(`⚠️ Zoho sync #${orderId} [${label}]: found ${others.length} duplicate(s) — removing`);
+                    for (const dup of others) {
+                        try {
+                            const pmts = await zohoService.getPayments(null, dup.invoice_number);
+                            for (const p of pmts) {
+                                try { await zohoService.deletePayment(p.payment_id); } catch (_) {}
+                            }
+                            if (dup.status !== 'void') await zohoService.voidInvoice(dup.invoice_id);
+                            await zohoService.deleteInvoice(dup.invoice_id);
+                            console.log(`✅ Zoho sync #${orderId} [${label}]: removed duplicate ${dup.invoice_number}`);
+                        } catch (dupErr) {
+                            console.warn(`⚠️ Zoho sync #${orderId} [${label}]: failed to remove ${dup.invoice_number}: ${dupErr.message}`);
+                        }
+                    }
+                }
+            } catch (sweepErr) {
+                console.warn(`⚠️ Zoho sync #${orderId} [${label}]: sweep failed (${sweepErr.message}) — non-critical`);
+            }
+        };
+
+        // Immediate sweep (catches native integration that was already faster)
+        await sweepDuplicates('immediate');
+        // Delayed sweep at 60s and 180s (catches native integration that's slower)
+        setTimeout(() => sweepDuplicates('60s-delayed'), 60_000).unref();
+        setTimeout(() => sweepDuplicates('180s-delayed'), 180_000).unref();
 
         console.log(`✅ Zoho sync: order #${orderId} → invoice ${zohoInvoice?.invoice_id || 'created'}`);
         return {

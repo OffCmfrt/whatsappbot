@@ -17,17 +17,80 @@
     var CUSTOMER_NAME = config.customerName || '';
     var CUSTOMER_PHONE = config.customerPhone || '';
 
+    // Clickable text trigger config
+    var TRIGGER_TEXT = config.triggerText || '';  // e.g. 'Need Help?'
+    var TRIGGER_POSITION = config.triggerPosition || 'bottom-right'; // bottom-right | bottom-left | top-right | top-left
+
     // ---------- Session ----------
+    // Guard against duplicate initialization (e.g. loader + direct <script> tag)
+    if (window.__offcomfrt_tb_initialized) return;
+    window.__offcomfrt_tb_initialized = true;
+
+    // Persistent visitor ID (survives tab close — links all sessions from same browser)
+    var visitorId = localStorage.getItem('offcomfrt_tb_visitor');
+    if (!visitorId) {
+        visitorId = 'v_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 10);
+        localStorage.setItem('offcomfrt_tb_visitor', visitorId);
+    }
+
     var sessionId = sessionStorage.getItem('offcomfrt_tb_session');
+    var welcomeShown = sessionStorage.getItem('offcomfrt_tb_welcome') === '1';
     if (!sessionId) {
         sessionId = 'tb_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 8);
         sessionStorage.setItem('offcomfrt_tb_session', sessionId);
+        // Fresh session — welcome will be shown below
     }
 
     var isOpen = false;
     var isTyping = false;
     var flowState = 'idle';
     var flowContext = {};
+    var widgetEventQueue = Promise.resolve();
+
+    // ---------- Admin override polling ----------
+    var lastMessageId = 0;
+    var pollTimer = null;
+    var POLL_INTERVAL = 5000; // 5 seconds
+
+    function startPolling() {
+        stopPolling();
+        // Initial fetch to set baseline
+        pollAdminMessages(true);
+        pollTimer = setInterval(function() { pollAdminMessages(false); }, POLL_INTERVAL);
+    }
+    function stopPolling() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    function pollAdminMessages(isInitial) {
+        if (!sessionId) return;
+        var url = API_URL + '/api/widget/poll?sessionId=' + encodeURIComponent(sessionId) + '&afterId=' + lastMessageId;
+        fetch(url)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.messages || !data.messages.length) return;
+                data.messages.forEach(function(m) {
+                    if (m.id > lastMessageId) lastMessageId = m.id;
+                    if (m.sender === 'admin') {
+                        addAdminMessage(m.content);
+                    }
+                });
+            })
+            .catch(function() { /* silent */ });
+    }
+
+    function addAdminMessage(text) {
+        var chat = document.getElementById('oftb-chat');
+        if (!chat) return;
+        var wrapper = document.createElement('div');
+        wrapper.className = 'oftb-msg-wrap oftb-align-left';
+        var msg = document.createElement('div');
+        msg.className = 'oftb-msg oftb-msg-admin';
+        msg.innerHTML = '<div class="oftb-admin-label">Support Team</div>' + escapeHtml(text).replace(/\n/g, '<br>');
+        wrapper.appendChild(msg);
+        chat.appendChild(wrapper);
+        scrollToBottom();
+    }
 
     // ---------- Inject CSS ----------
     function injectStyles() {
@@ -61,7 +124,6 @@
             '#offcomfrt-tb .oftb-header-brand{display:flex;align-items:center;gap:14px}',
             '#offcomfrt-tb .oftb-header-avatar{width:44px;height:44px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;position:relative;box-shadow:0 2px 8px rgba(0,0,0,0.3);overflow:hidden;border:1px solid rgba(255,255,255,0.15)}',
             '#offcomfrt-tb .oftb-header-avatar img{width:100%;height:100%;object-fit:cover}',
-            '#offcomfrt-tb .oftb-header-avatar::after{content:"";position:absolute;bottom:1px;right:1px;width:9px;height:9px;background:#fff;border-radius:50%;border:2px solid #0a0a0a;box-shadow:0 0 0 1px rgba(255,255,255,0.3)}',
             '#offcomfrt-tb .oftb-header-info{display:flex;flex-direction:column;gap:2px}',
             '#offcomfrt-tb .oftb-header-title{font-size:16px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase}',
             '#offcomfrt-tb .oftb-header-subtitle{font-size:11px;opacity:0.5;font-weight:500;letter-spacing:0.5px;text-transform:uppercase}',
@@ -83,6 +145,8 @@
             '#offcomfrt-tb .oftb-msg{padding:14px 18px;border-radius:18px;font-size:13.5px;line-height:1.65;word-wrap:break-word;letter-spacing:0.01em;max-width:88%}',
             '#offcomfrt-tb .oftb-msg-bot{align-self:flex-start;background:#fff;color:#1a1a1a;border-bottom-left-radius:6px;border:1px solid #e8e8e8;box-shadow:0 1px 4px rgba(0,0,0,0.04)}',
             '#offcomfrt-tb .oftb-msg-user{align-self:flex-end;background:linear-gradient(135deg,#1a1a1a,#000);color:#fff;border-bottom-right-radius:6px;border:none;box-shadow:0 2px 8px rgba(0,0,0,0.15)}',
+            '#offcomfrt-tb .oftb-msg-admin{align-self:flex-start;background:linear-gradient(135deg,#f0f4ff,#e8edff);color:#1a1a2e;border-bottom-left-radius:6px;border:1px solid #c7d2fe;box-shadow:0 2px 8px rgba(99,102,241,0.1);max-width:85%}',
+            '#offcomfrt-tb .oftb-admin-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#6366f1;margin-bottom:4px}',
 
             /* Inline Button Row */
             '#offcomfrt-tb .oftb-btn-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;animation:oftb-slideUp 0.35s cubic-bezier(0.16,1,0.3,1)}',
@@ -119,6 +183,7 @@
             '#offcomfrt-tb .oftb-tracking-status{font-size:10px;font-weight:700;padding:4px 10px;border-radius:100px;text-transform:uppercase;letter-spacing:0.8px}',
             '#offcomfrt-tb .oftb-status-delivered{background:#1a1a1a;color:#fff}',
             '#offcomfrt-tb .oftb-status-transit{background:#e5e5e5;color:#1a1a1a}',
+            '#offcomfrt-tb .oftb-status-pending{background:#fff3cd;color:#856404}',
             '#offcomfrt-tb .oftb-status-unknown{background:#f3f4f6;color:#999}',
             '#offcomfrt-tb .oftb-tracking-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f5f5f5}',
             '#offcomfrt-tb .oftb-tracking-row:last-child{border-bottom:none}',
@@ -147,6 +212,11 @@
             '#offcomfrt-tb .oftb-return-row .label{color:#bbb;font-size:10px;text-transform:uppercase;letter-spacing:0.8px;font-weight:600}',
             '#offcomfrt-tb .oftb-return-row .value{color:#1a1a1a;font-weight:500}',
 
+            /* WhatsApp Continue Button */
+            '#offcomfrt-tb .oftb-whatsapp-btn{display:inline-flex;align-items:center;gap:8px;margin-top:14px;padding:12px 24px;background:#25D366;color:#fff;border-radius:100px;text-decoration:none;font-size:12px;font-weight:700;font-family:inherit;letter-spacing:0.3px;transition:all 0.25s ease;border:none;cursor:pointer}',
+            '#offcomfrt-tb .oftb-whatsapp-btn:hover{background:#1ebe5d;transform:translateY(-1px);box-shadow:0 4px 16px rgba(37,211,102,0.3)}',
+            '#offcomfrt-tb .oftb-whatsapp-btn svg{width:18px;height:18px;fill:#fff;flex-shrink:0}',
+
             /* Ticket Confirmation — monochrome */
             '#offcomfrt-tb .oftb-ticket-confirm{background:#fff;border:1px solid #e0e0e0;border-radius:14px;padding:28px 24px;margin:4px 0;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.04);animation:oftb-slideUp 0.35s cubic-bezier(0.16,1,0.3,1);width:100%}',
             '#offcomfrt-tb .oftb-ticket-confirm-icon{width:48px;height:48px;border-radius:50%;background:#1a1a1a;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}',
@@ -159,16 +229,74 @@
             '#offcomfrt-tb .oftb-msg-bot strong{font-weight:700}',
             '#offcomfrt-tb .oftb-msg-bot em{font-style:italic}',
 
+            /* Clickable Text Trigger — inline class (place anywhere in theme) */
+            '.offcomfrt-open-chat{cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:"Archive Narrow",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#1a1a1a;background:#fff;padding:10px 22px;border-radius:100px;border:1px solid #000;box-shadow:0 4px 20px rgba(0,0,0,0.12),0 1px 4px rgba(0,0,0,0.08);transition:all 0.3s cubic-bezier(0.34,1.56,0.64,1);white-space:nowrap;user-select:none;-webkit-user-select:none;text-decoration:none;line-height:1}',
+            '.offcomfrt-open-chat:hover{background:#000;color:#fff;transform:translateY(-2px);box-shadow:0 8px 28px rgba(0,0,0,0.18)}',
+            '.offcomfrt-open-chat:active{transform:translateY(0) scale(0.96)}',
+
+            /* Clickable Text Trigger — fixed position (auto-created via config) */
+            '#offcomfrt-tb-trigger{position:fixed;z-index:99998;cursor:pointer;font-family:"Archive Narrow",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#1a1a1a;background:#fff;padding:10px 22px;border-radius:100px;border:1px solid #000;box-shadow:0 4px 20px rgba(0,0,0,0.12),0 1px 4px rgba(0,0,0,0.08);transition:all 0.3s cubic-bezier(0.34,1.56,0.64,1);white-space:nowrap;user-select:none;-webkit-user-select:none}',
+            '#offcomfrt-tb-trigger:hover{background:#000;color:#fff;transform:translateY(-2px);box-shadow:0 8px 28px rgba(0,0,0,0.18)}',
+            '#offcomfrt-tb-trigger:active{transform:translateY(0) scale(0.96)}',
+            '#offcomfrt-tb-trigger.pos-bottom-right{bottom:100px;right:28px}',
+            '#offcomfrt-tb-trigger.pos-bottom-left{bottom:100px;left:28px}',
+            '#offcomfrt-tb-trigger.pos-top-right{top:28px;right:28px}',
+            '#offcomfrt-tb-trigger.pos-top-left{top:28px;left:28px}',
+
             /* Mobile */
             '@media(max-width:480px){',
             '#offcomfrt-tb{bottom:0;right:0;left:0;width:100%;height:90vh;max-height:750px;border-radius:20px 20px 0 0;border:none;border-top:1px solid #000;box-shadow:0 -12px 48px rgba(0,0,0,0.15)}',
             '#offcomfrt-tb-btn{bottom:20px;right:20px;width:56px;height:56px}',
+            '#offcomfrt-tb-trigger.pos-bottom-right{bottom:86px;right:20px}',
+            '#offcomfrt-tb-trigger.pos-bottom-left{bottom:86px;left:20px}',
+            '#offcomfrt-tb-trigger.pos-top-right{top:20px;right:20px}',
+            '#offcomfrt-tb-trigger.pos-top-left{top:20px;left:20px}',
             '#offcomfrt-tb .oftb-header{padding:18px 14px}',
             '#offcomfrt-tb .oftb-chat{padding:18px 12px 14px;gap:12px}',
             '#offcomfrt-tb .oftb-input-area{padding:12px 12px 14px}',
             '}'
         ].join('\n');
         document.head.appendChild(style);
+    }
+
+    // ---------- Inline Trigger Binding (Shopify theme placement) ----------
+    function bindInlineTrigger(el) {
+        if (el.getAttribute('data-offcomfrt-bound')) return;
+        el.setAttribute('data-offcomfrt-bound', '1');
+        el.setAttribute('role', 'button');
+        if (!el.getAttribute('tabindex')) el.setAttribute('tabindex', '0');
+        el.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleWidget();
+        });
+        el.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleWidget(); }
+        });
+    }
+
+    function bindInlineTriggers() {
+        var els = document.querySelectorAll('.offcomfrt-open-chat');
+        for (var i = 0; i < els.length; i++) bindInlineTrigger(els[i]);
+    }
+
+    function watchInlineTriggers() {
+        if (typeof MutationObserver === 'undefined') return;
+        var observer = new MutationObserver(function (mutations) {
+            for (var i = 0; i < mutations.length; i++) {
+                var nodes = mutations[i].addedNodes;
+                if (!nodes || !nodes.length) continue;
+                for (var j = 0; j < nodes.length; j++) {
+                    var node = nodes[j];
+                    if (node.nodeType !== 1) continue; // element only
+                    if (node.classList && node.classList.contains('offcomfrt-open-chat')) bindInlineTrigger(node);
+                    // also check children
+                    var children = node.querySelectorAll ? node.querySelectorAll('.offcomfrt-open-chat') : [];
+                    for (var k = 0; k < children.length; k++) bindInlineTrigger(children[k]);
+                }
+            }
+        });
+        observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
     }
 
     // ---------- DOM Creation ----------
@@ -181,6 +309,28 @@
         btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
         btn.addEventListener('click', toggleWidget);
         document.body.appendChild(btn);
+
+        // Clickable text trigger (optional — only if triggerText is configured)
+        var trigger = null;
+        if (TRIGGER_TEXT) {
+            trigger = document.createElement('div');
+            trigger.id = 'offcomfrt-tb-trigger';
+            trigger.textContent = TRIGGER_TEXT;
+            trigger.className = 'pos-' + TRIGGER_POSITION;
+            trigger.setAttribute('role', 'button');
+            trigger.setAttribute('tabindex', '0');
+            trigger.setAttribute('aria-label', TRIGGER_TEXT);
+            trigger.addEventListener('click', toggleWidget);
+            trigger.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleWidget(); }
+            });
+            document.body.appendChild(trigger);
+        }
+
+        // Auto-bind any .offcomfrt-open-chat elements already in the DOM (Shopify theme placement)
+        bindInlineTriggers();
+        // Watch for dynamically added .offcomfrt-open-chat elements (SPA / lazy sections)
+        watchInlineTriggers();
 
         var widget = document.createElement('div');
         widget.id = 'offcomfrt-tb';
@@ -224,18 +374,27 @@
     function openWidget() {
         document.getElementById('offcomfrt-tb').classList.add('open');
         document.getElementById('offcomfrt-tb-btn').style.display = 'none';
+        var trig = document.getElementById('offcomfrt-tb-trigger');
+        if (trig) trig.style.display = 'none';
         isOpen = true;
+        startPolling();
         setTimeout(function () { document.getElementById('oftb-input').focus(); }, 300);
     }
     function closeWidget() {
         document.getElementById('offcomfrt-tb').classList.remove('open');
         document.getElementById('offcomfrt-tb-btn').style.display = 'flex';
+        var trig = document.getElementById('offcomfrt-tb-trigger');
+        if (trig) trig.style.display = '';
         isOpen = false;
+        stopPolling();
     }
 
     // ---------- Welcome ----------
     function showWelcome() {
         var greeting = CUSTOMER_NAME ? 'Welcome back, ' + CUSTOMER_NAME + '.' : 'Welcome to ' + BRAND_NAME + '.';
+        // Render the welcome in the DOM but never persist it to the DB.
+        // A session is only registered once the customer actually interacts
+        // (sends a message or clicks a button).
         addBotMessage(
             greeting + '\n\nHow can we assist you today?',
             [
@@ -243,13 +402,34 @@
                 { label: 'Return / Exchange', action: 'file_return' },
                 { label: 'Track Your Request', action: 'track_request' },
                 { label: 'Contact Support', action: 'contact_support' }
-            ]
+            ],
+            false  // never persist welcome — session starts on first customer action
         );
+        if (!welcomeShown) {
+            welcomeShown = true;
+            sessionStorage.setItem('offcomfrt_tb_welcome', '1');
+        }
         flowState = 'idle';
     }
 
     // ---------- Message Helpers ----------
-    function addBotMessage(text, buttons) {
+    // Widget-only interactions do not pass through the AI route, so save them
+    // separately for the admin conversation replay. AI replies opt out because
+    // the server persists their text, token usage, and any card payload itself.
+    function recordWidgetEvent(sender, content, richContent) {
+        if (!sessionId || !content) return;
+        widgetEventQueue = widgetEventQueue
+            .catch(function () { /* keep the event queue usable after a failed request */ })
+            .then(function () {
+                return fetch(API_URL + '/api/widget/event', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: sessionId, visitorId: visitorId, sender: sender, content: content, richContent: richContent || null })
+                });
+            });
+    }
+
+    function addBotMessage(text, buttons, persist) {
         var chat = document.getElementById('oftb-chat');
         var wrapper = document.createElement('div');
         wrapper.className = 'oftb-msg-wrap oftb-align-left';
@@ -281,6 +461,9 @@
 
         chat.appendChild(wrapper);
         scrollToBottom();
+        // Bot messages never create sessions — only customer actions do.
+        // AI chat is persisted server-side; cards call recordWidgetEvent directly.
+        if (persist === true) recordWidgetEvent('bot', text);
     }
 
     function addUserMessage(text) {
@@ -328,6 +511,12 @@
 
     // ---------- Button Action Router ----------
     function handleButtonAction(action) {
+        var actionLabels = {
+            track_order: 'Track Order', file_return: 'Return / Exchange', track_request: 'Track Your Request',
+            contact_support: 'Contact Support', create_support_ticket: 'Create Ticket', retry_support: 'Try Another Question',
+            main_menu: 'Menu', return_home: 'Menu', open_return_url: 'Open Return Portal', open_exchange_url: 'Open Exchange Page'
+        };
+        recordWidgetEvent('customer', actionLabels[action] || String(action || '').replace(/^support_/, '').replace(/_/g, ' '));
         if (action === 'open_return_url') {
             addUserMessage('Open Return Portal');
             window.open('https://www.offcomfrt.in/pages/return', '_blank');
@@ -385,14 +574,44 @@
         ]);
     }
 
-    function doTrackOrder(orderId) {
+    // ---------- Entity Extraction Helper ----------
+    function parseOrderOrTracking(text) {
+        if (!text) return null;
+        var str = String(text).trim();
+
+        // 1. Return/exchange request ID: REQ-1234 to REQ-123456
+        var reqMatch = str.match(/\b(REQ-\d{4,6})\b/i);
+        if (reqMatch) return { type: 'request', id: reqMatch[1].toUpperCase() };
+
+        // 2. AWB number (10 to 16 digits)
+        var awbMatch = str.match(/\b(\d{10,16})\b/);
+        if (awbMatch) return { type: 'awb', id: awbMatch[1] };
+
+        // 3. Order ID: matches #53388, Order #53388, 53388 order status, or standalone 4-6 digits
+        var orderMatch = str.match(/#(\d{4,6})/i)
+            || str.match(/\b(?:ORD|ORDER)[-_ #]?(\d{4,6})\b/i)
+            || str.match(/\b(\d{4,6})\b/)
+            || str.match(/(\d{4,6})/);
+        if (orderMatch) return { type: 'order', id: orderMatch[1] };
+
+        return null;
+    }
+
+    function doTrackOrder(orderInput, persist) {
+        if (persist !== false) recordWidgetEvent('customer', String(orderInput));
         flowState = 'tracking';
         showTyping();
 
-        var body = { sessionId: sessionId };
-        var cleaned = orderId.replace(/\s/g, '');
-        if (/^\d{10,}$/.test(cleaned)) { body.awb = cleaned; body.orderId = cleaned; }
-        else { body.orderId = cleaned; }
+        var parsed = parseOrderOrTracking(orderInput);
+        var targetId = parsed ? parsed.id : String(orderInput || '').replace(/\s/g, '');
+        var body = { sessionId: sessionId, visitorId: visitorId };
+
+        if ((parsed && parsed.type === 'awb') || /^\d{10,}$/.test(targetId)) {
+            body.awb = targetId;
+            body.orderId = targetId;
+        } else {
+            body.orderId = targetId;
+        }
 
         fetch(API_URL + '/api/widget/track-order', {
             method: 'POST',
@@ -402,7 +621,6 @@
         .then(function (r) { return r.json(); })
         .then(function (data) {
             hideTyping();
-            addUserMessage('Order #' + cleaned);
             if (data.error) {
                 addBotMessage(data.error, [
                     { label: 'Try Another', action: 'track_order', primary: true },
@@ -448,21 +666,32 @@
     function startTrackRequest() {
         flowState = 'awaiting_request_track_id';
         flowContext = {};
-        setInputMode('order');
-        addBotMessage('Enter your *order number* to check your return or exchange request status.', [
+        setInputMode('text');
+        addBotMessage('Enter your *order number* or *request ID* (e.g. REQ-12345) to check your return or exchange request status.', [
             { label: 'Back to Menu', action: 'main_menu' }
         ]);
     }
     
-    function doTrackRequest(orderId) {
+    function doTrackRequest(input, persist) {
+        if (persist !== false) recordWidgetEvent('customer', String(input));
         flowState = 'tracking_request';
         showTyping();
-        addUserMessage('Order #' + orderId);
-    
+
+        // Detect if user entered a REQ-XXXX request ID or an order number
+        var parsed = parseOrderOrTracking(input);
+        var payload = {};
+        if (parsed && parsed.type === 'request') {
+            payload.requestId = parsed.id;
+        } else if (parsed && parsed.type === 'order') {
+            payload.orderId = parsed.id;
+        } else {
+            payload.orderId = String(input).replace(/^#/, '').replace(/\s/g, '').trim();
+        }
+
         fetch(API_URL + '/api/widget/track-request', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ orderId: orderId })
+            body: JSON.stringify(payload)
         })
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -482,8 +711,9 @@
                     { label: 'Menu', action: 'main_menu' }
                 ]);
             } else {
+                var label = payload.requestId || ('#' + payload.orderId);
                 addBotMessage(
-                    'No return or exchange request found for order *#' + orderId + '*.\n\n' +
+                    'No return or exchange request found for *' + label + '*.\n\n' +
                     'You can submit a request on our pages.',
                     [
                         { label: 'Return Page', action: 'open_return_url', primary: true },
@@ -507,9 +737,12 @@
     }
 
     // ========== FLOW 4: CONTACT SUPPORT ==========
+    var MAX_AI_ATTEMPTS = 3; // Keep conversing for 3 replies before showing Create Ticket
+
     function startContactSupport() {
         flowState = 'awaiting_ticket_order_id';
         flowContext = {};
+        flowContext.aiAttempts = 0;
         setInputMode('order');
         addBotMessage('Please enter your *order number* so we can pull up your details.', [
             { label: 'Back to Menu', action: 'main_menu' }
@@ -543,6 +776,7 @@
 
     function doResolveWithAI(message) {
         flowState = 'resolving_with_ai';
+        flowContext.aiAttempts = (flowContext.aiAttempts || 0) + 1;
         showTyping();
 
         fetch(API_URL + '/api/widget/chat', {
@@ -550,6 +784,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 sessionId: sessionId,
+                visitorId: visitorId,
                 message: (flowContext.orderId ? '[Order #' + flowContext.orderId + '] ' : '') + '[' + (flowContext.supportTopic || 'General') + '] ' + message
             })
         })
@@ -557,47 +792,71 @@
         .then(function (data) {
             hideTyping();
             var aiReply = data.reply || 'I was unable to process your request.';
-            var needsEscalation = data.suggestedAction === 'create_ticket';
+            var aiSaysCreateTicket = data.suggestedAction === 'create_ticket';
+            var attempts = flowContext.aiAttempts || 0;
+            var exhaustedAttempts = attempts >= MAX_AI_ATTEMPTS;
 
-            if (needsEscalation) {
-                addBotMessage(aiReply + '\n\nWould you like to create a support ticket so our team can assist you further?', [
+            // Only offer Create Ticket after exhausting all AI attempts (ignore AI's create_ticket signal until then)
+            if (exhaustedAttempts) {
+                var escalationMsg = aiReply;
+                escalationMsg += '\n\nIt seems I am not able to fully resolve this. Would you like to create a support ticket so our team can assist you directly?';
+                addBotMessage(escalationMsg, [
                     { label: 'Create Ticket', action: 'create_support_ticket', primary: true },
                     { label: 'Try Another Question', action: 'retry_support' },
                     { label: 'Menu', action: 'main_menu' }
-                ]);
+                ], false);
             } else {
                 addBotMessage(aiReply, [
-                    { label: 'Create Ticket', action: 'create_support_ticket' },
-                    { label: 'Try Another Question', action: 'retry_support' },
+                    { label: 'Try Another Question', action: 'retry_support', primary: true },
                     { label: 'Menu', action: 'main_menu' }
-                ]);
+                ], false);
             }
             setInputMode('text');
             flowState = 'idle';
         })
         .catch(function () {
             hideTyping();
-            addBotMessage('I could not connect to our support assistant. Would you like to create a ticket instead?', [
-                { label: 'Create Ticket', action: 'create_support_ticket', primary: true },
-                { label: 'Menu', action: 'main_menu' }
-            ]);
+            var attempts = flowContext.aiAttempts || 0;
+            if (attempts >= MAX_AI_ATTEMPTS) {
+                addBotMessage('I could not connect to our support assistant. Would you like to create a ticket instead?', [
+                    { label: 'Create Ticket', action: 'create_support_ticket', primary: true },
+                    { label: 'Menu', action: 'main_menu' }
+                ]);
+            } else {
+                addBotMessage('I had trouble processing that. Could you rephrase or try another question?', [
+                    { label: 'Try Another Question', action: 'retry_support', primary: true },
+                    { label: 'Menu', action: 'main_menu' }
+                ]);
+            }
             setInputMode('text');
             flowState = 'idle';
         });
     }
 
     function doCreateSupportTicket(message) {
+        recordWidgetEvent('customer', String(message));
         flowState = 'creating_ticket';
         showTyping();
+
+        var ticketMessage = '[Website] [' + (flowContext.supportTopic || 'General') + '] ' + message;
+        
+        // Use looked-up customer details from order, fallback to widget config
+        var ticketName = flowContext.customerName || CUSTOMER_NAME || 'Customer';
+        var ticketPhone = flowContext.customerPhone || CUSTOMER_PHONE || '';
+        var ticketEmail = flowContext.customerEmail || '';
 
         fetch(API_URL + '/api/widget/ticket', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                name: CUSTOMER_NAME || 'Customer',
-                phone: CUSTOMER_PHONE || '',
-                message: '[' + (flowContext.supportTopic || 'General') + '] ' + message,
-                orderId: flowContext.orderId || null
+                name: ticketName,
+                phone: ticketPhone,
+                email: ticketEmail,
+                message: ticketMessage,
+                orderId: flowContext.orderId || null,
+                source: 'website',
+                sessionId: sessionId,
+                visitorId: visitorId
             })
         })
         .then(function (r) { return r.json(); })
@@ -636,6 +895,7 @@
         var statusClass = 'oftb-status-unknown';
         if (/delivered/i.test(statusText)) statusClass = 'oftb-status-delivered';
         else if (/transit|shipped|dispatched|in.?transit|out.?for.?delivery/i.test(statusText)) statusClass = 'oftb-status-transit';
+        else if (/pending|unfulfilled|confirm/i.test(statusText)) statusClass = 'oftb-status-pending';
 
         var carrierName = data.carrierName || 'Carrier';
         var html = '<div class="oftb-tracking-card-header">';
@@ -668,6 +928,7 @@
         wrapper.appendChild(card);
         chat.appendChild(wrapper);
         scrollToBottom();
+        recordWidgetEvent('bot', 'Order tracking update', { type: 'tracking', data: data });
     }
 
     function addRequestCard(req) {
@@ -717,6 +978,7 @@
         wrapper.appendChild(card);
         chat.appendChild(wrapper);
         scrollToBottom();
+        recordWidgetEvent('bot', (typeText || 'Return') + ' request update', { type: 'return_request', data: req });
     }
 
     function addTicketConfirmation(data) {
@@ -725,14 +987,24 @@
         wrapper.className = 'oftb-msg-wrap oftb-align-left';
         var el = document.createElement('div');
         el.className = 'oftb-ticket-confirm';
-        el.innerHTML =
+
+        var html =
             '<div class="oftb-ticket-confirm-icon"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>' +
             '<h4>Ticket Created</h4>' +
-            '<p>Our team will respond within 24 hours.</p>' +
+            '<p>Please continue on WhatsApp.</p>' +
             '<div class="oftb-ticket-number">' + escapeHtml(data.ticketNumber) + '</div>';
+
+        if (data.whatsappLink) {
+            html += '<a href="' + escapeHtml(data.whatsappLink) + '" target="_blank" class="oftb-whatsapp-btn">' +
+                '<svg viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.955 9.955 0 0 0 12 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>' +
+                'Continue on WhatsApp</a>';
+        }
+
+        el.innerHTML = html;
         wrapper.appendChild(el);
         chat.appendChild(wrapper);
         scrollToBottom();
+        recordWidgetEvent('bot', 'Support ticket created: ' + (data.ticketNumber || ''), { type: 'ticket', data: data });
 
         setTimeout(function () {
             addBotMessage('Anything else we can help with?', [
@@ -752,22 +1024,85 @@
 
         if (flowState === 'awaiting_ticket_order_id') {
             addUserMessage(text);
-            var cleaned = text.replace(/^#/, '').replace(/\s/g, '').trim();
-            flowContext.orderId = cleaned;
-            // Now ask for the topic
-            flowState = 'awaiting_support_topic';
-            setInputMode('text');
-            addBotMessage('Got it — Order *#' + cleaned + '*. What do you need help with?', [
-                { label: 'Order Issue', action: 'support_order_issue' },
-                { label: 'Product Question', action: 'support_product' },
-                { label: 'Delivery Problem', action: 'support_delivery' },
-                { label: 'Other', action: 'support_other' }
-            ]);
+            var parsedTicket = parseOrderOrTracking(text);
+            if (parsedTicket && parsedTicket.type === 'order') {
+                recordWidgetEvent('customer', text);
+                var cleaned = parsedTicket.id;
+                flowContext.orderId = cleaned;
+                
+                // Lookup customer details from order number
+                showTyping();
+                fetch(API_URL + '/api/widget/lookup-order', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ orderId: cleaned })
+                })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    hideTyping();
+                    if (data.success && data.name) {
+                        flowContext.customerName = data.name;
+                        flowContext.customerPhone = data.phone || '';
+                        flowContext.customerEmail = data.email || '';
+                    }
+                    // Now ask for the topic
+                    flowState = 'awaiting_support_topic';
+                    setInputMode('text');
+                    var greeting = flowContext.customerName ? 'Thanks, ' + flowContext.customerName + '. ' : 'Got it. ';
+                    addBotMessage(greeting + 'Order *#' + cleaned + '*. What do you need help with?', [
+                        { label: 'Order Issue', action: 'support_order_issue' },
+                        { label: 'Product Question', action: 'support_product' },
+                        { label: 'Delivery Problem', action: 'support_delivery' },
+                        { label: 'Other', action: 'support_other' }
+                    ]);
+                })
+                .catch(function () {
+                    hideTyping();
+                    // Lookup failed, continue without customer details
+                    flowState = 'awaiting_support_topic';
+                    setInputMode('text');
+                    addBotMessage('Got it — Order *#' + cleaned + '*. What do you need help with?', [
+                        { label: 'Order Issue', action: 'support_order_issue' },
+                        { label: 'Product Question', action: 'support_product' },
+                        { label: 'Delivery Problem', action: 'support_delivery' },
+                        { label: 'Other', action: 'support_other' }
+                    ]);
+                });
+            } else {
+                // Customer typed an issue description without an explicit order number
+                flowContext.supportTopic = 'General';
+                flowState = 'awaiting_support_message';
+                doResolveWithAI(text);
+            }
         } else if (flowState === 'awaiting_order_id') {
             addUserMessage(text);
-            doTrackOrder(text);
+            var parsedOrder = parseOrderOrTracking(text);
+            if (parsedOrder) {
+                recordWidgetEvent('customer', text);
+                if (parsedOrder.type === 'request') {
+                    doTrackRequest(parsedOrder.id, false);
+                } else {
+                    doTrackOrder(parsedOrder.id, false);
+                }
+            } else {
+                // Free-text/question in order tracking — let AI handle it instead of hard rejecting
+                if (typeof flowContext.aiAttempts !== 'number') {
+                    flowContext = { aiAttempts: 0 };
+                }
+                doResolveWithAI(text);
+            }
         } else if (flowState === 'awaiting_request_track_id') {
-            doTrackRequest(text);
+            addUserMessage(text);
+            var parsedReq = parseOrderOrTracking(text);
+            if (parsedReq) {
+                recordWidgetEvent('customer', text);
+                doTrackRequest(parsedReq.id, false);
+            } else {
+                recordWidgetEvent('customer', text);
+                addBotMessage('Please enter a valid *order number* or *request ID* (e.g. REQ-12345).', [
+                    { label: 'Back to Menu', action: 'main_menu' }
+                ]);
+            }
         } else if (flowState === 'awaiting_support_message') {
             addUserMessage(text);
             doResolveWithAI(text);
@@ -776,15 +1111,20 @@
             doCreateSupportTicket(text);
         } else {
             addUserMessage(text);
-            if (/^#?\d{4,}$/.test(text.replace(/\s/g, ''))) {
-                doTrackOrder(text.replace(/^#/, ''));
+            var parsedIdle = parseOrderOrTracking(text);
+            if (parsedIdle) {
+                recordWidgetEvent('customer', text);
+                if (parsedIdle.type === 'request') {
+                    doTrackRequest(parsedIdle.id, false);
+                } else {
+                    doTrackOrder(parsedIdle.id, false);
+                }
             } else {
-                addBotMessage('Please select an option:', [
-                    { label: 'Track Order', action: 'track_order' },
-                    { label: 'Return / Exchange', action: 'file_return' },
-                    { label: 'Track Your Request', action: 'track_request' },
-                    { label: 'Contact Support', action: 'contact_support' }
-                ]);
+                // Free-text in idle state — continue the AI conversation instead of showing the menu
+                if (typeof flowContext.aiAttempts !== 'number') {
+                    flowContext = { aiAttempts: 0 };
+                }
+                doResolveWithAI(text);
             }
         }
     }

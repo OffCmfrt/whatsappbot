@@ -1618,9 +1618,15 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
         // they feed the "urgent" stat card, and filter the list only when urgent_filter=1
         const urgentActive = urgent_filter === '1' || urgent_filter === 'true';
         let urgentClause = null;
+        let urgentClauseLiteral = null; // for FILTER() in stats SQL — uses escaped literals, not ?
         const urgentParams = urgentKeywords.map(k => `%${k}%`);
         if (urgentKeywords.length) {
             urgentClause = '(' + urgentKeywords.map(() => 'message ILIKE ?').join(' OR ') + ')';
+            // Build a literal version for the FILTER clause (no ? placeholders)
+            urgentClauseLiteral = '(' + urgentKeywords.map(k => {
+                const escaped = String(k).replace(/'/g, "''").replace(/\\/g, '\\\\');
+                return `message ILIKE '%${escaped}%'`;
+            }).join(' OR ') + ')';
             if (urgentActive) {
                 conditions.push(urgentClause);
                 params.push(...urgentParams);
@@ -1640,16 +1646,17 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
             LIMIT ? OFFSET ?`;
 
         // Stat cards in one aggregation scan over the same filtered set
+        // Uses urgentClauseLiteral (escaped literals, no ? placeholders) in FILTER
         const statsSql = `SELECT COUNT(*)::int AS total,
                 COUNT(*) FILTER (WHERE is_read = false)::int AS unread,
                 COUNT(*) FILTER (WHERE status = 'open')::int AS open,
                 COUNT(*) FILTER (WHERE status = 'resolved')::int AS resolved,
-                COUNT(*) FILTER (WHERE ${urgentClause || 'false'})::int AS urgent
+                COUNT(*) FILTER (WHERE ${urgentClauseLiteral || 'false'})::int AS urgent
             FROM support_tickets${whereSql}`;
 
         let tickets;
         let statsRow;
-        const statsParams = urgentClause ? [...params, ...urgentParams] : params;
+        const statsParams = [...params]; // no extra urgent params needed — literal clause used in FILTER
         try {
             const [dataRows, statsRows] = await Promise.all([
                 dbAdapter.query(buildDataSql(true), [...params, limit, offset]),
@@ -3866,11 +3873,11 @@ router.post('/support-portals', verifyToken, async (req, res) => {
         const passwordHash = await bcrypt.hash(portalPassword, 10);
 
         const result = await dbAdapter.run(
-            `INSERT INTO support_portals (name, slug, password_hash, type, config) VALUES (?, ?, ?, ?, ?)`,
-            [name, slug, passwordHash, type, config ? JSON.stringify(config) : null]
+            `INSERT INTO support_portals (name, slug, password_hash, password_plain, type, config) VALUES (?, ?, ?, ?, ?, ?)`,
+            [name, slug, passwordHash, portalPassword, type, config ? JSON.stringify(config) : null]
         );
 
-        // Store password in memory so admin can view it later
+        // Also keep in memory as a fast fallback
         const portalId = result.lastInsertRowid;
         portalPasswords.set(String(portalId), portalPassword);
 
@@ -3944,11 +3951,72 @@ router.get('/support-portals', verifyToken, async (req, res) => {
 
         res.json({
             success: true,
-            portals: enrichedPortals
+            portals: enrichedPortals.map(p => {
+                const { password_hash, password_plain, ...rest } = p;
+                return rest;
+            })
         });
     } catch (error) {
         console.error('List support portals error:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch support portals' });
+    }
+});
+
+// Update a support portal
+router.put('/support-portals/:id', verifyToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, slug, type, config, password } = req.body;
+
+        const existing = await dbAdapter.query('SELECT id FROM support_portals WHERE id = ?', [id]);
+        if (!existing || existing.length === 0) {
+            return res.status(404).json({ success: false, error: 'Portal not found' });
+        }
+
+        if (type && !['manual', 'time_based', 'auto'].includes(type)) {
+            return res.status(400).json({ success: false, error: 'Invalid portal type' });
+        }
+
+        const updates = [];
+        const params = [];
+
+        if (name) { updates.push('name = ?'); params.push(name); }
+        if (slug) { updates.push('slug = ?'); params.push(slug); }
+        if (type) { updates.push('type = ?'); params.push(type); }
+        if (config) { updates.push('config = ?'); params.push(JSON.stringify(config)); }
+        updates.push('updated_at = CURRENT_TIMESTAMP');
+
+        if (password) {
+            const passwordHash = await bcrypt.hash(password, 10);
+            updates.push('password_hash = ?');
+            params.push(passwordHash);
+            updates.push('password_plain = ?');
+            params.push(password);
+            portalPasswords.set(String(id), password);
+        }
+
+        if (updates.length <= 1) {
+            return res.status(400).json({ success: false, error: 'No fields to update' });
+        }
+
+        params.push(id);
+        await dbAdapter.run(
+            `UPDATE support_portals SET ${updates.join(', ')} WHERE id = ?`,
+            params
+        );
+
+        const portal = await dbAdapter.query(
+            'SELECT id, name, slug, type, config, created_at FROM support_portals WHERE id = ?',
+            [id]
+        );
+
+        res.json({
+            success: true,
+            portal: portal[0]
+        });
+    } catch (error) {
+        console.error('Update support portal error:', error);
+        res.status(500).json({ success: false, error: 'Failed to update support portal' });
     }
 });
 
@@ -4907,7 +4975,13 @@ router.get('/support-portals/active-shifts', verifyToken, async (req, res) => {
 router.get('/support-portals/:id/password', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const password = portalPasswords.get(String(id));
+
+        // Try DB first (persists across restarts), fall back to in-memory store
+        const portals = await dbAdapter.query(
+            'SELECT password_plain FROM support_portals WHERE id = ?',
+            [id]
+        );
+        const password = portals?.[0]?.password_plain || portalPasswords.get(String(id));
 
         if (!password) {
             return res.json({
@@ -4941,11 +5015,11 @@ router.put('/support-portals/:id/password', verifyToken, async (req, res) => {
 
         const passwordHash = await bcrypt.hash(newPassword, 10);
         await dbAdapter.run(
-            'UPDATE support_portals SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            [passwordHash, id]
+            'UPDATE support_portals SET password_hash = ?, password_plain = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [passwordHash, newPassword, id]
         );
 
-        // Store new password in memory so admin can view it
+        // Also update in-memory store
         portalPasswords.set(String(id), newPassword);
 
         res.json({
@@ -4956,6 +5030,241 @@ router.put('/support-portals/:id/password', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Change portal password error:', error);
         res.status(500).json({ success: false, error: 'Failed to change password' });
+    }
+});
+
+// ============================================================
+// AI SUPPORT ANALYTICS — aggregated insights for the dashboard
+// ============================================================
+
+router.get('/support-analytics/ai-overview', verifyToken, async (req, res) => {
+    try {
+        const { date_from, date_to } = req.query;
+        const cacheKey = `ai_support_overview_${date_from || 'all'}_${date_to || 'all'}`;
+        const cached = getCached(cacheKey);
+        if (cached) return res.json(cached);
+
+        // Build reusable date filter
+        const dateClauses = [];
+        const dateParams = [];
+        if (date_from) {
+            dateClauses.push('created_at >= ?::date AT TIME ZONE \'Asia/Kolkata\'');
+            dateParams.push(date_from);
+        }
+        if (date_to) {
+            dateClauses.push('created_at < (?::date + INTERVAL \'1 day\') AT TIME ZONE \'Asia/Kolkata\'');
+            dateParams.push(date_to);
+        }
+        const dateWhere = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
+
+        const [
+            totalStats,
+            channelStats,
+            sentimentStats,
+            dailyVolume,
+            scenarioStats,
+            // ── NEW: deep-dive queries ──
+            hourlyPattern,
+            channelSentiment,
+            portalPerformance,
+            confidenceDist,
+            resolutionTrend,
+            todayStats,
+            avgResponseTime,
+            peakDayStats,
+            channelResolution,
+            escalationByChannel
+        ] = await Promise.all([
+            // Overall ticket stats
+            dbAdapter.query(`SELECT
+                COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE status = 'open')::int AS open,
+                COUNT(*) FILTER (WHERE status = 'resolved')::int AS resolved,
+                COUNT(*) FILTER (WHERE is_read = false)::int AS unread,
+                COUNT(*) FILTER (WHERE sentiment = 'negative')::int AS negative,
+                COUNT(*) FILTER (WHERE sentiment = 'positive')::int AS positive,
+                COUNT(*) FILTER (WHERE sentiment = 'neutral')::int AS neutral,
+                COUNT(*) FILTER (WHERE ai_scenario IS NOT NULL)::int AS ai_classified,
+                COUNT(*) FILTER (WHERE portal_id IS NOT NULL)::int AS portal_assigned
+            FROM support_tickets WHERE 1=1${dateWhere}`, dateParams),
+
+            // Channel breakdown
+            dbAdapter.query(`SELECT channel, COUNT(*)::int AS count
+                FROM support_tickets WHERE 1=1${dateWhere} GROUP BY channel ORDER BY count DESC`, dateParams),
+
+            // Sentiment breakdown
+            dbAdapter.query(`SELECT sentiment, COUNT(*)::int AS count
+                FROM support_tickets WHERE sentiment IS NOT NULL${dateWhere} GROUP BY sentiment ORDER BY count DESC`, dateParams),
+
+            // Daily volume (range or last 14 days, IST)
+            dbAdapter.query(`SELECT
+                TO_CHAR(DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') AS day,
+                COUNT(*)::int AS count
+            FROM support_tickets
+            WHERE 1=1${dateWhere}${dateClauses.length ? '' : " AND created_at >= NOW() - INTERVAL '14 days'"}
+            GROUP BY DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
+            ORDER BY day ASC`, dateParams),
+
+            // AI scenario breakdown
+            dbAdapter.query(`SELECT ai_scenario, COUNT(*)::int AS count,
+                ROUND(AVG(ai_confidence)::numeric, 2)::float AS avg_confidence
+                FROM support_tickets WHERE ai_scenario IS NOT NULL${dateWhere} GROUP BY ai_scenario ORDER BY count DESC LIMIT 15`, dateParams),
+
+            // Hourly distribution (0-23h IST)
+            dbAdapter.query(`SELECT
+                EXTRACT(HOUR FROM created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::int AS hour,
+                COUNT(*)::int AS count
+            FROM support_tickets WHERE 1=1${dateWhere}
+            GROUP BY EXTRACT(HOUR FROM created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
+            ORDER BY hour ASC`, dateParams),
+
+            // Channel x Sentiment cross-tab
+            dbAdapter.query(`SELECT channel, sentiment, COUNT(*)::int AS count
+            FROM support_tickets
+            WHERE channel IS NOT NULL AND sentiment IS NOT NULL${dateWhere}
+            GROUP BY channel, sentiment
+            ORDER BY channel, count DESC`, dateParams),
+
+            // Portal performance
+            dbAdapter.query(`SELECT
+                p.name AS portal_name,
+                COUNT(t.id)::int AS assigned,
+                COUNT(t.id) FILTER (WHERE t.status = 'resolved')::int AS resolved,
+                COUNT(t.id) FILTER (WHERE t.status = 'open')::int AS open_count,
+                COUNT(t.id) FILTER (WHERE t.is_read = false)::int AS unread
+            FROM support_portals p
+            LEFT JOIN support_tickets t ON t.portal_id = p.id${dateWhere ? ` AND t.created_at >= '${date_from || '1970-01-01'}'::date AT TIME ZONE 'Asia/Kolkata'` : ''}
+            GROUP BY p.id, p.name
+            ORDER BY assigned DESC`),
+
+            // AI confidence distribution
+            dbAdapter.query(`SELECT
+                CASE
+                    WHEN ai_confidence >= 0.8 THEN 'high'
+                    WHEN ai_confidence >= 0.5 THEN 'medium'
+                    WHEN ai_confidence > 0 THEN 'low'
+                    ELSE 'none'
+                END AS tier,
+                COUNT(*)::int AS count
+            FROM support_tickets WHERE 1=1${dateWhere}
+            GROUP BY tier
+            ORDER BY tier ASC`, dateParams),
+
+            // Resolution trend (last 7 days)
+            dbAdapter.query(`SELECT
+                TO_CHAR(DATE(updated_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') AS day,
+                COUNT(*) FILTER (WHERE status = 'resolved')::int AS resolved,
+                COUNT(*)::int AS total
+            FROM support_tickets
+            WHERE updated_at >= NOW() - INTERVAL '7 days'
+            GROUP BY DATE(updated_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
+            ORDER BY day ASC`),
+
+            // Today's stats
+            dbAdapter.query(`SELECT
+                COUNT(*)::int AS today_total,
+                COUNT(*) FILTER (WHERE status = 'open')::int AS today_open,
+                COUNT(*) FILTER (WHERE status = 'resolved')::int AS today_resolved,
+                COUNT(*) FILTER (WHERE sentiment = 'negative')::int AS today_negative
+            FROM support_tickets
+            WHERE created_at >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date AT TIME ZONE 'Asia/Kolkata'`),
+
+            // Average response time
+            dbAdapter.query(`SELECT
+                ROUND(AVG(EXTRACT(EPOCH FROM (updated_at - created_at)))::numeric, 0)::int AS avg_seconds
+            FROM support_tickets
+            WHERE status = 'resolved' AND updated_at > created_at${dateWhere.replace('created_at', 'created_at')}`, dateParams),
+
+            // Peak day
+            dbAdapter.query(`SELECT
+                TO_CHAR(DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') AS day,
+                COUNT(*)::int AS count
+            FROM support_tickets
+            WHERE 1=1${dateWhere}${dateClauses.length ? '' : " AND created_at >= NOW() - INTERVAL '14 days'"}
+            GROUP BY DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
+            ORDER BY count DESC LIMIT 1`, dateParams),
+
+            // Channel resolution rate
+            dbAdapter.query(`SELECT channel,
+                COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE status = 'resolved')::int AS resolved,
+                COUNT(*) FILTER (WHERE status = 'open')::int AS open_count
+            FROM support_tickets
+            WHERE channel IS NOT NULL${dateWhere}
+            GROUP BY channel
+            ORDER BY total DESC`, dateParams),
+
+            // Escalation rate by channel
+            dbAdapter.query(`SELECT channel,
+                COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE portal_id IS NOT NULL)::int AS escalated,
+                COUNT(*) FILTER (WHERE portal_id IS NULL)::int AS self_served
+            FROM support_tickets
+            WHERE channel IS NOT NULL${dateWhere}
+            GROUP BY channel
+            ORDER BY total DESC`, dateParams)
+        ]);
+
+        const stats = totalStats[0] || {};
+        const resolutionRate = stats.total > 0 ? Math.round((stats.resolved / stats.total) * 100) : 0;
+        const today = todayStats[0] || {};
+        const peak = peakDayStats[0] || {};
+        const avgResp = avgResponseTime[0] || {};
+
+        // Format avg response time
+        let avgResponseFormatted = null;
+        if (avgResp.avg_seconds) {
+            const hrs = Math.floor(avgResp.avg_seconds / 3600);
+            const mins = Math.round((avgResp.avg_seconds % 3600) / 60);
+            avgResponseFormatted = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+        }
+
+        // Find peak hour
+        const hourlyArr = hourlyPattern || [];
+        const peakHour = hourlyArr.reduce((max, h) => h.count > (max?.count || 0) ? h : max, null);
+
+        const response = {
+            success: true,
+            overview: {
+                total: stats.total || 0,
+                open: stats.open || 0,
+                resolved: stats.resolved || 0,
+                unread: stats.unread || 0,
+                resolutionRate,
+                negativeCount: stats.negative || 0,
+                positiveCount: stats.positive || 0,
+                neutralCount: stats.neutral || 0,
+                aiClassified: stats.ai_classified || 0,
+                portalAssigned: stats.portal_assigned || 0,
+                todayTotal: today.today_total || 0,
+                todayOpen: today.today_open || 0,
+                todayResolved: today.today_resolved || 0,
+                todayNegative: today.today_negative || 0,
+                avgResponseSeconds: avgResp.avg_seconds || null,
+                avgResponseFormatted: avgResponseFormatted,
+                peakHour: peakHour ? peakHour.hour : null,
+                peakHourCount: peakHour ? peakHour.count : 0,
+                peakDay: peak.day || null,
+                peakDayCount: peak.count || 0
+            },
+            channels: channelStats,
+            sentiments: sentimentStats,
+            dailyVolume,
+            topScenarios: scenarioStats,
+            hourlyPattern: hourlyArr,
+            channelSentiment: channelSentiment || [],
+            portalPerformance: portalPerformance || [],
+            confidenceDist: confidenceDist || [],
+            resolutionTrend: resolutionTrend || [],
+            channelResolution: channelResolution || [],
+            escalationByChannel: escalationByChannel || []
+        };
+
+        setCache(cacheKey, response, 'stats', 5 * 60 * 1000);
+        res.json(response);
+    } catch (error) {
+        console.error('AI support analytics error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch AI analytics' });
     }
 });
 
@@ -7374,6 +7683,335 @@ router.post('/ig-comments/:id/open-dm', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('IG comment open DM error:', error);
         res.status(500).json({ success: false, error: 'Failed to open DM' });
+    }
+});
+
+// ════════════════════════════════════════════════════════════════
+// Widget Chats — sessions, conversations, analytics, settings
+// ════════════════════════════════════════════════════════════════
+
+// GET /api/admin/widget-chats/sessions — paginated session list
+router.get('/widget-chats/sessions', verifyToken, async (req, res) => {
+    try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+        const offset = (page - 1) * limit;
+        const { has_ticket, date_from, date_to, search } = req.query;
+
+        let where = 'WHERE 1=1';
+        const params = [];
+        let pi = 1;
+
+        if (has_ticket === '1' || has_ticket === 'true') { where += ` AND has_ticket = TRUE`; }
+        else if (has_ticket === '0' || has_ticket === 'false') { where += ` AND has_ticket = FALSE`; }
+
+        if (date_from) { where += ` AND created_at >= $${pi}`; params.push(date_from); pi++; }
+        if (date_to) { where += ` AND created_at <= $${pi}`; params.push(date_to + ' 23:59:59'); pi++; }
+
+        if (search) {
+            where += ` AND (session_id ILIKE $${pi} OR ticket_number ILIKE $${pi})`;
+            params.push(`%${search}%`);
+            pi++;
+        }
+
+        const cacheKey = `wcsess:${page}:${limit}:${has_ticket || ''}:${date_from || ''}:${date_to || ''}:${search || ''}`;
+        const cached = getCached(cacheKey);
+        if (cached) return res.json(cached);
+
+        const [countRows, sessions] = await Promise.all([
+            dbAdapter.query(`SELECT COUNT(*) AS total FROM widget_chat_sessions ${where}`, params),
+            dbAdapter.query(
+                `SELECT session_id, message_count, has_ticket, ticket_id, ticket_number,
+                        total_prompt_tokens, total_completion_tokens, total_cost_usd,
+                        last_message_at, created_at, visitor_id
+                 FROM widget_chat_sessions ${where}
+                 ORDER BY created_at DESC
+                 LIMIT $${pi} OFFSET $${pi + 1}`,
+                [...params, limit, offset]
+            )
+        ]);
+
+        const total = parseInt(countRows[0]?.total) || 0;
+        const response = {
+            success: true,
+            sessions,
+            meta: { total, page, limit, has_more: offset + limit < total }
+        };
+        setCache(cacheKey, response, 'queries', 2 * 60 * 1000);
+        res.json(response);
+    } catch (error) {
+        console.error('widget-chats/sessions error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load widget chat sessions' });
+    }
+});
+
+// GET /api/admin/widget-chats/session/:sessionId — full conversation
+router.get('/widget-chats/session/:sessionId', verifyToken, async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const [session, messages] = await Promise.all([
+            dbAdapter.query('SELECT * FROM widget_chat_sessions WHERE session_id = $1', [sessionId]),
+            dbAdapter.query(
+                'SELECT id, sender, content, model, prompt_tokens, completion_tokens, cost_usd, tool_calls, suggested_action, entities, rich_content, created_at FROM widget_chats WHERE session_id = $1 ORDER BY created_at ASC, id ASC',
+                [sessionId]
+            )
+        ]);
+        if (!session.length) return res.status(404).json({ success: false, error: 'Session not found' });
+        res.json({ success: true, session: session[0], messages });
+    } catch (error) {
+        console.error('widget-chats/session error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load conversation' });
+    }
+});
+
+// GET /api/admin/widget-chats/related/:visitorId — other sessions from same visitor
+router.get('/widget-chats/related/:visitorId', verifyToken, async (req, res) => {
+    try {
+        const { visitorId } = req.params;
+        const excludeSessionId = req.query.exclude || null;
+
+        let query = 'SELECT session_id, message_count, has_ticket, ticket_number, total_prompt_tokens, total_completion_tokens, total_cost_usd, last_message_at, created_at FROM widget_chat_sessions WHERE visitor_id = $1';
+        const params = [visitorId];
+
+        if (excludeSessionId) {
+            query += ' AND session_id != $2';
+            params.push(excludeSessionId);
+        }
+        query += ' ORDER BY created_at DESC LIMIT 20';
+
+        const sessions = await dbAdapter.query(query, params);
+        res.json({ success: true, sessions: sessions || [] });
+    } catch (error) {
+        console.error('widget-chats/related error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load related sessions' });
+    }
+});
+
+// GET /api/admin/widget-chats/analytics — aggregated token/cost analytics
+router.get('/widget-chats/analytics', verifyToken, async (req, res) => {
+    try {
+        const { date_from, date_to } = req.query;
+        const cacheKey = `wcanalytics:${date_from || ''}:${date_to || ''}`;
+        const cached = getCached(cacheKey);
+        if (cached) return res.json(cached);
+
+        let where = 'WHERE 1=1';
+        const p = [];
+        let pi = 1;
+        if (date_from) { where += ` AND created_at >= $${pi}`; p.push(date_from); pi++; }
+        if (date_to) { where += ` AND created_at <= $${pi}`; p.push(date_to + ' 23:59:59'); pi++; }
+
+        let sessWhere = 'WHERE 1=1';
+        const sp = [];
+        let spi = 1;
+        if (date_from) { sessWhere += ` AND created_at >= $${spi}`; sp.push(date_from); spi++; }
+        if (date_to) { sessWhere += ` AND created_at <= $${spi}`; sp.push(date_to + ' 23:59:59'); spi++; }
+
+        const [sessStats, msgStats, dailyUsage, hourly, modelUsage] = await Promise.all([
+            // Session-level stats
+            dbAdapter.query(
+                `SELECT COUNT(*) AS total_sessions,
+                        SUM(message_count) AS total_messages,
+                        SUM(CASE WHEN has_ticket THEN 1 ELSE 0 END) AS sessions_with_tickets,
+                        SUM(total_prompt_tokens) AS total_prompt_tokens,
+                        SUM(total_completion_tokens) AS total_completion_tokens,
+                        SUM(total_cost_usd) AS total_cost_usd,
+                        AVG(total_cost_usd) AS avg_cost_per_session,
+                        AVG(total_prompt_tokens + total_completion_tokens) AS avg_tokens_per_session
+                 FROM widget_chat_sessions ${sessWhere}`, sp
+            ),
+            // Message-level stats
+            dbAdapter.query(
+                `SELECT COUNT(*) AS total_msgs, SUM(cost_usd) AS total_cost FROM widget_chats ${where} AND sender = 'bot'`, p
+            ),
+            // Daily usage (last 14 days)
+            dbAdapter.query(
+                `SELECT created_at::date AS day,
+                        COUNT(*) AS sessions,
+                        SUM(message_count) AS messages,
+                        SUM(total_prompt_tokens + total_completion_tokens) AS tokens,
+                        SUM(total_cost_usd) AS cost
+                 FROM widget_chat_sessions ${sessWhere}
+                 GROUP BY created_at::date ORDER BY day DESC LIMIT 14`, sp
+            ),
+            // Hourly distribution (IST = UTC+5:30)
+            dbAdapter.query(
+                `SELECT EXTRACT(HOUR FROM (created_at + INTERVAL '5 hours 30 minutes'))::int AS hour,
+                        COUNT(*) AS count
+                 FROM widget_chats ${where} AND sender = 'customer'
+                 GROUP BY hour ORDER BY hour`, p
+            ),
+            // Model breakdown
+            dbAdapter.query(
+                `SELECT model,
+                        COUNT(*) AS calls,
+                        SUM(prompt_tokens) AS prompt_tokens,
+                        SUM(completion_tokens) AS completion_tokens,
+                        SUM(cost_usd) AS cost
+                 FROM widget_chats ${where} AND sender = 'bot' AND model IS NOT NULL
+                 GROUP BY model ORDER BY cost DESC`, p
+            )
+        ]);
+
+        const s = sessStats[0] || {};
+        const totalSessions = parseInt(s.total_sessions) || 0;
+        const sessionsWithTickets = parseInt(s.sessions_with_tickets) || 0;
+
+        const response = {
+            success: true,
+            analytics: {
+                totalSessions,
+                totalMessages: parseInt(s.total_messages) || 0,
+                sessionsWithTickets,
+                escalationRate: totalSessions > 0 ? Math.round(sessionsWithTickets / totalSessions * 100) : 0,
+                totalPromptTokens: parseInt(s.total_prompt_tokens) || 0,
+                totalCompletionTokens: parseInt(s.total_completion_tokens) || 0,
+                totalTokens: (parseInt(s.total_prompt_tokens) || 0) + (parseInt(s.total_completion_tokens) || 0),
+                totalCostUsd: parseFloat(s.total_cost_usd) || 0,
+                avgCostPerSession: parseFloat(s.avg_cost_per_session) || 0,
+                avgTokensPerSession: Math.round(parseFloat(s.avg_tokens_per_session) || 0),
+                dailyUsage: (dailyUsage || []).reverse(),
+                hourlyDistribution: hourly || [],
+                modelUsage: modelUsage || []
+            }
+        };
+        setCache(cacheKey, response, 'queries', 5 * 60 * 1000);
+        res.json(response);
+    } catch (error) {
+        console.error('widget-chats/analytics error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load analytics' });
+    }
+});
+
+// GET /api/admin/widget-chats/settings — current config
+router.get('/widget-chats/settings', verifyToken, async (req, res) => {
+    try {
+        const { getConfig } = require('../services/ai/aiClient');
+        const cfg = getConfig();
+        res.json({
+            success: true,
+            settings: {
+                provider: cfg.provider,
+                model: cfg.model,
+                inputCostPer1M: cfg.inputCostPer1M,
+                outputCostPer1M: cfg.outputCostPer1M,
+                sessionTtlMinutes: 15,
+                maxSessions: 200,
+                maxHistoryTurns: 10,
+                retentionDays: 90
+            }
+        });
+    } catch (error) {
+        console.error('widget-chats/settings error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load settings' });
+    }
+});
+
+// DELETE /api/admin/widget-chats/purge — purge chats older than N days
+router.delete('/widget-chats/purge', verifyToken, async (req, res) => {
+    try {
+        const days = Math.max(1, parseInt(req.query.days) || 90);
+        const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+        const [chatResult, sessResult] = await Promise.all([
+            dbAdapter.run('DELETE FROM widget_chats WHERE created_at < $1', [cutoff]),
+            dbAdapter.run('DELETE FROM widget_chat_sessions WHERE created_at < $1', [cutoff])
+        ]);
+        res.json({
+            success: true,
+            purged: { chats: chatResult.changes || 0, sessions: sessResult.changes || 0, olderThanDays: days }
+        });
+    } catch (error) {
+        console.error('widget-chats/purge error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to purge' });
+    }
+});
+
+// ════════════════════════════════════════════════════════════════
+// Live Chats — admin real-time monitoring + override
+// ════════════════════════════════════════════════════════════════
+
+// GET /api/admin/widget-chats/live — active sessions (last 15 min)
+router.get('/widget-chats/live', verifyToken, async (req, res) => {
+    try {
+        const windowMs = 15 * 60 * 1000; // 15 minutes
+        const cutoff = new Date(Date.now() - windowMs).toISOString();
+
+        const sessions = await dbAdapter.query(
+            `SELECT session_id, message_count, has_ticket, ticket_number,
+                    total_prompt_tokens, total_completion_tokens, total_cost_usd,
+                    last_message_at, created_at, visitor_id, admin_active
+             FROM widget_chat_sessions
+             WHERE last_message_at >= $1
+             ORDER BY last_message_at DESC
+             LIMIT 50`,
+            [cutoff]
+        );
+
+        // Fetch last 4 messages per session for chat preview
+        const enriched = [];
+        for (const s of (sessions || [])) {
+            const msgs = await dbAdapter.query(
+                `SELECT id, sender, content, created_at FROM widget_chats
+                 WHERE session_id = $1 ORDER BY id DESC LIMIT 4`,
+                [s.session_id]
+            );
+            enriched.push({ ...s, preview_messages: (msgs || []).reverse() });
+        }
+
+        res.json({ success: true, sessions: enriched, activeCount: enriched.length });
+    } catch (error) {
+        console.error('widget-chats/live error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to load live sessions' });
+    }
+});
+
+// POST /api/admin/widget-chats/admin-message — admin sends override message
+router.post('/widget-chats/admin-message', verifyToken, async (req, res) => {
+    try {
+        const { sessionId, message } = req.body;
+        if (!sessionId || !message) {
+            return res.status(400).json({ success: false, error: 'sessionId and message are required' });
+        }
+        if (String(message).length > 2000) {
+            return res.status(400).json({ success: false, error: 'Message too long (max 2000 chars)' });
+        }
+
+        const now = new Date().toISOString();
+
+        // Insert admin message with sender = 'admin'
+        await dbAdapter.run(
+            `INSERT INTO widget_chats (session_id, sender, content, created_at)
+             VALUES ($1, 'admin', $2, $3)`,
+            [sessionId, message, now]
+        );
+
+        // Update session: mark admin_active, bump message_count, update last_message_at
+        await dbAdapter.run(
+            `UPDATE widget_chat_sessions
+             SET admin_active = TRUE, message_count = message_count + 1, last_message_at = $2
+             WHERE session_id = $1`,
+            [sessionId, now]
+        );
+
+        res.json({ success: true, timestamp: now });
+    } catch (error) {
+        console.error('widget-chats/admin-message error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to send admin message' });
+    }
+});
+
+// POST /api/admin/widget-chats/release/:sessionId — admin releases control back to AI
+router.post('/widget-chats/release/:sessionId', verifyToken, async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        await dbAdapter.run(
+            `UPDATE widget_chat_sessions SET admin_active = FALSE WHERE session_id = $1`,
+            [sessionId]
+        );
+        res.json({ success: true });
+    } catch (error) {
+        console.error('widget-chats/release error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to release' });
     }
 });
 

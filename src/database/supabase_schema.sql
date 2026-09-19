@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     ai_confidence DECIMAL(3,2),
     ai_scenario VARCHAR(50),
     source VARCHAR(20) DEFAULT 'whatsapp',
+    order_id VARCHAR(100),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

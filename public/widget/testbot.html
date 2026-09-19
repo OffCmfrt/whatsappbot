@@ -173,11 +173,16 @@
     <div class="hero">
         <div class="hero-badge">Support Bot</div>
         <h1>OFFCOMFRT</h1>
-        <p>Interactive button-driven support experience. Click the floating button to try it.</p>
+        <p>Interactive button-driven support experience. Click the floating button or the inline trigger below to try it.</p>
         <a href="#" class="hero-cta" id="open-bot-btn">
             <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             Open Bot
         </a>
+
+        <!-- Inline trigger — place anywhere in your Shopify theme -->
+        <div style="margin-top:24px;">
+            <span class="offcomfrt-open-chat">Need Help?</span>
+        </div>
 
         <div class="features">
             <div class="feature">
@@ -206,7 +211,7 @@
             <h2>Embed Code</h2>
             <div class="embed-code" id="embed-code-block">
                 <button class="copy-btn" id="copy-embed-btn">Copy</button>
-                <span class="tag">&lt;script</span> <span class="attr">src</span>=<span class="val">"YOUR_SERVER_URL/widget/js/testbot-loader.js"</span> <span class="attr">defer</span><span class="tag">&gt;&lt;/script&gt;</span>
+                <span class="tag">&lt;script</span> <span class="attr">src</span>=<span class="val">"https://whatsappbot-4l4b.onrender.com/widget/js/testbot-loader.js"</span> <span class="attr">defer</span><span class="tag">&gt;&lt;/script&gt;</span>
             </div>
         </div>
     </div>
@@ -224,7 +229,7 @@
         });
 
         document.getElementById('copy-embed-btn').addEventListener('click', function () {
-            var code = '<script src="' + window.location.origin + '/widget/js/testbot-loader.js" defer><\/script>';
+            var code = '<script src="https://whatsappbot-4l4b.onrender.com/widget/js/testbot-loader.js" defer><\/script>';
             navigator.clipboard.writeText(code).then(function () {
                 document.getElementById('copy-embed-btn').textContent = 'Copied';
                 setTimeout(function () { document.getElementById('copy-embed-btn').textContent = 'Copy'; }, 2000);

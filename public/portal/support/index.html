@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/style.css?v=7">
+    <link rel="stylesheet" href="css/style.css?v=20">
 </head>
 <body>
     <!-- Login Screen -->
@@ -29,175 +29,135 @@
         </div>
     </div>
 
-    <!-- Main App -->
+    <!-- Main App — Three-Pane Workspace -->
     <div id="appScreen" class="app-screen" style="display: none;">
-        <!-- Header -->
-        <header class="portal-header">
-            <div class="header-left">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                <span class="portal-name" id="portalNameDisplay">Support Portal</span>
-            </div>
-            <div class="header-right">
-                <span class="ticket-count" id="headerTicketCount">0 tickets</span>
-                <span class="notification-badge" id="notificationBadge" style="display: none;">0</span>
-                <button class="btn btn-secondary" id="logoutBtn">Logout</button>
-            </div>
-        </header>
-
-        <!-- Main Content -->
-        <main class="portal-main">
-            <!-- Toolbar -->
-            <div class="portal-toolbar">
-                <div class="toolbar-search">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                    <input type="text" id="ticketSearch" placeholder="Search by ticket #, name, phone, or message...">
+        <!-- Left: Ticket Sidebar -->
+        <aside id="ticketSidebar" class="ticket-sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    <span class="sidebar-title" id="portalNameDisplay">Support</span>
                 </div>
-                <div class="toolbar-filters">
-                    <div class="channel-toggle-group">
-                        <button class="channel-toggle active" data-channel="all" title="All channels">
-                            <svg class="ch-icon ch-icon-all" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                            All
-                        </button>
-                        <button class="channel-toggle" data-channel="whatsapp" title="WhatsApp only">
-                            <svg class="ch-icon ch-icon-wa" width="14" height="14" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z" fill="currentColor"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.955 9.955 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2zm0 18a8 8 0 01-4.243-1.214l-.29-.175-3.032.795.81-2.96-.192-.305A7.963 7.963 0 014 12a8 8 0 1116 0 8 8 0 01-8 8z" fill="currentColor"/></svg>
-                            WhatsApp
-                        </button>
-                        <button class="channel-toggle" data-channel="instagram" title="Instagram only">
-                            <svg class="ch-icon ch-icon-ig" width="14" height="14" viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z" fill="currentColor"/></svg>
-                            Instagram
-                        </button>
-                    </div>
-                    <button class="btn btn-secondary" id="unreadFilterBtn" title="Show only unread tickets">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                        Unread
+                <div class="sidebar-header-actions">
+                    <span class="sidebar-ticket-count" id="headerTicketCount">0</span>
+                    <button class="sidebar-icon-btn" id="logoutBtn" title="Logout">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                     </button>
-                    <input type="date" id="dateFromFilter" class="date-filter" title="From Date">
-                    <input type="date" id="dateToFilter" class="date-filter" title="To Date">
-                    <input type="time" id="timeFromFilter" class="time-filter" title="From Time">
-                    <input type="time" id="timeToFilter" class="time-filter" title="To Time">
+                </div>
+            </div>
+            <div class="sidebar-search">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <input type="text" id="ticketSearch" placeholder="Search tickets...">
+            </div>
+            <div class="sidebar-filters">
+                <div class="channel-toggle-group">
+                    <button class="channel-toggle active" data-channel="all" title="All channels">All</button>
+                    <button class="channel-toggle" data-channel="whatsapp" title="WhatsApp">WA</button>
+                    <button class="channel-toggle" data-channel="instagram" title="Instagram">IG</button>
+                </div>
+                <div class="sidebar-filter-row">
                     <select id="statusFilter">
-                        <option value="">All Statuses</option>
+                        <option value="">All Status</option>
                         <option value="open">Open</option>
                         <option value="resolved">Resolved</option>
                     </select>
-                    <button class="btn btn-secondary" id="resetFiltersBtn" title="Reset all filters">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
-                        Reset
+                    <button class="filter-pill" id="unreadFilterBtn" title="Unread only">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                        Unread
                     </button>
-                    <button class="btn btn-secondary" id="refreshTicketsBtn">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-                        Refresh
+                    <button class="filter-pill" id="refreshTicketsBtn" title="Refresh">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
                     </button>
                 </div>
             </div>
+            <div class="sidebar-tickets-scroll">
+                <div id="ticketsList" class="sidebar-tickets-list"></div>
+                <div id="ticketsEmpty" class="sidebar-empty" style="display: none;">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    <div class="sidebar-empty-text">No tickets found</div>
+                </div>
+            </div>
+        </aside>
 
-            <!-- Tickets List -->
-            <div class="tickets-container">
-                <div class="tickets-list-header">
-                    <div class="col-ticket-number">Ticket #</div>
-                    <div class="col-customer">Customer</div>
-                    <div class="col-message">Message</div>
-                    <div class="col-status">Status</div>
-                    <div class="col-time">Time</div>
-                    <div class="col-actions">Actions</div>
+        <!-- Center: Chat Workspace -->
+        <main id="chatWorkspace" class="chat-workspace">
+            <!-- Tab bar -->
+            <div id="chatTabs" class="chat-tabs-bar"></div>
+            <!-- Active chat area -->
+            <div id="chatArea" class="chat-area">
+                <!-- Empty state (shown when no chats open) -->
+                <div id="chatEmptyState" class="chat-empty-workspace">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <h3>Select a ticket to start chatting</h3>
+                    <p>Open multiple conversations at once — they appear as tabs above.</p>
                 </div>
-                <div id="ticketsList" class="tickets-list">
-                    <div class="tickets-loading">
-                        <div class="spinner"></div>
-                        <span>Loading tickets...</span>
+                <!-- Active chat content (hidden until a chat is opened) -->
+                <div id="chatActiveContent" class="chat-active-content" style="display: none;">
+                    <div class="chat-header-bar">
+                        <div class="chat-header-info">
+                            <div class="chat-avatar" id="chatAvatar">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                            </div>
+                            <div class="chat-header-details">
+                                <h4 id="chatCustomerName">Customer</h4>
+                                <span class="chat-phone" id="chatCustomerPhone">-</span>
+                            </div>
+                        </div>
+                        <div class="chat-header-actions">
+                            <button class="btn btn-secondary btn-sm" id="resolveChatBtn" title="Mark resolved">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                                Resolve
+                            </button>
+                            <button class="btn btn-secondary btn-sm" id="toggleDetailsBtn" title="Customer details">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                                Details
+                            </button>
+                        </div>
                     </div>
-                </div>
-                <div id="ticketsEmpty" class="tickets-empty" style="display: none;">
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><circle cx="12" cy="10" r="3"/></svg>
-                    <div class="empty-title">No tickets found</div>
-                    <div class="empty-text">There are no tickets matching your criteria.</div>
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="chat-loading">
+                            <div class="spinner"></div>
+                            <span>Loading conversation...</span>
+                        </div>
+                    </div>
+                    <div class="chat-input-area">
+                        <textarea id="chatInput" placeholder="Type a message..." rows="1"></textarea>
+                        <button class="btn btn-chat" id="sendMessageBtn">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        </button>
+                    </div>
                 </div>
             </div>
         </main>
+
+        <!-- Right: Customer Details Panel -->
+        <aside id="detailsPanel" class="details-panel">
+            <div class="details-panel-header">
+                <h3>Customer Details</h3>
+                <div class="details-panel-actions">
+                    <button class="sidebar-icon-btn" id="refreshDetailsBtn" title="Refresh">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                    </button>
+                    <button class="sidebar-icon-btn" id="closeDetailsBtn" title="Close panel">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="details-panel-body" id="detailsPanelBody">
+                <div class="details-placeholder">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                    <p>Open a chat and click "Details" to view customer information</p>
+                </div>
+            </div>
+        </aside>
     </div>
 
-    <!-- Chat Modal -->
-    <div id="chatModal" class="chat-modal">
-        <div class="chat-modal-content">
-            <div class="chat-header">
-                <div class="chat-header-info">
-                    <div class="chat-avatar">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                    </div>
-                    <div class="chat-header-details">
-                        <h4 id="chatCustomerName">Customer</h4>
-                        <span class="chat-phone" id="chatCustomerPhone">-</span>
-                    </div>
-                </div>
-                <div class="chat-header-actions">
-                    <button class="btn btn-secondary" id="viewAllOrdersBtn">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
-                            <rect x="9" y="3" width="6" height="4" rx="1"/>
-                            <line x1="9" y1="12" x2="15" y2="12"/>
-                            <line x1="9" y1="16" x2="15" y2="16"/>
-                        </svg>
-                        All Orders
-                    </button>
-                    <button class="btn btn-primary" id="resolveChatBtn">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                        Resolve
-                    </button>
-                    <button class="chat-close" id="closeChatBtn">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    </button>
-                </div>
-            </div>
-            <div class="chat-messages" id="chatMessages">
-                <div class="chat-loading">
-                    <div class="spinner"></div>
-                    <span>Loading conversation...</span>
-                </div>
-            </div>
-            <div class="chat-input-area">
-                <textarea id="chatInput" placeholder="Type a message..." rows="1"></textarea>
-                <button class="btn btn-chat" id="sendMessageBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- All Orders Modal -->
-    <div id="allOrdersModal" class="chat-modal">
-        <div class="chat-modal-content">
-            <div class="chat-header">
-                <div class="chat-header-info">
-                    <div class="chat-avatar">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
-                            <rect x="9" y="3" width="6" height="4" rx="1"/>
-                        </svg>
-                    </div>
-                    <div class="chat-header-details">
-                        <h4>All Orders</h4>
-                        <span class="chat-phone" id="allOrdersCustomerPhone">-</span>
-                    </div>
-                </div>
-                <button class="chat-close" id="closeAllOrdersModal">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"/>
-                        <line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                </button>
-            </div>
-            <div class="chat-messages" id="allOrdersMessages">
-                <div class="chat-loading">
-                    <div class="spinner"></div>
-                    <span>Loading orders from database...</span>
-                </div>
-            </div>
-        </div>
-    </div>
+    <!-- Notification badge (floating) -->
+    <span class="notification-badge" id="notificationBadge" style="display: none;">0</span>
 
     <!-- Toast -->
     <div id="toast" class="toast"></div>
 
-    <script src="js/main.js?v=7"></script>
+    <script src="js/main.js?v=20"></script>
 </body>
 </html>

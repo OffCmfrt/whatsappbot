@@ -32,6 +32,10 @@ const SOP_GOLDEN_EXAMPLES = [
         a: "Order tracking is checked strictly in partner sequence: 1. Shiprocket (primary), 2. Delhivery One, 3. Ekart (prepaid only). If 'Edit Details' was clicked without reply, calling executive contacts you: COD stays on hold; Prepaid ships as-is after 24h."
     },
     {
+        q: "Till when will my order be delivered? / When will it be shipped?",
+        a: "If your order is pending confirmation: 'Please confirm your order via the template message sent to you.' If your order is confirmed: 'Your order #{{order_id}} is confirmed and will be shipped within 24 to 48 hours. Live courier tracking updates will be available once dispatched.'"
+    },
+    {
         q: "Tracking says delivered but I have not received my order / item missing",
         a: "Please check with neighbours, nearby flats, or security. We have notified our delivery partner and requested Proof of Delivery (POD). Once received (within 24h), we will share the POD with you."
     },

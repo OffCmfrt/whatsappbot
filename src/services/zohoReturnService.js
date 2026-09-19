@@ -9,6 +9,7 @@ const {
     determineTaxType
 } = require('./zohoTransform');
 const { createItemResolver } = require('./zohoItemResolver');
+const { taxFromInvoiceLine } = require('./zohoTransform');
 const { dbAdapter } = require('../database/db');
 
 // ============================================================
@@ -222,7 +223,7 @@ async function createExchangeReplacementInvoice({ shopifyOrder, orderId, exchang
         line_items: zohoLines,
         notes: `Exchange replacement for Shopify Order #${orderId}`,
         reference_number: ref,
-        is_inclusive_tax: false,
+        is_inclusive_tax: true,
         gst_treatment: 'consumer'
     };
 
@@ -416,8 +417,202 @@ async function handleRTO(shopifyOrder, carrierInfo = {}) {
 }
 
 /**
+ * Correct the original Zoho invoice after an exchange so it shows the
+ * NEW items the customer actually received (e.g. Henley S instead of M).
+ *
+ * Flow: delete credit note → delete payments → delete original invoice →
+ * create new invoice with exchanged items → re-record payments.
+ *
+ * Stock effect: old invoice deletion returns original stock, new invoice
+ * deduction removes exchanged items — net effect is correct.
+ */
+async function correctOriginalInvoiceForExchange({ shopifyOrder, orderId, originalItems, exchangedItems, creditNoteId, customerId }) {
+    if (!exchangedItems?.length) return { success: false, reason: 'no_exchanged_items' };
+
+    // 1. Find the original invoice
+    const originalInvoice = await findInvoiceForOrder(orderId);
+    if (!originalInvoice) return { success: false, reason: 'no_original_invoice' };
+
+    const fullInvoice = await fetchFullInvoice(originalInvoice);
+    if (!fullInvoice?.line_items?.length) return { success: false, reason: 'no_invoice_lines' };
+
+    const invoiceId = fullInvoice.invoice_id;
+
+    // 2. Delete the exchange credit note first (it's linked to the invoice;
+    //    Zoho may block invoice deletion while a credit note references it)
+    if (creditNoteId) {
+        try {
+            await zohoService.deleteCreditNote(creditNoteId);
+            console.log(`🗑️ Zoho exchange correction: deleted credit note ${creditNoteId}`);
+        } catch (e) {
+            console.warn(`⚠️ Zoho exchange correction: credit note delete failed (${e.message}) — continuing`);
+        }
+    }
+
+    // 3. Fetch and delete payments on the original invoice
+    //    (Zoho blocks invoice deletion when payments exist)
+    let deletedPayments = [];
+    try {
+        const payments = await zohoService.getPayments(invoiceId, fullInvoice.invoice_number);
+        for (const p of payments) {
+            try {
+                await zohoService.deletePayment(p.payment_id);
+                deletedPayments.push({
+                    amount: parseFloat(p.amount || 0),
+                    date: p.date,
+                    payment_mode: p.payment_mode,
+                    customer_id: p.customer_id || customerId
+                });
+            } catch (e) {
+                console.warn(`⚠️ Zoho exchange correction: payment delete failed (${e.message})`);
+            }
+        }
+    } catch (e) {
+        console.warn(`⚠️ Zoho exchange correction: payment fetch failed (${e.message})`);
+    }
+
+    // 4. Delete the original invoice
+    try {
+        await zohoService.deleteInvoice(invoiceId);
+        console.log(`🗑️ Zoho exchange correction: deleted invoice ${invoiceId}`);
+    } catch (e) {
+        console.error(`❌ Zoho exchange correction: invoice delete failed (${e.message})`);
+        return { success: false, reason: 'delete_failed', error: e.message };
+    }
+
+    // 5. Build new line items with exchanged products
+    const bundleMap = await loadBundleMap();
+    const resolver = createItemResolver();
+
+    // Map original invoice lines → track which are exchanged
+    const invoiceLines = (fullInvoice.line_items || []).map(l => ({ ...l, _matched: false }));
+
+    const findOrigLine = (item) => {
+        const keys = [item.sku, item.title].filter(Boolean);
+        for (const key of keys) {
+            const norm = (s) => String(s || '').toUpperCase().replace(/\s+/g, ' ').trim();
+            const hit = invoiceLines.find(l =>
+                !l._matched && (
+                    norm(l.sku || '') === norm(key) ||
+                    norm(l.name || '') === norm(key) ||
+                    (key.length > 3 && (norm(l.name || '').includes(norm(key)) || norm(key).includes(norm(l.name || ''))))
+                )
+            );
+            if (hit) return hit;
+        }
+        return null;
+    };
+
+    // Mark matched lines
+    for (const orig of originalItems) {
+        const line = findOrigLine(orig);
+        if (line) line._matched = true;
+    }
+
+    // Build new lines: exchanged items replace the matched original lines
+    const newLines = [];
+    const rawExchanged = exchangedItems.map(i => ({
+        title: i.title || '',
+        sku: i.sku || '',
+        quantity: parseInt(i.quantity || 1) || 1,
+        price: 0,
+        variant: i.variant || ''
+    }));
+    const { lineItems: brokenExchanged } = breakBundleLineItems(rawExchanged, bundleMap);
+
+    for (const exItem of brokenExchanged) {
+        const desc = exItem.variant
+            ? `${exItem.name} (${exItem.variant})`
+            : (exItem.name || 'Item');
+        const line = {
+            name: exItem.name,
+            description: desc,
+            quantity: exItem.quantity,
+            rate: 0,
+            discount: 0,
+            is_inclusive_tax: true
+        };
+        const item = await resolver.resolve(exItem.sku || exItem.name);
+        if (item?.item_id) line.item_id = item.item_id;
+        newLines.push(line);
+    }
+
+    // Preserve non-exchanged lines (shipping, other items not exchanged)
+    for (const line of invoiceLines) {
+        if (line._matched) continue;
+        const preserved = {
+            name: line.name,
+            description: line.description || line.name,
+            quantity: parseFloat(line.quantity || 1),
+            rate: parseFloat(line.rate || 0),
+            discount: parseFloat(line.discount || 0),
+            is_inclusive_tax: true
+        };
+        if (line.item_id) preserved.item_id = line.item_id;
+        // Preserve tax treatment from original line
+        const tax = taxFromInvoiceLine(line);
+        if (tax.cgst_rate) preserved.cgst_rate = tax.cgst_rate;
+        if (tax.sgst_rate) preserved.sgst_rate = tax.sgst_rate;
+        if (tax.igst_rate) preserved.igst_rate = tax.igst_rate;
+        if (tax.tax_percentage) preserved.tax_percentage = tax.tax_percentage;
+        newLines.push(preserved);
+    }
+
+    // 6. Create the new invoice with exchanged items
+    const newPayload = {
+        customer_id: fullInvoice.customer_id || customerId || undefined,
+        date: fullInvoice.date || new Date().toISOString().split('T')[0],
+        payment_terms: 0,
+        line_items: newLines,
+        notes: fullInvoice.notes || `Shopify Order #${orderId}`,
+        reference_number: fullInvoice.reference_number,
+        is_inclusive_tax: true,
+        gst_treatment: fullInvoice.gst_treatment || 'consumer'
+    };
+    if (fullInvoice.shipping_address) newPayload.shipping_address = fullInvoice.shipping_address;
+    if (fullInvoice.place_of_supply) newPayload.place_of_supply = fullInvoice.place_of_supply;
+
+    let newInvoice;
+    try {
+        newInvoice = await zohoService.createInvoice(newPayload);
+    } catch (e) {
+        console.error(`❌ Zoho exchange correction: new invoice creation failed (${e.message})`);
+        return { success: false, reason: 'create_failed', error: e.message };
+    }
+
+    // Mark sent so stock deduction happens
+    try {
+        await zohoService.markInvoiceSent(newInvoice.invoice_id);
+    } catch (e) {
+        console.warn(`⚠️ Zoho exchange correction: mark-sent failed (${e.message})`);
+    }
+
+    console.log(`✅ Zoho exchange correction: order #${orderId} → new invoice ${newInvoice.invoice_id} (was ${invoiceId})`);
+
+    // 7. Re-record payments on the new invoice
+    for (const p of deletedPayments) {
+        try {
+            await zohoService.recordPayment({
+                customer_id: p.customer_id,
+                amount: p.amount,
+                date: p.date,
+                payment_mode: p.payment_mode || 'cash',
+                invoices: [{ invoice_id: newInvoice.invoice_id, amount_applied: p.amount }],
+                description: 'Payment re-recorded after exchange correction'
+            });
+        } catch (e) {
+            console.warn(`⚠️ Zoho exchange correction: payment re-record failed (${e.message})`);
+        }
+    }
+
+    return { success: true, newInvoiceId: newInvoice.invoice_id };
+}
+
+/**
  * Handle an exchange (customer returns product A, gets product B).
- * Creates credit note for original product, notes the exchanged product.
+ * Creates credit note for original product, then corrects the original
+ * invoice to show the new items so Zoho always reflects what the
+ * customer actually has.
  */
 async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
     const rawOrderId = shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString();
@@ -447,9 +642,7 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
 
     try {
         // Credit note for the ORIGINAL items (item-linked → old size stock
-        // returns). The replacement products the customer actually received
-        // are stamped in the notes AND invoiced separately below so Zoho
-        // reflects the real exchange (e.g. Henley Acid Wash XS → S).
+        // returns). The exchangedSummary is stamped in the notes for audit.
         const exchangedSummary = (exchangedItems || [])
             .map(i => `${i.quantity || 1}x ${i.title || i.sku || 'item'}${i.variant ? ' (' + i.variant + ')' : ''}`)
             .join(', ');
@@ -464,24 +657,47 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
             extraNotes: exchangedSummary ? `Exchanged for: ${exchangedSummary}` : ''
         });
 
-        // Replacement invoice (zero-value, item-linked → new size stock
-        // deducts). Never fails the whole exchange if Zoho rejects it.
+        // Correct the original invoice to show the NEW items the customer
+        // actually received (e.g. Henley S instead of Henley M). This
+        // deletes the old invoice and creates a new one with exchanged
+        // items, so Zoho always reflects reality. Payments are re-recorded.
         let replacementInvoiceId = null;
+        let correctedInvoiceId = null;
         try {
-            replacementInvoiceId = await createExchangeReplacementInvoice({
+            const correction = await correctOriginalInvoiceForExchange({
                 shopifyOrder,
                 orderId,
+                originalItems,
                 exchangedItems,
+                creditNoteId: result.creditNoteId,
                 customerId: result.customerId
             });
-        } catch (invErr) {
-            console.error(`❌ Zoho exchange: replacement invoice failed for order #${orderId}: ${invErr.message}`);
+            if (correction.success) {
+                correctedInvoiceId = correction.newInvoiceId;
+            }
+        } catch (corrErr) {
+            console.warn(`⚠️ Zoho exchange: invoice correction failed for #${orderId}: ${corrErr.message} — falling back to replacement invoice`);
+        }
+
+        // Fallback: if correction failed, create a separate zero-value
+        // replacement invoice (old behaviour — stock deduction only)
+        if (!correctedInvoiceId) {
+            try {
+                replacementInvoiceId = await createExchangeReplacementInvoice({
+                    shopifyOrder,
+                    orderId,
+                    exchangedItems,
+                    customerId: result.customerId
+                });
+            } catch (invErr) {
+                console.error(`❌ Zoho exchange: replacement invoice failed for order #${orderId}: ${invErr.message}`);
+            }
         }
 
         try {
             await dbAdapter.run(
                 `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, zoho_exchange_invoice_id = ?, updated_at = NOW() WHERE id = ?`,
-                ['synced', result.creditNoteId || null, replacementInvoiceId, logResult.lastInsertRowid]
+                ['synced', result.creditNoteId || null, correctedInvoiceId || replacementInvoiceId, logResult.lastInsertRowid]
             );
         } catch (colErr) {
             // Column added post-rollout — fall back without it
@@ -491,12 +707,12 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
             );
         }
 
-        console.log(`✅ Zoho exchange: order #${orderId} → credit note ${result.creditNoteId || 'created'}${replacementInvoiceId ? ` + replacement invoice ${replacementInvoiceId}` : ''}`);
+        console.log(`✅ Zoho exchange: order #${orderId} → credit note ${result.creditNoteId || 'created'}${correctedInvoiceId ? ` + corrected invoice ${correctedInvoiceId}` : replacementInvoiceId ? ` + replacement invoice ${replacementInvoiceId}` : ''}`);
         return {
             success: true,
             logId: logResult.lastInsertRowid,
             creditNoteId: result.creditNoteId,
-            replacementInvoiceId,
+            replacementInvoiceId: correctedInvoiceId || replacementInvoiceId,
             originalItems,
             exchangedItems
         };

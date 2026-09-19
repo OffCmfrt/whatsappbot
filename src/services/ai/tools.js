@@ -204,11 +204,14 @@ const tools = [
             required: []
         },
         requiresConfirmation: false,
-        async execute({ orderName, limit }) {
+        async execute({ orderName, limit }, ctx) {
             const shop = process.env.SHOPIFY_STORE;
             const token = process.env.SHOPIFY_ACCESS_TOKEN;
             if (!shop || !token) throw new Error('Shopify is not configured on this server');
-            const fields = 'id,name,created_at,total_price,currency,financial_status,fulfillment_status,customer,line_items,shipping_address';
+            const isCustomerFacing = !!(ctx && ctx.isCustomerFacing);
+            const fields = isCustomerFacing
+                ? 'id,name,created_at,total_price,currency,financial_status,fulfillment_status,line_items'
+                : 'id,name,created_at,total_price,currency,financial_status,fulfillment_status,customer,line_items,shipping_address';
             let url;
             if (orderName) {
                 const name = String(orderName).replace(/^#/, '');
@@ -221,18 +224,51 @@ const tools = [
                 headers: { 'X-Shopify-Access-Token': token },
                 timeout: 15000
             });
-            const orders = (response.data?.orders || []).map(o => ({
-                id: o.id,
-                name: o.name,
-                createdAt: o.created_at,
-                total: o.total_price,
-                currency: o.currency,
-                financialStatus: o.financial_status,
-                fulfillmentStatus: o.fulfillment_status,
-                customer: o.customer ? `${o.customer.first_name || ''} ${o.customer.last_name || ''}`.trim() : null,
-                phone: o.customer?.phone || o.shipping_address?.phone || null,
-                items: (o.line_items || []).map(li => `${li.title} x${li.quantity}`)
-            }));
+            const rawOrders = response.data?.orders || [];
+
+            // Batch-lookup Shoppers Hub statuses for accurate pending vs confirmed messaging
+            let shopperStatusMap = {};
+            if (rawOrders.length > 0) {
+                try {
+                    const orderNames = rawOrders.map(o => o.name).filter(Boolean);
+                    if (orderNames.length) {
+                    const placeholders = orderNames.map((_, i) => `$${i + 1}`).join(',');
+                    const rows = await dbAdapter.query(
+                        `SELECT order_id, status FROM store_shoppers WHERE order_id IN (${placeholders})`,
+                        orderNames
+                    );
+                    for (const r of (rows || [])) {
+                        shopperStatusMap[r.order_id] = (r.status || '').toLowerCase();
+                    }
+                    }
+                } catch (e) { /* Shoppers Hub lookup is best-effort */ }
+            }
+
+            const orders = rawOrders.map(o => {
+                const hubStatus = shopperStatusMap[o.name] || null;
+                let note = null;
+                if (!o.fulfillment_status) {
+                    if (hubStatus === 'confirmed') {
+                        note = 'Your order is confirmed and will be shipped within 24 to 48 hours.';
+                    } else {
+                        note = 'Please confirm your order via the template message sent to you.';
+                    }
+                }
+                return {
+                    id: o.id,
+                    name: o.name,
+                    createdAt: o.created_at,
+                    total: o.total_price,
+                    currency: o.currency,
+                    financialStatus: o.financial_status,
+                    fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
+                    shopperStatus: hubStatus,
+                    note,
+                    customer: isCustomerFacing ? null : (o.customer ? `${o.customer.first_name || ''} ${o.customer.last_name || ''}`.trim() : null),
+                    phone: isCustomerFacing ? null : (o.customer?.phone || o.shipping_address?.phone || null),
+                    items: (o.line_items || []).map(li => `${li.title} x${li.quantity}`)
+                };
+            });
             return { count: orders.length, orders };
         }
     },
@@ -353,14 +389,69 @@ const tools = [
             } catch (e) { /* ignore */ }
 
             if (shipment || shopper || orderRow) {
+                const shopperStatus = (shopper?.status || '').toLowerCase();
+                // If shopper record exists, use its status. If shopper is null but shipment/orderRow
+                // exists, the order was processed enough to be in the system — treat as confirmed.
+                const isConfirmed = shopper ? shopperStatus === 'confirmed' : true;
                 return {
                     orderId: name,
                     awb: null,
                     shipmentStatus: shipment?.status || null,
                     shopperStatus: shopper?.status || null,
                     orderStatus: orderRow?.status || null,
-                    note: 'This order has not been handed to a courier yet, so live tracking is not available. Tracking will appear here as soon as it ships.'
+                    note: isConfirmed
+                        ? 'Your order will be shipped within 24 to 48 hours. Live tracking will be available once handed over to the courier partner.'
+                        : 'Please confirm your order via the template message sent to you.'
                 };
+            }
+
+            // 5. Fallback: Check Shopify Admin API if not found in local DB
+            try {
+                const shop = process.env.SHOPIFY_STORE;
+                const token = process.env.SHOPIFY_ACCESS_TOKEN;
+                if (shop && token) {
+                    const fields = 'id,name,financial_status,fulfillment_status,fulfillments,created_at';
+                    const shopifyRes = await axios.get(
+                        `https://${shop}/admin/api/2024-01/orders.json?name=${encodeURIComponent(name)}&status=any&fields=${fields}`,
+                        { headers: { 'X-Shopify-Access-Token': token }, timeout: 10000 }
+                    );
+                    const order = shopifyRes.data?.orders?.[0];
+                    if (order) {
+                        const fulfillment = order.fulfillments?.[0];
+                        const trackingInfo = fulfillment?.tracking_info?.[0] || fulfillment?.tracking_info;
+                        const orderAwb = trackingInfo?.number || trackingInfo?.tracking_number;
+                        if (orderAwb) {
+                            return {
+                                orderId: order.name,
+                                awb: orderAwb,
+                                fulfillmentStatus: order.fulfillment_status,
+                                note: 'Your order has been shipped. Live tracking updates are in progress.'
+                            };
+                        }
+                        // No AWB from Shopify — re-check Shoppers Hub before deciding the message
+                        let shopifyNote = null;
+                        try {
+                            const hubRows = await dbAdapter.query(
+                                `SELECT status FROM store_shoppers WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`,
+                                [order.name]
+                            );
+                            if (hubRows && hubRows.length > 0) {
+                                const hs = (hubRows[0].status || '').toLowerCase();
+                                shopifyNote = hs === 'confirmed'
+                                    ? 'Your order will be shipped within 24 to 48 hours. Live tracking will be available once handed over to the courier partner.'
+                                    : 'Please confirm your order via the template message sent to you.';
+                            }
+                        } catch (e) { /* best-effort */ }
+                        return {
+                            orderId: order.name,
+                            fulfillmentStatus: order.fulfillment_status || 'unfulfilled',
+                            financialStatus: order.financial_status,
+                            note: shopifyNote || 'Please confirm your order via the template message sent to you.'
+                        };
+                    }
+                }
+            } catch (shopifyErr) {
+                // ignore
             }
 
             return { error: `No order found with ID ${name}` };
@@ -543,7 +634,7 @@ const tools = [
                 headers: { 'x-internal-token': token || '' },
                 timeout: 15000
             });
-            return response.data;
+            return response.data || { error: 'Returns server returned no data' };
         }
     },
     // ---------- Batch / bulk tools ----------
@@ -741,11 +832,11 @@ const tools = [
         async execute({ phone }) {
             const digits = String(phone || '').replace(/\D/g, '');
             const phonePattern = `%${digits.slice(-10)}`;
-            const rows = await dbAdapter.query(
+            const rows = (await dbAdapter.query(
                 `SELECT order_id, status, awb, courier_name, total, payment_method, expected_delivery, created_at
                  FROM orders WHERE customer_phone LIKE ? ORDER BY created_at DESC LIMIT 5`,
                 [phonePattern]
-            );
+            )) || [];
             return { count: rows.length, orders: rows };
         }
     },
@@ -762,7 +853,7 @@ const tools = [
         requiresConfirmation: false,
         async execute({ question }) {
             const { findSimilarExamples } = require('./learning');
-            const examples = await findSimilarExamples(question, 3);
+            const examples = (await findSimilarExamples(question, 3)) || [];
             return {
                 count: examples.length,
                 answers: examples.map(e => ({ question: e.q, answer: e.a, relevance: e.uses }))
@@ -784,18 +875,20 @@ const tools = [
             const name = String(orderId || '').replace(/^#/, '');
             let rows = [];
             try {
-                rows = await dbAdapter.query(
+                rows = (await dbAdapter.query(
                     `SELECT order_id, status, created_at, updated_at, delivered_at
                      FROM orders WHERE order_id = ? LIMIT 1`,
                     [name]
-                );
+                )) || [];
             } catch (e) {
                 // delivered_at column may not exist yet on un-migrated databases
-                rows = await dbAdapter.query(
-                    `SELECT order_id, status, created_at, updated_at
-                     FROM orders WHERE order_id = ? LIMIT 1`,
-                    [name]
-                );
+                try {
+                    rows = (await dbAdapter.query(
+                        `SELECT order_id, status, created_at, updated_at
+                         FROM orders WHERE order_id = ? LIMIT 1`,
+                        [name]
+                    )) || [];
+                } catch (e2) { /* table may not exist */ }
             }
             if (!rows.length) return { eligible: false, reason: 'Order not found' };
             const order = rows[0];
@@ -834,7 +927,7 @@ const tools = [
             }
         },
         requiresConfirmation: false,
-        async execute({ requestId, orderId, phone }) {
+        async execute({ requestId, orderId, phone }, ctx) {
             const reqId = String(requestId || '').trim().toUpperCase();
             const name = String(orderId || '').replace(/^#/, '').trim();
             const digits = String(phone || '').replace(/\D/g, '');
@@ -842,18 +935,18 @@ const tools = [
             // Direct request-ID match first (REQ- prefix IDs from the returns portal)
             if (reqId) {
                 const bareId = reqId.replace(/^REQ-/, '');
-                const returnRows = await dbAdapter.query(
+                const returnRows = (await dbAdapter.query(
                     `SELECT return_id, order_id, reason, status, pickup_scheduled_date,
                             refund_amount, refund_status, created_at, updated_at
                      FROM returns WHERE return_id = ? OR return_id = ? ORDER BY created_at DESC LIMIT 3`,
                     [reqId, bareId]
-                );
-                const exchangeRows = await dbAdapter.query(
+                )) || [];
+                const exchangeRows = (await dbAdapter.query(
                     `SELECT exchange_id, order_id, old_items, new_items, reason, status,
                             price_difference, payment_status, pickup_scheduled_date, created_at, updated_at
                      FROM exchanges WHERE exchange_id = ? OR exchange_id = ? ORDER BY created_at DESC LIMIT 3`,
                     [reqId, bareId]
-                );
+                )) || [];
                 if (returnRows.length || exchangeRows.length) {
                     const safeParse = (v) => {
                         if (!v || typeof v !== 'string') return v;
@@ -883,19 +976,19 @@ const tools = [
             }
             const where = `(${clauses.join(' OR ')})`;
 
-            const returnRows = await dbAdapter.query(
+            const returnRows = (await dbAdapter.query(
                 `SELECT return_id, order_id, reason, status, pickup_scheduled_date,
                         refund_amount, refund_status, created_at, updated_at
                  FROM returns WHERE ${where} ORDER BY created_at DESC LIMIT 3`,
                 params
-            );
+            )) || [];
 
-            const exchangeRows = await dbAdapter.query(
+            const exchangeRows = (await dbAdapter.query(
                 `SELECT exchange_id, order_id, old_items, new_items, reason, status,
                         price_difference, payment_status, pickup_scheduled_date, created_at, updated_at
                  FROM exchanges WHERE ${where} ORDER BY created_at DESC LIMIT 3`,
                 params
-            );
+            )) || [];
 
             // items / old_items / new_items are stored as JSON strings
             const safeParse = (v) => {
@@ -921,11 +1014,11 @@ const tools = [
                 if (ticketClauses.length) {
                     const ticketWhere = `(${ticketClauses.join(' OR ')}) AND (message ILIKE '%return%' OR message ILIKE '%exchange%' OR message ILIKE '%refund%')`;
                     try {
-                        supportTickets = await dbAdapter.query(
+                        supportTickets = (await dbAdapter.query(
                             `SELECT ticket_number, customer_phone, customer_name, message, status, created_at
                              FROM support_tickets WHERE ${ticketWhere} ORDER BY created_at DESC LIMIT 5`,
                             ticketParams
-                        );
+                        )) || [];
                     } catch (e) {
                         console.warn('[check_return_exchange_status] support_tickets fallback query failed:', e.message);
                     }
@@ -935,12 +1028,12 @@ const tools = [
                 let shopperRecords = [];
                 if (name) {
                     try {
-                        shopperRecords = await dbAdapter.query(
+                        shopperRecords = (await dbAdapter.query(
                             `SELECT order_id, phone, name, status, customer_message, updated_at
                              FROM store_shoppers WHERE (order_id ILIKE ? OR order_id ILIKE ? OR order_id ILIKE ?)
                              ORDER BY updated_at DESC LIMIT 5`,
                             [name, `#${name}`, `%${name}`]
-                        );
+                        )) || [];
                     } catch (e) {
                         console.warn('[check_return_exchange_status] store_shoppers fallback query failed:', e.message);
                     }
@@ -960,16 +1053,16 @@ const tools = [
                     exchanges,
                     supportTickets: supportTickets.map(t => ({
                         ticketNumber: t.ticket_number,
-                        phone: t.customer_phone,
-                        name: t.customer_name,
+                        phone: ctx?.isCustomerFacing ? undefined : t.customer_phone,
+                        name: ctx?.isCustomerFacing ? undefined : t.customer_name,
                         message: t.message,
                         status: t.status,
                         createdAt: t.created_at
                     })),
                     shopperRecords: shopperRecords.map(s => ({
                         orderId: s.order_id,
-                        phone: s.phone,
-                        name: s.name,
+                        phone: ctx?.isCustomerFacing ? undefined : s.phone,
+                        name: ctx?.isCustomerFacing ? undefined : s.name,
                         status: s.status,
                         customerMessage: s.customer_message,
                         updatedAt: s.updated_at

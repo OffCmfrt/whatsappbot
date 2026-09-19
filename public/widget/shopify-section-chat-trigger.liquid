@@ -1,0 +1,104 @@
+{% comment %}
+  OFFCOMFRT Chat Trigger — Shopify Section
+  =========================================
+  Place this section anywhere in your Shopify theme.
+  The trigger text is editable from the Shopify theme customizer.
+
+  Usage:
+    1. Copy this file to your theme's sections/ folder as chat-trigger.liquid
+    2. Add the section to any template via the theme customizer
+    3. Edit the "Trigger text" setting in the customizer sidebar
+
+  Prerequisite: testbot-loader.js must be loaded in theme.liquid before </body>:
+    <script src="https://whatsappbot-4l4b.onrender.com/widget/js/testbot-loader.js" defer></script>
+{% endcomment %}
+
+<div class="offcomfrt-trigger-wrapper" style="text-align: {{ section.alignment }}; padding: {{ section.padding_top }}px 0 {{ section.padding_bottom }}px;">
+  <span class="offcomfrt-open-chat" style="
+    font-size: {{ section.font_size }}px;
+    color: {{ section.text_color }};
+    background: {{ section.bg_color }};
+    border-color: {{ section.border_color }};
+  ">{{ section.settings.trigger_text }}</span>
+</div>
+
+{% schema %}
+{
+  "name": "Chat Trigger",
+  "tag": "section",
+  "class": "offcomfrt-chat-trigger-section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "trigger_text",
+      "label": "Trigger text",
+      "default": "Need Help?"
+    },
+    {
+      "type": "select",
+      "id": "alignment",
+      "label": "Alignment",
+      "options": [
+        { "value": "left", "label": "Left" },
+        { "value": "center", "label": "Center" },
+        { "value": "right", "label": "Right" }
+      ],
+      "default": "center"
+    },
+    {
+      "type": "range",
+      "id": "font_size",
+      "label": "Font size",
+      "min": 10,
+      "max": 20,
+      "step": 1,
+      "default": 13,
+      "unit": "px"
+    },
+    {
+      "type": "range",
+      "id": "padding_top",
+      "label": "Padding top",
+      "min": 0,
+      "max": 80,
+      "step": 4,
+      "default": 16,
+      "unit": "px"
+    },
+    {
+      "type": "range",
+      "id": "padding_bottom",
+      "label": "Padding bottom",
+      "min": 0,
+      "max": 80,
+      "step": 4,
+      "default": 16,
+      "unit": "px"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text color",
+      "default": "#1a1a1a"
+    },
+    {
+      "type": "color",
+      "id": "bg_color",
+      "label": "Background color",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "border_color",
+      "label": "Border color",
+      "default": "#000000"
+    }
+  ],
+  "presets": [
+    {
+      "name": "Chat Trigger",
+      "category": "Promotional"
+    }
+  ]
+}
+{% endschema %}

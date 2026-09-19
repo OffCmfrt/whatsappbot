@@ -1,30 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta name="color-scheme" content="dark">
-    <title>OffComfrt Bot - Admin Dashboard</title>
-    <link rel="stylesheet" href="/dashboard/css/style.css?v=15">
+    <meta name="color-scheme" content="dark">
+    <title>OffComfrt — Support Command Center</title>
+    <link rel="stylesheet" href="/dashboard/css/style.css?v=27">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
-
 <body>
     <!-- Login Screen -->
     <div id="loginScreen" class="login-container">
         <div class="login-box">
-            <h1>OffComfrt Bot Admin</h1>
-            <p>WhatsApp Business Management</p>
+            <div class="login-brand">
+                <div class="brand-mark">OC</div>
+                <h1>OffComfrt</h1>
+                <p>Support Command Center</p>
+            </div>
             <form id="loginForm">
                 <div class="form-group">
                     <input type="text" id="username" placeholder="Username" required autocomplete="username">
                 </div>
                 <div class="form-group">
-                    <input type="password" id="password" placeholder="Password" required
-                        autocomplete="current-password">
+                    <input type="password" id="password" placeholder="Password" required autocomplete="current-password">
                 </div>
                 <button type="submit" class="btn btn-primary">
                     <span id="loginButtonText">Sign In</span>
@@ -39,63 +39,47 @@
     <div id="dashboardScreen" class="dashboard-container" style="display: none;">
         <!-- Sidebar Overlay (Mobile) -->
         <div class="sidebar-overlay" id="sidebarOverlay"></div>
-        
+
         <!-- Mobile Header -->
         <div class="mobile-header">
             <button class="menu-toggle" id="mobileMenuBtn">
-                <span></span>
-                <span></span>
-                <span></span>
+                <span></span><span></span><span></span>
             </button>
-            <div class="mobile-brand">OffComfrt Bot</div>
+            <div class="mobile-brand">OffComfrt</div>
             <button class="icon-btn" id="mobileRefreshBtn">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
             </button>
         </div>
-        
+
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <h2>OffComfrt Bot</h2>
+                <div class="brand-mark-sm">OC</div>
+                <h2>OffComfrt</h2>
             </div>
             <nav class="sidebar-nav">
-                <a href="#" class="nav-item active" data-page="overview" data-tooltip="Overview">
-                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-                    <span class="nav-item-text">Overview</span>
+                <a href="#" class="nav-item active" data-page="support" data-tooltip="Support Tickets">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><circle cx="12" cy="10" r="3"/></svg>
+                    <span class="nav-item-text">Support Tickets</span>
+                    <span class="nav-badge" id="navBadgeUnread" style="display:none">0</span>
                 </a>
-                <a href="#" class="nav-item" data-page="customers" data-tooltip="Customers">
-                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                    <span class="nav-item-text">Customers</span>
+                <a href="#" class="nav-item" data-page="widget-chats" data-tooltip="Widget Chats">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h8"/><path d="M8 14h4"/></svg>
+                    <span class="nav-item-text">Widget Chats</span>
                 </a>
-                <a href="#" class="nav-item" data-page="orders" data-tooltip="Orders">
-                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
-                    <span class="nav-item-text">Orders</span>
+                <a href="#" class="nav-item" data-page="ai-analytics" data-tooltip="AI Analytics">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4v2H8V6a4 4 0 0 1 4-4z"/><path d="M6 8H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2"/><circle cx="12" cy="16" r="3"/><path d="M12 13v-1"/></svg>
+                    <span class="nav-item-text">AI Analytics</span>
                 </a>
-
-                <a href="#" class="nav-item" data-page="messages" data-tooltip="Messages">
-                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    <span class="nav-item-text">Messages</span>
+                <a href="#" class="nav-item" data-page="templates" data-tooltip="Templates">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    <span class="nav-item-text">Templates</span>
                 </a>
                 <a href="#" class="nav-item" data-page="ig-comments" data-tooltip="Instagram Comments">
                     <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>
                     <span class="nav-item-text">IG Comments</span>
                 </a>
-                <a href="#" class="nav-item" data-page="support" data-tooltip="Support Tickets">
-                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><circle cx="12" cy="10" r="3"/></svg>
-                    <span class="nav-item-text">Support Tickets</span>
-                </a>
-                <a href="#" class="nav-item" data-page="broadcast" data-tooltip="Broadcast">
-                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                    <span class="nav-item-text">Broadcast</span>
-                </a>
-                <a href="#" class="nav-item" data-page="templates" data-tooltip="Templates">
-                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-                    <span class="nav-item-text">Templates</span>
-                </a>
-                <a href="#" class="nav-item" data-page="analytics" data-tooltip="Analytics">
-                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
-                    <span class="nav-item-text">Analytics</span>
-                </a>
+                <div class="nav-divider"></div>
                 <a href="/dashboard/ai-copilot.html" class="nav-item" data-tooltip="AI Copilot Pro" target="_blank">
                     <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/></svg>
                     <span class="nav-item-text">AI Copilot Pro</span>
@@ -104,15 +88,14 @@
                     <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
                     <span class="nav-item-text">Zoho Sync</span>
                 </a>
-
+                <div class="nav-divider"></div>
                 <a href="#" class="nav-item" data-page="settings" data-tooltip="Settings">
                     <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     <span class="nav-item-text">Settings</span>
                 </a>
-
             </nav>
             <div class="sidebar-footer">
-                <button id="logoutBtn" class="btn btn-secondary" style="width: 100%;">
+                <button id="logoutBtn" class="btn btn-secondary" style="width:100%">
                     <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                     <span class="nav-item-text">Logout</span>
                 </button>
@@ -125,15 +108,11 @@
             <header class="dashboard-header">
                 <div class="header-left">
                     <button class="sidebar-toggle" id="sidebarToggle" title="Toggle Sidebar">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="3" y1="12" x2="21" y2="12"/>
-                            <line x1="3" y1="6" x2="21" y2="6"/>
-                            <line x1="3" y1="18" x2="21" y2="18"/>
-                        </svg>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
                     </button>
                     <div class="header-title">
-                        <h1 id="pageTitle">Overview</h1>
-                        <p id="pageSubtitle">WhatsApp Bot Performance Dashboard</p>
+                        <h1 id="pageTitle">Support Tickets</h1>
+                        <p id="pageSubtitle">Manage customer conversations across all channels</p>
                     </div>
                 </div>
                 <div class="header-actions">
@@ -141,7 +120,7 @@
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
                         Refresh
                     </button>
-                    <button id="headerLogoutBtn" class="btn btn-secondary" title="Log out of the Admin Dashboard">
+                    <button id="headerLogoutBtn" class="btn btn-secondary" title="Log out">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                         Logout
                     </button>
@@ -150,554 +129,95 @@
 
             <!-- Content Area -->
             <div class="content-area">
-                <!-- Overview Page -->
-                <div id="overviewPage" class="page-section active">
-                    <!-- Statistics Cards -->
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-header">
-                                <div>
-                                    <div class="stat-label">Total Customers</div>
-                                    <div class="stat-value" id="totalCustomers">-</div>
-                                    <div class="stat-change positive" id="customersChange">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> Loading...
-                                    </div>
-                                </div>
-                                <div class="stat-icon primary"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
-                            </div>
-                        </div>
 
-                        <div class="stat-card">
-                            <div class="stat-header">
-                                <div>
-                                    <div class="stat-label">Total Orders</div>
-                                    <div class="stat-value" id="totalOrders">-</div>
-                                    <div class="stat-change positive" id="ordersChange">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> Loading...
-                                    </div>
-                                </div>
-                                <div class="stat-icon success"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></div>
-                            </div>
-                        </div>
-
-                        <div class="stat-card">
-                            <div class="stat-header">
-                                <div>
-                                    <div class="stat-label">Total Messages</div>
-                                    <div class="stat-value" id="totalMessages">-</div>
-                                    <div class="stat-change positive" id="messagesChange">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m18 15-6-6-6 6"/></svg> Loading...
-                                    </div>
-                                </div>
-                                <div class="stat-icon info"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
-                            </div>
-                        </div>
-
-                        <div class="stat-card">
-                            <div class="stat-header">
-                                <div>
-                                    <div class="stat-label">Active Today</div>
-                                    <div class="stat-value" id="activeToday">-</div>
-                                    <div class="stat-change" id="activeChange">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg> Loading...
-                                    </div>
-                                </div>
-                                <div class="stat-icon warning"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
-                            </div>
-                        </div>
+                <!-- ===================== SUPPORT TICKETS PAGE ===================== -->
+                <div id="supportPage" class="page-section active">
+                    <!-- Channel Segregation Tabs -->
+                    <div class="channel-tabs">
+                        <button class="channel-tab active" data-channel="all">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                            All Channels
+                        </button>
+                        <button class="channel-tab" data-channel="whatsapp">
+                            <svg width="16" height="16" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" fill="currentColor"/></svg>
+                            WhatsApp
+                        </button>
+                        <button class="channel-tab" data-channel="instagram">
+                            <svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z" fill="currentColor"/></svg>
+                            Instagram
+                        </button>
+                        <button class="channel-tab" data-channel="website">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                            Website Bot
+                        </button>
                     </div>
 
-                    <!-- Charts Row -->
-                    <div
-                        style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 24px; margin-bottom: 24px;">
-                        <div class="card">
-                            <div class="card-header">
-                                <h3 class="card-title">Message Volume (7 Days)</h3>
-                            </div>
-                            <div class="card-body">
-                                <div class="chart-container">
-                                    <canvas id="messageChart"></canvas>
-                                </div>
-                            </div>
+                    <!-- Stats Row -->
+                    <div class="stats-row">
+                        <div class="mini-stat">
+                            <span class="mini-stat-value" id="statTotal">0</span>
+                            <span class="mini-stat-label">Total</span>
                         </div>
-
-                        <div class="card">
-                            <div class="card-header">
-                                <h3 class="card-title">Order Status Distribution</h3>
-                            </div>
-                            <div class="card-body">
-                                <div class="chart-container">
-                                    <canvas id="orderStatusChart"></canvas>
-                                </div>
-                            </div>
+                        <div class="mini-stat">
+                            <span class="mini-stat-value" id="statOpen">0</span>
+                            <span class="mini-stat-label">Open</span>
                         </div>
-                    </div>
-
-                    <!-- Recent Activity -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">Recent Activity</h3>
+                        <div class="mini-stat">
+                            <span class="mini-stat-value" id="statUnread">0</span>
+                            <span class="mini-stat-label">Unread</span>
                         </div>
-                        <div class="card-body">
-                            <div id="recentActivity">
-                                <div class="loading"></div>
-                            </div>
+                        <div class="mini-stat">
+                            <span class="mini-stat-value" id="statResolved">0</span>
+                            <span class="mini-stat-label">Resolved</span>
                         </div>
-                    </div>
-                </div>
-
-                <!-- Customers Page -->
-                <div id="customersPage" class="page-section">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">Customer Management</h3>
-                            <button class="btn btn-primary" id="exportCustomersBtn">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                                Export CSV
-                            </button>
-                        </div>
-                        <div class="card-body">
-                            <!-- Search Bar -->
-                            <div class="search-bar">
-                                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                                <input type="text" id="customerSearch"
-                                    placeholder="Search customers by name or phone...">
-                            </div>
-
-                            <!-- Customers Table -->
-                            <div class="table-container">
-                                <table id="customersTable">
-                                    <thead>
-                                        <tr>
-                                            <th>Name</th>
-                                            <th>Phone</th>
-                                            <th>Orders</th>
-                                            <th>Messages</th>
-                                            <th>Joined</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="customersTableBody">
-                                        <tr>
-                                            <td colspan="6" class="text-center">
-                                                <div class="loading"></div>
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                            <!-- Pagination -->
-                            <div class="pagination-controls" style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
-                                <div id="customersPaginationInfo" class="text-muted text-small">
-                                    Showing 0-0 of 0 customers
-                                </div>
-                                <div class="btn-group" style="display: flex; gap: 8px;">
-                                    <button class="btn btn-secondary btn-sm" id="btnPrevCustomers" style="padding: 6px 12px; font-size: 13px;">Previous</button>
-                                    <button class="btn btn-secondary btn-sm" id="btnNextCustomers" style="padding: 6px 12px; font-size: 13px;">Next</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Orders Page -->
-                <div id="ordersPage" class="page-section">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">Order Management</h3>
-                            <div class="filters">
-                                <select id="orderStatusFilter">
-                                    <option value="">All Statuses</option>
-                                    <option value="pending">Pending</option>
-                                    <option value="confirmed">Confirmed</option>
-                                    <option value="shipped">Shipped</option>
-                                    <option value="delivered">Delivered</option>
-                                    <option value="cancelled">Cancelled</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <!-- Search Bar -->
-                            <div class="search-bar">
-                                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                                <input type="text" id="orderSearch" placeholder="Search by order ID or customer...">
-                            </div>
-
-                            <!-- Orders Table -->
-                            <div class="table-container">
-                                <table id="ordersTable">
-                                    <thead>
-                                        <tr>
-                                            <th>Order ID</th>
-                                            <th>Customer</th>
-                                            <th>Status</th>
-                                            <th>AWB</th>
-                                            <th>Date</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="ordersTableBody">
-                                        <tr>
-                                            <td colspan="6" class="text-center">
-                                                <div class="loading"></div>
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-
-
-                <!-- Messages Page -->
-                <div id="messagesPage" class="page-section">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">Message History</h3>
-                            <button class="btn btn-primary" id="exportMessagesBtn">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                                Export
-                            </button>
-                        </div>
-                        <div class="card-body">
-                            <!-- Filters -->
-                            <div class="filters">
-                                <select id="messageTypeFilter">
-                                    <option value="">All Messages</option>
-                                    <option value="incoming">Incoming</option>
-                                    <option value="outgoing">Outgoing</option>
-                                </select>
-                                <input type="date" id="messageDateFilter">
-                            </div>
-
-                            <!-- Messages Table -->
-                            <div class="table-container">
-                                <table id="messagesTable">
-                                    <thead>
-                                        <tr>
-                                            <th>Time</th>
-                                            <th>Customer</th>
-                                            <th>Type</th>
-                                            <th>Message</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="messagesTableBody">
-                                        <tr>
-                                            <td colspan="4" class="text-center">
-                                                <div class="loading"></div>
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Support Tickets Page -->
-                <div id="supportPage" class="page-section">
-                    <!-- Stats Bar -->
-                    <div class="ticket-stats-bar">
-                        <div class="ticket-stat">
-                            <span class="ticket-stat-value" id="totalTicketsCount">0</span>
-                            <span class="ticket-stat-label">Total Tickets</span>
-                        </div>
-                        <div class="ticket-stat unread">
-                            <span class="ticket-stat-value" id="unreadTicketsCount">0</span>
-                            <span class="ticket-stat-label">Unread</span>
-                        </div>
-                        <div class="ticket-stat urgent">
-                            <span class="ticket-stat-value" id="urgentTicketsCount">0</span>
-                            <span class="ticket-stat-label">Urgent</span>
-                        </div>
-                        <div class="ticket-stat open">
-                            <span class="ticket-stat-value" id="openTicketsCount">0</span>
-                            <span class="ticket-stat-label">Open</span>
-                        </div>
-                        <div class="ticket-stat resolved">
-                            <span class="ticket-stat-value" id="resolvedTicketsCount">0</span>
-                            <span class="ticket-stat-label">Resolved</span>
-                        </div>
-                    </div>
-
-                    <!-- Portals Section -->
-                    <div class="portals-section" id="portalsSection">
-                        <div class="portals-header">
-                            <h3 class="portals-title">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                                Support Portals
-                            </h3>
-                            <div class="portals-actions">
-                                <button class="btn btn-primary" id="openCreatePortalBtn">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                    Create Portal
-                                </button>
-                                <button class="btn btn-secondary" id="openAutoDistributeBtn">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                                    Auto Distribute
-                                </button>
-                            </div>
-                        </div>
-                        <div class="portals-list" id="portalsList">
-                            <div class="portals-empty">Loading portals...</div>
-                        </div>
-
-                        <!-- Portal Analytics Panel -->
-                        <div class="portal-analytics-panel" id="portalAnalyticsPanel">
-                            <div class="analytics-header">
-                                <h4 class="analytics-title">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
-                                    Portal Analytics
-                                </h4>
-                                <button class="btn btn-secondary btn-sm" id="refreshAnalyticsBtn" title="Refresh analytics">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                                    Refresh
-                                </button>
-                            </div>
-
-                            <!-- Global Summary Cards -->
-                            <div class="analytics-summary" id="analyticsSummary">
-                                <div class="analytics-card">
-                                    <div class="analytics-card-value" id="analyticsTotal">—</div>
-                                    <div class="analytics-card-label">Total Tickets</div>
-                                </div>
-                                <div class="analytics-card analytics-open">
-                                    <div class="analytics-card-value" id="analyticsOpen">—</div>
-                                    <div class="analytics-card-label">Open</div>
-                                </div>
-                                <div class="analytics-card analytics-resolved">
-                                    <div class="analytics-card-value" id="analyticsResolved">—</div>
-                                    <div class="analytics-card-label">Resolved</div>
-                                </div>
-                                <div class="analytics-card analytics-unread">
-                                    <div class="analytics-card-value" id="analyticsUnread">—</div>
-                                    <div class="analytics-card-label">Unread</div>
-                                </div>
-                                <div class="analytics-card analytics-unassigned">
-                                    <div class="analytics-card-value" id="analyticsUnassigned">—</div>
-                                    <div class="analytics-card-label">Unassigned</div>
-                                </div>
-                                <div class="analytics-card analytics-today">
-                                    <div class="analytics-card-value" id="analyticsToday">—</div>
-                                    <div class="analytics-card-label">Today</div>
-                                </div>
-                            </div>
-
-                            <!-- Per-Portal Breakdown -->
-                            <div class="analytics-portal-grid" id="analyticsPortalGrid">
-                                <!-- Populated by JS -->
-                            </div>
-
-                            <!-- Unassigned Tickets Section -->
-                            <div class="analytics-unassigned-section" id="analyticsUnassignedSection">
-                                <div class="unassigned-header">
-                                    <h5>
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
-                                        Unassigned Tickets
-                                    </h5>
-                                    <div class="unassigned-actions">
-                                        <select class="analytics-portal-select" id="unassignedTargetPortal">
-                                            <option value="">Select portal...</option>
-                                        </select>
-                                        <button class="btn btn-primary btn-sm" id="transferUnassignedBtn">
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/></svg>
-                                            Transfer Open
-                                        </button>
-                                        <button class="btn btn-secondary btn-sm" id="distributeUnassignedBtn" title="Distribute evenly across all portals">
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                                            Distribute Evenly
-                                        </button>
-                                    </div>
-                                </div>
-                                <div class="unassigned-chart" id="unassignedHourlyChart">
-                                    <!-- Hourly bar chart rendered by JS -->
-                                </div>
-                                <div class="unassigned-daily" id="unassignedDailyChart">
-                                    <!-- Daily trend rendered by JS -->
-                                </div>
-                            </div>
+                        <div class="mini-stat">
+                            <span class="mini-stat-value" id="statUrgent">0</span>
+                            <span class="mini-stat-label">Urgent</span>
                         </div>
                     </div>
 
                     <!-- Toolbar -->
-                    <div class="ticket-toolbar-pro">
-                        <!-- Row 1: Search Bar -->
-                        <div class="toolbar-search-row">
-                            <div class="search-container">
-                                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                                <input type="text" id="ticketSearchInput" placeholder="Search tickets, phone numbers, order IDs, or messages...">
-                                <button class="search-filter-toggle" id="searchFilterToggle" title="Advanced filters">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-                                </button>
-                            </div>
+                    <div class="ticket-toolbar">
+                        <div class="toolbar-search">
+                            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                            <input type="text" id="ticketSearchInput" placeholder="Search tickets, phone numbers, order IDs...">
                         </div>
-
-                        <!-- Row 2: Collapsible Filters Panel -->
-                        <div class="toolbar-filters-panel" id="filtersPanel">
-                            <div class="filters-grid">
-                                <!-- Quick Presets -->
-                                <div class="filter-group">
-                                    <label>Quick Filters</label>
-                                    <div class="quick-presets">
-                                        <button class="preset-btn" data-action="preset" data-preset="today">Today</button>
-                                        <button class="preset-btn" data-action="preset" data-preset="yesterday">Yesterday</button>
-                                        <button class="preset-btn" data-action="preset" data-preset="week">This Week</button>
-                                        <button class="preset-btn" data-action="preset" data-preset="month">This Month</button>
-                                    </div>
-                                </div>
-
-                                <!-- Date Range -->
-                                <div class="filter-group">
-                                    <label>Date Range</label>
-                                    <div class="date-range-inputs">
-                                        <input type="date" id="dateFromFilter" class="date-filter" title="From Date">
-                                        <span class="date-separator">to</span>
-                                        <input type="date" id="dateToFilter" class="date-filter" title="To Date">
-                                    </div>
-                                </div>
-
-                                <!-- Time Range (IST) -->
-                                <div class="filter-group">
-                                    <label>Time Range (IST)</label>
-                                    <div class="time-range-inputs">
-                                        <input type="time" id="timeFromFilter" class="time-filter" title="From Time">
-                                        <span class="time-separator">to</span>
-                                        <input type="time" id="timeToFilter" class="time-filter" title="To Time">
-                                    </div>
-                                </div>
-
-                                <!-- Status & Sort -->
-                                <div class="filter-group">
-                                    <label>Status & Sort</label>
-                                    <div class="status-sort-row">
-                                        <select id="ticketStatusFilter" class="custom-select-hidden">
-                                            <option value="">All Statuses</option>
-                                            <option value="open">Open</option>
-                                            <option value="resolved">Resolved</option>
-                                        </select>
-                                        <div class="custom-dropdown" data-target="ticketStatusFilter">
-                                            <div class="custom-dropdown-selected">
-                                                <span class="custom-dropdown-label">All Statuses</span>
-                                                <svg class="custom-dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
-                                            </div>
-                                            <div class="custom-dropdown-options">
-                                                <div class="custom-dropdown-option" data-value="">All Statuses</div>
-                                                <div class="custom-dropdown-option" data-value="open">Open</div>
-                                                <div class="custom-dropdown-option" data-value="resolved">Resolved</div>
-                                            </div>
-                                        </div>
-                                        <select id="ticketSortBy" class="custom-select-hidden">
-                                            <option value="newest">Newest First</option>
-                                            <option value="oldest">Oldest First</option>
-                                        </select>
-                                        <div class="custom-dropdown" data-target="ticketSortBy">
-                                            <div class="custom-dropdown-selected">
-                                                <span class="custom-dropdown-label">Newest First</span>
-                                                <svg class="custom-dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
-                                            </div>
-                                            <div class="custom-dropdown-options">
-                                                <div class="custom-dropdown-option" data-value="newest">Newest First</div>
-                                                <div class="custom-dropdown-option" data-value="oldest">Oldest First</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Portal Filter -->
-                                <div class="filter-group">
-                                    <label>Assigned Portal</label>
-                                    <select id="portalFilter" class="custom-select-hidden">
-                                        <option value="">All Portals</option>
-                                        <option value="unassigned">Unassigned</option>
-                                    </select>
-                                    <div class="custom-dropdown" data-target="portalFilter" id="portalFilterDropdown">
-                                        <div class="custom-dropdown-selected">
-                                            <span class="custom-dropdown-label">All Portals</span>
-                                            <svg class="custom-dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
-                                        </div>
-                                        <div class="custom-dropdown-options">
-                                            <div class="custom-dropdown-option" data-value="">All Portals</div>
-                                            <div class="custom-dropdown-option" data-value="unassigned">Unassigned</div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Channel Filter -->
-                                <div class="filter-group">
-                                    <label>Channel</label>
-                                    <div class="channel-toggle-group">
-                                        <button class="channel-toggle active" data-channel="all" title="All channels">
-                                            <svg class="ch-icon ch-icon-all" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                                            All
-                                        </button>
-                                        <button class="channel-toggle" data-channel="whatsapp" title="WhatsApp only">
-                                            <svg class="ch-icon ch-icon-wa" width="14" height="14" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" fill="currentColor"/></svg>
-                                            WhatsApp
-                                        </button>
-                                        <button class="channel-toggle" data-channel="instagram" title="Instagram only">
-                                            <svg class="ch-icon ch-icon-ig" width="14" height="14" viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z" fill="currentColor"/></svg>
-                                            Instagram
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <!-- Urgent & Unread Filters -->
-                                <div class="filter-group">
-                                    <label>Quick Actions</label>
-                                    <div class="urgent-filter-row">
-                                        <button class="btn-filter btn-urgent btn-filter-sm" id="urgentFilterBtn" title="Show urgent tickets">
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                                            Urgent
-                                        </button>
-                                        <button class="btn-filter btn-filter-sm" id="unreadFilterBtn" title="Show only unread tickets">
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                                            Unread
-                                        </button>
-                                        <button class="btn-secondary btn-sm" id="configureUrgentBtn" title="Configure keywords">
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                                            Configure
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Filter Actions -->
-                            <div class="filters-actions">
-                                <button class="btn btn-secondary" id="resetFiltersBtn" title="Reset all filters">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
-                                    Reset All
-                                </button>
-                                <span class="active-filters-count" id="activeFiltersCount"></span>
-                            </div>
+                        <div class="toolbar-filters">
+                            <select id="ticketStatusFilter">
+                                <option value="">All Statuses</option>
+                                <option value="open">Open</option>
+                                <option value="resolved">Resolved</option>
+                            </select>
+                            <select id="portalFilter">
+                                <option value="">All Portals</option>
+                                <option value="unassigned">Unassigned</option>
+                            </select>
+                            <select id="ticketSortBy">
+                                <option value="newest">Newest First</option>
+                                <option value="oldest">Oldest First</option>
+                            </select>
+                            <button class="btn-filter" id="urgentFilterBtn" title="Show urgent tickets">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                                Urgent
+                            </button>
+                            <button class="btn-filter" id="unreadFilterBtn" title="Show unread only">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                                Unread
+                            </button>
+                            <button class="btn btn-secondary btn-sm" id="resetFiltersBtn" title="Reset filters">Reset</button>
                         </div>
+                    </div>
+
+                    <!-- Portal Distribution Bar -->
+                    <div class="portal-dist-bar" id="portalDistBar">
+                        <!-- Rendered by JS -->
                     </div>
 
                     <!-- Tickets List -->
                     <div class="tickets-container">
-                        <!-- Bulk Action Bar -->
-                        <div class="bulk-action-bar" id="bulkActionBar" style="display: none;">
-                            <div class="bulk-action-info">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-                                <span><strong id="selectedCount">0</strong> ticket(s) selected</span>
-                            </div>
-                            <div class="bulk-action-controls">
-                                <select id="assignPortalSelect" class="bulk-portal-select">
-                                    <option value="">Assign to Portal...</option>
-                                </select>
-                                <button class="btn btn-danger btn-sm" id="bulkDeleteBtn" style="display: none;">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                                    Delete Selected
-                                </button>
-                            </div>
-                        </div>
-
                         <div class="tickets-list-header">
-                            <div class="ticket-col checkbox">
-                                <input type="checkbox" id="selectAllTickets">
-                            </div>
-                            <div class="ticket-col ticket-number">Ticket #</div>
+                            <div class="ticket-col checkbox"><input type="checkbox" id="selectAllTickets"></div>
+                            <div class="ticket-col ticket-number">Ticket</div>
                             <div class="ticket-col customer">Customer</div>
                             <div class="ticket-col message">Message</div>
                             <div class="ticket-col meta">Details</div>
@@ -710,245 +230,358 @@
                                 <span>Loading tickets...</span>
                             </div>
                         </div>
-                        <div class="tickets-pagination" id="ticketsPagination" style="display: none;">
+                        <div class="tickets-pagination" id="ticketsPagination" style="display:none">
                             <div class="pagination-info">
-                                Showing <span id="showingStart">0</span>-<span id="showingEnd">0</span> of <span id="showingTotal">0</span> tickets
+                                Showing <span id="showingStart">0</span>–<span id="showingEnd">0</span> of <span id="showingTotal">0</span>
                             </div>
-                            <button class="btn btn-primary btn-show-more" id="showMoreBtn">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
-                                Show More
+                            <button class="btn btn-primary btn-sm" id="showMoreBtn">Show More</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===================== WIDGET CHATS PAGE ===================== -->
+                <div id="widget-chatsPage" class="page-section">
+                    <!-- Sub-tabs -->
+                    <div class="wc-sub-tabs">
+                        <button class="wc-sub-tab active" data-wctab="conversations">Conversations</button>
+                        <button class="wc-sub-tab" data-wctab="wc-analytics">Analytics</button>
+                        <button class="wc-sub-tab" data-wctab="wc-settings">Settings</button>
+                    </div>
+
+                    <!-- ── Conversations Tab ── -->
+                    <div id="wcTabConversations" class="wc-tab-panel active">
+                        <!-- Live Now Section -->
+                        <div class="wc-live-section" id="wcLiveSection" style="display:none">
+                            <div class="wc-live-header">
+                                <div class="wc-live-title">
+                                    <span class="wc-live-dot"></span>
+                                    Live Now
+                                    <span class="wc-live-count" id="wcLiveCount">0</span>
+                                </div>
+                                <span class="wc-live-auto">Auto-refreshing</span>
+                            </div>
+                            <div class="wc-live-sessions" id="wcLiveSessions"></div>
+                        </div>
+                        <!-- Stats Row -->
+                        <div class="stats-row">
+                            <div class="mini-stat">
+                                <span class="mini-stat-value" id="wcStatSessions">0</span>
+                                <span class="mini-stat-label">Sessions</span>
+                            </div>
+                            <div class="mini-stat">
+                                <span class="mini-stat-value" id="wcStatTickets">0</span>
+                                <span class="mini-stat-label">With Tickets</span>
+                            </div>
+                            <div class="mini-stat">
+                                <span class="mini-stat-value" id="wcStatEscRate">0%</span>
+                                <span class="mini-stat-label">Escalation</span>
+                            </div>
+                            <div class="mini-stat">
+                                <span class="mini-stat-value" id="wcStatCost">$0.00</span>
+                                <span class="mini-stat-label">Total Cost</span>
+                            </div>
+                            <div class="mini-stat">
+                                <span class="mini-stat-value" id="wcStatTokens">0</span>
+                                <span class="mini-stat-label">Total Tokens</span>
+                            </div>
+                        </div>
+                        <!-- Toolbar -->
+                        <div class="ticket-toolbar">
+                            <div class="toolbar-search">
+                                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                                <input type="text" id="wcSearchInput" placeholder="Search session ID or ticket number...">
+                            </div>
+                            <div class="toolbar-filters">
+                                <select id="wcTicketFilter">
+                                    <option value="">All Sessions</option>
+                                    <option value="1">With Tickets</option>
+                                    <option value="0">Without Tickets</option>
+                                </select>
+                                <select id="wcSortBy">
+                                    <option value="newest">Newest First</option>
+                                    <option value="oldest">Oldest First</option>
+                                </select>
+                                <button class="btn btn-secondary btn-sm" id="wcRefreshBtn">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                                    Refresh
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Sessions List -->
+                        <div id="wcSessionsList" class="wc-sessions-list">
+                            <div class="tickets-loading"><div class="spinner"></div><span>Loading sessions...</span></div>
+                        </div>
+                        <div class="tickets-pagination" id="wcPagination" style="display:none">
+                            <div class="pagination-info">
+                                Showing <span id="wcShowStart">0</span>–<span id="wcShowEnd">0</span> of <span id="wcShowTotal">0</span>
+                            </div>
+                            <button class="btn btn-primary btn-sm" id="wcShowMoreBtn">Show More</button>
+                        </div>
+                    </div>
+
+                    <!-- ── Analytics Tab ── -->
+                    <div id="wcTabAnalytics" class="wc-tab-panel">
+                        <div class="ai-kpi-grid">
+                            <div class="ai-kpi-card">
+                                <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+                                <div class="ai-kpi-value" id="wcAnaSessions">0</div>
+                                <div class="ai-kpi-label">Total Sessions</div>
+                            </div>
+                            <div class="ai-kpi-card">
+                                <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg></div>
+                                <div class="ai-kpi-value" id="wcAnaMessages">0</div>
+                                <div class="ai-kpi-label">Total Messages</div>
+                            </div>
+                            <div class="ai-kpi-card">
+                                <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+                                <div class="ai-kpi-value" id="wcAnaTokens">0</div>
+                                <div class="ai-kpi-label">Total Tokens</div>
+                                <div class="ai-kpi-sub" id="wcAnaTokensBreakdown">prompt: 0 / completion: 0</div>
+                            </div>
+                            <div class="ai-kpi-card ai-kpi-danger">
+                                <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+                                <div class="ai-kpi-value" id="wcAnaCost">$0.00</div>
+                                <div class="ai-kpi-label">Total Cost</div>
+                                <div class="ai-kpi-sub" id="wcAnaAvgCost">avg $0.00/session</div>
+                            </div>
+                            <div class="ai-kpi-card ai-kpi-success">
+                                <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+                                <div class="ai-kpi-value" id="wcAnaEscRate">0%</div>
+                                <div class="ai-kpi-label">Escalation Rate</div>
+                                <div class="ai-kpi-sub" id="wcAnaEscCount">0 of 0 sessions</div>
+                            </div>
+                            <div class="ai-kpi-card">
+                                <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+                                <div class="ai-kpi-value" id="wcAnaAvgTokens">0</div>
+                                <div class="ai-kpi-label">Avg Tokens/Session</div>
+                            </div>
+                        </div>
+                        <!-- Daily Usage Chart -->
+                        <div class="analytics-card full-width" style="margin-top:16px">
+                            <div class="analytics-card-header"><h3>Daily Usage — Last 14 Days</h3></div>
+                            <div class="wc-daily-chart" id="wcDailyChart"></div>
+                        </div>
+                        <!-- Hourly + Model -->
+                        <div class="analytics-grid" style="margin-top:16px">
+                            <div class="analytics-card">
+                                <div class="analytics-card-header"><h3>Hourly Distribution (IST)</h3></div>
+                                <div class="hourly-heatmap" id="wcHourlyHeatmap"></div>
+                            </div>
+                            <div class="analytics-card">
+                                <div class="analytics-card-header"><h3>Model Usage</h3></div>
+                                <div id="wcModelUsage"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── Settings Tab ── -->
+                    <div id="wcTabSettings" class="wc-tab-panel">
+                        <div class="settings-grid">
+                            <div class="settings-card">
+                                <div class="settings-card-header"><h3>AI Configuration</h3></div>
+                                <div id="wcSettingsInfo" class="wc-settings-info">
+                                    <div class="wc-setting-row"><span class="wc-setting-label">Provider</span><span class="wc-setting-value" id="wcSetProvider">—</span></div>
+                                    <div class="wc-setting-row"><span class="wc-setting-label">Model</span><span class="wc-setting-value" id="wcSetModel">—</span></div>
+                                    <div class="wc-setting-row"><span class="wc-setting-label">Input Cost / 1M tokens</span><span class="wc-setting-value" id="wcSetInputCost">—</span></div>
+                                    <div class="wc-setting-row"><span class="wc-setting-label">Output Cost / 1M tokens</span><span class="wc-setting-value" id="wcSetOutputCost">—</span></div>
+                                </div>
+                            </div>
+                            <div class="settings-card">
+                                <div class="settings-card-header"><h3>Session Limits</h3></div>
+                                <div class="wc-settings-info">
+                                    <div class="wc-setting-row"><span class="wc-setting-label">Session TTL</span><span class="wc-setting-value" id="wcSetTTL">—</span></div>
+                                    <div class="wc-setting-row"><span class="wc-setting-label">Max Concurrent Sessions</span><span class="wc-setting-value" id="wcSetMaxSess">—</span></div>
+                                    <div class="wc-setting-row"><span class="wc-setting-label">Max History Turns</span><span class="wc-setting-value" id="wcSetHistory">—</span></div>
+                                    <div class="wc-setting-row"><span class="wc-setting-label">Chat Retention</span><span class="wc-setting-value" id="wcSetRetention">—</span></div>
+                                </div>
+                            </div>
+                            <div class="settings-card">
+                                <div class="settings-card-header"><h3>Data Management</h3></div>
+                                <div class="wc-settings-info">
+                                    <p class="text-muted" style="margin-bottom:12px">Purge old widget chat data to free database space.</p>
+                                    <div style="display:flex;gap:8px;align-items:center">
+                                        <select id="wcPurgeDays" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">
+                                            <option value="30">Older than 30 days</option>
+                                            <option value="60">Older than 60 days</option>
+                                            <option value="90" selected>Older than 90 days</option>
+                                        </select>
+                                        <button class="btn btn-danger btn-sm" id="wcPurgeBtn">Purge Old Chats</button>
+                                    </div>
+                                    <div id="wcPurgeResult" class="text-muted" style="margin-top:8px;font-size:12px"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===================== AI ANALYTICS PAGE ===================== -->
+                <div id="ai-analyticsPage" class="page-section">
+                    <!-- Date Range Filter -->
+                    <div class="analytics-date-filter">
+                        <div class="date-filter-group" id="analyticsDateFilter">
+                            <button class="date-filter-btn active" data-range="all">All Time</button>
+                            <button class="date-filter-btn" data-range="today">Today</button>
+                            <button class="date-filter-btn" data-range="yesterday">Yesterday</button>
+                            <button class="date-filter-btn" data-range="7d">Last 7 Days</button>
+                            <button class="date-filter-btn" data-range="30d">Last 30 Days</button>
+                            <button class="date-filter-btn" data-range="90d">Last 90 Days</button>
+                            <button class="date-filter-btn" data-range="this_month">This Month</button>
+                            <button class="date-filter-btn" data-range="last_month">Last Month</button>
+                        </div>
+                        <div class="date-filter-info" id="analyticsDateInfo">Showing all time</div>
+                    </div>
+                    <!-- Row 1: KPI Summary Cards (8 cards) -->
+                    <div class="ai-kpi-grid">
+                        <div class="ai-kpi-card">
+                            <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+                            <div class="ai-kpi-value" id="aiTotalConvos">0</div>
+                            <div class="ai-kpi-label">Total Tickets</div>
+                            <div class="ai-kpi-sub" id="aiTodayTotal">0 today</div>
+                        </div>
+                        <div class="ai-kpi-card ai-kpi-success">
+                            <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+                            <div class="ai-kpi-value" id="aiResolved">0</div>
+                            <div class="ai-kpi-label">Resolved</div>
+                            <div class="ai-kpi-sub" id="aiTodayResolved">0 today</div>
+                        </div>
+                        <div class="ai-kpi-card ai-kpi-warning">
+                            <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+                            <div class="ai-kpi-value" id="aiEscalated">0</div>
+                            <div class="ai-kpi-label">Open / Pending</div>
+                            <div class="ai-kpi-sub" id="aiTodayOpen">0 today</div>
+                        </div>
+                        <div class="ai-kpi-card ai-kpi-danger">
+                            <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+                            <div class="ai-kpi-value" id="aiNegativeToday">0</div>
+                            <div class="ai-kpi-label">Negative Today</div>
+                            <div class="ai-kpi-sub" id="aiNegativeTotal">0 total</div>
+                        </div>
+                        <div class="ai-kpi-card">
+                            <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+                            <div class="ai-kpi-value" id="aiAvgResponse">--</div>
+                            <div class="ai-kpi-label">Avg Resolution</div>
+                            <div class="ai-kpi-sub">creation to resolve</div>
+                        </div>
+                        <div class="ai-kpi-card">
+                            <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg></div>
+                            <div class="ai-kpi-value" id="aiResolutionRate">0%</div>
+                            <div class="ai-kpi-label">Resolution Rate</div>
+                            <div class="ai-kpi-sub">all time</div>
+                        </div>
+                        <div class="ai-kpi-card">
+                            <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+                            <div class="ai-kpi-value" id="aiPeakHour">--</div>
+                            <div class="ai-kpi-label">Peak Hour</div>
+                            <div class="ai-kpi-sub" id="aiPeakHourCount">0 tickets</div>
+                        </div>
+                        <div class="ai-kpi-card">
+                            <div class="ai-kpi-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+                            <div class="ai-kpi-value" id="aiPeakDay">--</div>
+                            <div class="ai-kpi-label">Peak Day</div>
+                            <div class="ai-kpi-sub" id="aiPeakDayCount">0 tickets</div>
+                        </div>
+                    </div>
+
+                    <!-- Row 2: Volume Trend + Hourly Heatmap -->
+                    <div class="analytics-grid">
+                        <div class="analytics-card">
+                            <div class="analytics-card-header">
+                                <h3>Ticket Volume — 14 Days</h3>
+                                <span class="analytics-badge" id="volumeTrendBadge">--</span>
+                            </div>
+                            <div class="volume-chart" id="volumeChart"></div>
+                        </div>
+                        <div class="analytics-card">
+                            <div class="analytics-card-header">
+                                <h3>Hourly Distribution (IST)</h3>
+                                <span class="analytics-badge" id="hourlyBadge">--</span>
+                            </div>
+                            <div class="hourly-heatmap" id="hourlyHeatmap"></div>
+                        </div>
+                    </div>
+
+                    <!-- Row 3: Channel Distribution + Sentiment -->
+                    <div class="analytics-grid">
+                        <div class="analytics-card">
+                            <div class="analytics-card-header"><h3>Channel Distribution</h3></div>
+                            <div class="channel-breakdown" id="channelBreakdown"></div>
+                        </div>
+                        <div class="analytics-card">
+                            <div class="analytics-card-header"><h3>Sentiment Overview</h3></div>
+                            <div class="sentiment-bars" id="sentimentBars"></div>
+                        </div>
+                    </div>
+
+                    <!-- Row 4: Channel x Sentiment Matrix + AI Confidence -->
+                    <div class="analytics-grid">
+                        <div class="analytics-card">
+                            <div class="analytics-card-header"><h3>Channel &times; Sentiment Matrix</h3></div>
+                            <div class="cross-tab-container" id="channelSentimentMatrix"></div>
+                        </div>
+                        <div class="analytics-card">
+                            <div class="analytics-card-header"><h3>AI Classification Confidence</h3></div>
+                            <div class="confidence-dist" id="confidenceDist"></div>
+                        </div>
+                    </div>
+
+                    <!-- Row 5: Channel Resolution + Escalation -->
+                    <div class="analytics-grid">
+                        <div class="analytics-card">
+                            <div class="analytics-card-header"><h3>Resolution Rate by Channel</h3></div>
+                            <div class="channel-resolution" id="channelResolution"></div>
+                        </div>
+                        <div class="analytics-card">
+                            <div class="analytics-card-header"><h3>Escalation Rate by Channel</h3></div>
+                            <div class="escalation-chart" id="escalationChart"></div>
+                        </div>
+                    </div>
+
+                    <!-- Row 6: Resolution Trend (7-day) -->
+                    <div class="analytics-card full-width">
+                        <div class="analytics-card-header">
+                            <h3>Resolution Trend — Last 7 Days</h3>
+                            <button class="btn btn-secondary btn-sm" id="refreshAiInsights">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                                Refresh
                             </button>
                         </div>
+                        <div class="resolution-trend" id="resolutionTrend"></div>
+                    </div>
+
+                    <!-- Row 7: Top AI Scenarios + Portal Performance -->
+                    <div class="analytics-grid">
+                        <div class="analytics-card">
+                            <div class="analytics-card-header">
+                                <h3>Top AI Scenarios</h3>
+                                <span class="analytics-badge" id="scenariosBadge">--</span>
+                            </div>
+                            <div class="top-issues-list" id="topIssuesList"></div>
+                        </div>
+                        <div class="analytics-card">
+                            <div class="analytics-card-header"><h3>Portal Performance</h3></div>
+                            <div class="portal-perf-list" id="portalPerformance"></div>
+                        </div>
+                    </div>
+
+                    <!-- Row 8: AI Insights & Actionable Suggestions -->
+                    <div class="analytics-card full-width">
+                        <div class="analytics-card-header"><h3>AI Insights &amp; Actionable Suggestions</h3></div>
+                        <div class="ai-insights-list" id="aiInsightsList">
+                            <div class="ai-insight-empty"><p>Loading AI insights...</p></div>
+                        </div>
+                    </div>
+
+                    <!-- Row 9: Recent Conversations -->
+                    <div class="analytics-card full-width">
+                        <div class="analytics-card-header">
+                            <h3>Recent Conversations</h3>
+                            <span class="analytics-badge" id="conversationsBadge">--</span>
+                        </div>
+                        <div class="ai-conversations-list" id="aiConversationsList"></div>
                     </div>
                 </div>
 
-                <!-- Urgent Keywords Configuration Modal -->
-                <div id="urgentKeywordsModal" class="modal">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3 class="modal-title">Configure Urgent Keywords</h3>
-                            <button class="modal-close" data-action="closeModal" data-modal="urgentKeywordsModal">&times;</button>
-                        </div>
-                        <div class="modal-body">
-                            <p class="text-muted mb-3">Tickets containing these keywords will be marked as urgent and highlighted</p>
-                            
-                            <div class="keyword-input-group">
-                                <input type="text" id="newKeywordInput" placeholder="Add new keyword (e.g., 'refund', 'complaint')" />
-                                <button class="btn btn-primary" id="addKeywordBtn">Add</button>
-                            </div>
-                            
-                            <div class="keywords-list" id="keywordsList">
-                                <!-- Keywords will be rendered here -->
-                            </div>
-                        </div>
-                        <div class="modal-footer">
-                            <button class="btn btn-secondary" data-action="closeModal" data-modal="urgentKeywordsModal">Cancel</button>
-                            <button class="btn btn-primary" id="saveKeywordsBtn">Save Changes</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Instagram Comments Page -->
-                <div id="ig-commentsPage" class="page-section">
-                    <div class="igc-stats-bar">
-                        <div class="igc-stat"><span class="igc-stat-value" id="igcStatTotal">0</span><span class="igc-stat-label">Total</span></div>
-                        <div class="igc-stat igc-stat-new"><span class="igc-stat-value" id="igcStatNew">0</span><span class="igc-stat-label">New</span></div>
-                        <div class="igc-stat igc-stat-attention"><span class="igc-stat-value" id="igcStatAttention">0</span><span class="igc-stat-label">Needs Attention</span></div>
-                        <div class="igc-stat igc-stat-dm"><span class="igc-stat-value" id="igcStatDm">0</span><span class="igc-stat-label">DM Started</span></div>
-                        <div class="igc-stat igc-stat-ticket"><span class="igc-stat-value" id="igcStatTickets">0</span><span class="igc-stat-label">Tickets</span></div>
-                        <div class="igc-stat igc-stat-spam"><span class="igc-stat-value" id="igcStatSpam">0</span><span class="igc-stat-label">Spam</span></div>
-                    </div>
-
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">Instagram Comments</h3>
-                            <button class="btn btn-secondary" id="igcRefreshBtn">Refresh</button>
-                        </div>
-                        <div class="igc-filters">
-                            <select id="igcStatusFilter" class="igc-filter-select">
-                                <option value="all">All Statuses</option>
-                                <option value="new">New</option>
-                                <option value="needs_review">Needs Review</option>
-                                <option value="needs_human">Needs Human</option>
-                                <option value="dm_started">DM Started</option>
-                                <option value="ticket_created">Ticket Created</option>
-                                <option value="resolved">Resolved</option>
-                                <option value="ignored">Ignored</option>
-                                <option value="spam">Spam</option>
-                            </select>
-                            <select id="igcIntentFilter" class="igc-filter-select">
-                                <option value="all">All Intents</option>
-                            </select>
-                            <input type="text" id="igcSearchInput" class="igc-filter-input" placeholder="Search username, text, comment ID, ticket..." />
-                            <input type="date" id="igcDateFrom" class="igc-filter-input" title="From date" />
-                            <input type="date" id="igcDateTo" class="igc-filter-input" title="To date" />
-                        </div>
-                        <div id="igCommentsList" class="igc-list">
-                            <div class="igc-empty">No comments yet. Comment webhook events will appear here.</div>
-                        </div>
-                        <div class="igc-pagination">
-                            <button class="btn btn-secondary" id="igcPrevBtn" disabled>Previous</button>
-                            <span id="igcPageInfo" class="igc-page-info">Page 1</span>
-                            <button class="btn btn-secondary" id="igcNextBtn" disabled>Next</button>
-                        </div>
-                    </div>
-
-                    <!-- Comment Detail Modal -->
-                    <div id="igCommentDetailModal" class="modal">
-                        <div class="modal-content igc-modal-wide">
-                            <div class="modal-header">
-                                <h3 class="modal-title">Comment Detail</h3>
-                                <button class="modal-close" data-action="closeModal" data-modal="igCommentDetailModal">&times;</button>
-                            </div>
-                            <div class="modal-body" id="igCommentDetailBody"></div>
-                            <div class="modal-footer" id="igCommentDetailFooter"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Broadcast Page -->
-                <div id="broadcastPage" class="page-section">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">Broadcast Message</h3>
-                        </div>
-                        <div class="card-body">
-                            <form id="broadcastForm">
-                                <div class="form-group">
-                                    <label>Recipients</label>
-                                    <select id="broadcastRecipients">
-                                        <option value="all">All Customers</option>
-                                        <option value="active">Active (Last 7 Days)</option>
-                                        <option value="recent">Recent Buyers (Last 30 Days)</option>
-                                        <option value="first_time">1st-time Buyers</option>
-                                        <option value="second_time">2nd-time Buyers</option>
-                                        <option value="loyal">Loyal (3-4 Orders)</option>
-                                        <option value="vip">VIP (5+ Orders)</option>
-                                        <option value="inactive">Inactive (No Order 60+ Days)</option>
-                                    </select>
-                                </div>
-
-                                <div class="form-group mt-3">
-                                    <label>Campaign Type</label>
-                                    <div class="d-flex gap-2 mt-1">
-                                        <label style="flex:1; border:1px solid #ddd; padding:10px; cursor:pointer">
-                                            <input type="radio" name="broadcastType" value="text" checked data-action="toggleBroadcastType"> Custom Message
-                                        </label>
-                                        <label style="flex:1; border:1px solid #ddd; padding:10px; cursor:pointer">
-                                            <input type="radio" name="broadcastType" value="template" data-action="toggleBroadcastType"> Meta Template
-                                        </label>
-                                    </div>
-                                </div>
-
-                                <div id="customMessageArea" class="mt-3">
-                                    <div class="form-group">
-                                        <label>Message</label>
-                                        <textarea id="broadcastMessage" placeholder="Enter your broadcast message..."></textarea>
-                                        <p class="text-small text-muted mt-1">
-                                            Tip: Use {{name}} to personalize with customer names
-                                        </p>
-                                    </div>
-
-                                    <div class="form-group mt-3">
-                                        <label>Image URL (Optional)</label>
-                                        <input type="text" id="broadcastImageUrl" placeholder="https://example.com/image.jpg">
-                                    </div>
-                                </div>
-
-                                <div id="templateArea" class="mt-3" style="display:none">
-                                    <div class="d-flex justify-between align-center mb-2">
-                                        <h4 class="mb-0">Select Approved Template</h4>
-                                        <button type="button" class="btn btn-outline btn-sm" data-action="createTemplate">
-                                            + Create New Template
-                                        </button>
-                                    </div>
-                                    
-                                    <!-- Template Search -->
-                                    <div class="form-group">
-                                        <input type="text" id="templateSearch" placeholder="Search templates..." class="wa-input">
-                                    </div>
-                                    
-                                    <!-- Template List (enhanced cards instead of dropdown) -->
-                                    <div id="templateList" class="template-list" style="max-height: 400px; overflow-y: auto;">
-                                        <div class="loading">Loading templates...</div>
-                                    </div>
-                                    
-                                    <!-- Template Variables Input (shown after selection) -->
-                                    <div id="templateVariablesArea" style="display:none;">
-                                        <h5 class="mt-3">Template Variables</h5>
-                                        <div id="templateVariablesInputs">
-                                            <!-- Dynamic variable inputs -->
-                                        </div>
-                                    </div>
-                                    
-                                    <div id="templatePreview" class="mt-2 text-small text-muted" style="background:#f9f9f9; padding:10px; border-left:3px solid #000; display:none">
-                                        <!-- Preview text -->
-                                    </div>
-                                </div>
-
-                                <div class="form-group mt-3">
-                                    <label>Delay (Seconds)</label>
-                                    <input type="number" id="broadcastDelay" value="5" min="2">
-                                </div>
-
-                                <!-- Recipient Selection Tabs -->
-                                <div class="broadcast-tabs mt-4">
-                                    <div class="tab-buttons">
-                                        <button type="button" class="tab-btn active" data-action="switchBroadcastTab" data-tab="segmentTab">Segment</button>
-                                        <button type="button" class="tab-btn" data-action="switchBroadcastTab" data-tab="fileTab">Import File</button>
-                                        <button type="button" class="tab-btn" data-action="switchBroadcastTab" data-tab="manualTab">Manual Entry</button>
-                                    </div>
-                                    
-                                    <div id="segmentTab" class="broadcast-tab-content active">
-                                        <button type="button" class="btn btn-outline mt-2" id="previewSegmentBtn">Preview Recipients</button>
-                                    </div>
-                                    
-                                    <div id="fileTab" class="broadcast-tab-content" style="display: none;">
-                                        <div class="file-upload-area mt-2">
-                                            <input type="file" id="broadcastFile" accept=".csv,.xlsx" style="display: none;">
-                                            <button type="button" class="btn btn-outline" id="chooseBroadcastFileBtn">Choose File</button>
-                                            <span id="fileNameDisplay" class="text-muted ml-2">No file selected</span>
-                                        </div>
-                                    </div>
-                                    
-                                    <div id="manualTab" class="broadcast-tab-content" style="display: none;">
-                                        <div class="form-group mt-2">
-                                            <textarea id="manualPhoneList" rows="4" placeholder="Enter phone numbers (one per line or comma-separated)"></textarea>
-                                            <button type="button" class="btn btn-outline mt-2" id="parseManualPhonesBtn">Parse Numbers</button>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="d-flex justify-between align-center mt-4">
-                                    <p class="text-muted">
-                                        <strong id="recipientCount">0</strong> customers will receive this message
-                                    </p>
-                                    <button type="submit" class="btn btn-primary">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
-                                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                                        </svg>
-                                        <span>Send Broadcast</span>
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-
-                    <!-- Broadcast History -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">Broadcast History</h3>
-                        </div>
-                        <div class="card-body">
-                            <div id="broadcastHistory">
-                                <div class="loading"></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Templates Page -->
+                <!-- ===================== TEMPLATES PAGE ===================== -->
                 <div id="templatesPage" class="page-section">
                     <div class="card">
                         <div class="card-header">
@@ -970,783 +603,223 @@
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="templatesTableBody">
-                                        <!-- Templates go here -->
-                                    </tbody>
+                                    <tbody id="templatesTableBody"></tbody>
                                 </table>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Analytics Page -->
-                <div id="analyticsPage" class="page-section">
+                <!-- ===================== IG COMMENTS PAGE ===================== -->
+                <div id="ig-commentsPage" class="page-section">
+                    <div class="igc-stats-bar">
+                        <div class="igc-stat"><span class="igc-stat-value" id="igcStatTotal">0</span><span class="igc-stat-label">Total</span></div>
+                        <div class="igc-stat igc-stat-new"><span class="igc-stat-value" id="igcStatNew">0</span><span class="igc-stat-label">New</span></div>
+                        <div class="igc-stat igc-stat-attention"><span class="igc-stat-value" id="igcStatAttention">0</span><span class="igc-stat-label">Needs Attention</span></div>
+                        <div class="igc-stat igc-stat-dm"><span class="igc-stat-value" id="igcStatDm">0</span><span class="igc-stat-label">DM Started</span></div>
+                        <div class="igc-stat igc-stat-ticket"><span class="igc-stat-value" id="igcStatTickets">0</span><span class="igc-stat-label">Tickets</span></div>
+                        <div class="igc-stat igc-stat-spam"><span class="igc-stat-value" id="igcStatSpam">0</span><span class="igc-stat-label">Spam</span></div>
+                    </div>
                     <div class="card">
                         <div class="card-header">
-                            <h3 class="card-title">Detailed Analytics</h3>
-                            <button class="btn btn-primary" id="syncAllDataBtn">
-                                <svg id="syncIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-                                <span id="syncBtnText">Sync All Data (Shopify+Shiprocket)</span>
-                                <span id="syncLoader" class="loading" style="display: none;"></span>
-                            </button>
+                            <h3 class="card-title">Instagram Comments</h3>
+                            <button class="btn btn-secondary" id="igcRefreshBtn">Refresh</button>
                         </div>
-                        <div class="card-body">
-                            <!-- FAQ Analytics -->
-                            <h4 class="mb-2">Top FAQ Queries</h4>
-                            <div class="chart-container">
-                                <canvas id="faqChart"></canvas>
+                        <div class="igc-filters">
+                            <select id="igcStatusFilter" class="igc-filter-select">
+                                <option value="all">All Statuses</option>
+                                <option value="new">New</option>
+                                <option value="needs_review">Needs Review</option>
+                                <option value="needs_human">Needs Human</option>
+                                <option value="dm_started">DM Started</option>
+                                <option value="ticket_created">Ticket Created</option>
+                                <option value="resolved">Resolved</option>
+                                <option value="ignored">Ignored</option>
+                                <option value="spam">Spam</option>
+                            </select>
+                            <select id="igcIntentFilter" class="igc-filter-select"><option value="all">All Intents</option></select>
+                            <input type="text" id="igcSearchInput" class="igc-filter-input" placeholder="Search username, text, comment ID, ticket..." />
+                            <input type="date" id="igcDateFrom" class="igc-filter-input" title="From date" />
+                            <input type="date" id="igcDateTo" class="igc-filter-input" title="To date" />
+                        </div>
+                        <div id="igCommentsList" class="igc-list">
+                            <div class="igc-empty">No comments yet. Comment webhook events will appear here.</div>
+                        </div>
+                        <div class="igc-pagination">
+                            <button class="btn btn-secondary" id="igcPrevBtn" disabled>Previous</button>
+                            <span id="igcPageInfo" class="igc-page-info">Page 1</span>
+                            <button class="btn btn-secondary" id="igcNextBtn" disabled>Next</button>
+                        </div>
+                    </div>
+                    <div id="igCommentDetailModal" class="modal">
+                        <div class="modal-content igc-modal-wide">
+                            <div class="modal-header">
+                                <h3 class="modal-title">Comment Detail</h3>
+                                <button class="modal-close" data-action="closeModal" data-modal="igCommentDetailModal">&times;</button>
                             </div>
-
-                            <!-- Customer Growth -->
-                            <h4 class="mb-2 mt-3">Customer Growth Trend</h4>
-                            <div class="chart-container">
-                                <canvas id="growthChart"></canvas>
-                            </div>
+                            <div class="modal-body" id="igCommentDetailBody"></div>
+                            <div class="modal-footer" id="igCommentDetailFooter"></div>
                         </div>
                     </div>
                 </div>
 
-
-
-                <!-- Settings Page -->
+                <!-- ===================== SETTINGS PAGE ===================== -->
                 <div id="settingsPage" class="page-section">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">Bot Configuration</h3>
+                    <div class="settings-grid">
+                        <!-- Support Portals -->
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <h3>Support Portals</h3>
+                                <button class="btn btn-primary btn-sm" id="openCreatePortalBtn">+ New Portal</button>
+                            </div>
+                            <div id="portalsList" class="portals-list">
+                                <div class="loading">Loading portals...</div>
+                            </div>
                         </div>
-                        <div class="card-body">
-                            <form id="settingsForm">
-                                <h4 class="mb-3">Abandoned Cart Reminders</h4>
-
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label>First Reminder Delay (Hours)</label>
-                                        <input type="number" id="abandonedCartFirstDelay" min="0" step="1" required>
-                                        <p class="text-small text-muted mt-1">Set to 0 for instant testing.</p>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Second Reminder Delay (Hours)</label>
-                                        <input type="number" id="abandonedCartSecondDelay" min="0" step="1" required>
-                                        <p class="text-small text-muted mt-1">Hours after checkout to send the final
-                                            reminder.</p>
-                                    </div>
-                                </div>
-
-                                <div class="d-flex justify-end mt-4">
-                                    <button type="submit" class="btn btn-primary">
-                                        <span id="settingsSaveText">Save Settings</span>
-                                        <span id="settingsLoader" class="loading" style="display: none;"></span>
-                                    </button>
-                                </div>
-                            </form>
+                        <!-- Auto Distribute -->
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <h3>Auto Distribution</h3>
+                                <button class="btn btn-secondary btn-sm" id="openAutoDistributeBtn">Configure</button>
+                            </div>
+                            <div id="autoDistributeInfo" class="auto-dist-info">
+                                <p class="text-muted">Configure automatic ticket distribution rules.</p>
+                            </div>
+                        </div>
+                        <!-- Urgent Keywords -->
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <h3>Urgent Keywords</h3>
+                                <button class="btn btn-secondary btn-sm" id="configureUrgentBtn">Configure</button>
+                            </div>
+                            <div id="urgentKeywordsPreview" class="keywords-preview">
+                                <p class="text-muted">Keywords that flag tickets as urgent.</p>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-
-            </div>
+            </div><!-- /content-area -->
         </main>
-    </div>
+    </div><!-- /dashboard-container -->
 
-    <!-- Customer Detail Modal -->
-    <div id="customerModal" class="modal">
+    <!-- ===================== MODALS ===================== -->
+
+    <!-- Create/Edit Portal Modal -->
+    <div id="createPortalModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 class="modal-title">Customer Details</h3>
-                <button class="modal-close" id="closeCustomerModalBtn">×</button>
-            </div>
-            <div class="modal-body" id="customerModalBody">
-                <div class="loading-state"><div class="spinner"></div><span>Loading...</span></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Broadcast Recipient Preview Modal -->
-    <div id="selectionPreview" class="modal" style="display: none;">
-        <div class="modal-content" style="max-width: 800px;">
-            <div class="modal-header">
-                <h3 class="modal-title">Select Recipients</h3>
-                <button class="modal-close" id="closeSelectionPreviewBtn">×</button>
+                <h3 class="modal-title" id="portalModalTitle">Create Support Portal</h3>
+                <button class="modal-close" data-action="closeModal" data-modal="createPortalModal">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="table-container" style="max-height: 400px; overflow-y: auto;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th style="width: 40px;"><input type="checkbox" id="selectAllRecipients"></th>
-                                <th>Name</th>
-                                <th>Phone</th>
-                            </tr>
-                        </thead>
-                        <tbody id="previewTableBody"></tbody>
-                    </table>
-                </div>
-                <p class="text-muted mt-2"><span id="selectedCount">0</span> selected</p>
-            </div>
-        </div>
-    </div>
-
-
-
-    <!-- Create Portal Modal -->
-    <div id="createPortalModal" class="modal">
-        <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">
-                <h3>Create Support Portal</h3>
-                <button class="modal-close" id="closeCreatePortalBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <form id="createPortalForm">
+                <form id="portalForm">
+                    <input type="hidden" id="editPortalId" value="">
                     <div class="form-group">
                         <label>Portal Name</label>
-                        <input type="text" id="portalName" placeholder="e.g. Day Shift Portal" required>
+                        <input type="text" id="portalName" required placeholder="e.g. Morning Shift">
                     </div>
                     <div class="form-group">
-                        <label>Type</label>
-                        <select id="portalType" required>
-                            <option value="manual">Manual Assignment</option>
-                            <option value="time_based">Time-Based</option>
-                        </select>
-                    </div>
-                    <div id="timeBasedFields" style="display: none;">
-                        <div class="form-row">
-                            <div class="form-group" style="flex: 1;">
-                                <label>Start Time</label>
-                                <input type="time" id="portalTimeStart" value="06:00">
-                            </div>
-                            <div class="form-group" style="flex: 1;">
-                                <label>End Time</label>
-                                <input type="time" id="portalTimeEnd" value="18:00">
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Timezone</label>
-                            <select id="portalTimezone">
-                                <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
-                                <option value="UTC">UTC</option>
-                            </select>
-                        </div>
+                        <label>Slug (URL identifier)</label>
+                        <input type="text" id="portalSlug" required placeholder="e.g. morning-shift">
                     </div>
                     <div class="form-group">
                         <label>Password</label>
-                        <div class="password-input-group">
-                            <input type="text" id="portalPassword" placeholder="Auto-generated if empty">
-                            <button type="button" class="btn btn-secondary" id="generatePortalPasswordBtn">Generate</button>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" id="cancelCreatePortalBtn">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Create Portal</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Portal Password Management Modal -->
-    <div id="portalPasswordModal" class="modal">
-        <div class="modal-content" style="max-width: 480px;">
-            <div class="modal-header">
-                <h3>Portal Password</h3>
-                <button class="modal-close" id="closePortalPasswordModalBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <div class="portal-password-portal-name" id="portalPasswordPortalName">Portal Name</div>
-
-                <!-- View Password Section -->
-                <div class="portal-password-section">
-                    <label class="portal-password-label">Current Password</label>
-                    <div class="portal-password-input-group">
-                        <input type="password" id="portalPasswordDisplay" class="portal-password-input" readonly placeholder="Not available">
-                        <button type="button" class="btn btn-secondary portal-password-toggle-btn" id="togglePortalPasswordBtn" title="Show/hide password">
-                            <svg class="eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path class="eye-open" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                <circle class="eye-open" cx="12" cy="12" r="3"/>
-                                <line class="eye-closed" x1="1" y1="1" x2="23" y2="23" style="display:none"/>
-                            </svg>
-                        </button>
-                        <button type="button" class="btn btn-secondary" id="copyPortalPasswordBtn" title="Copy password">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                        </button>
-                    </div>
-                    <div id="portalPasswordMessage" class="portal-password-message"></div>
-                </div>
-
-                <!-- Divider -->
-                <div class="portal-password-divider">
-                    <span>or change password</span>
-                </div>
-
-                <!-- Change Password Section -->
-                <div class="portal-password-section">
-                    <label class="portal-password-label">New Password</label>
-                    <div class="portal-password-input-group">
-                        <input type="password" id="newPortalPasswordInput" class="portal-password-input" placeholder="Enter new password (min 6 chars)">
-                        <button type="button" class="btn btn-secondary portal-password-toggle-btn" id="toggleNewPortalPasswordBtn" title="Show/hide password">
-                            <svg class="eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path class="eye-open" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                <circle class="eye-open" cx="12" cy="12" r="3"/>
-                                <line class="eye-closed" x1="1" y1="1" x2="23" y2="23" style="display:none"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <div class="portal-password-actions">
-                        <button type="button" class="btn btn-primary" id="savePortalPasswordBtn">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                            Update Password
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Auto Distribute Modal - Professional Multi-Step Wizard -->
-    <div id="autoDistributeModal" class="modal">
-        <div class="modal-content wizard-modal">
-            <div class="modal-header">
-                <h3>Auto Distribute Tickets</h3>
-                <button class="modal-close" id="closeAutoDistributeBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <!-- Progress Steps -->
-                <div class="wizard-progress">
-                    <div class="wizard-step active" data-step="1">
-                        <div class="step-number">1</div>
-                        <div class="step-label">Mode</div>
-                    </div>
-                    <div class="wizard-step" data-step="2">
-                        <div class="step-number">2</div>
-                        <div class="step-label">Configure</div>
-                    </div>
-                    <div class="wizard-step" data-step="3">
-                        <div class="step-number">3</div>
-                        <div class="step-label">Settings</div>
-                    </div>
-                    <div class="wizard-step" data-step="4">
-                        <div class="step-number">4</div>
-                        <div class="step-label">Preview</div>
-                    </div>
-                </div>
-
-                <!-- Step 1: Distribution Mode Selection -->
-                <div class="wizard-panel" id="wizardStep1">
-                    <h4 class="wizard-panel-title">Select Distribution Mode</h4>
-                    <div class="mode-selection-grid">
-                        <div class="mode-card" data-mode="round_robin">
-                            <div class="mode-icon">
-                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-                            </div>
-                            <h5>Round Robin</h5>
-                            <p>Evenly distribute tickets across portals in sequential order</p>
-                        </div>
-                        <div class="mode-card" data-mode="filter_based">
-                            <div class="mode-icon">
-                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-                            </div>
-                            <h5>Filter Based</h5>
-                            <p>Distribute tickets based on custom date/time filters</p>
-                        </div>
-                        <div class="mode-card" data-mode="shift_based">
-                            <div class="mode-icon">
-                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                            </div>
-                            <h5>Smart Time Periods</h5>
-                            <p>Create multiple portals inside each time period and evenly distribute matching tickets</p>
-                        </div>
-                        <div class="mode-card" data-mode="workload_balanced">
-                            <div class="mode-icon">
-                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
-                            </div>
-                            <h5>Workload Balanced</h5>
-                            <p>Distribute based on current portal capacity for balanced workload</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Step 2: Configuration Panel (Dynamic) -->
-                <div class="wizard-panel" id="wizardStep2" style="display: none;">
-                    <h4 class="wizard-panel-title">Configure Distribution</h4>
-                    
-                    <!-- Round Robin / Workload Balanced Config -->
-                    <div id="simpleConfig" class="config-section" style="display: none;">
-                        <div class="form-group">
-                            <label>Number of Portals</label>
-                            <input type="number" id="distributeCount" min="2" max="20" value="2" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Name Prefix</label>
-                            <input type="text" id="distributeNamePrefix" placeholder="e.g. Agent" value="Agent">
-                        </div>
-                        <p class="text-small text-muted">Tickets will be distributed evenly across all created portals.</p>
-                    </div>
-
-                    <!-- Filter Based Config -->
-                    <div id="filterConfig" class="config-section" style="display: none;">
-                        <div class="filter-card">
-                            <h5>Date & Time Range Filter</h5>
-                            <div class="filter-row">
-                                <div class="form-group">
-                                    <label>Date From</label>
-                                    <input type="date" id="filterDateFrom">
-                                </div>
-                                <div class="form-group">
-                                    <label>Time From</label>
-                                    <input type="time" id="filterTimeFrom">
-                                </div>
-                            </div>
-                            <div class="filter-row">
-                                <div class="form-group">
-                                    <label>Date To</label>
-                                    <input type="date" id="filterDateTo">
-                                </div>
-                                <div class="form-group">
-                                    <label>Time To</label>
-                                    <input type="time" id="filterTimeTo">
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label>Ticket Status</label>
-                                <div class="checkbox-group">
-                                    <label class="checkbox-label"><input type="checkbox" value="open" checked> Open</label>
-                                    <label class="checkbox-label"><input type="checkbox" value="pending"> Pending</label>
-                                    <label class="checkbox-label"><input type="checkbox" value="in-progress"> In Progress</label>
-                                </div>
-                            </div>
-                            <div class="filter-preview">
-                                <strong>Preview:</strong> <span id="filterTicketCount">Calculating...</span> tickets match filters
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Number of Portals</label>
-                            <input type="number" id="filterDistributeCount" min="2" max="20" value="2" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Name Prefix</label>
-                            <input type="text" id="filterNamePrefix" placeholder="e.g. Agent" value="Agent">
-                        </div>
-                    </div>
-
-                    <!-- Shift Based Config -->
-                    <div id="shiftConfig" class="config-section" style="display: none;">
-                        <div class="shift-header">
-                            <h5>Time Period Configuration</h5>
-                            <button type="button" class="btn btn-sm btn-secondary" id="addShiftBtn">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                Add Time Period
-                            </button>
-                        </div>
-                        <div id="shiftsContainer">
-                            <!-- Shifts will be dynamically added here -->
-                        </div>
-                        <div class="filter-preview">
-                            <strong>Allocation:</strong> Default periods are 09:00-17:00 and 17:00-21:00. Each period can create its own portal group and distribute tickets evenly inside that period.
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Step 3: Portal Settings -->
-                <div class="wizard-panel" id="wizardStep3" style="display: none;">
-                    <h4 class="wizard-panel-title">Portal Settings</h4>
-                    <div class="settings-card">
-                        <div class="form-group">
-                            <label>Max Tickets per Portal (optional)</label>
-                            <input type="number" id="maxTicketsPerPortal" min="1" placeholder="Leave empty for unlimited">
-                            <p class="text-small text-muted">Limit the number of tickets each portal can receive</p>
-                        </div>
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="autoGeneratePasswords" checked>
-                                Auto-generate secure passwords
-                            </label>
-                        </div>
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="enableWorkloadBalancing" checked>
-                                Enable workload balancing
-                            </label>
-                        </div>
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="autoRotate24h">
-                                Auto-rotate after 24 hours
-                            </label>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Step 4: Preview & Confirm -->
-                <div class="wizard-panel" id="wizardStep4" style="display: none;">
-                    <h4 class="wizard-panel-title">Preview Distribution</h4>
-                    <div class="preview-summary">
-                        <div class="summary-item">
-                            <span class="summary-label">Distribution Mode:</span>
-                            <span class="summary-value" id="previewMode">-</span>
-                        </div>
-                        <div class="summary-item">
-                            <span class="summary-label">Total Tickets:</span>
-                            <span class="summary-value" id="previewTickets">-</span>
-                        </div>
-                        <div class="summary-item">
-                            <span class="summary-label">Total Portals:</span>
-                            <span class="summary-value" id="previewPortals">-</span>
-                        </div>
-                    </div>
-                    <div class="preview-table-container">
-                        <table class="preview-table">
-                            <thead>
-                                <tr>
-                                    <th>Portal Name</th>
-                                    <th>Time Period</th>
-                                    <th>Est. Tickets</th>
-                                    <th>Capacity</th>
-                                </tr>
-                            </thead>
-                            <tbody id="previewTableBody">
-                                <!-- Preview rows will be inserted here -->
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="preview-warning" id="previewWarning" style="display: none;">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                        <span id="previewWarningText"></span>
-                    </div>
-                </div>
-
-                <div class="modal-footer wizard-footer">
-                    <button type="button" class="btn btn-secondary" id="wizardPrevBtn" style="display: none;">Previous</button>
-                    <button type="button" class="btn btn-secondary" id="cancelAutoDistributeBtn">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="wizardNextBtn">Next</button>
-                    <button type="button" class="btn btn-success" id="confirmDistributeBtn" style="display: none;">Distribute Tickets</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Auto Distribute Results Modal - Professional -->
-    <div id="distributeResultsModal" class="modal">
-        <div class="modal-content results-modal">
-            <div class="modal-header">
-                <div class="results-header">
-                    <div class="success-icon">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                    </div>
-                    <div>
-                        <h3>Distribution Complete</h3>
-                        <p class="text-muted" id="resultsSummary">Tickets have been successfully distributed</p>
-                    </div>
-                </div>
-                <button class="modal-close" id="closeDistributeResultsBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <div class="results-stats">
-                    <div class="stat-card">
-                        <div class="stat-value" id="statTotalTickets">0</div>
-                        <div class="stat-label">Total Tickets</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="statTotalPortals">0</div>
-                        <div class="stat-label">Portals Created</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="statDistributionMode">-</div>
-                        <div class="stat-label">Distribution Mode</div>
-                    </div>
-                </div>
-                
-                <h4 class="results-section-title">Portal Details</h4>
-                <div id="distributeResultsList" class="results-portal-list">
-                    <!-- Portal cards will be inserted here -->
-                </div>
-                
-                <div class="modal-footer results-footer">
-                    <button type="button" class="btn btn-secondary" id="exportResultsBtn">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        Export Results
-                    </button>
-                    <button type="button" class="btn btn-primary" id="doneDistributeResultsBtn">Done</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Split Portal Modal -->
-    <div id="splitPortalModal" class="modal">
-        <div class="modal-content" style="max-width: 480px;">
-            <div class="modal-header">
-                <h3>Split Portal</h3>
-                <button class="modal-close" id="closeSplitPortalBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <p class="text-muted" id="splitPortalInfo" style="margin-bottom: 16px;">Split this portal into multiple portals with tickets distributed evenly.</p>
-                <form id="splitPortalForm">
-                    <div class="form-group">
-                        <label>Number of Portals</label>
-                        <input type="number" id="splitCount" min="2" max="10" value="2" required>
+                        <input type="password" id="portalPassword" placeholder="Set a password for agents">
                     </div>
                     <div class="form-group">
-                        <label>Portal Name Prefix</label>
-                        <input type="text" id="splitNamePrefix" placeholder="Defaults to source portal name">
-                    </div>
-                    <div class="form-group">
-                        <label class="checkbox-label" style="display:flex; align-items:center; gap:8px; font-weight:normal;">
-                            <input type="checkbox" id="splitOnlyOpen" checked style="width:auto;"> Only distribute open tickets
-                        </label>
-                    </div>
-                    <div class="form-group">
-                        <label class="checkbox-label" style="display:flex; align-items:center; gap:8px; font-weight:normal;">
-                            <input type="checkbox" id="splitKeepSource" style="width:auto;"> Keep the original portal
-                        </label>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" id="cancelSplitPortalBtn">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Split Evenly</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Transfer Tickets Modal -->
-    <div id="transferPortalModal" class="modal">
-        <div class="modal-content" style="max-width: 480px;">
-            <div class="modal-header">
-                <h3>Transfer Tickets</h3>
-                <button class="modal-close" id="closeTransferPortalBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            </div>
-            <div class="modal-body">
-                <form id="transferPortalForm">
-                    <div class="form-group">
-                        <label>From Portal</label>
-                        <input type="text" id="transferFromName" readonly>
-                    </div>
-                    <div class="form-group">
-                        <label>To Portal</label>
-                        <select id="transferToPortal" required></select>
-                    </div>
-                    <div class="form-group">
-                        <label>How many tickets?</label>
-                        <select id="transferMode">
-                            <option value="all">All tickets</option>
-                            <option value="count">A specific number</option>
+                        <label>Type</label>
+                        <select id="portalType">
+                            <option value="manual">Manual</option>
+                            <option value="auto">Auto Distribute</option>
+                            <option value="time_based">Time Based</option>
                         </select>
                     </div>
-                    <div class="form-group" id="transferCountGroup" style="display:none;">
-                        <label>Number of tickets to move (oldest first)</label>
-                        <input type="number" id="transferCount" min="1" value="1">
-                    </div>
-                    <div class="form-group">
-                        <label class="checkbox-label" style="display:flex; align-items:center; gap:8px; font-weight:normal;">
-                            <input type="checkbox" id="transferOnlyOpen" checked style="width:auto;"> Only transfer open tickets
-                        </label>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" id="cancelTransferPortalBtn">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Transfer</button>
+                    <div id="timeBasedConfig" style="display:none">
+                        <div class="form-group">
+                            <label>Shift Start (IST)</label>
+                            <input type="time" id="portalShiftStart">
+                        </div>
+                        <div class="form-group">
+                            <label>Shift End (IST)</label>
+                            <input type="time" id="portalShiftEnd">
+                        </div>
                     </div>
                 </form>
             </div>
-        </div>
-    </div>
-
-    <!-- Support Ticket Chat Modal -->
-    <div id="supportChatModal" class="modal chat-modal">
-        <div class="chat-modal-content">
-            <div class="chat-container">
-                <div class="chat-sidebar">
-                    <div class="chat-sidebar-header">
-                        <h3>
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>
-                            Customer Info
-                        </h3>
-                        <button class="chat-sidebar-close" id="closeSupportChatMobile">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                        </button>
-                    </div>
-                    <div class="chat-customer-info" id="chatCustomerInfo">
-                        <div class="info-row">
-                            <span class="info-label">Name</span>
-                            <span class="info-value" id="chatCustomerName">-</span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label">Phone</span>
-                            <span class="info-value" id="chatCustomerPhone">-</span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label">Ticket ID</span>
-                            <span class="info-value" id="chatTicketId">-</span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label">Status</span>
-                            <span class="info-value" id="chatTicketStatus">-</span>
-                        </div>
-                    </div>
-                    <div class="chat-sidebar-actions">
-                        <button class="btn btn-outline" id="viewAllOrdersBtn">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
-                                <rect x="9" y="3" width="6" height="4" rx="1"/>
-                                <line x1="9" y1="12" x2="15" y2="12"/>
-                                <line x1="9" y1="16" x2="15" y2="16"/>
-                            </svg>
-                            View All Orders
-                        </button>
-                        <button class="btn btn-outline" id="viewTicketOrderBtn">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/></svg>
-                            View Order
-                        </button>
-                        <button class="btn btn-primary" id="markTicketResolvedBtn">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                            Mark Resolved
-                        </button>
-                    </div>
-                </div>
-                <div class="chat-main">
-                    <div class="chat-header">
-                        <div class="chat-header-info">
-                            <div class="chat-header-avatar">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                            </div>
-                            <div class="chat-header-details">
-                                <h4 id="chatHeaderTitle">Customer</h4>
-                                <span class="chat-header-status" id="chatHeaderStatus">Online</span>
-                            </div>
-                        </div>
-                        <div class="chat-header-actions">
-                            <button class="chat-header-btn" id="pinMessageBtn" title="Pin a message">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l-5.5 9h11z"/><circle cx="12" cy="19" r="3"/></svg>
-                            </button>
-                            <button class="chat-close" id="closeSupportChat">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="chat-pinned-message" id="pinnedMessageContainer" style="display: none;">
-                        <div class="pinned-label">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l-5.5 9h11z"/><circle cx="12" cy="19" r="3"/></svg>
-                            Pinned
-                        </div>
-                        <div class="pinned-content" id="pinnedMessageContent"></div>
-                        <button class="pinned-unpin" id="unpinMessageBtn" title="Unpin message">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                        </button>
-                    </div>
-                    <div class="chat-messages" id="supportChatMessages">
-                        <div class="chat-loading">
-                            <div class="spinner"></div>
-                            <span>Loading conversation...</span>
-                        </div>
-                    </div>
-                    <div class="chat-input-area">
-                        <textarea id="supportChatInput" placeholder="Type a message..." rows="1"></textarea>
-                        <button class="btn btn-chat" id="sendSupportChatBtn">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                        </button>
-                    </div>
-                </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-action="closeModal" data-modal="createPortalModal">Cancel</button>
+                <button class="btn btn-primary" id="savePortalBtn">Save Portal</button>
             </div>
         </div>
     </div>
 
-    <!-- All Orders Modal -->
-    <div id="allOrdersModal" class="modal">
-        <div class="modal-content" style="max-width: 800px;">
+    <!-- Auto Distribute Modal -->
+    <div id="autoDistributeModal" class="modal">
+        <div class="modal-content">
             <div class="modal-header">
-                <h3>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
-                        <rect x="9" y="3" width="6" height="4" rx="1"/>
-                    </svg>
-                    All Orders - <span id="allOrdersCustomerPhone">-</span>
-                    <span id="allOrdersSource" class="text-small text-muted"></span>
-                </h3>
-                <button class="modal-close" id="closeAllOrdersModal">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"/>
-                        <line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                </button>
+                <h3 class="modal-title">Auto Distribution Rules</h3>
+                <button class="modal-close" data-action="closeModal" data-modal="autoDistributeModal">&times;</button>
+            </div>
+            <div class="modal-body" id="autoDistributeBody">
+                <div class="loading">Loading...</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-action="closeModal" data-modal="autoDistributeModal">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Urgent Keywords Modal -->
+    <div id="urgentKeywordsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Configure Urgent Keywords</h3>
+                <button class="modal-close" data-action="closeModal" data-modal="urgentKeywordsModal">&times;</button>
             </div>
             <div class="modal-body">
-                <div id="allOrdersLoading" class="loading">
-                    <div class="spinner"></div>
-                    <span>Loading orders from database...</span>
+                <p class="text-muted mb-3">Tickets containing these keywords will be marked as urgent</p>
+                <div class="keyword-input-group">
+                    <input type="text" id="newKeywordInput" placeholder="Add new keyword (e.g., 'refund', 'complaint')" />
+                    <button class="btn btn-primary btn-sm" id="addKeywordBtn">Add</button>
                 </div>
-                <div id="allOrdersContent" style="display: none;">
-                    <div id="allOrdersSummary" class="orders-summary"></div>
-                    <div id="allOrdersList" class="orders-list"></div>
-                </div>
-                <div id="allOrdersEmpty" class="empty-state" style="display: none;">
-                    <div class="empty-state-icon">📦</div>
-                    <div class="empty-state-title">No orders found</div>
-                    <div class="empty-state-text">This customer has no order history in our database.</div>
-                </div>
+                <div class="keywords-list" id="keywordsList"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-action="closeModal" data-modal="urgentKeywordsModal">Cancel</button>
+                <button class="btn btn-primary" id="saveKeywordsBtn">Save Changes</button>
             </div>
         </div>
     </div>
 
-    <!-- Template Creation Modal -->
-    <div id="createTemplateModal" class="modal">
-        <div class="modal-content" style="max-width: 900px;">
+    <!-- Template Create/Edit Modal -->
+    <div id="templateModal" class="modal">
+        <div class="modal-content modal-wide">
             <div class="modal-header">
-                <h3>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                        <polyline points="14 2 14 8 20 8"/>
-                        <line x1="12" y1="18" x2="12" y2="12"/>
-                        <line x1="9" y1="15" x2="15" y2="15"/>
-                    </svg>
-                    Create WhatsApp Template
-                </h3>
-                <button class="modal-close" data-action="closeTemplateModal">&times;</button>
+                <h3 class="modal-title" id="templateModalTitle">Create Template</h3>
+                <button class="modal-close" data-action="closeModal" data-modal="templateModal">&times;</button>
             </div>
             <div class="modal-body">
-                <form id="createTemplateForm">
-                    <!-- Basic Info -->
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Template Category *</label>
-                            <select id="templateCategory" required>
-                                <option value="UTILITY">Utility (Order updates, shipping)</option>
-                                <option value="MARKETING">Marketing (Promotions, offers)</option>
-                                <option value="OTP">Authentication (OTP, verification)</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Language *</label>
-                            <select id="templateLanguage" required>
-                                <option value="en_US">English (US)</option>
-                                <option value="en_GB">English (UK)</option>
-                                <option value="hi">Hindi</option>
-                                <option value="es">Spanish</option>
-                                <option value="fr">French</option>
-                            </select>
-                        </div>
-                    </div>
-                    
+                <form id="templateForm">
                     <div class="form-group">
-                        <label>Template Name *</label>
-                        <input type="text" id="templateNameInput" placeholder="order_confirmation_v2" 
-                               pattern="[a-z0-9_]+" required 
-                               title="Lowercase letters, numbers, underscores only (max 512 chars)">
-                        <p class="text-small text-muted mt-1">
-                            Only lowercase letters, numbers, and underscores. Example: order_update_v2
-                        </p>
+                        <label>Template Name</label>
+                        <input type="text" id="templateName" required placeholder="order_confirmation">
                     </div>
-                    
-                    <!-- Header Section -->
+                    <div class="form-group">
+                        <label>Category</label>
+                        <select id="templateCategory">
+                            <option value="UTILITY">Utility</option>
+                            <option value="MARKETING">Marketing</option>
+                            <option value="AUTHENTICATION">Authentication</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Language</label>
+                        <select id="templateLanguage">
+                            <option value="en">English</option>
+                            <option value="hi">Hindi</option>
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label>Header Type</label>
                         <select id="headerType">
@@ -1755,113 +828,156 @@
                             <option value="IMAGE">Image Header</option>
                         </select>
                     </div>
-                    
-                    <div id="headerContentArea" style="display:none;">
-                        <div id="textHeaderArea" style="display:none;">
+                    <div id="headerContentArea" style="display:none">
+                        <div id="textHeaderArea" style="display:none">
                             <label>Header Text</label>
                             <input type="text" id="headerText" maxlength="60" placeholder="ORDER CONFIRMATION">
-                            <p class="text-small text-muted mt-1">Max 60 characters</p>
                         </div>
-                        <div id="imageHeaderArea" style="display:none;">
-                            <label>Image URL (Public URL required)</label>
+                        <div id="imageHeaderArea" style="display:none">
+                            <label>Image URL</label>
                             <input type="url" id="headerImageUrl" placeholder="https://example.com/image.jpg">
-                            <p class="text-small text-muted mt-1">Must be a publicly accessible image URL</p>
                         </div>
                     </div>
-                    
-                    <!-- Body Text Editor with Toolbar -->
                     <div class="form-group">
                         <label>Body Content *</label>
-                        
-                        <!-- Formatting Toolbar -->
                         <div class="template-editor-toolbar">
-                            <button type="button" class="toolbar-btn" data-action="formatBold" title="Bold">
-                                <strong>B</strong>
-                            </button>
-                            <button type="button" class="toolbar-btn" data-action="formatItalic" title="Italic">
-                                <em>I</em>
-                            </button>
-                            <button type="button" class="toolbar-btn" data-action="formatStrikethrough" title="Strikethrough">
-                                <s>S</s>
-                            </button>
+                            <button type="button" class="toolbar-btn" data-action="formatBold" title="Bold"><strong>B</strong></button>
+                            <button type="button" class="toolbar-btn" data-action="formatItalic" title="Italic"><em>I</em></button>
+                            <button type="button" class="toolbar-btn" data-action="formatStrikethrough" title="Strikethrough"><s>S</s></button>
                             <div class="toolbar-separator"></div>
-                            <button type="button" class="toolbar-btn" data-action="insertEmoji" title="Insert Emoji">
-                                😀 Emoji
-                            </button>
-                            <div class="toolbar-separator"></div>
-                            <button type="button" class="toolbar-btn" data-action="insertVariable" title="Add Variable Placeholder">
-                                {{1}} Variable
-                            </button>
+                            <button type="button" class="toolbar-btn" data-action="insertVariable" title="Add Variable">{{1}} Variable</button>
                         </div>
-                        
-                        <!-- Emoji Picker (hidden by default) -->
-                        <div id="emojiPicker" class="emoji-picker" style="display:none;"></div>
-                        
-                        <!-- Text Area -->
-                        <textarea id="templateBody" rows="10" required 
-                                  placeholder="Hello {{1}},&#10;&#10;Your order {{2}} has been confirmed.&#10;Amount: {{3}}&#10;&#10;Thank you for shopping with us!"></textarea>
-                        
-                        <p class="text-small text-muted mt-1">
-                            Use *bold*, _italic_, ~strikethrough~ formatting. Use {{1}}, {{2}}, etc. for variables.
-                        </p>
+                        <textarea id="templateBody" rows="8" required placeholder="Hello {{1}},&#10;&#10;Your order {{2}} has been confirmed."></textarea>
                     </div>
-                    
-                    <!-- Variables Management -->
                     <div class="form-group">
                         <label>Detected Variables</label>
-                        <div id="variablesList">
-                            <p class="text-small text-muted">Variables will appear here as you type them in the body</p>
-                        </div>
+                        <div id="variablesList"><p class="text-muted text-small">Variables appear here as you type</p></div>
                     </div>
-                    
-                    <!-- Footer Text -->
                     <div class="form-group">
                         <label>Footer Text (Optional)</label>
                         <input type="text" id="templateFooter" maxlength="60" placeholder="Powered by OffComfrt">
-                        <p class="text-small text-muted mt-1">Max 60 characters. Appears at the bottom in smaller text.</p>
                     </div>
-                    
-                    <!-- Buttons Section -->
                     <div class="form-group">
-                        <label>Buttons (Optional - Max 3 Quick Reply buttons)</label>
-                        <div id="quickReplyBuilder">
-                            <!-- Button rows will be added here -->
-                        </div>
-                        <button type="button" class="btn btn-outline btn-sm" data-action="addQuickReplyButton" id="addButtonBtn">
-                            + Add Button
-                        </button>
-                        <p class="text-small text-muted mt-1">Quick Reply buttons are limited to 25 characters each</p>
+                        <label>Buttons (Max 3)</label>
+                        <div id="quickReplyBuilder"></div>
+                        <button type="button" class="btn btn-secondary btn-sm" data-action="addQuickReplyButton" id="addButtonBtn">+ Add Button</button>
                     </div>
-                    
-                    <!-- Live Preview -->
                     <div class="form-group">
-                        <label>Template Preview</label>
+                        <label>Preview</label>
                         <div id="templateLivePreview" class="whatsapp-preview">
-                            <div class="preview-body" style="color: #999;">
-                                Start typing to see preview...
-                            </div>
+                            <div class="preview-body" style="color:#666">Start typing to see preview...</div>
                         </div>
                     </div>
                 </form>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" data-action="closeTemplateModal">Cancel</button>
-                <button class="btn btn-primary" data-action="submitTemplate" id="submitTemplateBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="22" y1="2" x2="11" y2="13"/>
-                        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                    </svg>
-                    Submit to Meta for Approval
-                </button>
+                <button class="btn btn-primary" data-action="submitTemplate" id="submitTemplateBtn">Submit to Meta</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat Modal -->
+    <div id="chatModal" class="modal">
+        <div class="modal-content chat-modal-wide">
+            <div class="modal-header">
+                <div class="chat-modal-header-info">
+                    <h3 class="modal-title" id="chatModalTitle">Chat</h3>
+                    <span class="chat-modal-subtitle" id="chatModalSubtitle"></span>
+                </div>
+                <div class="chat-modal-actions">
+                    <select id="chatStatusSelect" class="chat-status-select">
+                        <option value="open">Open</option>
+                        <option value="resolved">Resolved</option>
+                    </select>
+                    <button class="modal-close" data-action="closeModal" data-modal="chatModal">&times;</button>
+                </div>
+            </div>
+            <div class="chat-body">
+                <div class="chat-messages" id="chatMessages">
+                    <div class="chat-loading"><div class="spinner"></div><span>Loading conversation...</span></div>
+                </div>
+                <div class="chat-input-area">
+                    <div class="ai-suggestions-row" id="aiSuggestionsRow" style="display:none">
+                        <div class="ai-suggestions-chips" id="aiSuggestionsChips"></div>
+                    </div>
+                    <div class="chat-input-row">
+                        <textarea id="chatInput" placeholder="Type a message..." rows="2"></textarea>
+                        <button class="btn btn-primary" id="sendMessageBtn">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Assign Portal Modal -->
+    <div id="assignPortalModal" class="modal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3 class="modal-title">Assign to Portal</h3>
+                <button class="modal-close" data-action="closeModal" data-modal="assignPortalModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="assignTicketId" value="">
+                <select id="assignPortalSelectModal" class="full-width-select">
+                    <option value="">Select portal...</option>
+                </select>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-action="closeModal" data-modal="assignPortalModal">Cancel</button>
+                <button class="btn btn-primary" id="confirmAssignBtn">Assign</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Widget Chat Conversation Modal -->
+    <div id="wcConversationModal" class="modal">
+        <div class="modal-content chat-modal-wide">
+            <div class="modal-header">
+                <div class="chat-modal-header-info">
+                    <h3 class="modal-title" id="wcConvoTitle">Widget Chat</h3>
+                    <span class="chat-modal-subtitle" id="wcConvoSubtitle"></span>
+                </div>
+                <div class="chat-modal-actions">
+                    <span class="wc-convo-stats" id="wcConvoStats"></span>
+                    <button class="modal-close" data-action="closeModal" data-modal="wcConversationModal">&times;</button>
+                </div>
+            </div>
+            <div class="chat-body">
+                <div class="wc-related-sessions-bar" id="wcRelatedBar" style="display:none">
+                    <button class="wc-related-toggle" id="wcRelatedToggle">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                        <span id="wcRelatedLabel">Related sessions</span>
+                    </button>
+                    <div class="wc-related-content" id="wcRelatedContent" style="display:none"></div>
+                </div>
+                <div class="chat-messages" id="wcConvoMessages">
+                    <div class="chat-loading"><div class="spinner"></div><span>Loading conversation...</span></div>
+                </div>
+                <div class="wc-admin-input-area">
+                    <div class="wc-admin-status" id="wcAdminStatus">
+                        <span class="wc-admin-mode" id="wcAdminMode"></span>
+                        <button class="wc-admin-release-btn" id="wcAdminReleaseBtn" style="display:none" title="Release control back to AI">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                            Release to AI
+                        </button>
+                    </div>
+                    <div class="wc-admin-input-row">
+                        <textarea id="wcAdminInput" placeholder="Type a message to override AI and send directly to customer..." rows="2"></textarea>
+                        <button class="btn btn-primary" id="wcAdminSendBtn" title="Send as admin (overrides AI)">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- Scripts -->
-    <script src="/dashboard/js/chart.min.js" defer></script>
-    <script src="/dashboard/js/main.js?v=18" defer></script>
+    <script src="/dashboard/js/main.js?v=28" defer></script>
     <script src="/dashboard/js/comments.js?v=1" defer></script>
     <script src="/dashboard/js/ai-copilot.js?v=2" defer></script>
 </body>
-
 </html>

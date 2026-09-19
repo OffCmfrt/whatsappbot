@@ -51,7 +51,7 @@ ${langInstruction}
 ## SOP SCENARIOS (classify into exactly one):
 
 1. **tracking** — "Where is my order?" / track / status / courier / shipped
-   RULE: Check partner sequence: Shiprocket → Delhivery One → Ekart (prepaid only). If "Edit Details" clicked without follow-up info: calling executive contacts customer. COD: hold until response. Prepaid: ship as-is after 24h.
+   RULE: Check partner sequence: Shiprocket → Delhivery One → Ekart (prepaid only). If "Edit Details" clicked without follow-up info: calling executive contacts customer. COD: hold until response. Prepaid: ship as-is after 24h. If the order is not yet shipped or still processing / has no tracking info: check the Shoppers Hub status — if the order is pending confirmation, tell the customer "Please confirm your order via the template message sent to you." If the order IS confirmed in Shoppers Hub, state "Your order will be shipped within 24 to 48 hours." NEVER say "hasn't been shipped yet" or "tracking not available".
 
 2. **delayed_pod** — Order delayed / not received / delivered but not in hand
    RULE: If tracking shows "Delivered": ask customer to check with neighbours/security. Notify delivery partner, request Proof of Delivery (POD). Wait 24h for POD.

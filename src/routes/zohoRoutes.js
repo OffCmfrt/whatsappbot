@@ -433,4 +433,47 @@ router.get('/config', requireAdmin, async (req, res) => {
     }
 });
 
+// ============================================================
+// PRICE VALIDATION — flagged mismatches between Zoho and Shopify
+// ============================================================
+
+router.get('/price-flags', requireAdmin, async (req, res) => {
+    try {
+        const { limit = 100 } = req.query;
+        // The transformation JSONB column stores price_validation after sync.
+        // Find rows where the delta exceeds ₹1 (flagged = true).
+        const rows = await dbAdapter.query(
+            `SELECT shopify_order_id, zoho_invoice_id, created_at,
+                    transformation->'price_validation' as price_validation
+             FROM zoho_sync_log
+             WHERE status = 'synced'
+               AND transformation->'price_validation'->>'flagged' = 'true'
+             ORDER BY created_at DESC
+             LIMIT ?`,
+            [parseInt(limit)]
+        );
+
+        const total = await dbAdapter.query(
+            `SELECT COUNT(*) as count FROM zoho_sync_log
+             WHERE status = 'synced'
+               AND transformation->'price_validation'->>'flagged' = 'true'`
+        );
+
+        res.json({
+            success: true,
+            total: total[0]?.count || 0,
+            flagged: rows.map(r => ({
+                order_id: r.shopify_order_id,
+                invoice_id: r.zoho_invoice_id,
+                created_at: r.created_at,
+                zoho_net: r.price_validation?.zoho_net,
+                shopify_net: r.price_validation?.shopify_net,
+                delta: r.price_validation?.delta
+            }))
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch price flags', detail: err.message });
+    }
+});
+
 module.exports = router;

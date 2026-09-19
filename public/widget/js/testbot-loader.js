@@ -10,13 +10,19 @@
  *       apiUrl: 'https://your-bot-server.onrender.com',
  *       brandName: 'OFFCOMFRT',
  *       customerName: 'John Doe',
- *       customerPhone: '+919876543210'
+ *       customerPhone: '+919876543210',
+ *       triggerText: 'Need Help?',           // clickable text trigger (omit to disable)
+ *       triggerPosition: 'bottom-right'       // bottom-right | bottom-left | top-right | top-left
  *     };
  *   </script>
  */
 
 (function () {
     'use strict';
+
+    // Guard against duplicate loader execution (e.g. multiple <script> tags)
+    if (window.__offcomfrt_tb_loader_loaded) return;
+    window.__offcomfrt_tb_loader_loaded = true;
 
     // Determine base URL from this script's own src attribute
     var scripts = document.getElementsByTagName('script');

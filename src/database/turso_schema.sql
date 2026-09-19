@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     status TEXT DEFAULT 'open',
     is_read BOOLEAN DEFAULT 0,
     portal_id INTEGER,
+    order_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (portal_id) REFERENCES support_portals(id)

@@ -245,6 +245,9 @@ async function initializeDatabase() {
     
     // Initialize AI Copilot Tables (pending actions, chat history, usage log)
     await initializeAiTables();
+
+    // Initialize Widget Chat Tables (persisted website bot conversations)
+    await initializeWidgetChatTables();
     
     // Initialize Manual Inventory Tables (bulk inventory-in tracking)
     await initializeManualInventoryTables();
@@ -450,6 +453,9 @@ async function initializeSupportPortalsTable() {
     // Single-session enforcement for portals (same scheme as hub_operators)
     await addColumnIfNotExists('support_portals', 'active_session_id', 'VARCHAR(64)');
 
+    // Store plain-text password so admin can always view it (click-to-reveal)
+    await addColumnIfNotExists('support_portals', 'password_plain', 'TEXT');
+
     // Add portal_id to support_tickets if missing
     await addColumnIfNotExists('support_tickets', 'portal_id', 'INTEGER');
     await addColumnIfNotExists('support_tickets', 'ticket_number', 'VARCHAR(50)');
@@ -467,6 +473,8 @@ async function initializeSupportPortalsTable() {
     await addColumnIfNotExists('support_tickets', 'ai_confidence', 'DECIMAL(3,2)');
     await addColumnIfNotExists('support_tickets', 'ai_scenario', 'VARCHAR(50)');
     await addColumnIfNotExists('support_tickets', 'source', "VARCHAR(20) DEFAULT 'whatsapp'");
+    await addColumnIfNotExists('support_tickets', 'customer_email', 'VARCHAR(255)');
+    await addColumnIfNotExists('support_tickets', 'order_id', 'VARCHAR(100)');
 
     // AI classification indexes
     await pool.query('CREATE INDEX IF NOT EXISTS idx_tickets_sentiment ON support_tickets(sentiment) WHERE sentiment IS NOT NULL');
@@ -758,6 +766,71 @@ async function initializeAiTables() {
     console.log('✅ AI copilot tables initialized');
   } catch (error) {
     console.error('❌ Failed to initialize AI copilot tables:', error.message);
+  }
+}
+
+// ── Widget Chat Tables ──
+// Persists all website bot (testbot) conversations so admins can view,
+// analyze token usage/cost, and track which sessions escalated to tickets.
+async function initializeWidgetChatTables() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS widget_chats (
+        id SERIAL PRIMARY KEY,
+        session_id VARCHAR(100) NOT NULL,
+        sender VARCHAR(10) NOT NULL,
+        content TEXT NOT NULL,
+        model VARCHAR(100),
+        prompt_tokens INTEGER DEFAULT 0,
+        completion_tokens INTEGER DEFAULT 0,
+        cost_usd DECIMAL(10,6) DEFAULT 0,
+        tool_calls INTEGER DEFAULT 0,
+        suggested_action VARCHAR(30),
+        ticket_id INTEGER,
+        entities JSONB,
+        rich_content JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_widget_chats_session ON widget_chats(session_id, created_at)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_widget_chats_created ON widget_chats(created_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_widget_chats_ticket ON widget_chats(ticket_id) WHERE ticket_id IS NOT NULL');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS widget_chat_sessions (
+        id SERIAL PRIMARY KEY,
+        session_id VARCHAR(100) UNIQUE NOT NULL,
+        message_count INTEGER DEFAULT 0,
+        ticket_id INTEGER,
+        ticket_number VARCHAR(50),
+        has_ticket BOOLEAN DEFAULT FALSE,
+        total_prompt_tokens INTEGER DEFAULT 0,
+        total_completion_tokens INTEGER DEFAULT 0,
+        total_cost_usd DECIMAL(10,6) DEFAULT 0,
+        last_message_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_wcs_created ON widget_chat_sessions(created_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_wcs_has_ticket ON widget_chat_sessions(has_ticket)');
+
+    // Support richer historical messages when the table already existed before this column.
+    await pool.query('ALTER TABLE widget_chats ADD COLUMN IF NOT EXISTS rich_content JSONB');
+
+    // Add context column for persisting customer entities (orderId, awb, etc.)
+    await pool.query('ALTER TABLE widget_chat_sessions ADD COLUMN IF NOT EXISTS context JSONB');
+
+    // Add visitor_id to link sessions from the same browser/device
+    await pool.query('ALTER TABLE widget_chat_sessions ADD COLUMN IF NOT EXISTS visitor_id VARCHAR(100)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_wcs_visitor ON widget_chat_sessions(visitor_id) WHERE visitor_id IS NOT NULL');
+
+    // Add admin_active flag — true when admin has taken over the conversation
+    await pool.query('ALTER TABLE widget_chat_sessions ADD COLUMN IF NOT EXISTS admin_active BOOLEAN DEFAULT FALSE');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_wcs_admin_active ON widget_chat_sessions(admin_active) WHERE admin_active = TRUE');
+
+    console.log('✅ Widget chat tables initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize widget chat tables:', error.message);
   }
 }
 

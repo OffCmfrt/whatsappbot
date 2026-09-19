@@ -1,436 +1,190 @@
 // ===================================
-// Professional Admin Dashboard JS
+// OffComfrt Support Command Center
+// Premium Monochrome Dashboard JS
 // ===================================
 
-const API_BASE = '/api/admin';
+const API = '/api/admin';
 let authToken = localStorage.getItem('authToken');
-let currentPage = 'overview';
-let charts = {};
-let customersData = [];
-let ordersData = [];
-let currentCustomersPage = 1;
-let customersLimit = 50;
-let totalCustomers = 0;
-let currentBroadcastRecipients = []; // For previews and selection
-let currentBroadcastTab = 'segmentTab';
+let currentPage = 'support';
+let currentChannel = 'all';
+let ticketsPage = 1;
+let ticketsLimit = 50;
+let ticketsMeta = {};
+let urgentKeywords = JSON.parse(localStorage.getItem('urgentKeywords') || '[]');
+let portalsCache = [];
 
-// Initialize
+// ===================================
+// Init
+// ===================================
 document.addEventListener('DOMContentLoaded', () => {
-    if (authToken) {
-        showDashboard();
-        loadDashboardData();
-    } else {
-        showLogin();
-    }
+    if (authToken) { showDashboard(); loadPageData('support'); }
+    else { showLogin(); }
     setupEventListeners();
 });
-
-// ===================================
-// Event Listeners
-// ===================================
 
 function setupEventListeners() {
     // Login
     document.getElementById('loginForm')?.addEventListener('submit', handleLogin);
 
-    // Logout — sidebar button and the always-visible header button
+    // Logout
     document.getElementById('logoutBtn')?.addEventListener('click', handleLogout);
     document.getElementById('headerLogoutBtn')?.addEventListener('click', handleLogout);
 
     // Navigation
-    document.querySelectorAll('.nav-item').forEach(item => {
-        item.addEventListener('click', (e) => {
-            if (item.dataset.page) {
-                e.preventDefault();
-                navigateTo(item.dataset.page);
-                // Close mobile menu after navigation
-                closeMobileMenu();
-            }
+    document.querySelectorAll('.nav-item[data-page]').forEach(item => {
+        item.addEventListener('click', e => {
+            e.preventDefault();
+            navigateTo(item.dataset.page);
+            closeMobileMenu();
         });
     });
 
     // Refresh
-    document.getElementById('refreshBtn')?.addEventListener('click', () => {
-        loadDashboardData();
-        loadPageData(currentPage);
-    });
+    document.getElementById('refreshBtn')?.addEventListener('click', () => loadPageData(currentPage));
+    document.getElementById('mobileRefreshBtn')?.addEventListener('click', () => loadPageData(currentPage));
 
-    document.getElementById('mobileRefreshBtn')?.addEventListener('click', () => {
-        loadDashboardData();
-        loadPageData(currentPage);
-    });
-
-    // Mobile Menu
+    // Mobile
     document.getElementById('mobileMenuBtn')?.addEventListener('click', toggleMobileMenu);
     document.getElementById('sidebarOverlay')?.addEventListener('click', closeMobileMenu);
-    
-    // Sidebar Toggle (Desktop)
     document.getElementById('sidebarToggle')?.addEventListener('click', toggleSidebar);
 
-    // Broadcast
-    document.getElementById('broadcastForm')?.addEventListener('submit', handleBroadcast);
+    // Channel tabs
+    document.querySelectorAll('.channel-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.channel-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            currentChannel = tab.dataset.channel;
+            ticketsPage = 1;
+            loadTickets();
+        });
+    });
 
-    // Search & Filters
-    document.getElementById('customerSearch')?.addEventListener('input', filterCustomers);
-    document.getElementById('orderSearch')?.addEventListener('input', filterOrders);
-    document.getElementById('orderStatusFilter')?.addEventListener('change', filterOrders);
-    document.getElementById('messageTypeFilter')?.addEventListener('change', filterMessages);
-    document.getElementById('messageDateFilter')?.addEventListener('change', filterMessages);
-
-    // Broadcast recipients
-    document.getElementById('broadcastRecipients')?.addEventListener('change', updateRecipientCount);
+    // Ticket filters
+    document.getElementById('ticketSearchInput')?.addEventListener('input', debounce(() => { ticketsPage = 1; loadTickets(); }, 350));
+    document.getElementById('ticketStatusFilter')?.addEventListener('change', () => { ticketsPage = 1; loadTickets(); });
+    document.getElementById('portalFilter')?.addEventListener('change', () => { ticketsPage = 1; loadTickets(); });
+    document.getElementById('ticketSortBy')?.addEventListener('change', () => { ticketsPage = 1; loadTickets(); });
+    document.getElementById('urgentFilterBtn')?.addEventListener('click', function() { this.classList.toggle('active'); ticketsPage = 1; loadTickets(); });
+    document.getElementById('unreadFilterBtn')?.addEventListener('click', function() { this.classList.toggle('active'); ticketsPage = 1; loadTickets(); });
+    document.getElementById('resetFiltersBtn')?.addEventListener('click', resetTicketFilters);
+    document.getElementById('showMoreBtn')?.addEventListener('click', () => { ticketsPage++; loadTickets(true); });
+    document.getElementById('selectAllTickets')?.addEventListener('change', toggleSelectAll);
 
     // Settings
-    document.getElementById('settingsForm')?.addEventListener('submit', handleSettingsSave);
-
-    // Customer Pagination
-    document.getElementById('btnPrevCustomers')?.addEventListener('click', () => changeCustomersPage(-1));
-    document.getElementById('btnNextCustomers')?.addEventListener('click', () => changeCustomersPage(1));
-
-    // Export buttons
-    document.getElementById('exportCustomersBtn')?.addEventListener('click', exportCustomers);
-
-    document.getElementById('exportMessagesBtn')?.addEventListener('click', exportMessages);
-
-
-
-    // Support tickets
-    document.getElementById('openCreatePortalBtn')?.addEventListener('click', openCreatePortalModal);
+    document.getElementById('openCreatePortalBtn')?.addEventListener('click', () => openPortalModal());
     document.getElementById('openAutoDistributeBtn')?.addEventListener('click', openAutoDistributeModal);
-
-    // Portal Analytics
-    document.getElementById('refreshAnalyticsBtn')?.addEventListener('click', loadPortalAnalytics);
-    document.getElementById('transferUnassignedBtn')?.addEventListener('click', transferUnassignedToPortal);
-    document.getElementById('distributeUnassignedBtn')?.addEventListener('click', distributeUnassignedEvenly);
-    document.getElementById('ticketSearchInput')?.addEventListener('input', searchTickets);
-    document.getElementById('ticketStatusFilter')?.addEventListener('change', filterSupportTickets);
-    document.getElementById('ticketSortBy')?.addEventListener('change', sortTickets);
-    document.getElementById('assignPortalSelect')?.addEventListener('change', (e) => assignSelectedToPortal(e.target.value));
-    document.getElementById('bulkDeleteBtn')?.addEventListener('click', deleteSelectedTickets);
-    document.getElementById('refreshTicketsBtn')?.addEventListener('click', loadSupportTickets);
-    document.getElementById('selectAllTickets')?.addEventListener('change', (e) => toggleSelectAllTickets(e.target));
-    document.getElementById('showMoreBtn')?.addEventListener('click', showMoreTickets);
-
-    // Split Portal Modal
-    document.getElementById('closeSplitPortalBtn')?.addEventListener('click', closeSplitPortalModal);
-    document.getElementById('cancelSplitPortalBtn')?.addEventListener('click', closeSplitPortalModal);
-    document.getElementById('splitPortalForm')?.addEventListener('submit', submitSplitPortal);
-
-    // Transfer Tickets Modal
-    document.getElementById('closeTransferPortalBtn')?.addEventListener('click', closeTransferPortalModal);
-    document.getElementById('cancelTransferPortalBtn')?.addEventListener('click', closeTransferPortalModal);
-    document.getElementById('transferPortalForm')?.addEventListener('submit', submitTransferPortal);
-    document.getElementById('transferMode')?.addEventListener('change', (e) => {
-        document.getElementById('transferCountGroup').style.display = e.target.value === 'count' ? 'block' : 'none';
-    });
-
-    // Portal Password Modal
-    document.getElementById('closePortalPasswordModalBtn')?.addEventListener('click', closePortalPasswordModal);
-    document.getElementById('togglePortalPasswordBtn')?.addEventListener('click', () => togglePasswordVisibility('portalPasswordDisplay', 'togglePortalPasswordBtn'));
-    document.getElementById('toggleNewPortalPasswordBtn')?.addEventListener('click', () => togglePasswordVisibility('newPortalPasswordInput', 'toggleNewPortalPasswordBtn'));
-    document.getElementById('savePortalPasswordBtn')?.addEventListener('click', savePortalPassword);
-    document.getElementById('copyPortalPasswordBtn')?.addEventListener('click', copyPortalPassword);
-
-    // Close portal password modal on backdrop click
-    document.getElementById('portalPasswordModal')?.addEventListener('click', (e) => {
-        if (e.target.id === 'portalPasswordModal') {
-            closePortalPasswordModal();
-        }
-    });
-
-    // Enter key to save portal password
-    document.getElementById('newPortalPasswordInput')?.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            savePortalPassword();
-        }
-    });
-    
-    // New filter controls
-    document.getElementById('unreadFilterBtn')?.addEventListener('click', toggleUnreadFilter);
-    document.getElementById('dateFromFilter')?.addEventListener('change', applyFiltersAndSort);
-    document.getElementById('dateToFilter')?.addEventListener('change', applyFiltersAndSort);
-    document.getElementById('timeFromFilter')?.addEventListener('change', applyFiltersAndSort);
-    document.getElementById('timeToFilter')?.addEventListener('change', applyFiltersAndSort);
-    document.getElementById('portalFilter')?.addEventListener('change', applyFiltersAndSort);
-    document.getElementById('resetFiltersBtn')?.addEventListener('click', resetAllFilters);
-
-    // Channel toggle buttons
-    document.querySelectorAll('.channel-toggle').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const channel = e.currentTarget.dataset.channel;
-            document.querySelectorAll('.channel-toggle').forEach(b => b.classList.remove('active'));
-            e.currentTarget.classList.add('active');
-            applyFiltersAndSort();
-        });
-    });
-
-    // Initialize custom dropdowns
-    initCustomDropdowns();
-
-    // New filter controls
-    document.getElementById('searchFilterToggle')?.addEventListener('click', toggleFiltersPanel);
-    document.getElementById('urgentFilterBtn')?.addEventListener('click', toggleUrgentFilter);
     document.getElementById('configureUrgentBtn')?.addEventListener('click', openUrgentKeywordsModal);
-    document.getElementById('addKeywordBtn')?.addEventListener('click', addUrgentKeyword);
+    document.getElementById('savePortalBtn')?.addEventListener('click', savePortal);
     document.getElementById('saveKeywordsBtn')?.addEventListener('click', saveUrgentKeywords);
-    
-    // Quick preset buttons
-    document.querySelectorAll('.preset-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => handlePreset(e.currentTarget.dataset.preset));
-    });
-    
-    // Close modal buttons
-    document.querySelectorAll('[data-action="closeModal"]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const modalId = e.currentTarget.dataset.modal;
-            document.getElementById(modalId)?.classList.remove('active');
-        });
-    });
-
-    // Portal modals
-    document.getElementById('closeCreatePortalBtn')?.addEventListener('click', closeCreatePortalModal);
-    document.getElementById('cancelCreatePortalBtn')?.addEventListener('click', closeCreatePortalModal);
-    document.getElementById('createPortalForm')?.addEventListener('submit', submitCreatePortal);
-    document.getElementById('portalType')?.addEventListener('change', togglePortalTypeFields);
-    document.getElementById('generatePortalPasswordBtn')?.addEventListener('click', generatePortalPassword);
-    
-    // Auto Distribute Wizard
-    document.getElementById('closeAutoDistributeBtn')?.addEventListener('click', closeAutoDistributeModal);
-    document.getElementById('cancelAutoDistributeBtn')?.addEventListener('click', closeAutoDistributeModal);
-    document.getElementById('wizardNextBtn')?.addEventListener('click', wizardNextStep);
-    document.getElementById('wizardPrevBtn')?.addEventListener('click', wizardPrevStep);
-    document.getElementById('confirmDistributeBtn')?.addEventListener('click', executeDistribution);
-    document.getElementById('addShiftBtn')?.addEventListener('click', addShiftRow);
-    document.getElementById('closeDistributeResultsBtn')?.addEventListener('click', closeDistributeResultsModal);
-    document.getElementById('doneDistributeResultsBtn')?.addEventListener('click', closeDistributeResultsModal);
-    document.getElementById('exportResultsBtn')?.addEventListener('click', exportDistributionResults);
-    
-    // Mode selection cards
-    document.querySelectorAll('.mode-card').forEach(card => {
-        card.addEventListener('click', () => selectDistributionMode(card.dataset.mode));
-    });
-    
-    // Filter inputs for live preview
-    ['filterDateFrom', 'filterDateTo', 'filterTimeFrom', 'filterTimeTo'].forEach(id => {
-        document.getElementById(id)?.addEventListener('change', updateFilterPreview);
+    document.getElementById('addKeywordBtn')?.addEventListener('click', addKeyword);
+    document.getElementById('newKeywordInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') addKeyword(); });
+    document.getElementById('portalType')?.addEventListener('change', function() {
+        document.getElementById('timeBasedConfig').style.display = this.value === 'time_based' ? 'block' : 'none';
     });
 
     // Templates
     document.getElementById('loadTemplatesBtn')?.addEventListener('click', loadTemplates);
-    document.getElementById('syncAllDataBtn')?.addEventListener('click', syncAllData);
 
-
-    // Broadcast
-    document.getElementById('broadcastTemplate')?.addEventListener('change', handleTemplateSelect);
-    document.getElementById('broadcastFile')?.addEventListener('change', handleBroadcastFile);
-    document.getElementById('chooseBroadcastFileBtn')?.addEventListener('click', () => document.getElementById('broadcastFile').click());
-    document.getElementById('previewSegmentBtn')?.addEventListener('click', previewSegment);
-    document.getElementById('parseManualPhonesBtn')?.addEventListener('click', parseManualPhones);
-    document.querySelectorAll('input[name="broadcastType"]').forEach(radio => {
-        radio.addEventListener('change', toggleBroadcastType);
+    // Chat modal
+    document.getElementById('sendMessageBtn')?.addEventListener('click', sendChatMessage);
+    document.getElementById('chatInput')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
     });
-    document.querySelectorAll('[data-action="switchBroadcastTab"]').forEach(btn => {
-        btn.addEventListener('click', (e) => switchBroadcastTab(e, btn.dataset.tab));
-    });
-    
-    // Template search
-    initTemplateSearch();
-    
-    // Load templates button
-    document.getElementById('loadTemplatesBtn')?.addEventListener('click', loadTemplates);
-    
-    // Sync templates button (if exists)
-    document.getElementById('syncTemplatesBtn')?.addEventListener('click', syncTemplates);
-
-    // Customer & recipient modals
-    document.getElementById('closeCustomerModalBtn')?.addEventListener('click', closeCustomerModal);
-    document.getElementById('closeSelectionPreviewBtn')?.addEventListener('click', () => {
-        document.getElementById('selectionPreview').style.display = 'none';
-    });
-    document.getElementById('selectAllRecipients')?.addEventListener('change', (e) => toggleAllRecipients(e.target));
-
-    // Event delegation for dynamically generated data-action elements
-    document.addEventListener('click', (e) => {
-        const actionEl = e.target.closest('[data-action]');
-        if (!actionEl) return;
-        const action = actionEl.dataset.action;
-        switch (action) {
-            case 'viewCustomer':
-                viewCustomerDetails(actionEl.dataset.phone);
-                break;
-            case 'viewOrder':
-                viewOrderDetails(actionEl.dataset.orderId);
-                break;
-            case 'viewReturnDetails':
-                viewReturnDetails(actionEl.dataset.returnId);
-                break;
-            case 'viewExchangeDetails':
-                viewExchangeDetails(actionEl.dataset.exchangeId);
-                break;
-            case 'initiateTemplateBroadcast':
-                initiateTemplateBroadcast(actionEl.dataset.template);
-                break;
-            case 'editAutomation':
-                editAutomation(actionEl.dataset.autoId);
-                break;
-            case 'copyPortalLink':
-                copyPortalLink(actionEl.dataset.url);
-                break;
-            case 'clearPortalTickets':
-                clearPortalTickets(actionEl.dataset.portalId);
-                break;
-            case 'deletePortal':
-                deletePortal(actionEl.dataset.portalId);
-                break;
-            case 'changePortalPassword':
-                openPortalPasswordModal(actionEl.dataset.portalId);
-                break;
-            case 'splitPortal':
-                openSplitPortalModal(actionEl.dataset.portalId);
-                break;
-            case 'transferPortal':
-                openTransferPortalModal(actionEl.dataset.portalId);
-                break;
-            case 'loadPortals':
-                loadPortals();
-                break;
-            case 'removeRow':
-                actionEl.closest('.d-flex')?.remove();
-                break;
-            // Template management actions
-            case 'closeTemplateModal':
-                closeTemplateModal();
-                break;
-            case 'createTemplate':
-                openTemplateModal();
-                break;
-            case 'submitTemplate':
-                submitTemplate(e);
-                break;
-            case 'addQuickReplyButton':
-                addButtonRow();
-                break;
-            case 'checkTemplateStatus':
-                checkTemplateStatus(actionEl.dataset.id);
-                break;
-            case 'deleteTemplate':
-                deleteTemplate(actionEl.dataset.id);
-                break;
-            case 'selectTemplate':
-                handleTemplateSelection(actionEl.dataset.template);
-                break;
-            case 'formatBold':
-            case 'formatItalic':
-            case 'formatStrikethrough':
-            case 'insertEmoji':
-            case 'insertVariable':
-                handleToolbarAction(action);
-                break;
-        }
+    document.getElementById('chatStatusSelect')?.addEventListener('change', function() {
+        const ticketId = this.dataset.ticketId;
+        if (ticketId) updateTicketStatus(ticketId, this.value);
     });
 
-    // Event delegation for dynamically generated checkboxes
-    document.addEventListener('change', (e) => {
-        if (e.target.classList.contains('ticket-checkbox')) {
-            toggleTicketSelection(e.target);
-        }
-        if (e.target.classList.contains('recipient-checkbox')) {
-            updateRecipientCount();
-        }
-        if (e.target.classList.contains('shopper-checkbox')) {
-            updateShopperSelection();
-        }
+    // Assign portal modal
+    document.getElementById('confirmAssignBtn')?.addEventListener('click', confirmAssignPortal);
+
+    // AI Analytics
+    document.getElementById('refreshAiInsights')?.addEventListener('click', loadAiAnalytics);
+
+    // Widget Chats
+    document.querySelectorAll('.wc-sub-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.wc-sub-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const target = tab.dataset.wctab;
+            document.querySelectorAll('.wc-tab-panel').forEach(p => p.classList.remove('active'));
+            if (target === 'conversations') { document.getElementById('wcTabConversations')?.classList.add('active'); }
+            else if (target === 'wc-analytics') { document.getElementById('wcTabAnalytics')?.classList.add('active'); loadWidgetChatAnalytics(); }
+            else if (target === 'wc-settings') { document.getElementById('wcTabSettings')?.classList.add('active'); loadWidgetChatSettings(); }
+        });
     });
-}
+    document.getElementById('wcSearchInput')?.addEventListener('input', debounce(() => { wcPage = 1; loadWidgetChats(); }, 350));
+    document.getElementById('wcTicketFilter')?.addEventListener('change', () => { wcPage = 1; loadWidgetChats(); });
+    document.getElementById('wcSortBy')?.addEventListener('change', () => { wcPage = 1; loadWidgetChats(); });
+    document.getElementById('wcRefreshBtn')?.addEventListener('click', () => loadWidgetChats());
+    document.getElementById('wcShowMoreBtn')?.addEventListener('click', () => { wcPage++; loadWidgetChats(true); });
+    document.getElementById('wcPurgeBtn')?.addEventListener('click', purgeWidgetChats);
 
-// Mobile Menu Functions
-function toggleMobileMenu() {
-    const sidebar = document.getElementById('sidebar');
-    const overlay = document.getElementById('sidebarOverlay');
-    const menuBtn = document.getElementById('mobileMenuBtn');
-    
-    if (sidebar) {
-        sidebar.classList.toggle('mobile-open');
-        // Remove collapsed state when opening on mobile
-        if (sidebar.classList.contains('mobile-open')) {
-            sidebar.classList.remove('collapsed');
-        }
-    }
-    if (overlay) overlay.classList.toggle('active');
-    if (menuBtn) menuBtn.classList.toggle('active');
-}
+    // Widget chat related sessions toggle
+    document.getElementById('wcRelatedToggle')?.addEventListener('click', function() {
+        const content = document.getElementById('wcRelatedContent');
+        const svg = this.querySelector('svg');
+        const isHidden = content.style.display === 'none';
+        content.style.display = isHidden ? 'flex' : 'none';
+        if (svg) svg.style.transform = isHidden ? 'rotate(180deg)' : '';
+    });
 
-function closeMobileMenu() {
-    const sidebar = document.getElementById('sidebar');
-    const overlay = document.getElementById('sidebarOverlay');
-    const menuBtn = document.getElementById('mobileMenuBtn');
-    
-    if (sidebar) sidebar.classList.remove('mobile-open');
-    if (overlay) overlay.classList.remove('active');
-    if (menuBtn) menuBtn.classList.remove('active');
-}
+    // Admin override send
+    document.getElementById('wcAdminSendBtn')?.addEventListener('click', sendAdminMessage);
+    document.getElementById('wcAdminInput')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAdminMessage(); }
+    });
+    document.getElementById('wcAdminReleaseBtn')?.addEventListener('click', releaseAdminControl);
 
-// Sidebar Toggle Function (Desktop)
-function toggleSidebar() {
-    const sidebar = document.getElementById('sidebar');
-    
-    if (sidebar) {
-        sidebar.classList.toggle('collapsed');
-        
-        // Save state to localStorage
-        const isCollapsed = sidebar.classList.contains('collapsed');
-        localStorage.setItem('sidebarCollapsed', isCollapsed);
-    }
-}
+    // Modal close buttons
+    document.querySelectorAll('[data-action="closeModal"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const modal = document.getElementById(btn.dataset.modal);
+            if (modal) modal.classList.remove('active');
+        });
+    });
+    document.querySelectorAll('[data-action="closeTemplateModal"]').forEach(btn => {
+        btn.addEventListener('click', () => document.getElementById('templateModal')?.classList.remove('active'));
+    });
 
-// Load sidebar state from localStorage
-function loadSidebarState() {
-    const sidebar = document.getElementById('sidebar');
-    const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-    
-    if (sidebar && isCollapsed) {
-        sidebar.classList.add('collapsed');
-    }
+    // Close modals on backdrop click
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('active'); });
+    });
 }
 
 // ===================================
-// Authentication
+// Auth
 // ===================================
-
 async function handleLogin(e) {
     e.preventDefault();
-
-    const username = document.getElementById('username').value;
+    const btn = e.target.querySelector('button');
+    const username = document.getElementById('username').value.trim();
     const password = document.getElementById('password').value;
-    const errorDiv = document.getElementById('loginError');
-    const buttonText = document.getElementById('loginButtonText');
-    const loader = document.getElementById('loginLoader');
-
-    buttonText.style.display = 'none';
-    loader.style.display = 'inline-block';
+    document.getElementById('loginError').textContent = '';
+    btn.disabled = true;
+    btn.querySelector('#loginButtonText').textContent = 'Signing in...';
 
     try {
-        const response = await fetch(`${API_BASE}/login`, {
+        const res = await fetch(`${API}/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password })
         });
-
-        const data = await response.json();
-
-        if (data.success) {
+        const data = await res.json();
+        if (data.success && data.token) {
             authToken = data.token;
             localStorage.setItem('authToken', authToken);
             showDashboard();
-            loadDashboardData();
+            loadPageData('support');
         } else {
-            throw new Error('Invalid credentials');
+            document.getElementById('loginError').textContent = data.error || 'Invalid credentials';
         }
-    } catch (error) {
-        errorDiv.textContent = error.message;
-        buttonText.style.display = 'inline';
-        loader.style.display = 'none';
+    } catch (err) {
+        document.getElementById('loginError').textContent = 'Connection error';
+    } finally {
+        btn.disabled = false;
+        btn.querySelector('#loginButtonText').textContent = 'Sign In';
     }
 }
 
@@ -448,4868 +202,1642 @@ function showLogin() {
 function showDashboard() {
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('dashboardScreen').style.display = 'flex';
-    
-    // Load sidebar state
-    loadSidebarState();
+    loadPortals();
+    loadUnreadCount();
 }
 
 // ===================================
 // Navigation
 // ===================================
-
 function navigateTo(page) {
+    // Stop live refresh when leaving widget chats
+    if (currentPage === 'widget-chats' && page !== 'widget-chats') {
+        stopLiveRefresh();
+    }
     currentPage = page;
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelector(`.nav-item[data-page="${page}"]`)?.classList.add('active');
+    document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+    const section = document.getElementById(`${page}Page`);
+    if (section) section.classList.add('active');
 
-    // Update nav
-    document.querySelectorAll('.nav-item').forEach(item => {
-        item.classList.toggle('active', item.dataset.page === page);
-    });
-
-    // Update pages
-    document.querySelectorAll('.page-section').forEach(p => {
-        p.classList.remove('active');
-    });
-    document.getElementById(`${page}Page`)?.classList.add('active');
-
-    // Update title
     const titles = {
-        overview: 'Overview',
-        customers: 'Customer Management',
-        orders: 'Order Management',
-        returns: 'Returns & Exchanges',
-        messages: 'Message History',
-        'ig-comments': 'Instagram Comments',
-        broadcast: 'Broadcast Messages',
-        templates: 'Meta API Templates',
-        analytics: 'Detailed Analytics',
-        settings: 'Settings',
-        shoppers: 'Shopper Hub'
+        'support': ['Support Tickets', 'Manage customer conversations across all channels'],
+        'widget-chats': ['Widget Chats', 'Website bot conversations, token usage and analytics'],
+        'ai-analytics': ['AI Analytics', 'Intelligent insights from all support conversations'],
+        'templates': ['Templates', 'Meta API message templates'],
+        'ig-comments': ['Instagram Comments', 'Monitor and manage Instagram comment interactions'],
+        'settings': ['Settings', 'Configure portals, distribution rules and keywords']
     };
+    const [title, subtitle] = titles[page] || ['Dashboard', ''];
+    document.getElementById('pageTitle').textContent = title;
+    document.getElementById('pageSubtitle').textContent = subtitle;
 
-    const subtitles = {
-        overview: 'WhatsApp Bot Performance Dashboard',
-        customers: 'Manage and view customer information',
-        orders: 'Track and manage all orders',
-        returns: 'Manage returns and exchange requests',
-        messages: 'View conversation history',
-        'ig-comments': 'Comment automation, replies and support hand-offs',
-        broadcast: 'Send messages to customers',
-        templates: 'Manage and sync Meta API templates',
-        analytics: 'In-depth performance metrics',
-        settings: 'Configure bot behavior and abandoned cart reminders',
-        shoppers: 'Track and segment store customers'
-    };
-
-    document.getElementById('pageTitle').textContent = titles[page] || 'Dashboard';
-    document.getElementById('pageSubtitle').textContent = subtitles[page] || '';
-
-    // Load page data
     loadPageData(page);
 }
 
-function showToast(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.className = `wa-toast wa-toast-${type}`;
-    toast.innerHTML = `
-        <div class="wa-toast-content">
-            <i class="fas fa-${type === 'success' ? 'check-circle' : 'info-circle'} mr-2"></i>
-            <span>${message}</span>
-        </div>
-    `;
-    document.body.appendChild(toast);
-    
-    setTimeout(() => toast.classList.add('active'), 10);
-    setTimeout(() => {
-        toast.classList.remove('active');
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
-
-// ===================================
-// Data Loading
-// ===================================
-
-async function loadDashboardData() {
-    await loadStats();
-    await loadRecentActivity();
-    await loadCharts();
-    await loadSettings();
-}
-
-async function loadPageData(page) {
+function loadPageData(page) {
     switch (page) {
-        case 'customers':
-            await loadCustomers();
-            break;
-        case 'orders':
-            await loadOrders();
-            break;
-        case 'returns':
-            await loadReturnsData();
-            break;
-        case 'messages':
-            await loadMessages();
-            break;
-        case 'support':
-            await loadSupportTickets();
-            await loadPortals();
-            break;
-        case 'ig-comments':
-            await window.CommentsCenter?.load();
-            break;
-        case 'broadcast':
-            await loadBroadcastHistory();
-            await updateRecipientCount();
-            break;
-        case 'templates':
-            await loadTemplates();
-            break;
-        case 'analytics':
-            await loadAnalytics();
-            break;
-        case 'settings':
-            await loadSettings();
-            break;
-        case 'shoppers':
-            await loadShoppers();
-            break;
-    }
-}
-
-// Load Statistics
-async function loadStats() {
-    try {
-        const response = await apiCall('/stats');
-
-        if (response.success) {
-            const { stats } = response;
-
-            // Update stat cards
-            if (document.getElementById('totalCustomers')) document.getElementById('totalCustomers').textContent = stats.totalCustomers || 0;
-            if (document.getElementById('segTotalCustomers')) document.getElementById('segTotalCustomers').textContent = stats.totalCustomers || 0;
-            if (document.getElementById('totalOrders')) document.getElementById('totalOrders').textContent = stats.totalOrders || 0;
-            document.getElementById('totalMessages').textContent = stats.totalMessages || 0;
-            document.getElementById('activeToday').textContent = stats.activeToday || 0;
-
-            // Update changes
-            updateStatChange('customersChange', stats.customersGrowth);
-            updateStatChange('ordersChange', stats.ordersGrowth);
-            updateStatChange('messagesChange', stats.messagesGrowth);
-            updateStatChange('activeChange', stats.activeGrowth);
-        }
-    } catch (error) {
-        console.error('Failed to load stats:', error);
-    }
-}
-
-function updateStatChange(elementId, growth) {
-    const element = document.getElementById(elementId);
-    if (!element || growth === undefined) return;
-
-    const isPositive = growth >= 0;
-    element.className = `stat-change ${isPositive ? 'positive' : 'negative'}`;
-    element.innerHTML = `<span>${isPositive ? '↑' : '↓'}</span> ${Math.abs(growth)}% vs last week`;
-}
-
-// Load Recent Activity
-async function loadRecentActivity() {
-    try {
-        const response = await apiCall('/activity/recent');
-
-        if (response.success) {
-            const container = document.getElementById('recentActivity');
-
-            if (response.activity.length === 0) {
-                container.innerHTML = '<div class="empty-state"><p class="text-muted">No recent activity</p></div>';
-                return;
-            }
-
-            container.innerHTML = response.activity.map(a => `
-                <div style="padding: 12px 0; border-bottom: 1px solid var(--border-color);">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                        <strong>${a.title}</strong>
-                        <span class="text-small text-muted">${formatTimeAgo(a.created_at)}</span>
-                    </div>
-                    <p class="text-small text-muted">${a.description}</p>
-                </div>
-            `).join('');
-        }
-    } catch (error) {
-        console.error('Failed to load activity:', error);
-    }
-}
-
-// Load Charts
-async function loadCharts() {
-    try {
-        const response = await apiCall('/analytics/charts');
-
-        if (response.success) {
-            // Message Volume Chart
-            createLineChart('messageChart', response.messageVolume);
-
-            // Order Status Chart
-            createDoughnutChart('orderStatusChart', response.orderStatus);
-        }
-    } catch (error) {
-        console.error('Failed to load charts:', error);
-    }
-}
-
-// Load Customers
-async function loadCustomers(page = 1) {
-    try {
-        currentCustomersPage = page;
-        const offset = (page - 1) * customersLimit;
-        const response = await apiCall(`/customers?limit=${customersLimit}&offset=${offset}`);
-
-        if (response.success) {
-            window.customersData = response.customers;
-            totalCustomers = response.total;
-            renderCustomersTable(response.customers, response.total, page);
-        }
-    } catch (error) {
-        console.error('Failed to load customers:', error);
-    }
-}
-
-function renderCustomersTable(customers, total, page) {
-    const tbody = document.getElementById('customersTableBody');
-    const info = document.getElementById('customersPaginationInfo');
-    const btnPrev = document.getElementById('btnPrevCustomers');
-    const btnNext = document.getElementById('btnNextCustomers');
-
-    if (customers.length === 0 && page === 1) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="6" class="text-center">
-                    <div class="empty-state">
-                        <div class="empty-state-icon">
-                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>
-                        </div>
-                        <div class="empty-state-title">No customers yet</div>
-                        <div class="empty-state-text">Customers will appear here once they start using the bot</div>
-                    </div>
-                </td>
-            </tr>
-        `;
-        if (info) info.innerText = 'Showing 0 customers';
-        if (btnPrev) btnPrev.disabled = true;
-        if (btnNext) btnNext.disabled = true;
-        return;
-    }
-
-    tbody.innerHTML = customers.map(c => `
-        <tr>
-            <td><strong>${c.name || 'Unknown'}</strong></td>
-            <td>${formatPhone(c.phone)}</td>
-            <td><span class="badge badge-info">${c.order_count || 0}</span></td>
-            <td><span class="badge badge-primary">${c.message_count || 0}</span></td>
-            <td class="text-small text-muted">${formatDate(c.created_at)}</td>
-            <td>
-                <button class="btn btn-secondary" data-action="viewCustomer" data-phone="${c.phone}">
-                    View
-                </button>
-            </td>
-        </tr>
-    `).join('');
-
-    // Update pagination UI
-    if (info) {
-        const start = (page - 1) * customersLimit + 1;
-        const end = Math.min(page * customersLimit, total);
-        info.innerText = `Showing ${start}-${end} of ${total} customers`;
-    }
-
-    if (btnPrev) btnPrev.disabled = page <= 1;
-    if (btnNext) btnNext.disabled = page * customersLimit >= total;
-}
-
-function changeCustomersPage(delta) {
-    loadCustomers(currentCustomersPage + delta);
-}
-
-// Load Orders
-async function loadOrders() {
-    try {
-        const response = await apiCall('/orders');
-
-        if (response.success) {
-            window.ordersData = response.orders;
-            renderOrdersTable(response.orders);
-        }
-    } catch (error) {
-        console.error('Failed to load orders:', error);
-    }
-}
-
-function renderOrdersTable(orders) {
-    const tbody = document.getElementById('ordersTableBody');
-
-    if (orders.length === 0) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="6" class="text-center">
-                    <div class="empty-state">
-                        <div class="empty-state-icon">
-                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/></svg>
-                        </div>
-                        <div class="empty-state-title">No orders yet</div>
-                        <div class="empty-state-text">Orders will appear here once customers place them</div>
-                    </div>
-                </td>
-            </tr>
-        `;
-        return;
-    }
-
-    tbody.innerHTML = orders.map(o => `
-        <tr>
-            <td><strong>${o.order_id}</strong></td>
-            <td>${o.customer_name || formatPhone(o.customer_phone)}</td>
-            <td>${getStatusBadge(o.status)}</td>
-            <td class="text-small">${o.awb || 'N/A'}</td>
-            <td class="text-small text-muted">${formatDate(o.created_at)}</td>
-            <td>
-                <button class="btn btn-secondary" data-action="viewOrder" data-order-id="${o.order_id}">
-                    View
-                </button>
-            </td>
-        </tr>
-    `).join('');
-}
-
-// Load Messages
-async function loadMessages() {
-    try {
-        const response = await apiCall('/messages');
-
-        if (response.success) {
-            window.messagesData = response.messages;
-            renderMessagesTable(response.messages);
-        }
-    } catch (error) {
-        console.error('Failed to load messages:', error);
-    }
-}
-
-function renderMessagesTable(messages) {
-    const tbody = document.getElementById('messagesTableBody');
-
-    // Safety check for undefined or null
-    if (!messages || messages.length === 0) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="4" class="text-center">
-                    <div class="empty-state">
-                        <div class="empty-state-icon">💬</div>
-                        <div class="empty-state-title">No messages yet</div>
-                        <div class="empty-state-text">Messages will appear here as customers interact with the bot</div>
-                    </div>
-                </td>
-            </tr>
-        `;
-        return;
-    }
-
-    tbody.innerHTML = messages.map(m => `
-        <tr>
-            <td class="text-small text-muted">${formatTime(m.created_at)}</td>
-            <td>${formatPhone(m.customer_phone)}</td>
-            <td>
-                <span class="badge ${m.message_type === 'incoming' ? 'badge-primary' : 'badge-success'}">
-                    ${m.message_type === 'incoming' ? '📥 In' : '📤 Out'}
-                </span>
-            </td>
-            <td class="text-small">${truncate(m.message_content, 80)}</td>
-        </tr>
-    `).join('');
-}
-
-// ===================================
-// Professional Support Tickets System
-// ===================================
-
-let allTickets = [];
-let filteredTickets = [];
-let displayedTickets = [];
-let selectedTickets = new Set();
-let ticketsPerPage = 50;
-let currentDisplayCount = 0;
-// Server-side pagination state — the server filters/sorts/paginates, so the
-// client only ever holds one small page of tickets instead of thousands
-let ticketMeta = { total: 0, unread: 0, open: 0, resolved: 0, urgent: 0, has_more: false };
-let currentTicketPage = 1;
-let isLoadingTickets = false;
-let ticketSearchDebounce = null;
-
-// Quick reply templates for faster responses
-const quickReplyTemplates = [
-    { label: 'Hello', text: 'Hello! Thank you for contacting OffComfrt support. How may I assist you today?' },
-    { label: 'Order Status', text: 'Let me check the status of your order. Could you please provide your order ID?' },
-    { label: 'Shipping', text: 'Your order has been shipped and is on its way! You can track it using the tracking number sent to your WhatsApp.' },
-    { label: 'Return Policy', text: 'We accept returns within 7 days of delivery. The item must be unworn with original tags. Would you like to initiate a return?' },
-    { label: 'Exchange', text: 'For exchanges, we can arrange a pickup of your current item and deliver the new size/color. There may be a price difference to pay.' },
-    { label: 'Size Help', text: 'For sizing guidance and detailed measurements, please type your question here and our support team will respond within 24 hours.' },
-    { label: 'Payment Issue', text: 'I understand you\'re facing a payment issue. Please try using a different payment method or contact your bank if the issue persists.' },
-    { label: 'Refund', text: 'Your store credit has been issued and is now available in your account. You can use it for your next purchase.' },
-    { label: 'Thanks', text: 'Thank you for choosing OffComfrt! Is there anything else I can help you with today?' },
-    { label: 'Close', text: 'We\'re closing this ticket now. If you need further assistance, feel free to reach out anytime. Have a great day!' }
-];
-
-// Build the query string carrying every filter to the server
-function buildTicketQueryParams(page) {
-    const statusFilter = document.getElementById('ticketStatusFilter')?.value || '';
-    const unreadOnly = document.getElementById('unreadFilterBtn')?.classList.contains('active') || false;
-    const urgentOnly = document.getElementById('urgentFilterBtn')?.classList.contains('active') || false;
-    const searchQuery = (document.getElementById('ticketSearchInput')?.value || '').trim();
-    const portalFilterVal = document.getElementById('portalFilter')?.value || '';
-    const dateFrom = document.getElementById('dateFromFilter')?.value || '';
-    const dateTo = document.getElementById('dateToFilter')?.value || '';
-    const timeFrom = document.getElementById('timeFromFilter')?.value || '';
-    const timeTo = document.getElementById('timeToFilter')?.value || '';
-    const sortBy = document.getElementById('ticketSortBy')?.value || 'newest';
-    
-    // Get active channel filter
-    const activeChannelBtn = document.querySelector('.channel-toggle.active');
-    const channelFilter = activeChannelBtn?.dataset.channel || 'all';
-
-    const params = new URLSearchParams();
-    if (statusFilter) params.append('status', statusFilter);
-    if (unreadOnly) params.append('is_read', 'false');
-    if (dateFrom) params.append('date_from', dateFrom);
-    if (dateTo) params.append('date_to', dateTo);
-    if (timeFrom) params.append('time_from', timeFrom);
-    if (timeTo) params.append('time_to', timeTo);
-    if (searchQuery) params.append('search', searchQuery);
-    if (portalFilterVal) params.append('portal', portalFilterVal);
-    if (sortBy) params.append('sort', sortBy);
-    if (channelFilter && channelFilter !== 'all') params.append('channel', channelFilter);
-    // Keywords always go up (they feed the urgent stat card); they only filter
-    // the list when the urgent toggle is active
-    if (urgentKeywords.length) params.append('urgent', urgentKeywords.join(','));
-    if (urgentOnly) params.append('urgent_filter', '1');
-    params.append('page', String(page));
-    params.append('limit', String(ticketsPerPage));
-    return params.toString();
-}
-
-// Load Support Tickets (one server-side page at a time)
-async function loadSupportTickets(page = 1, append = false) {
-    if (isLoadingTickets) return;
-    isLoadingTickets = true;
-    try {
-        const response = await apiCall(`/support-tickets?${buildTicketQueryParams(page)}`);
-
-        if (response.success) {
-            const fetched = (response.tickets || []).map(t => ({
-                ...t,
-                orderId: t.order_id || null
-            }));
-
-            allTickets = append ? [...allTickets, ...fetched] : fetched;
-            filteredTickets = allTickets;
-            currentTicketPage = page;
-            ticketMeta = response.meta || ticketMeta;
-
-            updateTicketStats();
-            renderTicketsList();
-            updateActiveFiltersCount();
-        }
-    } catch (error) {
-        console.error('Failed to load support tickets:', error);
-        document.getElementById('ticketsList').innerHTML = `
-            <div class="tickets-empty">
-                <svg class="tickets-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                    <circle cx="12" cy="10" r="3"/>
-                </svg>
-                <div class="tickets-empty-title">Failed to load tickets</div>
-                <div class="tickets-empty-text">Please try refreshing the page</div>
-            </div>
-        `;
-    } finally {
-        isLoadingTickets = false;
-    }
-}
-
-// Update statistics — counts come from the server's single aggregation query
-function updateTicketStats() {
-    document.getElementById('totalTicketsCount').textContent = ticketMeta.total ?? allTickets.length;
-    document.getElementById('unreadTicketsCount').textContent = ticketMeta.unread ?? 0;
-    document.getElementById('urgentTicketsCount').textContent = ticketMeta.urgent ?? 0;
-    document.getElementById('openTicketsCount').textContent = ticketMeta.open ?? 0;
-    document.getElementById('resolvedTicketsCount').textContent = ticketMeta.resolved ?? 0;
-}
-
-// Update active filters count display
-function updateActiveFiltersCount() {
-    let count = 0;
-    const searchQuery = document.getElementById('ticketSearchInput')?.value;
-    const statusFilter = document.getElementById('ticketStatusFilter')?.value;
-    const dateFrom = document.getElementById('dateFromFilter')?.value;
-    const dateTo = document.getElementById('dateToFilter')?.value;
-    const timeFrom = document.getElementById('timeFromFilter')?.value;
-    const timeTo = document.getElementById('timeToFilter')?.value;
-    const unreadOnly = document.getElementById('unreadFilterBtn')?.classList.contains('active');
-    const urgentOnly = document.getElementById('urgentFilterBtn')?.classList.contains('active');
-    const portalFilterVal = document.getElementById('portalFilter')?.value;
-    
-    if (searchQuery) count++;
-    if (statusFilter) count++;
-    if (dateFrom || dateTo) count++;
-    if (timeFrom || timeTo) count++;
-    if (unreadOnly) count++;
-    if (urgentOnly) count++;
-    if (portalFilterVal) count++;
-    
-    const countElement = document.getElementById('activeFiltersCount');
-    if (countElement) {
-        countElement.textContent = count > 0 ? `${count} filter${count > 1 ? 's' : ''} active` : '';
-    }
-}
-
-// Apply filters and sorting — everything is filtered server-side now, so this
-// simply refetches page 1 with the current filter state
-function applyFiltersAndSort() {
-    loadSupportTickets(1, false);
-}
-
-// Render tickets list
-function renderTicketsList() {
-    const container = document.getElementById('ticketsList');
-    const pagination = document.getElementById('ticketsPagination');
-    const selectAllCheckbox = document.getElementById('selectAllTickets');
-    
-    // Reset selection
-    selectedTickets.clear();
-    if (selectAllCheckbox) {
-        selectAllCheckbox.checked = false;
-        selectAllCheckbox.indeterminate = false;
-    }
-    updateBulkActionButtons();
-    
-    if (!filteredTickets || filteredTickets.length === 0) {
-        container.innerHTML = `
-            <div class="tickets-empty">
-                <svg class="tickets-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                    <circle cx="12" cy="10" r="3"/>
-                </svg>
-                <div class="tickets-empty-title">No tickets found</div>
-                <div class="tickets-empty-text">Customer support queries will appear here</div>
-            </div>
-        `;
-        pagination.style.display = 'none';
-        return;
-    }
-    
-    // Render every loaded ticket (all fetched pages so far)
-    displayedTickets = filteredTickets;
-    
-    container.innerHTML = displayedTickets.map(t => renderTicketItem(t)).join('');
-    
-    // Update pagination info — totals come from the server
-    const serverTotal = ticketMeta.total || displayedTickets.length;
-    document.getElementById('showingStart').textContent = displayedTickets.length > 0 ? 1 : 0;
-    document.getElementById('showingEnd').textContent = displayedTickets.length;
-    document.getElementById('showingTotal').textContent = serverTotal;
-    
-    // Show/hide pagination
-    pagination.style.display = 'flex';
-    
-    // Update show more button
-    const showMoreBtn = document.getElementById('showMoreBtn');
-    if (ticketMeta.has_more) {
-        showMoreBtn.style.display = 'inline-flex';
-    } else {
-        showMoreBtn.style.display = 'none';
-    }
-    
-    // Add event listeners
-    attachTicketEventListeners();
-}
-
-// Render single ticket item
-function renderTicketItem(t) {
-    const isResolved = t.status === 'resolved';
-    const isUnread = !t.is_read;
-    const isUrgent = isUrgentTicket(t.message);
-    const statusClass = `ticket-status-${t.status || 'open'}`;
-    const date = formatTicketDate(t.created_at);
-    const channel = t.channel || 'whatsapp';
-    
-    // Channel icon SVG
-    const channelIcon = channel === 'instagram' 
-        ? '<svg class="ticket-channel-icon ch-icon-ig" width="14" height="14" viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z" fill="currentColor"/></svg>'
-        : '<svg class="ticket-channel-icon ch-icon-wa" width="14" height="14" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" fill="currentColor"/></svg>';
-    
-    // Get portal badge
-    let portalBadge = '<span class="no-portal-badge">No Portal</span>';
-    
-    // Check if ticket has portal_id from manual/auto assignment
-    const assignedPortal = allPortals.find(p => p.id == t.portal_id);
-    if (assignedPortal) {
-        portalBadge = `<span class="portal-badge portal-badge-${assignedPortal.type}">${escapeHtml(assignedPortal.name)}</span>`;
-    } else if (t.portal_name) {
-        // Time-based portal assignment (backend enriched the ticket)
-        portalBadge = `<span class="portal-badge portal-badge-time_based">${escapeHtml(t.portal_name)}</span>`;
-    }
-    
-    return `
-    <div class="ticket-item ${isResolved ? 'ticket-item-resolved' : ''} ${isUnread ? 'ticket-item-unread' : ''} ${isUrgent ? 'ticket-item-urgent' : ''}" 
-         data-ticket-id="${t.id}" 
-         data-phone="${t.customer_phone}" 
-         data-name="${escapeHtml(t.customer_name || '')}" 
-         data-status="${t.status}">
-        <div class="ticket-checkbox-wrapper">
-            <input type="checkbox" class="ticket-checkbox" value="${t.id}">
-        </div>
-        <div class="ticket-number-col">
-            <span class="ticket-number-badge">${escapeHtml(t.ticket_number || 'N/A')}</span>
-            ${channelIcon}
-            ${isUrgent ? '<span class="urgent-badge">⚡ Urgent</span>' : ''}
-        </div>
-        <div class="ticket-customer">
-            <div class="ticket-customer-name ${isUnread ? 'unread-name' : ''}">
-                ${isUnread ? '<span class="unread-dot"></span>' : ''}
-                ${escapeHtml(t.customer_name || 'Customer')}
-            </div>
-            <div class="ticket-customer-phone">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
-                </svg>
-                <a href="tel:${t.customer_phone}">${formatPhone(t.customer_phone)}</a>
-            </div>
-        </div>
-        <div class="ticket-message">
-            <div class="ticket-message-preview">${escapeHtml(t.message || '')}</div>
-            <div class="ticket-message-meta">
-                <span class="ticket-message-time">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"/>
-                        <polyline points="12 6 12 12 16 14"/>
-                    </svg>
-                    ${date}
-                </span>
-                ${t.orderId ? `<span class="ticket-order-badge">Order #${t.orderId}</span>` : ''}
-            </div>
-        </div>
-        <div class="ticket-meta">
-            <span class="ticket-status ${statusClass}">
-                ${isResolved 
-                    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> Resolved'
-                    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Open'
-                }
-            </span>
-        </div>
-        <div class="ticket-portal-display">
-            ${portalBadge}
-        </div>
-        <div class="ticket-actions">
-            <button class="ticket-action-btn ticket-action-btn-primary btn-chat-open" data-action="chat" title="Open chat">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                </svg>
-                Chat
-            </button>
-            ${!isResolved ? `
-            <button class="ticket-action-btn ticket-action-btn-success btn-ticket-resolve" data-action="resolve" title="Mark as resolved">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                    <polyline points="20 6 9 17 4 12"/>
-                </svg>
-            </button>
-            ` : ''}
-            <button class="ticket-action-btn ticket-action-btn-danger btn-ticket-delete" data-action="delete" title="Delete ticket">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="3 6 5 6 21 6"/>
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                </svg>
-            </button>
-        </div>
-    </div>
-    `;
-}
-
-// Format ticket date
-function formatTicketDate(dateString) {
-    if (!dateString) return '-';
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-    
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    
-    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-}
-
-// Attach event listeners to ticket items
-function attachTicketEventListeners() {
-    const container = document.getElementById('ticketsList');
-    
-    // Chat buttons
-    container.querySelectorAll('.btn-chat-open').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const item = e.target.closest('.ticket-item');
-            openSupportChat(
-                item.dataset.ticketId,
-                item.dataset.phone,
-                item.dataset.name,
-                item.dataset.status
-            );
-        });
-    });
-    
-    // Resolve buttons
-    container.querySelectorAll('.btn-ticket-resolve').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const item = e.target.closest('.ticket-item');
-            resolveTicket(item.dataset.ticketId);
-        });
-    });
-    
-    // Delete buttons
-    container.querySelectorAll('.btn-ticket-delete').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const item = e.target.closest('.ticket-item');
-            deleteTicket(item.dataset.ticketId);
-        });
-    });
-    
-    // Portal selector dropdowns
-    container.querySelectorAll('.portal-select-dropdown').forEach(select => {
-        select.addEventListener('change', async (e) => {
-            e.stopPropagation();
-            const ticketId = select.dataset.ticketId;
-            const portalId = select.value || null;
-            await assignTicketToPortal(ticketId, portalId, select);
-        });
-    });
-    
-    // Click on ticket item to open chat
-    container.querySelectorAll('.ticket-item').forEach(item => {
-        item.addEventListener('click', (e) => {
-            if (e.target.closest('input') || e.target.closest('button') || e.target.closest('select') || e.target.closest('a')) return;
-            openSupportChat(
-                item.dataset.ticketId,
-                item.dataset.phone,
-                item.dataset.name,
-                item.dataset.status
-            );
-        });
-    });
-}
-
-// Show more tickets — fetch the next server page and append it
-function showMoreTickets() {
-    if (ticketMeta.has_more && !isLoadingTickets) {
-        loadSupportTickets(currentTicketPage + 1, true);
-    }
-}
-
-// Search tickets — debounced since filtering now hits the server
-function searchTickets() {
-    clearTimeout(ticketSearchDebounce);
-    ticketSearchDebounce = setTimeout(() => loadSupportTickets(1, false), 300);
-}
-
-// Sort tickets
-function sortTickets() {
-    applyFiltersAndSort();
-}
-
-// Toggle filters panel
-function toggleFiltersPanel() {
-    const panel = document.getElementById('filtersPanel');
-    const toggle = document.getElementById('searchFilterToggle');
-    
-    if (panel && toggle) {
-        panel.classList.toggle('open');
-        toggle.classList.toggle('active');
-    }
-}
-
-// Quick preset handler
-function handlePreset(preset) {
-    const now = new Date();
-    let fromDate, toDate;
-    
-    // Remove active class from all presets
-    document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
-    
-    // Add active class to clicked preset
-    document.querySelector(`[data-preset="${preset}"]`)?.classList.add('active');
-    
-    switch(preset) {
-        case 'today':
-            fromDate = toDate = now.toISOString().split('T')[0];
-            break;
-        case 'yesterday':
-            const yesterday = new Date(now);
-            yesterday.setDate(yesterday.getDate() - 1);
-            fromDate = toDate = yesterday.toISOString().split('T')[0];
-            break;
-        case 'week':
-            const weekAgo = new Date(now);
-            weekAgo.setDate(weekAgo.getDate() - 7);
-            fromDate = weekAgo.toISOString().split('T')[0];
-            toDate = now.toISOString().split('T')[0];
-            break;
-        case 'month':
-            const monthAgo = new Date(now);
-            monthAgo.setMonth(monthAgo.getMonth() - 1);
-            fromDate = monthAgo.toISOString().split('T')[0];
-            toDate = now.toISOString().split('T')[0];
-            break;
-    }
-    
-    document.getElementById('dateFromFilter').value = fromDate;
-    document.getElementById('dateToFilter').value = toDate;
-    
-    applyFiltersAndSort();
-}
-
-// Load urgent keywords from localStorage
-let urgentKeywords = JSON.parse(localStorage.getItem('urgentKeywords') || '[]');
-
-// Default keywords if empty
-if (urgentKeywords.length === 0) {
-    urgentKeywords = ['refund', 'complaint', 'urgent', 'not received', 'damaged', 'defective', 'wrong item'];
-    localStorage.setItem('urgentKeywords', JSON.stringify(urgentKeywords));
-}
-
-// Check if message contains urgent keywords
-function isUrgentTicket(message) {
-    if (!message) return false;
-    const msgLower = message.toLowerCase();
-    return urgentKeywords.some(keyword => msgLower.includes(keyword.toLowerCase()));
-}
-
-// Toggle urgent filter
-function toggleUrgentFilter() {
-    const btn = document.getElementById('urgentFilterBtn');
-    if (btn) {
-        btn.classList.toggle('active');
-        applyFiltersAndSort();
-    }
-}
-
-// Open urgent keywords modal
-function openUrgentKeywordsModal() {
-    renderKeywordsList();
-    document.getElementById('urgentKeywordsModal')?.classList.add('active');
-}
-
-// Render keywords list
-function renderKeywordsList() {
-    const container = document.getElementById('keywordsList');
-    if (!container) return;
-    
-    container.innerHTML = urgentKeywords.map((keyword, index) => `
-        <div class="keyword-item">
-            <span class="keyword-text">${escapeHtml(keyword)}</span>
-            <button class="keyword-delete" data-action="deleteKeyword" data-index="${index}">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-            </button>
-        </div>
-    `).join('');
-    
-    // Attach delete handlers
-    container.querySelectorAll('[data-action="deleteKeyword"]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const index = parseInt(e.currentTarget.dataset.index);
-            urgentKeywords.splice(index, 1);
-            localStorage.setItem('urgentKeywords', JSON.stringify(urgentKeywords)); // Auto-save
-            renderKeywordsList();
-        });
-    });
-}
-
-// Add new keyword
-function addUrgentKeyword() {
-    const input = document.getElementById('newKeywordInput');
-    const keyword = input?.value.trim();
-    
-    if (keyword && !urgentKeywords.includes(keyword.toLowerCase())) {
-        urgentKeywords.push(keyword.toLowerCase());
-        localStorage.setItem('urgentKeywords', JSON.stringify(urgentKeywords)); // Auto-save
-        input.value = '';
-        renderKeywordsList();
-    }
-}
-
-// Save urgent keywords
-function saveUrgentKeywords() {
-    localStorage.setItem('urgentKeywords', JSON.stringify(urgentKeywords));
-    document.getElementById('urgentKeywordsModal')?.classList.remove('active');
-    applyFiltersAndSort(); // Reapply filters
-}
-
-// Toggle unread filter
-function toggleUnreadFilter() {
-    const btn = document.getElementById('unreadFilterBtn');
-    if (btn) {
-        btn.classList.toggle('active');
-        loadSupportTickets(); // Reload from server with new filter
-    }
-}
-
-// Reset all filters
-function resetAllFilters() {
-    const unreadBtn = document.getElementById('unreadFilterBtn');
-    const urgentBtn = document.getElementById('urgentFilterBtn');
-    const statusFilter = document.getElementById('ticketStatusFilter');
-    const dateFrom = document.getElementById('dateFromFilter');
-    const dateTo = document.getElementById('dateToFilter');
-    const timeFrom = document.getElementById('timeFromFilter');
-    const timeTo = document.getElementById('timeToFilter');
-    const searchInput = document.getElementById('ticketSearchInput');
-    
-    if (unreadBtn) unreadBtn.classList.remove('active');
-    if (urgentBtn) urgentBtn.classList.remove('active');
-    if (statusFilter) statusFilter.value = '';
-    if (dateFrom) dateFrom.value = '';
-    if (dateTo) dateTo.value = '';
-    if (timeFrom) timeFrom.value = '';
-    if (timeTo) timeTo.value = '';
-    if (searchInput) searchInput.value = '';
-    const portalFilterEl = document.getElementById('portalFilter');
-    if (portalFilterEl) portalFilterEl.value = '';
-    
-    // Reset quick presets
-    document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
-
-    // Reset channel toggle to 'All'
-    document.querySelectorAll('.channel-toggle').forEach(btn => btn.classList.remove('active'));
-    const allChannelBtn = document.querySelector('.channel-toggle[data-channel="all"]');
-    if (allChannelBtn) allChannelBtn.classList.add('active');
-
-    // Reset custom dropdown labels and active states
-    resetCustomDropdown('ticketStatusFilter', 'All Statuses');
-    resetCustomDropdown('ticketSortBy', 'Newest First');
-    resetCustomDropdown('portalFilter', 'All Portals');
-    
-    loadSupportTickets();
-}
-
-function resetCustomDropdown(selectId, defaultLabel) {
-    const dropdown = document.querySelector(`.custom-dropdown[data-target="${selectId}"]`);
-    if (!dropdown) return;
-    const label = dropdown.querySelector('.custom-dropdown-label');
-    if (label) label.textContent = defaultLabel;
-    dropdown.querySelectorAll('.custom-dropdown-option').forEach(opt => {
-        opt.classList.toggle('active', opt.dataset.value === '');
-    });
-    // For sortBy, default is 'newest'
-    if (selectId === 'ticketSortBy') {
-        dropdown.querySelectorAll('.custom-dropdown-option').forEach(opt => {
-            opt.classList.toggle('active', opt.dataset.value === 'newest');
-        });
-    }
-}
-
-// Filter support tickets
-async function filterSupportTickets() {
-    applyFiltersAndSort();
-}
-
-// Toggle ticket selection
-function toggleTicketSelection(checkbox) {
-    const ticketId = checkbox.value;
-    const ticketItem = checkbox.closest('.ticket-item');
-    
-    if (checkbox.checked) {
-        selectedTickets.add(ticketId);
-        ticketItem?.classList.add('selected');
-    } else {
-        selectedTickets.delete(ticketId);
-        ticketItem?.classList.remove('selected');
-    }
-    
-    updateSelectAllState();
-    updateBulkActionButtons();
-}
-
-// Toggle select all
-function toggleSelectAllTickets(selectAllCheckbox) {
-    const checkboxes = document.querySelectorAll('.ticket-checkbox');
-    
-    checkboxes.forEach(checkbox => {
-        checkbox.checked = selectAllCheckbox.checked;
-        const ticketItem = checkbox.closest('.ticket-item');
-        const ticketId = checkbox.value;
-        
-        if (selectAllCheckbox.checked) {
-            selectedTickets.add(ticketId);
-            ticketItem?.classList.add('selected');
-        } else {
-            selectedTickets.delete(ticketId);
-            ticketItem?.classList.remove('selected');
-        }
-    });
-    
-    updateBulkActionButtons();
-}
-
-// Update select all checkbox state
-function updateSelectAllState() {
-    const selectAllCheckbox = document.getElementById('selectAllTickets');
-    const allCheckboxes = document.querySelectorAll('.ticket-checkbox');
-    const checkedCount = document.querySelectorAll('.ticket-checkbox:checked').length;
-    
-    if (selectAllCheckbox) {
-        selectAllCheckbox.checked = checkedCount === allCheckboxes.length && allCheckboxes.length > 0;
-        selectAllCheckbox.indeterminate = checkedCount > 0 && checkedCount < allCheckboxes.length;
-    }
-}
-
-// Update bulk action buttons visibility
-function updateBulkActionButtons() {
-    const bulkActionBar = document.getElementById('bulkActionBar');
-    const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
-    const assignPortalSelect = document.getElementById('assignPortalSelect');
-    const selectedCount = document.getElementById('selectedCount');
-    const hasSelection = selectedTickets.size > 0;
-
-    // Show/hide the entire bulk action bar
-    if (bulkActionBar) {
-        bulkActionBar.style.display = hasSelection ? 'flex' : 'none';
-    }
-
-    // Show delete button only when tickets are selected
-    if (bulkDeleteBtn) {
-        bulkDeleteBtn.style.display = hasSelection ? 'inline-flex' : 'none';
-    }
-
-    // Populate and show portal select when tickets are selected
-    if (assignPortalSelect) {
-        const manualPortals = allPortals.filter(p => p.type === 'manual' || p.type === 'auto');
-        if (hasSelection && manualPortals.length > 0) {
-            assignPortalSelect.style.display = 'inline-block';
-            // Populate with portal options
-            assignPortalSelect.innerHTML = '<option value="">Assign to Portal...</option>' +
-                manualPortals.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-        } else {
-            assignPortalSelect.style.display = 'none';
-        }
-    }
-
-    // Update selected count
-    if (selectedCount) {
-        selectedCount.textContent = selectedTickets.size;
-    }
-}
-
-function toggleTicketSelection(checkbox) {
-    const ticketId = checkbox.value;
-
-    if (checkbox.checked) {
-        selectedTickets.add(ticketId);
-    } else {
-        selectedTickets.delete(ticketId);
-    }
-
-    // Update select all checkbox state
-    const selectAllCheckbox = document.getElementById('selectAllTickets');
-    const allCheckboxes = document.querySelectorAll('.ticket-checkbox');
-    const checkedCount = document.querySelectorAll('.ticket-checkbox:checked').length;
-
-    if (selectAllCheckbox) {
-        selectAllCheckbox.checked = checkedCount === allCheckboxes.length && allCheckboxes.length > 0;
-        selectAllCheckbox.indeterminate = checkedCount > 0 && checkedCount < allCheckboxes.length;
-    }
-
-    updateBulkActionButtons();
-}
-
-function toggleSelectAllTickets(selectAllCheckbox) {
-    const checkboxes = document.querySelectorAll('.ticket-checkbox');
-
-    checkboxes.forEach(checkbox => {
-        checkbox.checked = selectAllCheckbox.checked;
-        const ticketId = checkbox.value;
-        if (selectAllCheckbox.checked) {
-            selectedTickets.add(ticketId);
-        } else {
-            selectedTickets.delete(ticketId);
-        }
-    });
-
-    updateBulkActionButtons();
-}
-
-async function deleteTicket(id) {
-    if (!confirm('Are you sure you want to delete this ticket? This action cannot be undone.')) return;
-
-    try {
-        const response = await apiCall(`/support-tickets/${id}`, 'DELETE');
-        if (response.success) {
-            showToast('Ticket deleted successfully!', 'success');
-            loadSupportTickets();
-        } else {
-            throw new Error(response.error);
-        }
-    } catch (error) {
-        alert(error.message || 'Failed to delete ticket');
-    }
-}
-
-async function deleteSelectedTickets() {
-    if (selectedTickets.size === 0) return;
-
-    if (!confirm(`Are you sure you want to delete ${selectedTickets.size} selected ticket(s)? This action cannot be undone.`)) return;
-
-    try {
-        const response = await apiCall('/support-tickets/bulk/delete', 'DELETE', {
-            ids: Array.from(selectedTickets)
-        });
-        if (response.success) {
-            showToast(`${selectedTickets.size} ticket(s) deleted successfully!`, 'success');
-            selectedTickets.clear();
-            loadSupportTickets();
-        } else {
-            throw new Error(response.error);
-        }
-    } catch (error) {
-        alert(error.message || 'Failed to delete tickets');
-    }
-}
-
-async function filterSupportTickets() {
-    await loadSupportTickets();
-}
-
-async function resolveTicket(id) {
-    if (!confirm('Mark this ticket as resolved?')) return;
-    try {
-        const response = await apiCall(`/support-tickets/${id}`, 'PUT', { status: 'resolved' });
-        if (response.success) {
-            showToast('Ticket marked as resolved!', 'success');
-            loadSupportTickets();
-        } else {
-            throw new Error(response.error);
-        }
-    } catch (error) {
-        alert(error.message);
-    }
-}
-
-// Mark ticket as read
-async function markTicketAsRead(ticketId) {
-    try {
-        await apiCall(`/support-tickets/${ticketId}/mark-read`, 'PATCH');
-        
-        // Update local state without a full refetch
-        const ticket = allTickets.find(t => t.id == ticketId);
-        if (ticket && !ticket.is_read) {
-            ticket.is_read = 1;
-            if (ticketMeta.unread > 0) ticketMeta.unread -= 1;
-            updateTicketStats();
-            // Only re-render when the unread filter is active (row must disappear)
-            if (document.getElementById('unreadFilterBtn')?.classList.contains('active')) {
-                loadSupportTickets(1, false);
-            } else {
-                renderTicketsList();
-            }
-        }
-    } catch (error) {
-        console.error('Failed to mark ticket as read:', error);
+        case 'support': loadTickets(); loadPortals(); break;
+        case 'widget-chats': loadWidgetChats(); break;
+        case 'ai-analytics': initAnalyticsDateFilter(); loadAiAnalytics(); break;
+        case 'templates': loadTemplates(); break;
+        case 'ig-comments': if (typeof loadIgComments === 'function') loadIgComments(); break;
+        case 'settings': loadPortals(); loadUrgentKeywordsPreview(); break;
     }
 }
 
 // ===================================
-// Support Portal Management
+// API Helper
 // ===================================
+async function apiFetch(url, options = {}) {
+    const headers = { ...(options.headers || {}), 'Authorization': `Bearer ${authToken}` };
+    if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
+        headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify(options.body);
+    }
+    const res = await fetch(`${API}${url}`, { ...options, headers });
+    if (res.status === 401) { handleLogout(); return null; }
+    return res.json();
+}
 
-let allPortals = [];
+// ===================================
+// Support Tickets
+// ===================================
+async function loadTickets(append = false) {
+    const list = document.getElementById('ticketsList');
+    if (!append) list.innerHTML = '<div class="tickets-loading"><div class="spinner"></div><span>Loading tickets...</span></div>';
 
-async function loadPortals() {
+    const params = new URLSearchParams({ page: ticketsPage, limit: ticketsLimit });
+    const status = document.getElementById('ticketStatusFilter')?.value;
+    const portal = document.getElementById('portalFilter')?.value;
+    const sort = document.getElementById('ticketSortBy')?.value;
+    const search = document.getElementById('ticketSearchInput')?.value.trim();
+    const urgentActive = document.getElementById('urgentFilterBtn')?.classList.contains('active');
+    const unreadActive = document.getElementById('unreadFilterBtn')?.classList.contains('active');
+
+    if (status) params.set('status', status);
+    if (portal) params.set('portal', portal);
+    if (sort) params.set('sort', sort);
+    if (search) params.set('search', search);
+    if (currentChannel && currentChannel !== 'all') params.set('channel', currentChannel);
+    if (urgentActive) params.set('urgent_filter', '1');
+    if (unreadActive) params.set('is_read', 'false');
+    if (urgentKeywords.length) params.set('urgent', urgentKeywords.join(','));
+
     try {
-        const response = await apiCall('/support-portals');
-        if (response.success) {
-            allPortals = response.portals || [];
-            renderPortals();
-            updateAssignPortalDropdown();
-            updatePortalFilterDropdown();
-            loadPortalAnalytics();
-        }
-    } catch (error) {
-        console.error('Failed to load portals:', error);
-        document.getElementById('portalsList').innerHTML = `
-            <div class="portals-empty">Failed to load portals. <button class="btn btn-sm btn-secondary" data-action="loadPortals">Retry</button></div>
-        `;
+        const data = await apiFetch(`/support-tickets?${params}`);
+        if (!data?.success) { list.innerHTML = '<div class="tickets-loading"><span>Failed to load tickets</span></div>'; return; }
+
+        ticketsMeta = data.meta || {};
+        updateStatsRow(ticketsMeta);
+        renderTickets(data.tickets || [], append);
+        updatePagination();
+        updatePortalDistBar(data.tickets || []);
+    } catch (err) {
+        list.innerHTML = '<div class="tickets-loading"><span>Error loading tickets</span></div>';
     }
 }
 
-function renderPortals() {
-    const container = document.getElementById('portalsList');
-    if (!container) return;
-
-    if (allPortals.length === 0) {
-        container.innerHTML = `
-            <div class="portals-empty">
-                No portals created yet. Create a portal to divide tickets among support agents.
-            </div>
-        `;
+function renderTickets(tickets, append) {
+    const list = document.getElementById('ticketsList');
+    if (!append) list.innerHTML = '';
+    if (!tickets.length && !append) {
+        list.innerHTML = '<div class="tickets-loading"><span>No tickets found</span></div>';
         return;
     }
 
-    container.innerHTML = allPortals.map(portal => {
-        // Parse distribution rule if exists
-        let distributionRule = null;
-        if (portal.distribution_rule) {
-            try {
-                distributionRule = JSON.parse(portal.distribution_rule);
-            } catch (e) {
-                // Ignore parse errors
-            }
-        }
+    tickets.forEach(t => {
+        const row = document.createElement('div');
+        row.className = `ticket-row${t.is_read ? '' : ' unread'}${isUrgent(t.message) ? ' urgent' : ''}`;
+        row.dataset.id = t.id;
 
-        // Calculate workload percentage
-        const maxTickets = portal.max_tickets;
-        const ticketCount = portal.ticket_count || portal.assigned_count || 0;
-        const workloadPercent = maxTickets ? Math.round((ticketCount / maxTickets) * 100) : null;
-        
-        // Determine workload color
-        let workloadColor = 'var(--success)';
-        if (workloadPercent) {
-            if (workloadPercent >= 90) {
-                workloadColor = 'var(--danger)';
-            } else if (workloadPercent >= 70) {
-                workloadColor = 'var(--warning)';
-            }
-        }
+        const channel = t.channel || 'whatsapp';
+        const channelLabel = channel === 'instagram' ? 'IG' : channel === 'website' ? 'Web' : 'WA';
+        const timeAgo = formatTimeAgo(t.created_at);
+        const statusClass = t.status || 'open';
 
-        // Check if portal is currently active (for shift-based portals)
-        let isActive = portal.is_active !== 0;
-        let shiftInfo = null;
-        
-        if (distributionRule && distributionRule.shift_start && distributionRule.shift_end) {
-            shiftInfo = {
-                start: distributionRule.shift_start,
-                end: distributionRule.shift_end
-            };
-            
-            // Check if currently in shift time
-            const now = new Date();
-            const currentTime = now.getHours() * 60 + now.getMinutes();
-            const [startH, startM] = shiftInfo.start.split(':').map(Number);
-            const [endH, endM] = shiftInfo.end.split(':').map(Number);
-            const startTime = startH * 60 + startM;
-            const endTime = endH * 60 + endM;
-            
-            if (endTime < startTime) {
-                isActive = isActive && (currentTime >= startTime || currentTime < endTime);
-            } else {
-                isActive = isActive && (currentTime >= startTime && currentTime < endTime);
-            }
-        }
-
-        return `
-            <div class="portal-card ${!isActive ? 'portal-inactive' : ''}" data-portal-id="${portal.id}">
-                <div class="portal-info">
-                    <div class="portal-header-row">
-                        <span class="portal-name">${escapeHtml(portal.name)}</span>
-                        <div class="portal-badges">
-                            <span class="portal-type-badge ${portal.type}">${portal.type.replace('_', ' ')}</span>
-                            ${shiftInfo ? `<span class="shift-time-badge">${shiftInfo.start} - ${shiftInfo.end}</span>` : ''}
-                            ${isActive ? '<span class="active-badge">Active</span>' : '<span class="inactive-badge">Inactive</span>'}
-                        </div>
-                    </div>
-                    <div class="portal-meta-row">
-                        <span class="portal-meta">${ticketCount} tickets</span>
-                        ${maxTickets ? `<span class="portal-meta">Max: ${maxTickets}</span>` : ''}
-                    </div>
-                    ${workloadPercent !== null ? `
-                        <div class="workload-indicator">
-                            <div class="workload-bar" style="width: ${workloadPercent}%; background: ${workloadColor};"></div>
-                            <span class="workload-percent">${workloadPercent}%</span>
-                        </div>
-                    ` : ''}
-                </div>
-                <div class="portal-actions">
-                    <span class="portal-link" data-action="copyPortalLink" data-url="${portal.url}" title="Copy link">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-                        Copy Link
-                    </span>
-                    <button class="portal-btn" data-action="changePortalPassword" data-portal-id="${portal.id}" title="Change password">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                        Password
+        row.innerHTML = `
+            <div class="ticket-col checkbox"><input type="checkbox" class="ticket-check" data-id="${t.id}"></div>
+            <div class="ticket-col"><span class="ticket-number-text">#${t.ticket_number || t.id}</span></div>
+            <div class="ticket-col">
+                <div class="ticket-customer-name">${esc(t.customer_name || 'Unknown')}</div>
+                <div class="ticket-customer-phone">${esc(t.customer_phone || '')}</div>
+            </div>
+            <div class="ticket-col"><div class="ticket-message-text">${esc(t.message || '')}</div></div>
+            <div class="ticket-col ticket-meta">
+                <span class="ticket-channel-badge ${channel}">${channelLabel}</span>
+                <span class="ticket-time">${timeAgo}</span>
+            </div>
+            <div class="ticket-col"><span class="ticket-status-badge ${statusClass}">${statusClass}</span></div>
+            <div class="ticket-col">
+                <div class="ticket-portal-name">${esc(t.portal_name || 'Unassigned')}</div>
+                <div class="ticket-actions">
+                    <button class="ticket-action-btn" onclick="openChat(${t.id},'${esc(t.customer_phone || '')}','${esc(t.customer_name || '')}','${channel}')" title="Open Chat">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                     </button>
-                    <button class="portal-btn" data-action="splitPortal" data-portal-id="${portal.id}" title="Split into multiple portals, distributing tickets evenly">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88"/><path d="M14.47 14.48 20 20"/><path d="M8.12 8.12 12 12"/></svg>
-                        Split
+                    <button class="ticket-action-btn" onclick="openAssignModal(${t.id})" title="Assign Portal">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
                     </button>
-                    <button class="portal-btn" data-action="transferPortal" data-portal-id="${portal.id}" title="Transfer tickets to another portal">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
-                        Transfer
-                    </button>
-                    <button class="portal-btn" data-action="clearPortalTickets" data-portal-id="${portal.id}" title="Clear all tickets">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                        Clear
-                    </button>
-                    <button class="portal-btn portal-btn-danger" data-action="deletePortal" data-portal-id="${portal.id}" title="Delete portal">
+                    <button class="ticket-action-btn danger" onclick="deleteTicket(${t.id})" title="Delete">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                     </button>
                 </div>
             </div>
         `;
-    }).join('');
+        list.appendChild(row);
+    });
 }
 
-// ── Portal Analytics ──
-let analyticsData = null;
+function updateStatsRow(meta) {
+    document.getElementById('statTotal').textContent = meta.total || 0;
+    document.getElementById('statOpen').textContent = meta.open || 0;
+    document.getElementById('statUnread').textContent = meta.unread || 0;
+    document.getElementById('statResolved').textContent = meta.resolved || 0;
+    document.getElementById('statUrgent').textContent = meta.urgent || 0;
+}
 
-async function loadPortalAnalytics() {
+function updatePagination() {
+    const pag = document.getElementById('ticketsPagination');
+    if (!ticketsMeta.total || ticketsMeta.total === 0) { pag.style.display = 'none'; return; }
+    pag.style.display = 'flex';
+    const end = ticketsPage * ticketsLimit;
+    document.getElementById('showingStart').textContent = ((ticketsPage - 1) * ticketsLimit) + 1;
+    document.getElementById('showingEnd').textContent = Math.min(end, ticketsMeta.total);
+    document.getElementById('showingTotal').textContent = ticketsMeta.total;
+    document.getElementById('showMoreBtn').style.display = ticketsMeta.has_more ? '' : 'none';
+}
+
+function updatePortalDistBar(tickets) {
+    const bar = document.getElementById('portalDistBar');
+    const portalCounts = {};
+    tickets.forEach(t => {
+        const name = t.portal_name || 'Unassigned';
+        portalCounts[name] = (portalCounts[name] || 0) + 1;
+    });
+    const entries = Object.entries(portalCounts).sort((a, b) => b[1] - a[1]);
+    if (!entries.length) { bar.innerHTML = ''; return; }
+    bar.innerHTML = entries.map(([name, count]) =>
+        `<div class="portal-chip"><span>${esc(name)}</span><span class="portal-chip-count">${count}</span></div>`
+    ).join('');
+}
+
+function resetTicketFilters() {
+    document.getElementById('ticketSearchInput').value = '';
+    document.getElementById('ticketStatusFilter').value = '';
+    document.getElementById('portalFilter').value = '';
+    document.getElementById('ticketSortBy').value = 'newest';
+    document.getElementById('urgentFilterBtn').classList.remove('active');
+    document.getElementById('unreadFilterBtn').classList.remove('active');
+    ticketsPage = 1;
+    loadTickets();
+}
+
+function isUrgent(msg) {
+    if (!msg || !urgentKeywords.length) return false;
+    const lower = msg.toLowerCase();
+    return urgentKeywords.some(k => lower.includes(k.toLowerCase()));
+}
+
+async function deleteTicket(id) {
+    if (!confirm('Delete this ticket?')) return;
+    await apiFetch(`/support-tickets/${id}`, { method: 'DELETE' });
+    loadTickets();
+    loadUnreadCount();
+}
+
+async function updateTicketStatus(id, status) {
+    await apiFetch(`/support-tickets/${id}`, { method: 'PUT', body: { status } });
+    loadTickets();
+}
+
+// ===================================
+// Chat Modal
+// ===================================
+let currentChatPhone = null;
+let currentChatChannel = 'whatsapp';
+
+async function openChat(ticketId, phone, name, channel) {
+    if (!phone) { alert('No customer phone available for this ticket.'); return; }
+    currentChatPhone = phone;
+    currentChatChannel = channel || 'whatsapp';
+    document.getElementById('chatModalTitle').textContent = name || phone;
+    document.getElementById('chatModalSubtitle').textContent = phone;
+    document.getElementById('chatStatusSelect').dataset.ticketId = ticketId;
+
+    // Mark as read
+    await apiFetch(`/support-tickets/${ticketId}/mark-read`, { method: 'PATCH' });
+    loadUnreadCount();
+
+    const modal = document.getElementById('chatModal');
+    modal.classList.add('active');
+    document.getElementById('chatMessages').innerHTML = '<div class="chat-loading"><div class="spinner"></div><span>Loading...</span></div>';
+
+    // Load chat history
     try {
-        const data = await apiCall('/support-portals/analytics');
-        if (!data.success) return;
-        analyticsData = data;
-        renderAnalyticsSummary(data);
-        renderAnalyticsPortalGrid(data);
-        renderUnassignedHourlyChart(data);
-        renderUnassignedDailyTrend(data);
-        populateUnassignedTargetPortal(data);
-    } catch (e) {
-        console.error('Analytics load error:', e);
+        const data = await apiFetch(`/chat/${phone}?limit=200`);
+        if (data?.success) renderChatMessages(data.messages || []);
+        else document.getElementById('chatMessages').innerHTML = '<div class="chat-loading"><span>No messages found</span></div>';
+    } catch {
+        document.getElementById('chatMessages').innerHTML = '<div class="chat-loading"><span>Error loading chat</span></div>';
+    }
+
+    // Prefetch AI suggestions
+    prefetchAiSuggestions(phone, ticketId);
+}
+
+function renderChatMessages(messages) {
+    const container = document.getElementById('chatMessages');
+    container.innerHTML = '';
+    messages.forEach(m => {
+        const div = document.createElement('div');
+        div.className = `chat-msg ${m.sender === 'customer' ? 'incoming' : 'outgoing'}`;
+        div.innerHTML = `<div>${esc(m.content || '')}</div><div class="chat-msg-time">${formatTime(m.created_at)}</div>`;
+        container.appendChild(div);
+    });
+    container.scrollTop = container.scrollHeight;
+}
+
+async function sendChatMessage() {
+    const input = document.getElementById('chatInput');
+    const message = input.value.trim();
+    if (!message || !currentChatPhone) return;
+    input.value = '';
+
+    const data = await apiFetch('/chat/send', {
+        method: 'POST',
+        body: { phone: currentChatPhone, message, channel: currentChatChannel }
+    });
+
+    if (data?.success) {
+        const container = document.getElementById('chatMessages');
+        const div = document.createElement('div');
+        div.className = 'chat-msg outgoing';
+        div.innerHTML = `<div>${esc(message)}</div><div class="chat-msg-time">Just now</div>`;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
     }
 }
 
-function renderAnalyticsSummary(data) {
-    const g = data.global || {};
-    // Find unassigned row from portals array
-    const unassignedRow = (data.portals || []).find(p => p.id === 0 || p.name === 'Unassigned');
-    const unassignedTotal = unassignedRow ? unassignedRow.total : 0;
-
-    setText('analyticsTotal', fmtNum(g.total_cnt || 0));
-    setText('analyticsOpen', fmtNum(g.open_cnt || 0));
-    setText('analyticsResolved', fmtNum(g.resolved_cnt || 0));
-    setText('analyticsUnread', fmtNum(g.unread_cnt || 0));
-    setText('analyticsUnassigned', fmtNum(unassignedTotal));
-    setText('analyticsToday', fmtNum(g.today_cnt || 0));
-}
-
-function renderAnalyticsPortalGrid(data) {
-    const grid = document.getElementById('analyticsPortalGrid');
-    if (!grid) return;
-    // Filter out the "Unassigned" pseudo-portal
-    const portals = (data.portals || []).filter(p => p.id !== 0 && p.name !== 'Unassigned' && p.id !== -1);
-    if (portals.length === 0) { grid.innerHTML = ''; return; }
-
-    grid.innerHTML = portals.map(p => {
-        const cfg = p.config || {};
-        const timeWindow = cfg.time_start && cfg.time_end ? `${cfg.time_start} – ${cfg.time_end}` : (p.shift_start && p.shift_end ? `${p.shift_start} – ${p.shift_end}` : 'Always active');
-        const isActive = p.is_active !== 0 && p.is_active !== false;
-        return `
-            <div class="analytics-portal-card">
-                <div class="apc-header">
-                    <span class="apc-name">${escapeHtml(p.name)}</span>
-                    <span class="apc-badge ${isActive ? 'badge-active' : 'badge-inactive'}">${isActive ? 'Active' : 'Inactive'}</span>
-                </div>
-                <div class="apc-time">${escapeHtml(timeWindow)} IST</div>
-                <div class="apc-stats-row">
-                    <div class="apc-stat"><div class="apc-stat-val">${fmtNum(p.total)}</div><div class="apc-stat-lbl">Total</div></div>
-                    <div class="apc-stat"><div class="apc-stat-val clr-open">${fmtNum(p.open)}</div><div class="apc-stat-lbl">Open</div></div>
-                    <div class="apc-stat"><div class="apc-stat-val clr-resolved">${fmtNum(p.resolved)}</div><div class="apc-stat-lbl">Resolved</div></div>
-                    <div class="apc-stat"><div class="apc-stat-val clr-unread">${fmtNum(p.unread)}</div><div class="apc-stat-lbl">Unread</div></div>
-                    <div class="apc-stat"><div class="apc-stat-val clr-today">${fmtNum(p.today)}</div><div class="apc-stat-lbl">Today</div></div>
-                </div>
-            </div>
-        `;
-    }).join('');
-}
-
-function renderUnassignedHourlyChart(data) {
-    const container = document.getElementById('unassignedHourlyChart');
-    if (!container) return;
-    const hours = data.unassigned?.byHour || [];
-    if (hours.length === 0) { container.innerHTML = '<p style="font-size:12px;color:var(--text-secondary)">No unassigned ticket data</p>'; return; }
-
-    // Build full 24-hour array
-    const hourMap = {};
-    hours.forEach(h => { hourMap[h.ist_hour] = h; });
-    const maxCnt = Math.max(1, ...hours.map(h => h.open_cnt || h.cnt));
-
-    let barsHtml = '';
-    let labelsHtml = '';
-    for (let h = 0; h < 24; h++) {
-        const d = hourMap[h] || { cnt: 0, open_cnt: 0 };
-        const pct = Math.round(((d.open_cnt || d.cnt) / maxCnt) * 100);
-        const color = d.open_cnt > 0 ? '#ef4444' : '#6b728044';
-        barsHtml += `<div class="hourly-bar" style="height:${Math.max(pct, 2)}%;background:${color}"><div class="bar-tooltip">${h}:00 IST — ${d.cnt} total, ${d.open_cnt} open</div></div>`;
-        labelsHtml += `<span>${h % 3 === 0 ? h : ''}</span>`;
-    }
-    container.innerHTML = `
-        <div class="daily-trend-title">Unassigned by Hour (IST)</div>
-        <div class="hourly-chart">${barsHtml}</div>
-        <div class="hourly-labels">${labelsHtml}</div>
-    `;
-}
-
-function renderUnassignedDailyTrend(data) {
-    const container = document.getElementById('unassignedDailyChart');
-    if (!container) return;
-    const daily = data.unassigned?.daily || [];
-    if (daily.length === 0) { container.innerHTML = ''; return; }
-
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    container.innerHTML = `
-        <div class="daily-trend">
-            <div class="daily-trend-title">Last 7 Days — Unassigned</div>
-            <div class="daily-trend-row">
-                ${daily.map(d => {
-                    const dt = new Date(d.ist_date + 'T00:00:00');
-                    const lbl = dayNames[dt.getUTCDay()];
-                    return `<div class="daily-trend-day"><div class="dt-val">${fmtNum(d.open_cnt)}</div><div class="dt-lbl">${lbl}</div></div>`;
-                }).join('')}
-            </div>
-        </div>
-    `;
-}
-
-function populateUnassignedTargetPortal(data) {
-    const sel = document.getElementById('unassignedTargetPortal');
-    if (!sel) return;
-    const portals = (data.portals || []).filter(p => p.id !== 0 && p.name !== 'Unassigned' && p.id !== -1);
-    sel.innerHTML = '<option value="">Select portal...</option>' +
-        portals.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-}
-
-// Helpers
-function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
-function fmtNum(n) { return Number(n || 0).toLocaleString('en-IN'); }
-
-async function transferUnassignedToPortal() {
-    const sel = document.getElementById('unassignedTargetPortal');
-    const portalId = sel ? sel.value : '';
-    if (!portalId) return alert('Please select a target portal');
-
-    if (!confirm('Transfer all open unassigned tickets to the selected portal?')) return;
-
+async function prefetchAiSuggestions(phone, ticketId) {
     try {
-        const btn = document.getElementById('transferUnassignedBtn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Transferring...'; }
-
-        const result = await apiCall('/support-portals/assign-unassigned', {
+        const data = await apiFetch('/ai/suggest-reply', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ portalId: parseInt(portalId), status: 'open' })
+            body: { phone, ticketId, actor: 'admin' }
         });
-
-        if (result.success) {
-            alert(`Transferred ${result.transferred} tickets successfully`);
-            loadPortalAnalytics();
-            loadSupportTickets();
+        if (data?.success && data.suggestions?.length) {
+            const row = document.getElementById('aiSuggestionsRow');
+            const chips = document.getElementById('aiSuggestionsChips');
+            chips.innerHTML = data.suggestions.map(s =>
+                `<span class="ai-suggestion-chip" onclick="document.getElementById('chatInput').value=this.textContent">${esc(s)}</span>`
+            ).join('');
+            row.style.display = '';
         } else {
-            alert('Transfer failed: ' + (result.error || 'Unknown error'));
+            document.getElementById('aiSuggestionsRow').style.display = 'none';
         }
-    } catch (e) {
-        alert('Transfer failed: ' + e.message);
-    } finally {
-        const btn = document.getElementById('transferUnassignedBtn');
-        if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/></svg> Transfer Open'; }
-    }
+    } catch { /* silent */ }
 }
 
-async function distributeUnassignedEvenly() {
-    const portals = (analyticsData?.portals || []).filter(p => p.id !== 0 && p.name !== 'Unassigned' && p.id !== -1);
-    if (portals.length === 0) return alert('No portals available');
+// ===================================
+// Assign Portal
+// ===================================
+let assignTicketId = null;
 
-    if (!confirm(`Distribute all open unassigned tickets evenly across ${portals.length} portals?`)) return;
+function openAssignModal(ticketId) {
+    assignTicketId = ticketId;
+    const select = document.getElementById('assignPortalSelectModal');
+    select.innerHTML = '<option value="">Select portal...</option>' +
+        portalsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    document.getElementById('assignPortalModal').classList.add('active');
+}
 
+async function confirmAssignPortal() {
+    const portalId = document.getElementById('assignPortalSelectModal').value;
+    if (!assignTicketId) return;
+    await apiFetch(`/support-tickets/${assignTicketId}/assign-portal`, {
+        method: 'POST',
+        body: { portalId: portalId || null }
+    });
+    document.getElementById('assignPortalModal').classList.remove('active');
+    loadTickets();
+}
+
+// ===================================
+// Portals (Settings)
+// ===================================
+async function loadPortals() {
     try {
-        const btn = document.getElementById('distributeUnassignedBtn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Distributing...'; }
-
-        // Get open unassigned count first
-        const unassignedRow = (analyticsData?.portals || []).find(p => p.id === 0 || p.name === 'Unassigned');
-        const totalOpen = unassignedRow ? unassignedRow.open : 0;
-        if (totalOpen === 0) return alert('No open unassigned tickets to distribute');
-
-        const perPortal = Math.ceil(totalOpen / portals.length);
-        const results = [];
-
-        for (const portal of portals) {
-            const result = await apiCall('/support-portals/assign-unassigned', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ portalId: portal.id, status: 'open', limit: perPortal })
-            });
-            if (result.success) results.push(`${portal.name}: ${result.transferred}`);
+        const data = await apiFetch('/support-portals');
+        if (data?.success) {
+            portalsCache = data.portals || [];
+            renderPortalsList();
+            populatePortalFilters();
         }
-
-        alert('Distribution complete:\n' + results.join('\n'));
-        loadPortalAnalytics();
-        loadSupportTickets();
-    } catch (e) {
-        alert('Distribution failed: ' + e.message);
-    } finally {
-        const btn = document.getElementById('distributeUnassignedBtn');
-        if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13 4 4a4 4 0 0 0 0 7.75"/></svg> Distribute Evenly'; }
-    }
+    } catch { /* silent */ }
 }
 
-function initCustomDropdowns() {
-    document.querySelectorAll('.custom-dropdown').forEach(dropdown => {
-        const selected = dropdown.querySelector('.custom-dropdown-selected');
-        const optionsPanel = dropdown.querySelector('.custom-dropdown-options');
-        if (!selected || !optionsPanel) return;
+function renderPortalsList() {
+    const container = document.getElementById('portalsList');
+    if (!container) return;
+    if (!portalsCache.length) { container.innerHTML = '<p class="text-muted text-small">No portals configured</p>'; return; }
+    container.innerHTML = portalsCache.map(p => `
+        <div class="portal-item">
+            <div style="min-width:0">
+                <div class="portal-item-name">${esc(p.name)}</div>
+                <div class="portal-item-type">${p.type}${p.config?.time_start ? ` · ${p.config.time_start}–${p.config.time_end}` : ''}</div>
+                ${p.url ? `
+                <div class="portal-item-link" id="plink-${p.id}">
+                    <a class="portal-link-url" href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(p.url)}">${esc(p.url)}</a>
+                    <button class="btn btn-secondary btn-sm portal-pw-btn portal-link-copy" onclick="copyPortalLink(${p.id})" title="Copy portal link">📋</button>
+                </div>` : ''}
+                <div class="portal-item-password" id="pw-${p.id}">
+                    <span class="portal-pw-masked">••••••••</span>
+                    <button class="btn btn-secondary btn-sm portal-pw-btn" onclick="revealPortalPassword(${p.id})" title="Show password">👁</button>
+                    <button class="btn btn-secondary btn-sm portal-pw-btn" onclick="copyPortalPassword(${p.id})" title="Copy password" style="margin-left:4px">📋</button>
+                </div>
+            </div>
+            <div style="display:flex;gap:6px">
+                <button class="btn btn-secondary btn-sm" onclick="openPortalModal(${p.id})">Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="deletePortal(${p.id})">Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
 
-        // Toggle open/close
-        selected.addEventListener('click', (e) => {
-            e.stopPropagation();
-            // Close all other open dropdowns first
-            document.querySelectorAll('.custom-dropdown.open').forEach(d => {
-                if (d !== dropdown) {
-                    d.classList.remove('open');
-                    const op = d.querySelector('.custom-dropdown-options');
-                    if (op) { op.style.top = ''; op.style.left = ''; op.style.width = ''; }
-                }
-            });
+function populatePortalFilters() {
+    const filter = document.getElementById('portalFilter');
+    if (!filter) return;
+    const current = filter.value;
+    filter.innerHTML = '<option value="">All Portals</option><option value="unassigned">Unassigned</option>' +
+        portalsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    filter.value = current;
+}
 
-            const isOpening = !dropdown.classList.contains('open');
-            dropdown.classList.toggle('open');
+function openPortalModal(id) {
+    const modal = document.getElementById('createPortalModal');
+    document.getElementById('portalModalTitle').textContent = id ? 'Edit Portal' : 'Create Support Portal';
+    document.getElementById('editPortalId').value = id || '';
 
-            if (isOpening) {
-                // Calculate position using getBoundingClientRect (viewport-relative)
-                const rect = selected.getBoundingClientRect();
-                optionsPanel.style.position = 'fixed';
-                optionsPanel.style.top = (rect.bottom + 4) + 'px';
-                optionsPanel.style.left = rect.left + 'px';
-                optionsPanel.style.minWidth = rect.width + 'px';
-            } else {
-                optionsPanel.style.top = '';
-                optionsPanel.style.left = '';
-                optionsPanel.style.width = '';
-            }
-        });
+    if (id) {
+        const p = portalsCache.find(x => x.id === id);
+        if (p) {
+            document.getElementById('portalName').value = p.name || '';
+            document.getElementById('portalSlug').value = p.slug || '';
+            document.getElementById('portalPassword').value = '';
+            document.getElementById('portalType').value = p.type || 'manual';
+            document.getElementById('portalShiftStart').value = p.config?.time_start || '';
+            document.getElementById('portalShiftEnd').value = p.config?.time_end || '';
+            document.getElementById('timeBasedConfig').style.display = p.type === 'time_based' ? 'block' : 'none';
+        }
+    } else {
+        document.getElementById('portalForm').reset();
+        document.getElementById('timeBasedConfig').style.display = 'none';
+    }
+    modal.classList.add('active');
+}
 
-        bindCustomDropdownOptions(dropdown);
-    });
-
-    // Close all custom dropdowns when clicking outside or scrolling
-    const closeAllDropdowns = () => {
-        document.querySelectorAll('.custom-dropdown.open').forEach(d => {
-            d.classList.remove('open');
-            const op = d.querySelector('.custom-dropdown-options');
-            if (op) { op.style.top = ''; op.style.left = ''; op.style.width = ''; }
-        });
+async function savePortal() {
+    const id = document.getElementById('editPortalId').value;
+    const body = {
+        name: document.getElementById('portalName').value.trim(),
+        slug: document.getElementById('portalSlug').value.trim(),
+        type: document.getElementById('portalType').value
     };
-    document.addEventListener('click', closeAllDropdowns);
-    window.addEventListener('scroll', closeAllDropdowns, true);
-    window.addEventListener('resize', closeAllDropdowns);
-}
-
-function bindCustomDropdownOptions(dropdown) {
-    const targetId = dropdown.dataset.target;
-    const select = document.getElementById(targetId);
-    const label = dropdown.querySelector('.custom-dropdown-label');
-    const options = dropdown.querySelectorAll('.custom-dropdown-option');
-
-    options.forEach(option => {
-        option.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const value = option.dataset.value;
-            const text = option.textContent;
-
-            // Update the label
-            if (label) label.textContent = text;
-
-            // Mark active
-            options.forEach(o => o.classList.remove('active'));
-            option.classList.add('active');
-
-            // Sync with the hidden select and trigger change
-            if (select) {
-                select.value = value;
-                select.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-
-            // Close the dropdown
-            dropdown.classList.remove('open');
-        });
-    });
-}
-
-function updateAssignPortalDropdown() {
-    const select = document.getElementById('assignPortalSelect');
-    if (!select) return;
-
-    const manualPortals = allPortals.filter(p => p.type === 'manual' || p.type === 'auto');
-    if (manualPortals.length === 0) {
-        select.style.display = 'none';
-        return;
-    }
-
-    select.innerHTML = '<option value="">Assign to Portal...</option>' +
-        manualPortals.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-}
-
-function updatePortalFilterDropdown() {
-    const select = document.getElementById('portalFilter');
-    if (!select) return;
-
-    const currentValue = select.value;
-    
-    // Keep the default options
-    select.innerHTML = '<option value="">All Portals</option>' +
-        '<option value="unassigned">Unassigned</option>' +
-        allPortals.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-    
-    // Restore previous value if it still exists
-    if (currentValue && select.querySelector(`option[value="${currentValue}"]`)) {
-        select.value = currentValue;
-    }
-
-    // Also update the custom dropdown options
-    const customDropdown = document.querySelector('#portalFilterDropdown');
-    if (customDropdown) {
-        const optionsContainer = customDropdown.querySelector('.custom-dropdown-options');
-        if (optionsContainer) {
-            optionsContainer.innerHTML =
-                '<div class="custom-dropdown-option' + (!currentValue ? ' active' : '') + '" data-value="">All Portals</div>' +
-                '<div class="custom-dropdown-option' + (currentValue === 'unassigned' ? ' active' : '') + '" data-value="unassigned">Unassigned</div>' +
-                allPortals.map(p => `<div class="custom-dropdown-option${currentValue === String(p.id) ? ' active' : ''}" data-value="${p.id}">${escapeHtml(p.name)}</div>`).join('');
-            
-            // Re-bind click events on new options
-            bindCustomDropdownOptions(customDropdown);
-        }
-        // Update the label
-        const label = customDropdown.querySelector('.custom-dropdown-label');
-        if (label) {
-            const selectedOption = select.querySelector(`option[value="${select.value}"]`);
-            label.textContent = selectedOption ? selectedOption.textContent : 'All Portals';
-        }
-    }
-}
-
-function openCreatePortalModal() {
-    document.getElementById('createPortalModal').classList.add('active');
-    generatePortalPassword();
-}
-
-function closeCreatePortalModal() {
-    document.getElementById('createPortalModal').classList.remove('active');
-    document.getElementById('createPortalForm').reset();
-    document.getElementById('timeBasedFields').style.display = 'none';
-}
-
-function togglePortalTypeFields() {
-    const type = document.getElementById('portalType').value;
-    document.getElementById('timeBasedFields').style.display = type === 'time_based' ? 'block' : 'none';
-}
-
-function generatePortalPassword() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-    let password = '';
-    for (let i = 0; i < 10; i++) {
-        password += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    document.getElementById('portalPassword').value = password;
-}
-
-async function submitCreatePortal(event) {
-    event.preventDefault();
-    const name = document.getElementById('portalName').value.trim();
-    const type = document.getElementById('portalType').value;
     const password = document.getElementById('portalPassword').value;
-
-    const config = {};
-    if (type === 'time_based') {
-        config.time_start = document.getElementById('portalTimeStart').value;
-        config.time_end = document.getElementById('portalTimeEnd').value;
-        config.timezone = document.getElementById('portalTimezone').value;
-    }
-
-    try {
-        const response = await apiCall('/support-portals', 'POST', {
-            name,
-            type,
-            password,
-            config: Object.keys(config).length > 0 ? config : null
-        });
-
-        if (response.success) {
-            showToast('Portal created successfully!', 'success');
-            closeCreatePortalModal();
-            loadPortals();
-            // Show password and link once
-            setTimeout(() => {
-                alert(`Portal Created!\n\nName: ${response.portal.name}\nPassword: ${response.password}\nLink: ${response.url}\n\nSave this password - it won't be shown again.`);
-            }, 300);
-        } else {
-            throw new Error(response.error);
-        }
-    } catch (error) {
-        showToast(error.message || 'Failed to create portal', 'error');
-    }
-}
-
-// ===================================
-// Auto Distribute Wizard Functions
-// ===================================
-
-let currentWizardStep = 1;
-let selectedDistributionMode = 'round_robin';
-let wizardShifts = [];
-let distributionResults = null;
-
-function openAutoDistributeModal() {
-    currentWizardStep = 1;
-    selectedDistributionMode = 'round_robin';
-    wizardShifts = [];
-    distributionResults = null;
-    
-    // Reset wizard
-    updateWizardProgress();
-    showWizardStep(1);
-    resetWizardForm();
-    
-    // Add default time periods for shift-based mode
-    addShiftRow('9-5 Support', '09:00', '17:00', 2);
-    addShiftRow('5-9 Support', '17:00', '21:00', 2);
-    
-    document.getElementById('autoDistributeModal').classList.add('active');
-}
-
-function closeAutoDistributeModal() {
-    document.getElementById('autoDistributeModal').classList.remove('active');
-    resetWizardForm();
-}
-
-function resetWizardForm() {
-    // Reset all form fields
-    document.getElementById('distributeCount').value = 2;
-    document.getElementById('distributeNamePrefix').value = 'Agent';
-    document.getElementById('filterDistributeCount').value = 2;
-    document.getElementById('filterNamePrefix').value = 'Agent';
-    document.getElementById('maxTicketsPerPortal').value = '';
-    document.getElementById('autoGeneratePasswords').checked = true;
-    document.getElementById('enableWorkloadBalancing').checked = true;
-    document.getElementById('autoRotate24h').checked = false;
-    
-    // Clear shift rows
-    const shiftsContainer = document.getElementById('shiftsContainer');
-    if (shiftsContainer) shiftsContainer.innerHTML = '';
-    wizardShifts = [];
-    
-    // Clear filters
-    document.getElementById('filterDateFrom').value = '';
-    document.getElementById('filterDateTo').value = '';
-    document.getElementById('filterTimeFrom').value = '';
-    document.getElementById('filterTimeTo').value = '';
-    
-    // Reset mode selection
-    document.querySelectorAll('.mode-card').forEach(card => card.classList.remove('selected'));
-    document.querySelector('.mode-card[data-mode="round_robin"]')?.classList.add('selected');
-}
-
-function selectDistributionMode(mode) {
-    selectedDistributionMode = mode;
-    
-    // Update UI
-    document.querySelectorAll('.mode-card').forEach(card => {
-        card.classList.toggle('selected', card.dataset.mode === mode);
-    });
-    
-    // Show appropriate config section
-    document.getElementById('simpleConfig').style.display = 
-        (mode === 'round_robin' || mode === 'workload_balanced') ? 'block' : 'none';
-    document.getElementById('filterConfig').style.display = 
-        mode === 'filter_based' ? 'block' : 'none';
-    document.getElementById('shiftConfig').style.display = 
-        mode === 'shift_based' ? 'block' : 'none';
-    
-    // Update preview if on step 4
-    if (currentWizardStep === 4) {
-        updatePreview();
-    }
-}
-
-function wizardNextStep() {
-    if (!validateCurrentStep()) return;
-    
-    if (currentWizardStep < 4) {
-        currentWizardStep++;
-        updateWizardProgress();
-        showWizardStep(currentWizardStep);
-        
-        if (currentWizardStep === 4) {
-            updatePreview();
-        }
-    }
-}
-
-function wizardPrevStep() {
-    if (currentWizardStep > 1) {
-        currentWizardStep--;
-        updateWizardProgress();
-        showWizardStep(currentWizardStep);
-    }
-}
-
-function updateWizardProgress() {
-    document.querySelectorAll('.wizard-step').forEach(step => {
-        const stepNum = parseInt(step.dataset.step);
-        step.classList.toggle('active', stepNum === currentWizardStep);
-        step.classList.toggle('completed', stepNum < currentWizardStep);
-    });
-}
-
-function showWizardStep(step) {
-    document.querySelectorAll('.wizard-panel').forEach(panel => panel.style.display = 'none');
-    document.getElementById(`wizardStep${step}`).style.display = 'block';
-    
-    // Update buttons
-    document.getElementById('wizardPrevBtn').style.display = step > 1 ? 'inline-block' : 'none';
-    document.getElementById('wizardNextBtn').style.display = step < 4 ? 'inline-block' : 'none';
-    document.getElementById('confirmDistributeBtn').style.display = step === 4 ? 'inline-block' : 'none';
-}
-
-function validateCurrentStep() {
-    switch (currentWizardStep) {
-        case 1:
-            if (!selectedDistributionMode) {
-                showToast('Please select a distribution mode', 'error');
-                return false;
-            }
-            return true;
-            
-        case 2:
-            if (selectedDistributionMode === 'round_robin' || selectedDistributionMode === 'workload_balanced') {
-                const count = parseInt(document.getElementById('distributeCount').value);
-                if (!count || count < 2 || count > 20) {
-                    showToast('Number of portals must be between 2 and 20', 'error');
-                    return false;
-                }
-            } else if (selectedDistributionMode === 'filter_based') {
-                const count = parseInt(document.getElementById('filterDistributeCount').value);
-                if (!count || count < 2 || count > 20) {
-                    showToast('Number of portals must be between 2 and 20', 'error');
-                    return false;
-                }
-            } else if (selectedDistributionMode === 'shift_based') {
-                const shifts = collectWizardShifts();
-                const totalPortals = shifts.reduce((sum, shift) => sum + shift.portalCount, 0);
-
-                if (shifts.length === 0) {
-                    showToast('Please add at least one time period', 'error');
-                    return false;
-                }
-
-                if (totalPortals < 1 || totalPortals > 50) {
-                    showToast('Shift-based allocation supports 1 to 50 total portals', 'error');
-                    return false;
-                }
-
-                for (const shift of shifts) {
-                    if (!shift.name || !shift.start || !shift.end) {
-                        showToast('Each time period needs a name, start time, and end time', 'error');
-                        return false;
-                    }
-                    if (!shift.portalCount || shift.portalCount < 1 || shift.portalCount > 50) {
-                        showToast('Each time period must have between 1 and 50 portals', 'error');
-                        return false;
-                    }
-                }
-            }
-            return true;
-            
-        case 3:
-            // Settings step - optional fields, always valid
-            return true;
-            
-        default:
-            return true;
-    }
-}
-
-function addShiftRow(name = '', start = '', end = '', portalCount = 1) {
-    if (typeof name !== 'string') {
-        name = 'Custom Period';
-        start = '';
-        end = '';
-        portalCount = 1;
-    }
-
-    const container = document.getElementById('shiftsContainer');
-    const shiftIndex = container ? container.querySelectorAll('.shift-card').length : wizardShifts.length;
-    const safeName = escapeHtml(name);
-    const safeStart = escapeHtml(start);
-    const safeEnd = escapeHtml(end);
-    const safePortalCount = Math.max(1, parseInt(portalCount) || 1);
-    
-    const shiftDiv = document.createElement('div');
-    shiftDiv.className = 'shift-card';
-    shiftDiv.dataset.index = shiftIndex;
-    shiftDiv.innerHTML = `
-        <div class="shift-header">
-            <h6>Time Period ${shiftIndex + 1}</h6>
-            <button type="button" class="btn-remove-shift" onclick="removeShiftRow(${shiftIndex})">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-        </div>
-        <div class="shift-fields">
-            <div class="form-group">
-                <label>Time Period Name</label>
-                <input type="text" class="shift-name" value="${safeName}" placeholder="e.g. 9-5 Support">
-            </div>
-            <div class="shift-time-row">
-                <div class="form-group">
-                    <label>Start Time</label>
-                    <input type="time" class="shift-start" value="${safeStart}">
-                </div>
-                <div class="form-group">
-                    <label>End Time</label>
-                    <input type="time" class="shift-end" value="${safeEnd}">
-                </div>
-                <div class="form-group">
-                    <label>Portals in Period</label>
-                    <input type="number" class="shift-portal-count" min="1" max="50" value="${safePortalCount}">
-                </div>
-            </div>
-            <div class="form-group">
-                <label>Portal Name Prefix</label>
-                <input type="text" class="shift-prefix" value="${safeName}" placeholder="e.g. 9-5 Agent">
-                <p class="text-small text-muted">Tickets created inside this period are evenly distributed only across these portals.</p>
-            </div>
-        </div>
-    `;
-    
-    container.appendChild(shiftDiv);
-    wizardShifts.push({ name, start, end, portalCount: safePortalCount });
-}
-
-function collectWizardShifts() {
-    return Array.from(document.querySelectorAll('.shift-card')).map((card, index) => {
-        const name = card.querySelector('.shift-name')?.value.trim() || `Time Period ${index + 1}`;
-        const prefix = card.querySelector('.shift-prefix')?.value.trim() || name;
-        const portalCount = parseInt(card.querySelector('.shift-portal-count')?.value) || 1;
-
-        return {
-            name,
-            prefix,
-            start: card.querySelector('.shift-start')?.value || '',
-            end: card.querySelector('.shift-end')?.value || '',
-            portalCount
+    if (password) body.password = password;
+    if (body.type === 'time_based') {
+        body.config = {
+            time_start: document.getElementById('portalShiftStart').value,
+            time_end: document.getElementById('portalShiftEnd').value
         };
-    });
-}
-
-function refreshShiftIndexes() {
-    document.querySelectorAll('.shift-card').forEach((card, index) => {
-        card.dataset.index = index;
-        const title = card.querySelector('.shift-header h6');
-        if (title) title.textContent = `Time Period ${index + 1}`;
-        const removeBtn = card.querySelector('.btn-remove-shift');
-        if (removeBtn) removeBtn.setAttribute('onclick', `removeShiftRow(${index})`);
-    });
-    wizardShifts = collectWizardShifts();
-}
-
-function removeShiftRow(index) {
-    const container = document.getElementById('shiftsContainer');
-    const shiftCard = container.querySelector(`[data-index="${index}"]`);
-    if (shiftCard) {
-        shiftCard.remove();
-        refreshShiftIndexes();
     }
-}
 
-function updateFilterPreview() {
-    // This would call backend to get ticket count matching filters
-    // For now, show a placeholder
-    document.getElementById('filterTicketCount').textContent = '...';
-}
-
-async function updatePreview() {
-    const modeNames = {
-        'round_robin': 'Round Robin',
-        'filter_based': 'Filter Based',
-        'shift_based': 'Smart Time Periods',
-        'workload_balanced': 'Workload Balanced'
-    };
-    
-    document.getElementById('previewMode').textContent = modeNames[selectedDistributionMode];
-    
-    let portalCount = 0;
-    let portalDetails = [];
-    
-    if (selectedDistributionMode === 'shift_based') {
-        const shifts = collectWizardShifts();
-        portalCount = shifts.reduce((sum, shift) => sum + shift.portalCount, 0);
-        shifts.forEach((shift) => {
-            for (let i = 0; i < shift.portalCount; i++) {
-                portalDetails.push({
-                    name: shift.portalCount > 1 ? `${shift.prefix} ${i + 1}` : shift.prefix,
-                    config: `${shift.start} - ${shift.end}`,
-                    estTickets: '~ even within period',
-                    capacity: document.getElementById('maxTicketsPerPortal').value || 'Unlimited'
-                });
-            }
-        });
+    const url = id ? `/support-portals/${id}` : '/support-portals';
+    const method = id ? 'PUT' : 'POST';
+    const data = await apiFetch(url, { method, body });
+    if (data?.success) {
+        document.getElementById('createPortalModal').classList.remove('active');
+        loadPortals();
     } else {
-        portalCount = parseInt(
-            selectedDistributionMode === 'filter_based' 
-                ? document.getElementById('filterDistributeCount').value 
-                : document.getElementById('distributeCount').value
-        );
-        
-        for (let i = 0; i < portalCount; i++) {
-            portalDetails.push({
-                name: `${selectedDistributionMode === 'filter_based' ? document.getElementById('filterNamePrefix').value : document.getElementById('distributeNamePrefix').value} ${i + 1}`,
-                config: '-',
-                estTickets: '~',
-                capacity: document.getElementById('maxTicketsPerPortal').value || 'Unlimited'
-            });
-        }
-    }
-    
-    document.getElementById('previewPortals').textContent = portalCount;
-    document.getElementById('previewTickets').textContent = 'Open tickets';
-    
-    // Render preview table
-    const tbody = document.getElementById('previewTableBody');
-    tbody.innerHTML = portalDetails.map(p => `
-        <tr>
-            <td><strong>${escapeHtml(p.name)}</strong></td>
-            <td>${p.config}</td>
-            <td>${p.estTickets}</td>
-            <td>${p.capacity}</td>
-        </tr>
-    `).join('');
-    
-    // Show warning if needed
-    const maxTickets = parseInt(document.getElementById('maxTicketsPerPortal').value);
-    if (maxTickets && maxTickets < 10) {
-        document.getElementById('previewWarning').style.display = 'flex';
-        document.getElementById('previewWarningText').textContent = 
-            `Warning: Low capacity limit (${maxTickets}) may result in unassigned tickets.`;
-    } else {
-        document.getElementById('previewWarning').style.display = 'none';
+        alert(data?.error || 'Failed to save portal');
     }
 }
 
-async function executeDistribution() {
+async function revealPortalPassword(id) {
+    const container = document.getElementById(`pw-${id}`);
+    const btn = container.querySelector('.portal-pw-btn');
     try {
-        const maxTickets = document.getElementById('maxTicketsPerPortal').value 
-            ? parseInt(document.getElementById('maxTicketsPerPortal').value) 
-            : null;
-        
-        let payload = {
-            distributionMode: selectedDistributionMode,
-            portalSettings: {
-                maxTickets,
-                autoRotate: document.getElementById('autoRotate24h').checked,
-                rotationHours: 24
-            }
-        };
-        
-        if (selectedDistributionMode === 'round_robin' || selectedDistributionMode === 'workload_balanced') {
-            payload.count = parseInt(document.getElementById('distributeCount').value);
-            payload.namePrefix = document.getElementById('distributeNamePrefix').value.trim();
-        } else if (selectedDistributionMode === 'filter_based') {
-            payload.count = parseInt(document.getElementById('filterDistributeCount').value);
-            payload.namePrefix = document.getElementById('filterNamePrefix').value.trim();
-            
-            // Get selected statuses
-            const statusFilters = [];
-            document.querySelectorAll('#filterConfig .checkbox-group input:checked').forEach(cb => {
-                statusFilters.push(cb.value);
-            });
-            
-            payload.filters = {
-                dateFrom: document.getElementById('filterDateFrom').value || null,
-                dateTo: document.getElementById('filterDateTo').value || null,
-                timeFrom: document.getElementById('filterTimeFrom').value || null,
-                timeTo: document.getElementById('filterTimeTo').value || null,
-                statusFilter: statusFilters.length > 0 ? statusFilters : ['open']
-            };
-        } else if (selectedDistributionMode === 'shift_based') {
-            const shifts = collectWizardShifts();
-            
-            payload.shifts = shifts;
-            payload.count = shifts.reduce((sum, shift) => sum + shift.portalCount, 0);
-            payload.namePrefix = 'Agent';
-        }
-        
-        // Show loading
-        document.getElementById('confirmDistributeBtn').disabled = true;
-        document.getElementById('confirmDistributeBtn').textContent = 'Distributing...';
-        
-        const response = await apiCall('/support-portals/auto-distribute', 'POST', payload);
-        
-        if (response.success) {
-            showToast(`${response.portals.length} portals created and tickets distributed!`, 'success');
-            closeAutoDistributeModal();
-            loadPortals();
-            loadSupportTickets();
-            showDistributeResults(response.portals, response.stats);
+        const data = await apiFetch(`/support-portals/${id}/password`);
+        if (data?.success && data.password) {
+            container.querySelector('.portal-pw-masked').textContent = data.password;
+            container.querySelector('.portal-pw-masked').classList.add('revealed');
+            btn.onclick = () => hidePortalPassword(id);
+            btn.title = 'Hide password';
+            btn.textContent = '🙈';
         } else {
-            throw new Error(response.error);
+            container.querySelector('.portal-pw-masked').textContent = data?.message || 'Not available';
         }
-    } catch (error) {
-        showToast(error.message || 'Failed to distribute tickets', 'error');
-    } finally {
-        document.getElementById('confirmDistributeBtn').disabled = false;
-        document.getElementById('confirmDistributeBtn').textContent = 'Distribute Tickets';
+    } catch {
+        container.querySelector('.portal-pw-masked').textContent = 'Failed to load';
     }
 }
 
-function showDistributeResults(portals, stats = null) {
-    distributionResults = { portals, stats };
-    
-    // Update stats
-    if (stats) {
-        document.getElementById('statTotalTickets').textContent = stats.totalTickets;
-        document.getElementById('statTotalPortals').textContent = stats.totalPortals;
-        document.getElementById('statDistributionMode').textContent = 
-            stats.distributionMode.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
-        
-        document.getElementById('resultsSummary').textContent = 
-            `${stats.totalTickets} tickets distributed across ${stats.totalPortals} portals`;
+function hidePortalPassword(id) {
+    const container = document.getElementById(`pw-${id}`);
+    container.querySelector('.portal-pw-masked').textContent = '••••••••';
+    container.querySelector('.portal-pw-masked').classList.remove('revealed');
+    const btn = container.querySelector('.portal-pw-btn');
+    btn.onclick = () => revealPortalPassword(id);
+    btn.title = 'Show password';
+    btn.textContent = '👁';
+}
+
+async function copyPortalPassword(id) {
+    const data = await apiFetch(`/support-portals/${id}/password`);
+    if (data?.success && data.password) {
+        await navigator.clipboard.writeText(data.password);
+        const btn = document.querySelector(`#pw-${id} .portal-pw-btn:last-child`);
+        const orig = btn.textContent;
+        btn.textContent = '✓';
+        setTimeout(() => btn.textContent = orig, 1500);
     }
-    
-    // Render portal cards
-    const container = document.getElementById('distributeResultsList');
-    container.innerHTML = portals.map(p => `
-        <div class="result-portal-card">
-            <div class="result-portal-header">
-                <h5>${escapeHtml(p.name)}</h5>
-                ${p.shift ? `<span class="shift-badge">${p.shift.name || 'Shift'}</span>` : ''}
-            </div>
-            <div class="result-portal-stats">
-                <div class="result-stat">
-                    <span class="result-stat-label">Tickets:</span>
-                    <span class="result-stat-value">${p.ticketCount || 0}</span>
-                </div>
-                ${p.maxTickets ? `
-                    <div class="result-stat">
-                        <span class="result-stat-label">Capacity:</span>
-                        <span class="result-stat-value">${Math.round((p.ticketCount / p.maxTickets) * 100)}%</span>
-                    </div>
-                ` : ''}
-                ${p.shift ? `
-                    <div class="result-stat">
-                        <span class="result-stat-label">Shift:</span>
-                        <span class="result-stat-value">${p.shift.start} - ${p.shift.end}</span>
-                    </div>
-                ` : ''}
-            </div>
-            <div class="result-portal-credentials">
-                <div class="credential-row">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-                    <span>Link:</span>
-                    <code class="credential-value">${p.url}</code>
-                    <button class="btn-copy" onclick="copyToClipboard('${p.url}')">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                    </button>
-                </div>
-                <div class="credential-row">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    <span>Password:</span>
-                    <code class="credential-value">${p.password}</code>
-                    <button class="btn-copy" onclick="copyToClipboard('${p.password}')">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                    </button>
-                </div>
-            </div>
-        </div>
-    `).join('');
-    
-    document.getElementById('distributeResultsModal').classList.add('active');
 }
 
-function closeDistributeResultsModal() {
-    document.getElementById('distributeResultsModal').classList.remove('active');
-    distributionResults = null;
-}
-
-function exportDistributionResults() {
-    if (!distributionResults || !distributionResults.portals) return;
-    
-    const { portals, stats } = distributionResults;
-    
-    // Create CSV content
-    let csv = 'Portal Name,Tickets,Shift Start,Shift End,Link,Password\n';
-    portals.forEach(p => {
-        csv += `"${p.name}",${p.ticketCount || 0},${p.shift?.start || '-'},${p.shift?.end || '-'},${p.url},${p.password}\n`;
-    });
-    
-    // Download CSV
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `distribution-results-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    window.URL.revokeObjectURL(url);
-    
-    showToast('Results exported successfully!', 'success');
-}
-
-function copyToClipboard(text) {
-    navigator.clipboard.writeText(text).then(() => {
-        showToast('Copied to clipboard!', 'success');
-    }).catch(() => {
-        // Fallback
-        const textarea = document.createElement('textarea');
-        textarea.value = text;
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-        showToast('Copied to clipboard!', 'success');
-    });
+async function copyPortalLink(id) {
+    const p = portalsCache.find(x => x.id === id);
+    if (!p?.url) return;
+    await navigator.clipboard.writeText(p.url);
+    const btn = document.querySelector(`#plink-${id} .portal-link-copy`);
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(() => btn.textContent = orig, 1500);
 }
 
 async function deletePortal(id) {
-    if (!confirm('Are you sure you want to delete this portal? Assigned tickets will be unassigned.')) return;
+    if (!confirm('Delete this portal?')) return;
+    await apiFetch(`/support-portals/${id}`, { method: 'DELETE' });
+    loadPortals();
+}
 
-    try {
-        const response = await apiCall(`/support-portals/${id}`, 'DELETE');
-        if (response.success) {
-            showToast('Portal deleted successfully!', 'success');
-            loadPortals();
-            loadSupportTickets();
-        } else {
-            throw new Error(response.error);
-        }
-    } catch (error) {
-        showToast(error.message || 'Failed to delete portal', 'error');
+// ===================================
+// Auto Distribute
+// ===================================
+function openAutoDistributeModal() {
+    const body = document.getElementById('autoDistributeBody');
+    body.innerHTML = portalsCache.map(p => `
+        <div class="portal-item" style="margin-bottom:8px">
+            <div>
+                <div class="portal-item-name">${esc(p.name)}</div>
+                <div class="portal-item-type">${p.type} · ${p.assigned_count || 0} open tickets</div>
+            </div>
+        </div>
+    `).join('') || '<p class="text-muted">No portals configured</p>';
+    document.getElementById('autoDistributeModal').classList.add('active');
+}
+
+// ===================================
+// Urgent Keywords
+// ===================================
+function openUrgentKeywordsModal() {
+    renderKeywordsList();
+    document.getElementById('urgentKeywordsModal').classList.add('active');
+}
+
+function renderKeywordsList() {
+    const list = document.getElementById('keywordsList');
+    list.innerHTML = urgentKeywords.map((k, i) =>
+        `<span class="keyword-tag">${esc(k)}<span class="remove-keyword" onclick="removeKeyword(${i})">&times;</span></span>`
+    ).join('') || '<p class="text-muted text-small">No keywords configured</p>';
+}
+
+function addKeyword() {
+    const input = document.getElementById('newKeywordInput');
+    const val = input.value.trim();
+    if (val && !urgentKeywords.includes(val)) {
+        urgentKeywords.push(val);
+        input.value = '';
+        renderKeywordsList();
     }
 }
 
-// Portal Password Management Modal
-let currentPasswordPortalId = null;
-
-async function openPortalPasswordModal(id) {
-    currentPasswordPortalId = id;
-
-    // Find portal name
-    const portal = allPortals.find(p => String(p.id) === String(id));
-    const portalName = portal ? portal.name : 'Portal';
-
-    // Update modal title
-    document.getElementById('portalPasswordPortalName').textContent = portalName;
-
-    // Reset form state
-    const displayInput = document.getElementById('portalPasswordDisplay');
-    const newInput = document.getElementById('newPortalPasswordInput');
-    const messageEl = document.getElementById('portalPasswordMessage');
-    const toggleBtn = document.getElementById('togglePortalPasswordBtn');
-    const toggleNewBtn = document.getElementById('toggleNewPortalPasswordBtn');
-
-    displayInput.value = '';
-    displayInput.type = 'password';
-    newInput.value = '';
-    newInput.type = 'password';
-    messageEl.textContent = 'Loading...';
-    messageEl.className = 'portal-password-message info';
-    toggleBtn.classList.remove('active');
-    toggleNewBtn.classList.remove('active');
-    updateEyeIcon(toggleBtn, false);
-    updateEyeIcon(toggleNewBtn, false);
-
-    // Show modal
-    document.getElementById('portalPasswordModal').classList.add('active');
-
-    // Fetch current password
-    try {
-        const response = await apiCall(`/support-portals/${id}/password`);
-        if (response.success && response.password) {
-            displayInput.value = response.password;
-            messageEl.textContent = 'Password loaded. Use the eye icon to reveal.';
-            messageEl.className = 'portal-password-message info';
-        } else {
-            displayInput.value = '';
-            displayInput.placeholder = 'Not available';
-            messageEl.textContent = response.message || 'No password on record. Set one below.';
-            messageEl.className = 'portal-password-message';
-        }
-    } catch (error) {
-        messageEl.textContent = 'Failed to load password';
-        messageEl.className = 'portal-password-message';
-    }
+function removeKeyword(i) {
+    urgentKeywords.splice(i, 1);
+    renderKeywordsList();
 }
 
-function closePortalPasswordModal() {
-    document.getElementById('portalPasswordModal').classList.remove('active');
-    currentPasswordPortalId = null;
+function saveUrgentKeywords() {
+    localStorage.setItem('urgentKeywords', JSON.stringify(urgentKeywords));
+    document.getElementById('urgentKeywordsModal').classList.remove('active');
+    loadUrgentKeywordsPreview();
+    loadTickets();
 }
 
-function updateEyeIcon(button, isVisible) {
-    const eyeOpenPaths = button.querySelectorAll('.eye-open');
-    const eyeClosedLine = button.querySelector('.eye-closed');
-
-    if (isVisible) {
-        eyeOpenPaths.forEach(el => el.style.opacity = '0.4');
-        if (eyeClosedLine) eyeClosedLine.style.display = 'block';
-    } else {
-        eyeOpenPaths.forEach(el => el.style.opacity = '1');
-        if (eyeClosedLine) eyeClosedLine.style.display = 'none';
-    }
+function loadUrgentKeywordsPreview() {
+    const el = document.getElementById('urgentKeywordsPreview');
+    if (!el) return;
+    el.innerHTML = urgentKeywords.length
+        ? urgentKeywords.map(k => `<span class="keyword-tag">${esc(k)}</span>`).join('')
+        : '<p class="text-muted text-small">No keywords configured</p>';
 }
 
-function togglePasswordVisibility(inputId, buttonId) {
-    const input = document.getElementById(inputId);
-    const button = document.getElementById(buttonId);
-    const isPassword = input.type === 'password';
+// ===================================
+// AI Analytics
+// ===================================
+let analyticsDateRange = 'all';
 
-    input.type = isPassword ? 'text' : 'password';
-    button.classList.toggle('active', isPassword);
-    updateEyeIcon(button, isPassword);
-}
-
-async function savePortalPassword() {
-    if (!currentPasswordPortalId) return;
-
-    const newInput = document.getElementById('newPortalPasswordInput');
-    const newPassword = newInput.value.trim();
-    const messageEl = document.getElementById('portalPasswordMessage');
-
-    if (!newPassword) {
-        messageEl.textContent = 'Please enter a new password';
-        messageEl.className = 'portal-password-message';
-        return;
-    }
-
-    if (newPassword.length < 6) {
-        messageEl.textContent = 'Password must be at least 6 characters';
-        messageEl.className = 'portal-password-message';
-        return;
-    }
-
-    try {
-        const response = await apiCall(`/support-portals/${currentPasswordPortalId}/password`, 'PUT', { newPassword });
-        if (response.success) {
-            // Update the display with the new password
-            const displayInput = document.getElementById('portalPasswordDisplay');
-            displayInput.value = response.password;
-            displayInput.type = 'text';
-
-            // Clear the new password input
-            newInput.value = '';
-            newInput.type = 'password';
-
-            // Update toggle buttons
-            const toggleBtn = document.getElementById('togglePortalPasswordBtn');
-            const toggleNewBtn = document.getElementById('toggleNewPortalPasswordBtn');
-            toggleBtn.classList.add('active');
-            toggleNewBtn.classList.remove('active');
-            updateEyeIcon(toggleBtn, true);
-            updateEyeIcon(toggleNewBtn, false);
-
-            messageEl.textContent = 'Password updated successfully!';
-            messageEl.className = 'portal-password-message success';
-            showToast('Portal password updated!', 'success');
-        } else {
-            throw new Error(response.error);
-        }
-    } catch (error) {
-        messageEl.textContent = error.message || 'Failed to update password';
-        messageEl.className = 'portal-password-message';
-        showToast(error.message || 'Failed to change password', 'error');
-    }
-}
-
-function copyPortalPassword() {
-    const displayInput = document.getElementById('portalPasswordDisplay');
-    const password = displayInput.value;
-    const messageEl = document.getElementById('portalPasswordMessage');
-
-    if (!password) {
-        messageEl.textContent = 'No password to copy';
-        messageEl.className = 'portal-password-message';
-        return;
-    }
-
-    navigator.clipboard.writeText(password).then(() => {
-        messageEl.textContent = 'Password copied to clipboard!';
-        messageEl.className = 'portal-password-message success';
-        showToast('Password copied!', 'success');
-    }).catch(() => {
-        // Fallback for older browsers
-        displayInput.type = 'text';
-        displayInput.select();
-        document.execCommand('copy');
-        messageEl.textContent = 'Password copied to clipboard!';
-        messageEl.className = 'portal-password-message success';
-        showToast('Password copied!', 'success');
+function initAnalyticsDateFilter() {
+    const group = document.getElementById('analyticsDateFilter');
+    if (!group) return;
+    group.addEventListener('click', (e) => {
+        const btn = e.target.closest('.date-filter-btn');
+        if (!btn) return;
+        group.querySelectorAll('.date-filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        analyticsDateRange = btn.dataset.range;
+        const info = document.getElementById('analyticsDateInfo');
+        if (info) info.textContent = `Showing ${btn.textContent.toLowerCase()}`;
+        loadAiAnalytics();
     });
 }
 
-async function clearPortalTickets(id) {
-    if (!confirm('Clear all ticket assignments from this portal?')) return;
-
-    try {
-        const response = await apiCall(`/support-portals/${id}/clear`, 'POST');
-        if (response.success) {
-            showToast('Portal tickets cleared!', 'success');
-            loadPortals();
-            loadSupportTickets();
-        } else {
-            throw new Error(response.error);
+function getDateRangeParams() {
+    const now = new Date();
+    const fmt = d => d.toISOString().split('T')[0];
+    switch (analyticsDateRange) {
+        case 'today':
+            return { date_from: fmt(now), date_to: fmt(now) };
+        case 'yesterday': {
+            const y = new Date(now); y.setDate(y.getDate() - 1);
+            return { date_from: fmt(y), date_to: fmt(y) };
         }
-    } catch (error) {
-        showToast(error.message || 'Failed to clear tickets', 'error');
+        case '7d': {
+            const s = new Date(now); s.setDate(s.getDate() - 6);
+            return { date_from: fmt(s), date_to: fmt(now) };
+        }
+        case '30d': {
+            const s = new Date(now); s.setDate(s.getDate() - 29);
+            return { date_from: fmt(s), date_to: fmt(now) };
+        }
+        case '90d': {
+            const s = new Date(now); s.setDate(s.getDate() - 89);
+            return { date_from: fmt(s), date_to: fmt(now) };
+        }
+        case 'this_month': {
+            const s = new Date(now.getFullYear(), now.getMonth(), 1);
+            return { date_from: fmt(s), date_to: fmt(now) };
+        }
+        case 'last_month': {
+            const s = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+            const e = new Date(now.getFullYear(), now.getMonth(), 0);
+            return { date_from: fmt(s), date_to: fmt(e) };
+        }
+        default:
+            return {};
     }
 }
 
-async function assignSelectedToPortal(portalId) {
-    if (!portalId) return;
-    if (selectedTickets.size === 0) {
-        showToast('No tickets selected', 'error');
-        document.getElementById('assignPortalSelect').value = '';
+async function loadAiAnalytics() {
+    const container = document.getElementById('aiInsightsList');
+    if (container) container.innerHTML = '<div class="ai-insight-empty"><p>Loading AI insights...</p></div>';
+
+    try {
+        const dateParams = getDateRangeParams();
+        const qs = new URLSearchParams(dateParams).toString();
+        const [aiOverview, recentTickets] = await Promise.all([
+            apiFetch(`/support-analytics/ai-overview${qs ? '?' + qs : ''}`),
+            apiFetch(`/support-tickets?limit=200&sort=newest${qs ? '&' + qs : ''}`)
+        ]);
+
+        const ov = aiOverview?.overview || {};
+        const tickets = recentTickets?.tickets || [];
+
+        // ── KPI Cards ──
+        setText('aiTotalConvos', ov.total || 0);
+        setText('aiResolved', ov.resolved || 0);
+        setText('aiEscalated', ov.open || 0);
+        setText('aiTodayTotal', `${ov.todayTotal || 0} today`);
+        setText('aiTodayResolved', `${ov.todayResolved || 0} today`);
+        setText('aiTodayOpen', `${ov.todayOpen || 0} today`);
+        setText('aiNegativeToday', ov.todayNegative || 0);
+        setText('aiNegativeTotal', `${ov.negativeCount || 0} total`);
+        setText('aiAvgResponse', ov.avgResponseFormatted || '\u2014');
+        setText('aiResolutionRate', `${ov.resolutionRate || 0}%`);
+        if (ov.peakHour !== null && ov.peakHour !== undefined) {
+            const h = ov.peakHour;
+            setText('aiPeakHour', `${h}:00`);
+            setText('aiPeakHourCount', `${ov.peakHourCount || 0} tickets`);
+        }
+        if (ov.peakDay) {
+            const d = new Date(ov.peakDay + 'T00:00:00');
+            setText('aiPeakDay', d.toLocaleDateString('en', { month: 'short', day: 'numeric' }));
+            setText('aiPeakDayCount', `${ov.peakDayCount || 0} tickets`);
+        }
+
+        // ── Volume trend badge ──
+        const dv = aiOverview?.dailyVolume || [];
+        renderVolumeFromApi(dv);
+        if (dv.length >= 2) {
+            const last = dv[dv.length - 1].count;
+            const prev = dv[dv.length - 2].count;
+            const diff = last - prev;
+            const badge = document.getElementById('volumeTrendBadge');
+            if (badge) badge.textContent = diff >= 0 ? `\u2191${diff} vs yesterday` : `\u2193${Math.abs(diff)} vs yesterday`;
+        }
+
+        // ── Hourly Heatmap ──
+        renderHourlyHeatmap(aiOverview?.hourlyPattern || []);
+
+        // ── Channel + Sentiment ──
+        renderChannelBreakdownFromApi(aiOverview?.channels || []);
+        renderSentimentFromApi(aiOverview?.sentiments || [], ov);
+
+        // ── Cross-tab + Confidence ──
+        renderChannelSentimentMatrix(aiOverview?.channelSentiment || []);
+        renderConfidenceDist(aiOverview?.confidenceDist || []);
+
+        // ── Channel Resolution + Escalation ──
+        renderChannelResolution(aiOverview?.channelResolution || []);
+        renderEscalationChart(aiOverview?.escalationByChannel || []);
+
+        // ── Resolution Trend ──
+        renderResolutionTrend(aiOverview?.resolutionTrend || []);
+
+        // ── Top Scenarios + Portal Perf ──
+        renderTopScenarios(aiOverview?.topScenarios || []);
+        renderPortalPerformance(aiOverview?.portalPerformance || []);
+
+        // ── Conversations + Insights ──
+        renderAiConversations(tickets);
+        generateAiInsights(tickets, ov);
+
+    } catch (err) {
+        console.error('AI Analytics error:', err);
+    }
+}
+
+function setText(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+}
+
+function renderChannelBreakdownFromApi(channels) {
+    const el = document.getElementById('channelBreakdown');
+    if (!el) return;
+    const total = channels.reduce((s, c) => s + (c.count || 0), 0) || 1;
+    const labels = { whatsapp: 'WhatsApp', instagram: 'Instagram', website: 'Website Bot', widget: 'Website Bot' };
+    el.innerHTML = channels.length
+        ? channels.map(c => {
+            const key = (c.channel || 'other').toLowerCase();
+            const pct = Math.round((c.count / total) * 100);
+            return `<div class="channel-bar-item">
+                <div class="channel-bar-header">
+                    <span class="channel-bar-label">${labels[key] || key}</span>
+                    <span class="channel-bar-count">${c.count} (${pct}%)</span>
+                </div>
+                <div class="channel-bar-track"><div class="channel-bar-fill" style="width:${pct}%"></div></div>
+            </div>`;
+        }).join('')
+        : '<p class="text-muted text-small">No channel data</p>';
+}
+
+function renderSentimentFromApi(sentiments, overview) {
+    const el = document.getElementById('sentimentBars');
+    if (!el) return;
+    const total = (overview.positiveCount || 0) + (overview.neutralCount || 0) + (overview.negativeCount || 0);
+    if (total === 0) { el.innerHTML = '<p class="text-muted text-small">No sentiment data available</p>'; return; }
+    const items = [
+        { key: 'positive', count: overview.positiveCount || 0 },
+        { key: 'neutral', count: overview.neutralCount || 0 },
+        { key: 'negative', count: overview.negativeCount || 0 }
+    ];
+    el.innerHTML = items.map(({ key, count }) => `
+        <div class="sentiment-item">
+            <div class="sentiment-header">
+                <span class="sentiment-label">${key.charAt(0).toUpperCase() + key.slice(1)}</span>
+                <span class="sentiment-value">${count} (${Math.round(count / total * 100)}%)</span>
+            </div>
+            <div class="sentiment-track"><div class="sentiment-fill ${key}" style="width:${count / total * 100}%"></div></div>
+        </div>
+    `).join('');
+}
+
+function renderVolumeFromApi(dailyVolume) {
+    const el = document.getElementById('volumeChart');
+    if (!el) return;
+    if (!dailyVolume.length) { el.innerHTML = '<p class="text-muted text-small" style="text-align:center;padding:24px">No volume data</p>'; return; }
+    const max = Math.max(...dailyVolume.map(d => d.count), 1);
+    el.innerHTML = dailyVolume.map(d => {
+        const label = new Date(d.day + 'T00:00:00').toLocaleDateString('en', { weekday: 'short' });
+        return `<div class="volume-bar-group"><div class="volume-bar" style="height:${d.count / max * 100}%"></div><span class="volume-bar-label">${label}</span></div>`;
+    }).join('');
+}
+
+function renderTopScenarios(scenarios) {
+    const el = document.getElementById('topIssuesList');
+    if (!el) return;
+    const badge = document.getElementById('scenariosBadge');
+    if (badge) badge.textContent = `${scenarios.length} scenarios`;
+    if (!scenarios.length) { el.innerHTML = '<p class="text-muted text-small">No AI scenarios detected yet</p>'; return; }
+    el.innerHTML = scenarios.map((s, i) => {
+        const conf = s.avg_confidence ? Math.round(s.avg_confidence * 100) + '%' : '';
+        return `<div class="issue-item">
+            <span class="issue-rank">${i + 1}</span>
+            <span class="issue-name">${esc(s.ai_scenario || 'Unknown')}</span>
+            ${conf ? `<span class="issue-count" style="color:var(--text-tertiary)">${conf} conf</span>` : ''}
+            <span class="issue-count">${s.count}</span>
+        </div>`;
+    }).join('');
+}
+
+function renderAiConversations(tickets) {
+    const el = document.getElementById('aiConversationsList');
+    if (!el) return;
+    const badge = document.getElementById('conversationsBadge');
+    if (badge) badge.textContent = `${tickets.length} recent`;
+    const recent = tickets.slice(0, 10);
+    el.innerHTML = recent.length
+        ? recent.map(t => {
+            const ch = (t.channel || 'whatsapp').toLowerCase();
+            const icon = ch === 'instagram' ? 'IG' : ch === 'website' ? 'Web' : 'WA';
+            return `
+                <div class="ai-convo-item" onclick="openChat(${t.id},'${esc(t.customer_phone || '')}','${esc(t.customer_name || '')}','${ch}')">
+                    <div class="ai-convo-channel ${ch}">${icon}</div>
+                    <div class="ai-convo-info">
+                        <div class="ai-convo-name">${esc(t.customer_name || t.customer_phone || 'Unknown')}</div>
+                        <div class="ai-convo-preview">${esc((t.message || '').substring(0, 80))}</div>
+                    </div>
+                    <div class="ai-convo-meta">
+                        <div class="ai-convo-time">${formatTimeAgo(t.created_at)}</div>
+                        <div class="ai-convo-status ${t.status || 'open'}">${t.status || 'open'}</div>
+                    </div>
+                </div>
+            `;
+        }).join('')
+        : '<p class="text-muted text-small" style="text-align:center;padding:24px">No conversations yet</p>';
+}
+
+function generateAiInsights(tickets, overview) {
+    const el = document.getElementById('aiInsightsList');
+    if (!el) return;
+    const insights = [];
+
+    const total = overview.total || tickets.length || 0;
+    const open = overview.open || 0;
+    const resolved = overview.resolved || 0;
+    const urgent = tickets.filter(t => isUrgent(t.message)).length;
+    const resolutionRate = overview.resolutionRate || (total > 0 ? Math.round(resolved / total * 100) : 0);
+    const negativeCount = overview.negativeCount || 0;
+
+    if (urgent > 0) {
+        insights.push({ icon: '', title: `${urgent} urgent ticket${urgent > 1 ? 's' : ''} need attention`, desc: 'Tickets flagged with urgent keywords require immediate response. Review and prioritize.' });
+    }
+    if (open > 10) {
+        insights.push({ icon: '📋', title: `${open} open tickets pending resolution`, desc: 'Consider distributing across portals or escalating to reduce backlog.' });
+    }
+    if (resolutionRate < 50 && total > 5) {
+        insights.push({ icon: '📉', title: `Resolution rate at ${resolutionRate}%`, desc: 'Below 50% resolution rate. Review common issues and improve AI auto-responses.' });
+    }
+    if (resolutionRate >= 70 && total > 5) {
+        insights.push({ icon: '✅', title: `Strong ${resolutionRate}% resolution rate`, desc: 'Your support team is performing well. Consider documenting successful resolution patterns.' });
+    }
+
+    // Channel-specific insights
+    const waCount = tickets.filter(t => (t.channel || 'whatsapp') === 'whatsapp').length;
+    const igCount = tickets.filter(t => t.channel === 'instagram').length;
+    const webCount = tickets.filter(t => t.channel === 'website' || t.channel === 'widget').length;
+    if (igCount > 0 && igCount > waCount * 0.3) {
+        insights.push({ icon: '', title: `Instagram tickets rising (${igCount})`, desc: 'Instagram channel is generating significant volume. Ensure adequate staffing for IG responses.' });
+    }
+    if (webCount > 0) {
+        insights.push({ icon: '🌐', title: `${webCount} website bot tickets`, desc: 'Website bot escalations are being tracked. Review bot responses to reduce unnecessary escalations.' });
+    }
+
+    // Sentiment insight from API overview
+    if (negativeCount > total * 0.2 && total > 5) {
+        insights.push({ icon: '😟', title: `${Math.round(negativeCount / total * 100)}% negative sentiment detected`, desc: 'Higher than usual negative sentiment. Review recent conversations for systemic issues.' });
+    }
+
+    if (!insights.length) {
+        insights.push({ icon: '✨', title: 'All systems running smoothly', desc: 'No critical issues detected. Continue monitoring ticket volume and response times.' });
+    }
+
+    el.innerHTML = insights.map(ins => `
+        <div class="ai-insight-item">
+            <div class="ai-insight-icon"><span style="font-size:18px">${ins.icon}</span></div>
+            <div class="ai-insight-content">
+                <div class="ai-insight-title">${ins.title}</div>
+                <div class="ai-insight-desc">${ins.desc}</div>
+            </div>
+        </div>
+    `).join('');
+}
+
+// ===================================
+// Hourly Heatmap
+// ===================================
+function renderHourlyHeatmap(hourly) {
+    const el = document.getElementById('hourlyHeatmap');
+    if (!el) return;
+    if (!hourly.length) { el.innerHTML = '<p class="text-muted text-small" style="text-align:center;padding:24px;width:100%">No hourly data</p>'; return; }
+    const max = Math.max(...hourly.map(h => h.count), 1);
+    const badge = document.getElementById('hourlyBadge');
+    const peak = hourly.reduce((m, h) => h.count > (m?.count || 0) ? h : m, null);
+    if (badge && peak) badge.textContent = `Peak: ${peak.hour}:00`;
+
+    let html = '';
+    for (let h = 0; h < 24; h++) {
+        const data = hourly.find(x => x.hour === h);
+        const count = data ? data.count : 0;
+        const ratio = count / max;
+        let heat = 'heat-1';
+        if (ratio > 0.8) heat = 'heat-5';
+        else if (ratio > 0.6) heat = 'heat-4';
+        else if (ratio > 0.4) heat = 'heat-3';
+        else if (ratio > 0.2) heat = 'heat-2';
+        html += `<div class="heatmap-cell ${heat}" title="${h}:00 — ${count} tickets">${count || ''}</div>`;
+    }
+    el.innerHTML = html + '<div class="heatmap-labels" style="width:100%"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span></div>';
+}
+
+// ===================================
+// Channel x Sentiment Matrix
+// ===================================
+function renderChannelSentimentMatrix(data) {
+    const el = document.getElementById('channelSentimentMatrix');
+    if (!el) return;
+    if (!data.length) { el.innerHTML = '<p class="text-muted text-small">No data</p>'; return; }
+    const channels = [...new Set(data.map(d => d.channel))];
+    const sentiments = ['positive', 'neutral', 'negative'];
+    const labels = { whatsapp: 'WhatsApp', instagram: 'Instagram', website: 'Website', widget: 'Website' };
+    const max = Math.max(...data.map(d => d.count), 1);
+
+    let html = '<table class="cross-tab-table"><thead><tr><th>Channel</th>';
+    sentiments.forEach(s => html += `<th>${s}</th>`);
+    html += '</tr></thead><tbody>';
+    channels.forEach(ch => {
+        const key = (ch || 'other').toLowerCase();
+        html += `<tr><td>${labels[key] || key}</td>`;
+        sentiments.forEach(s => {
+            const row = data.find(d => d.channel === ch && d.sentiment === s);
+            const count = row ? row.count : 0;
+            const ratio = count / max;
+            const cls = ratio > 0.6 ? 'ct-high' : ratio > 0.3 ? 'ct-med' : 'ct-low';
+            html += `<td><span class="cross-tab-cell ${cls}">${count}</span></td>`;
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}
+
+// ===================================
+// Confidence Distribution
+// ===================================
+function renderConfidenceDist(data) {
+    const el = document.getElementById('confidenceDist');
+    if (!el) return;
+    if (!data.length) { el.innerHTML = '<p class="text-muted text-small">No confidence data</p>'; return; }
+    const total = data.reduce((s, d) => s + d.count, 0) || 1;
+    const order = ['high', 'medium', 'low', 'none'];
+    const labels = { high: 'High (>80%)', medium: 'Med (50-80%)', low: 'Low (<50%)', none: 'Unclassified' };
+    const sorted = order.map(tier => data.find(d => d.tier === tier) || { tier, count: 0 });
+
+    el.innerHTML = sorted.map(d => {
+        const pct = Math.round(d.count / total * 100);
+        return `<div class="confidence-tier">
+            <span class="confidence-label">${labels[d.tier] || d.tier}</span>
+            <div class="confidence-bar-track">
+                <div class="confidence-bar-fill conf-${d.tier}" style="width:${Math.max(pct, 3)}%">${pct}%</div>
+            </div>
+            <span class="confidence-count">${d.count}</span>
+        </div>`;
+    }).join('');
+}
+
+// ===================================
+// Channel Resolution
+// ===================================
+function renderChannelResolution(data) {
+    const el = document.getElementById('channelResolution');
+    if (!el) return;
+    if (!data.length) { el.innerHTML = '<p class="text-muted text-small">No data</p>'; return; }
+    const labels = { whatsapp: 'WhatsApp', instagram: 'Instagram', website: 'Website', widget: 'Website' };
+    el.innerHTML = data.map(d => {
+        const key = (d.channel || 'other').toLowerCase();
+        const rate = d.total > 0 ? Math.round(d.resolved / d.total * 100) : 0;
+        const resPct = d.total > 0 ? (d.resolved / d.total * 100) : 0;
+        const openPct = d.total > 0 ? (d.open_count / d.total * 100) : 0;
+        return `<div class="channel-res-item">
+            <div class="channel-res-header">
+                <span class="channel-res-name">${labels[key] || key}</span>
+                <span class="channel-res-rate">${rate}%</span>
+            </div>
+            <div class="channel-res-track">
+                <div class="channel-res-fill-resolved" style="width:${resPct}%"></div>
+                <div class="channel-res-fill-open" style="width:${openPct}%"></div>
+            </div>
+            <div class="channel-res-legend">
+                <span class="leg-resolved">${d.resolved} resolved</span>
+                <span class="leg-open">${d.open_count} open</span>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ===================================
+// Escalation Chart
+// ===================================
+function renderEscalationChart(data) {
+    const el = document.getElementById('escalationChart');
+    if (!el) return;
+    if (!data.length) { el.innerHTML = '<p class="text-muted text-small">No data</p>'; return; }
+    const labels = { whatsapp: 'WhatsApp', instagram: 'Instagram', website: 'Website', widget: 'Website' };
+    el.innerHTML = data.map(d => {
+        const key = (d.channel || 'other').toLowerCase();
+        const escPct = d.total > 0 ? Math.round(d.escalated / d.total * 100) : 0;
+        const selfPct = d.total > 0 ? Math.round(d.self_served / d.total * 100) : 0;
+        return `<div class="escalation-item">
+            <div class="escalation-header">
+                <span class="escalation-name">${labels[key] || key}</span>
+                <span class="escalation-pct">${escPct}% escalated</span>
+            </div>
+            <div class="escalation-track">
+                <div class="escalation-fill-escalated" style="width:${escPct}%"></div>
+                <div class="escalation-fill-self" style="width:${selfPct}%"></div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ===================================
+// Resolution Trend
+// ===================================
+function renderResolutionTrend(data) {
+    const el = document.getElementById('resolutionTrend');
+    if (!el) return;
+    if (!data.length) { el.innerHTML = '<p class="text-muted text-small" style="text-align:center;padding:24px;width:100%">No trend data</p>'; return; }
+    const max = Math.max(...data.map(d => d.total), 1);
+    el.innerHTML = data.map(d => {
+        const totalH = (d.total / max) * 100;
+        const resH = d.total > 0 ? (d.resolved / d.total) * totalH : 0;
+        const openH = totalH - resH;
+        const label = new Date(d.day + 'T00:00:00').toLocaleDateString('en', { weekday: 'short' });
+        return `<div class="res-trend-bar">
+            <span class="res-trend-count">${d.total}</span>
+            <div class="res-trend-stack" style="height:${totalH}%">
+                <div class="res-trend-resolved" style="flex:${d.resolved || 0.1}"></div>
+                <div class="res-trend-open" style="flex:${(d.total - d.resolved) || 0.1}"></div>
+            </div>
+            <span class="res-trend-label">${label}</span>
+        </div>`;
+    }).join('');
+}
+
+// ===================================
+// Portal Performance
+// ===================================
+function renderPortalPerformance(data) {
+    const el = document.getElementById('portalPerformance');
+    if (!el) return;
+    if (!data.length) { el.innerHTML = '<p class="text-muted text-small">No portals configured</p>'; return; }
+    el.innerHTML = data.map(d => {
+        const rate = d.assigned > 0 ? Math.round(d.resolved / d.assigned * 100) : 0;
+        return `<div class="portal-perf-item">
+            <span class="portal-perf-name">${esc(d.portal_name || 'Unknown')}</span>
+            <div class="portal-perf-stats">
+                <div class="portal-perf-stat">
+                    <div class="portal-perf-stat-val">${d.assigned}</div>
+                    <div class="portal-perf-stat-label">Total</div>
+                </div>
+                <div class="portal-perf-stat">
+                    <div class="portal-perf-stat-val" style="color:var(--success)">${d.resolved}</div>
+                    <div class="portal-perf-stat-label">Resolved</div>
+                </div>
+                <div class="portal-perf-stat">
+                    <div class="portal-perf-stat-val" style="color:var(--warning)">${d.open_count}</div>
+                    <div class="portal-perf-stat-label">Open</div>
+                </div>
+                <div class="portal-perf-stat">
+                    <div class="portal-perf-stat-val">${rate}%</div>
+                    <div class="portal-perf-stat-label">Rate</div>
+                </div>
+            </div>
+            <div class="portal-perf-bar">
+                <div class="portal-perf-bar-fill" style="width:${rate}%"></div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ===================================
+// Templates
+// ===================================
+async function loadTemplates() {
+    const tbody = document.getElementById('templatesTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="5" class="text-muted" style="text-align:center;padding:24px">Loading...</td></tr>';
+    try {
+        const data = await apiFetch('/templates');
+        if (data?.success && data.templates?.length) {
+            tbody.innerHTML = data.templates.map(t => `
+                <tr>
+                    <td style="font-weight:600;color:var(--text-primary)">${esc(t.name || '')}</td>
+                    <td>${esc(t.category || '')}</td>
+                    <td>${esc(t.language || '')}</td>
+                    <td><span class="ticket-status-badge ${t.status === 'APPROVED' ? 'resolved' : 'open'}">${esc(t.status || '')}</span></td>
+                    <td><button class="btn btn-secondary btn-sm" onclick="useTemplate('${esc(t.name || '')}')">Use</button></td>
+                </tr>
+            `).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-muted" style="text-align:center;padding:24px">No templates found</td></tr>';
+        }
+    } catch {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-muted" style="text-align:center;padding:24px">Error loading templates</td></tr>';
+    }
+}
+
+function useTemplate(name) {
+    // Could open broadcast with pre-filled template
+    alert(`Template "${name}" selected`);
+}
+
+// ===================================
+// Unread Count
+// ===================================
+async function loadUnreadCount() {
+    try {
+        const data = await apiFetch('/chat/unread');
+        const badge = document.getElementById('navBadgeUnread');
+        if (badge && data?.count > 0) {
+            badge.textContent = data.count;
+            badge.style.display = '';
+        } else if (badge) {
+            badge.style.display = 'none';
+        }
+    } catch { /* silent */ }
+}
+
+// ===================================
+// Bulk Select
+// ===================================
+function toggleSelectAll(e) {
+    document.querySelectorAll('.ticket-check').forEach(cb => { cb.checked = e.target.checked; });
+}
+
+// ===================================
+// Widget Chats
+// ===================================
+let wcPage = 1;
+const wcLimit = 50;
+let wcMeta = {};
+
+async function loadWidgetChats(append = false) {
+    const list = document.getElementById('wcSessionsList');
+    if (!append) list.innerHTML = '<div class="tickets-loading"><div class="spinner"></div><span>Loading sessions...</span></div>';
+
+    const params = new URLSearchParams({ page: wcPage, limit: wcLimit });
+    const search = document.getElementById('wcSearchInput')?.value.trim();
+    const ticketFilter = document.getElementById('wcTicketFilter')?.value;
+    if (search) params.set('search', search);
+    if (ticketFilter) params.set('has_ticket', ticketFilter);
+
+    try {
+        const [sessionsData, analyticsData] = await Promise.all([
+            apiFetch(`/widget-chats/sessions?${params}`),
+            wcPage === 1 ? apiFetch('/widget-chats/analytics') : Promise.resolve(null)
+        ]);
+
+        if (!sessionsData?.success) { list.innerHTML = '<div class="tickets-loading"><span>Failed to load</span></div>'; return; }
+        wcMeta = sessionsData.meta || {};
+        renderWidgetSessions(sessionsData.sessions || [], append);
+        updateWcPagination();
+
+        if (analyticsData?.success) updateWcStatsRow(analyticsData.analytics);
+        // Start live session refresh when on conversations tab
+        startLiveRefresh();
+    } catch (err) {
+        list.innerHTML = '<div class="tickets-loading"><span>Error loading sessions</span></div>';
+    }
+}
+
+function renderWidgetSessions(sessions, append) {
+    const list = document.getElementById('wcSessionsList');
+    if (!append) list.innerHTML = '';
+    if (!sessions.length && !append) {
+        list.innerHTML = '<div class="tickets-loading"><span>No widget chat sessions found</span></div>';
         return;
     }
+    sessions.forEach(s => {
+        const row = document.createElement('div');
+        row.className = 'wc-session-row';
+        const sid = esc(s.session_id || '');
+        const shortSid = sid.length > 20 ? sid.substring(0, 20) + '...' : sid;
+        const ticketBadge = s.has_ticket
+            ? `<span class="wc-ticket-badge" title="${esc(s.ticket_number || '')}">${esc(s.ticket_number || 'Ticket')}</span>`
+            : '<span class="wc-no-ticket">No ticket</span>';
+        const tokens = (s.total_prompt_tokens || 0) + (s.total_completion_tokens || 0);
+        const cost = parseFloat(s.total_cost_usd || 0);
+        const visitorBadge = s.visitor_id
+            ? `<span class="wc-visitor-badge" title="Visitor: ${esc(s.visitor_id)}">&#x1f464; same device</span>`
+            : '';
 
-    try {
-        const response = await apiCall(`/support-portals/${portalId}/assign`, 'POST', {
-            ticketIds: Array.from(selectedTickets)
-        });
-
-        if (response.success) {
-            showToast(`${selectedTickets.size} ticket(s) assigned to portal!`, 'success');
-            selectedTickets.clear();
-            updateBulkActionButtons();
-            loadPortals();
-            loadSupportTickets();
-        } else {
-            throw new Error(response.error);
-        }
-    } catch (error) {
-        showToast(error.message || 'Failed to assign tickets', 'error');
-    }
-
-    document.getElementById('assignPortalSelect').value = '';
-}
-
-
-function copyPortalLink(url) {
-    navigator.clipboard.writeText(url).then(() => {
-        showToast('Portal link copied to clipboard!', 'success');
-    }).catch(() => {
-        // Fallback
-        const textarea = document.createElement('textarea');
-        textarea.value = url;
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-        showToast('Portal link copied to clipboard!', 'success');
+        row.innerHTML = `
+            <div class="wc-session-main">
+                <div class="wc-session-id" title="${sid}">${shortSid}</div>
+                <div class="wc-session-meta">
+                    <span class="wc-msg-count">${s.message_count || 0} msgs</span>
+                    ${ticketBadge}
+                    ${visitorBadge}
+                    <span class="wc-token-badge" title="${tokens} tokens">${formatTokens(tokens)} tok</span>
+                    <span class="wc-cost-badge">$${cost.toFixed(4)}</span>
+                </div>
+            </div>
+            <div class="wc-session-time">
+                <div>${formatTimeAgo(s.last_message_at || s.created_at)}</div>
+                <button class="ticket-action-btn" onclick="openWidgetChat('${sid}')" title="View conversation">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                </button>
+            </div>
+        `;
+        list.appendChild(row);
     });
 }
 
-// ===================================
-// Split Portal (even distribution)
-// ===================================
-let splitPortalId = null;
-let isSplitSubmitting = false;
-
-function openSplitPortalModal(id) {
-    splitPortalId = id;
-    const portal = allPortals.find(p => String(p.id) === String(id));
-    const name = portal ? portal.name : 'Portal';
-    const ticketCount = portal ? (portal.ticket_count || portal.assigned_count || 0) : 0;
-
-    document.getElementById('splitPortalInfo').textContent =
-        `Split "${name}" (${ticketCount} tickets) into multiple portals with tickets distributed evenly.`;
-    document.getElementById('splitCount').value = 2;
-    document.getElementById('splitNamePrefix').value = '';
-    document.getElementById('splitNamePrefix').placeholder = name;
-    document.getElementById('splitOnlyOpen').checked = true;
-    document.getElementById('splitKeepSource').checked = false;
-
-    document.getElementById('splitPortalModal').classList.add('active');
+function updateWcPagination() {
+    const pag = document.getElementById('wcPagination');
+    if (!wcMeta.total) { pag.style.display = 'none'; return; }
+    pag.style.display = 'flex';
+    const end = wcPage * wcLimit;
+    document.getElementById('wcShowStart').textContent = ((wcPage - 1) * wcLimit) + 1;
+    document.getElementById('wcShowEnd').textContent = Math.min(end, wcMeta.total);
+    document.getElementById('wcShowTotal').textContent = wcMeta.total;
+    document.getElementById('wcShowMoreBtn').style.display = wcMeta.has_more ? '' : 'none';
 }
 
-function closeSplitPortalModal() {
-    document.getElementById('splitPortalModal').classList.remove('active');
-    splitPortalId = null;
+function updateWcStatsRow(a) {
+    if (!a) return;
+    setText('wcStatSessions', a.totalSessions || 0);
+    setText('wcStatTickets', a.sessionsWithTickets || 0);
+    setText('wcStatEscRate', `${a.escalationRate || 0}%`);
+    setText('wcStatCost', `$${(a.totalCostUsd || 0).toFixed(4)}`);
+    setText('wcStatTokens', formatTokens(a.totalTokens || 0));
 }
 
-async function submitSplitPortal(event) {
-    event.preventDefault();
-    if (!splitPortalId || isSplitSubmitting) return;
-
-    const count = parseInt(document.getElementById('splitCount').value);
-    const namePrefix = document.getElementById('splitNamePrefix').value.trim();
-    const onlyOpen = document.getElementById('splitOnlyOpen').checked;
-    const keepSource = document.getElementById('splitKeepSource').checked;
-
-    if (!count || count < 2 || count > 10) {
-        showToast('Number of portals must be between 2 and 10', 'error');
-        return;
-    }
-
-    isSplitSubmitting = true;
-    const submitBtn = event.target.querySelector('button[type="submit"]');
-    const originalText = submitBtn.textContent;
-    submitBtn.textContent = 'Splitting...';
-    submitBtn.disabled = true;
+async function openWidgetChat(sessionId) {
+    const modal = document.getElementById('wcConversationModal');
+    document.getElementById('wcConvoTitle').textContent = 'Widget Chat';
+    document.getElementById('wcConvoSubtitle').textContent = sessionId;
+    document.getElementById('wcConvoStats').textContent = '';
+    document.getElementById('wcConvoMessages').innerHTML = '<div class="chat-loading"><div class="spinner"></div><span>Loading...</span></div>';
+    // Hide related sessions bar until we know the visitor_id
+    const relatedBar = document.getElementById('wcRelatedBar');
+    relatedBar.style.display = 'none';
+    document.getElementById('wcRelatedContent').style.display = 'none';
+    document.getElementById('wcRelatedContent').innerHTML = '';
+    // Track current session for admin actions
+    currentWcSessionId = sessionId;
+    currentWcAdminActive = false;
+    updateAdminStatusUI();
+    modal.classList.add('active');
 
     try {
-        const response = await apiCall(`/support-portals/${splitPortalId}/split`, 'POST', {
-            count,
-            namePrefix: namePrefix || undefined,
-            onlyOpen,
-            keepSource
-        });
-
-        if (response.success) {
-            closeSplitPortalModal();
-            showToast(response.message, 'success');
-            loadPortals();
-            loadSupportTickets();
-            if (response.portals) {
-                showDistributeResults(response.portals, response.stats);
-            }
-        } else {
-            throw new Error(response.error);
-        }
-    } catch (error) {
-        showToast(error.message || 'Failed to split portal', 'error');
-    } finally {
-        isSplitSubmitting = false;
-        submitBtn.textContent = originalText;
-        submitBtn.disabled = false;
-    }
-}
-
-// ===================================
-// Transfer Tickets Between Portals
-// ===================================
-let transferFromPortalId = null;
-
-function openTransferPortalModal(id) {
-    transferFromPortalId = id;
-    const portal = allPortals.find(p => String(p.id) === String(id));
-    document.getElementById('transferFromName').value = portal ? portal.name : 'Portal';
-
-    // Populate destination dropdown (exclude the source portal)
-    const select = document.getElementById('transferToPortal');
-    const others = allPortals.filter(p => String(p.id) !== String(id));
-    if (others.length === 0) {
-        select.innerHTML = '<option value="">No other portals available</option>';
-    } else {
-        select.innerHTML = '<option value="">Select destination portal...</option>' +
-            others.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-    }
-
-    document.getElementById('transferMode').value = 'all';
-    document.getElementById('transferCountGroup').style.display = 'none';
-    document.getElementById('transferCount').value = 1;
-    document.getElementById('transferOnlyOpen').checked = true;
-
-    document.getElementById('transferPortalModal').classList.add('active');
-}
-
-function closeTransferPortalModal() {
-    document.getElementById('transferPortalModal').classList.remove('active');
-    transferFromPortalId = null;
-}
-
-async function submitTransferPortal(event) {
-    event.preventDefault();
-    if (!transferFromPortalId) return;
-
-    const toPortalId = document.getElementById('transferToPortal').value;
-    if (!toPortalId) {
-        showToast('Select a destination portal', 'error');
-        return;
-    }
-
-    const mode = document.getElementById('transferMode').value;
-    const onlyOpen = document.getElementById('transferOnlyOpen').checked;
-    const body = { fromPortalId: transferFromPortalId, toPortalId, onlyOpen };
-
-    if (mode === 'count') {
-        const n = parseInt(document.getElementById('transferCount').value);
-        if (!n || n < 1) {
-            showToast('Enter a valid number of tickets', 'error');
+        const data = await apiFetch(`/widget-chats/session/${encodeURIComponent(sessionId)}`);
+        if (!data?.success) {
+            document.getElementById('wcConvoMessages').innerHTML = '<div class="chat-loading"><span>Not found</span></div>';
             return;
         }
-        body.count = n;
+        const sess = data.session;
+        const tokens = (sess.total_prompt_tokens || 0) + (sess.total_completion_tokens || 0);
+        document.getElementById('wcConvoStats').textContent =
+            `${sess.message_count || 0} msgs · ${formatTokens(tokens)} tok · $${parseFloat(sess.total_cost_usd || 0).toFixed(4)}` +
+            (sess.has_ticket ? ` · ${esc(sess.ticket_number || 'ticket')}` : '');
+
+        // Track admin state from session
+        currentWcAdminActive = sess.admin_active || false;
+        updateAdminStatusUI();
+
+        renderWidgetConversation(data.messages || []);
+
+        // Load related sessions if visitor_id exists
+        if (sess.visitor_id) {
+            loadRelatedSessions(sess.visitor_id, sessionId);
+        }
+    } catch {
+        document.getElementById('wcConvoMessages').innerHTML = '<div class="chat-loading"><span>Error loading</span></div>';
     }
+}
+
+async function loadRelatedSessions(visitorId, currentSessionId) {
+    const bar = document.getElementById('wcRelatedBar');
+    const content = document.getElementById('wcRelatedContent');
+    const label = document.getElementById('wcRelatedLabel');
 
     try {
-        const response = await apiCall('/support-portals/transfer', 'POST', body);
-        if (response.success) {
-            closeTransferPortalModal();
-            showToast(response.message, 'success');
-            loadPortals();
-            loadSupportTickets();
-        } else {
-            throw new Error(response.error);
+        const data = await apiFetch(`/widget-chats/related/${encodeURIComponent(visitorId)}?exclude=${encodeURIComponent(currentSessionId)}`);
+        if (!data?.success || !data.sessions?.length) {
+            bar.style.display = 'none';
+            return;
         }
-    } catch (error) {
-        showToast(error.message || 'Failed to transfer tickets', 'error');
+
+        label.textContent = `${data.sessions.length} other session${data.sessions.length > 1 ? 's' : ''} from this visitor`;
+        bar.style.display = 'flex';
+
+        // Render collapsed list
+        content.innerHTML = data.sessions.map(s => {
+            const sid = esc(s.session_id || '');
+            const shortSid = sid.length > 18 ? sid.substring(0, 18) + '...' : sid;
+            const ticketBadge = s.has_ticket
+                ? `<span class="wc-ticket-badge" style="font-size:10px">${esc(s.ticket_number || 'T')}</span>`
+                : '';
+            const tokens = (s.total_prompt_tokens || 0) + (s.total_completion_tokens || 0);
+            return `<div class="wc-related-item" onclick="openWidgetChat('${sid}')">
+                <span class="wc-related-item-id" title="${sid}">${shortSid}</span>
+                <span class="wc-related-item-meta">${s.message_count || 0} msgs · ${formatTokens(tokens)} tok</span>
+                ${ticketBadge}
+                <span class="wc-related-item-time">${formatTimeAgo(s.last_message_at || s.created_at)}</span>
+            </div>`;
+        }).join('');
+    } catch {
+        bar.style.display = 'none';
     }
 }
 
-// ===================================
-// Support Ticket Chat Functionality
-// ===================================
-
-let currentSupportChatPhone = null;
-let currentSupportTicketId = null;
-let supportChatPollingInterval = null;
-let pinnedMessage = null;
-let isPinningMode = false;
-
-async function openSupportChat(ticketId, phone, name, status) {
-    currentSupportTicketId = ticketId;
-    currentSupportChatPhone = phone;
-    
-    const chatModal = document.getElementById('supportChatModal');
-    const chatMessages = document.getElementById('supportChatMessages');
-    
-    // Update sidebar info
-    document.getElementById('chatCustomerName').textContent = name || 'Customer';
-    document.getElementById('chatCustomerPhone').textContent = phone;
-    document.getElementById('chatTicketId').textContent = '#' + ticketId;
-    document.getElementById('chatTicketStatus').textContent = (status || 'open').toUpperCase();
-    document.getElementById('chatHeaderTitle').textContent = name || 'Customer';
-    
-    chatMessages.innerHTML = `
-        <div class="chat-loading">
-            <div class="spinner"></div>
-            <span>Loading conversation...</span>
-        </div>
-    `;
-    
-    chatModal.classList.add('active');
-    
-    // Mark ticket as read
-    await markTicketAsRead(ticketId);
-    
-    // Setup event listeners
-    setupSupportChatEvents();
-    
-    // Start polling for new messages
-    if (supportChatPollingInterval) clearInterval(supportChatPollingInterval);
-    supportChatPollingInterval = setInterval(async () => {
-        if (!currentSupportChatPhone) return;
-        // Skip polling when the tab is hidden to save DB egress
-        if (document.hidden) return;
-        try {
-            const data = await apiCall(`/chat/${currentSupportChatPhone}`);
-            if (data && data.success) {
-                renderSupportChatMessages(data.messages);
-            }
-        } catch (err) {
-            // Silently fail on polling errors
-        }
-    }, 30000); // Poll every 30 seconds (reduced from 15s to save DB reads/egress)
-    
+function dashboardSafeUrl(value) {
     try {
-        const data = await apiCall(`/chat/${phone}`);
-        if (data && data.success) {
-            renderSupportChatMessages(data.messages);
-        } else {
-            chatMessages.innerHTML = `
-                <div class="chat-loading">Failed to load messages</div>
-            `;
-        }
-    } catch (err) {
-        chatMessages.innerHTML = `
-            <div class="chat-loading">Error loading conversation</div>
-        `;
-    }
+        const url = new URL(String(value || ''));
+        return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+    } catch { return null; }
 }
 
-// Insert quick reply template
-function insertQuickReply(templateName) {
-    const template = quickReplyTemplates.find(t => t.label === templateName);
-    if (!template) return;
-    
-    const input = document.getElementById('supportChatInput');
-    if (input) {
-        input.value = template.text;
-        input.focus();
-        // Auto-expand textarea
-        input.style.height = '48px';
-        input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+function renderWidgetRichContent(value) {
+    if (!value) return '';
+    let rich = value;
+    if (typeof rich === 'string') {
+        try { rich = JSON.parse(rich); } catch { return ''; }
     }
-}
-
-// Update pin button visual state
-function updatePinButtonState() {
-    const pinBtn = document.getElementById('pinMessageBtn');
-    if (pinBtn) {
-        if (isPinningMode) {
-            pinBtn.classList.add('active');
-            pinBtn.innerHTML = `
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l-5.5 9h11z"/><circle cx="12" cy="19" r="3"/></svg>
-                Click a Message
-            `;
-        } else {
-            pinBtn.classList.remove('active');
-            pinBtn.innerHTML = `
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l-5.5 9h11z"/><circle cx="12" cy="19" r="3"/></svg>
-                Pin
-            `;
-        }
+    const data = rich?.data || {};
+    if (rich?.type === 'tracking') {
+        const rows = [
+            ['Order', data.orderId ? '#' + data.orderId : null], ['AWB', data.awb], ['Location', data.location],
+            ['Expected', data.expectedDelivery], ['Delivered', data.deliveredDate], ['Note', data.note]
+        ].filter(([, value]) => value).map(([label, value]) => `<div class="wc-card-row"><span>${esc(label)}</span><span>${esc(value)}</span></div>`).join('');
+        const timeline = Array.isArray(data.timeline) && data.timeline.length
+            ? `<div class="wc-card-timeline">${data.timeline.slice(0, 6).map(item => `<div><strong>${esc(item.activity || item.status || 'Update')}</strong><span>${esc([item.date, item.location].filter(Boolean).join(' · '))}</span></div>`).join('')}</div>` : '';
+        const url = dashboardSafeUrl(data.trackingUrl);
+        return `<section class="wc-rich-card wc-tracking-card"><header><strong>${esc(data.carrierName || 'Tracking')}</strong><b>${esc(data.status || 'Unknown')}</b></header>${rows}${timeline}${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Track Live ↗</a>` : ''}</section>`;
     }
-}
-
-// Pin a message
-function pinMessage(messageContent, messageTime) {
-    pinnedMessage = {
-        content: messageContent,
-        time: messageTime
-    };
-    isPinningMode = false;
-    updatePinButtonState();
-    updatePinnedMessageDisplay();
-    showToast('Message pinned', 'success');
-}
-
-// Update pinned message display
-function updatePinnedMessageDisplay() {
-    const container = document.getElementById('pinnedMessageContainer');
-    const content = document.getElementById('pinnedMessageContent');
-    
-    if (!container || !content) return;
-    
-    if (pinnedMessage) {
-        content.textContent = pinnedMessage.content;
-        container.style.display = 'flex';
-    } else {
-        container.style.display = 'none';
-        content.textContent = '';
+    if (rich?.type === 'return_request' || rich?.type === 'return_status') {
+        const requestId = data.request_id || data.returnId;
+        const order = data.order_number || data.orderId;
+        const rows = [['Request ID', requestId], ['Order', order ? '#' + order : null], ['Reason', data.reason], ['Pickup', data.eta], ['Refund', data.refundAmount], ['Note', data.note]]
+            .filter(([, value]) => value).map(([label, value]) => `<div class="wc-card-row"><span>${esc(label)}</span><span>${esc(value)}</span></div>`).join('');
+        return `<section class="wc-rich-card wc-return-card"><header><strong>${esc(data.type || 'Return')}</strong><b>${esc(data.status || 'Pending')}</b></header>${rows}</section>`;
     }
-}
-
-function setupSupportChatEvents() {
-    const closeBtn = document.getElementById('closeSupportChat');
-    const closeMobileBtn = document.getElementById('closeSupportChatMobile');
-    const sendBtn = document.getElementById('sendSupportChatBtn');
-    const input = document.getElementById('supportChatInput');
-    const markResolvedBtn = document.getElementById('markTicketResolvedBtn');
-    const pinBtn = document.getElementById('pinMessageBtn');
-    const unpinBtn = document.getElementById('unpinMessageBtn');
-
-    // Close button (desktop)
-    if (closeBtn) {
-        closeBtn.onclick = () => {
-            document.getElementById('supportChatModal').classList.remove('active');
-            currentSupportChatPhone = null;
-            currentSupportTicketId = null;
-            pinnedMessage = null;
-            isPinningMode = false;
-            updatePinButtonState();
-            if (supportChatPollingInterval) {
-                clearInterval(supportChatPollingInterval);
-                supportChatPollingInterval = null;
-            }
-        };
+    if (rich?.type === 'ticket') {
+        const url = dashboardSafeUrl(data.whatsappLink);
+        return `<section class="wc-rich-card wc-ticket-card"><strong>Ticket created</strong><span>${esc(data.ticketNumber || '')}</span>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open WhatsApp ↗</a>` : ''}</section>`;
     }
-
-    // Close button (mobile sidebar)
-    if (closeMobileBtn) {
-        closeMobileBtn.onclick = () => {
-            document.querySelector('.chat-sidebar').classList.remove('open');
-        };
-    }
-    
-    // Send button
-    if (sendBtn) {
-        sendBtn.onclick = sendSupportChatMessage;
-    }
-    
-    // Input enter key
-    if (input) {
-        input.onkeypress = (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendSupportChatMessage();
-            }
-        };
-        // Auto-expand textarea
-        input.oninput = () => {
-            input.style.height = '52px';
-            input.style.height = Math.min(input.scrollHeight, 140) + 'px';
-        };
-    }
-    
-    // Mark resolved button
-    if (markResolvedBtn) {
-        markResolvedBtn.onclick = async () => {
-            if (!currentSupportTicketId) return;
-            if (confirm('Mark this ticket as resolved?')) {
-                try {
-                    const response = await apiCall(`/support-tickets/${currentSupportTicketId}`, 'PUT', { status: 'resolved' });
-                    if (response.success) {
-                        showToast('Ticket marked as resolved!', 'success');
-                        document.getElementById('supportChatModal').classList.remove('active');
-                        loadSupportTickets();
-                    }
-                } catch (error) {
-                    alert('Failed to resolve ticket');
-                }
-            }
-        };
-    }
-    
-    // View All Orders button
-    const viewAllOrdersBtn = document.getElementById('viewAllOrdersBtn');
-    if (viewAllOrdersBtn) {
-        viewAllOrdersBtn.onclick = () => {
-            if (currentSupportChatPhone) {
-                showAllOrdersModal(currentSupportChatPhone);
-            }
-        };
-    }
-    
-    // Close All Orders modal
-    const closeAllOrdersModalBtn = document.getElementById('closeAllOrdersModal');
-    if (closeAllOrdersModalBtn) {
-        closeAllOrdersModalBtn.onclick = () => {
-            document.getElementById('allOrdersModal').classList.remove('active');
-        };
-    }
-    
-    // Pin button - toggles pinning mode
-    if (pinBtn) {
-        pinBtn.onclick = () => {
-            isPinningMode = !isPinningMode;
-            updatePinButtonState();
-            if (isPinningMode) {
-                showToast('Click on any message to pin it', 'info');
-            }
-        };
-    }
-    
-    // Unpin button
-    if (unpinBtn) {
-        unpinBtn.onclick = () => {
-            pinnedMessage = null;
-            updatePinnedMessageDisplay();
-            showToast('Message unpinned', 'success');
-        };
-    }
-}
-
-// Helper: format time only (IST) for chat messages
-function formatChatTime(isoString) {
-    if (!isoString) return '';
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return '';
-    const istOffsetMs = 5.5 * 60 * 60 * 1000;
-    const istDate = new Date(d.getTime() + istOffsetMs);
-    let hours = istDate.getUTCHours();
-    const minutes = istDate.getUTCMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    return `${hours}:${minutes} ${ampm}`;
-}
-
-// Helper: get IST date key from ISO string
-function getISTDateKey(isoString) {
-    if (!isoString) return null;
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return null;
-    const istOffsetMs = 5.5 * 60 * 60 * 1000;
-    const istDate = new Date(d.getTime() + istOffsetMs);
-    const y = istDate.getUTCFullYear();
-    const m = String(istDate.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(istDate.getUTCDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-}
-
-// Helper: human-readable date label for chat separator
-function getDateLabel(dateKey) {
-    if (!dateKey) return '';
-    const today = getISTDateKey(new Date().toISOString());
-    const yesterday = getISTDateKey(new Date(Date.now() - 86400000).toISOString());
-    if (dateKey === today) return 'Today';
-    if (dateKey === yesterday) return 'Yesterday';
-    const [y, m, d] = dateKey.split('-');
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${parseInt(d)} ${months[parseInt(m) - 1]} ${y}`;
-}
-
-// Helper: get message type label
-function getMessageTypeLabel(msg) {
-    const type = msg.type || '';
-    if (type === 'template') return 'Template';
-    if (type === 'manual_reply') return 'Manual';
-    if (type === 'outgoing' || type === 'auto_reply' || type === 'text') return 'Bot';
-    if (type === 'broadcast') return 'Broadcast';
     return '';
 }
 
-// Helper: get WhatsApp-style status indicator HTML
-function getStatusIndicator(msg) {
-    if (msg.sender !== 'agent') return '';
-    const status = (msg.status || 'sent').toLowerCase();
-    
-    switch (status) {
-        case 'sent':
-            return '<span class="msg-status msg-status-sent" title="Sent">&#10003;</span>';
-        case 'delivered':
-            return '<span class="msg-status msg-status-delivered" title="Delivered">&#10003;&#10003;</span>';
-        case 'read':
-            return '<span class="msg-status msg-status-read" title="Read">&#10003;&#10003;</span>';
-        case 'failed':
-            return '<span class="msg-status msg-status-failed" title="Failed">!</span>';
-        default:
-            return '<span class="msg-status msg-status-sent" title="Sent">&#10003;</span>';
-    }
-}
-
-function renderSupportChatMessages(messages) {
-    const chatMessages = document.getElementById('supportChatMessages');
-    
-    // Check if user is near bottom before re-rendering (within 100px of bottom)
-    const isNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 100;
-    
-    if (!messages || messages.length === 0) {
-        chatMessages.innerHTML = `
-            <div class="chat-empty-state">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                </svg>
-                <div class="chat-empty-text">No messages yet</div>
-                <div class="chat-empty-sub">Start the conversation by typing below</div>
-            </div>
-        `;
-        return;
-    }
-    
-    chatMessages.innerHTML = '';
-    let lastDateKey = null;
-    
-    messages.forEach(msg => {
-        const currentDateKey = getISTDateKey(msg.created_at);
-        
-        // Insert date separator if the date changed
-        if (currentDateKey && currentDateKey !== lastDateKey) {
-            const separator = document.createElement('div');
-            separator.className = 'chat-date-separator';
-            separator.innerHTML = `<span>${getDateLabel(currentDateKey)}</span>`;
-            chatMessages.appendChild(separator);
-            lastDateKey = currentDateKey;
-        }
-        
-        const msgDiv = document.createElement('div');
-        msgDiv.className = `chat-message ${msg.sender}`;
-        
-        const time = formatChatTime(msg.created_at);
-        const typeLabel = getMessageTypeLabel(msg);
-        const typeBadge = typeLabel && msg.sender === 'agent' 
-            ? `<span class="msg-type-badge">${typeLabel}</span>` 
-            : '';
-        
-        // Format message content (handles templates, images, newlines)
-        const contentHtml = formatMessageContent(msg.content, msg);
-        
-        msgDiv.innerHTML = `
-            <div class="msg-bubble">
-                <div class="msg-content">${contentHtml}</div>
-                <div class="msg-meta">
-                    ${typeBadge}
-                    <span class="msg-time">${time}</span>
-                    ${getStatusIndicator(msg)}
-                </div>
-            </div>
-        `;
-        
-        // Add click handler for pinning messages
-        msgDiv.addEventListener('click', () => {
-            if (isPinningMode) {
-                pinMessage(msg.content || '', time);
-            }
-        });
-        
-        // Add visual indicator when in pinning mode
-        if (isPinningMode) {
-            msgDiv.style.cursor = 'pointer';
-            msgDiv.title = 'Click to pin this message';
-        }
-        
-        chatMessages.appendChild(msgDiv);
-    });
-    
-    // Only auto-scroll to bottom if user was already near bottom
-    // This preserves scroll position when user scrolls up to read messages
-    if (isNearBottom) {
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
-}
-
-async function sendSupportChatMessage() {
-    const input = document.getElementById('supportChatInput');
-    const message = input.value.trim();
-    
-    if (!message || !currentSupportChatPhone) return;
-    
-    // Add message to UI immediately (optimistic update)
-    const chatMessages = document.getElementById('supportChatMessages');
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'chat-message agent';
-    
-    const now = new Date();
-    const istOffsetMs = 5.5 * 60 * 60 * 1000;
-    const istDate = new Date(now.getTime() + istOffsetMs);
-    let istHours = istDate.getUTCHours();
-    const istMinutes = istDate.getUTCMinutes().toString().padStart(2, '0');
-    const istAmpm = istHours >= 12 ? 'PM' : 'AM';
-    istHours = istHours % 12;
-    istHours = istHours ? istHours : 12;
-    const istTimeStr = `${istHours}:${istMinutes} ${istAmpm}`;
-    
-    const contentHtml = escapeHtml(message).replace(/\n/g, '<br>');
-    msgDiv.innerHTML = `
-        <div class="msg-bubble">
-            <div class="msg-content">${contentHtml}</div>
-            <div class="msg-meta">
-                <span class="msg-type-badge">Manual</span>
-                <span class="msg-time">${istTimeStr}</span>
-                <span class="msg-status msg-status-sent">&#10003;</span>
-            </div>
-        </div>
-    `;
-    chatMessages.appendChild(msgDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-    input.value = '';
-    input.style.height = '52px';
-    
-    try {
-        const data = await apiCall('/chat/send', 'POST', {
-            phone: currentSupportChatPhone,
-            message: message,
-            suggestedText: window.__aiSuggestedReply || null
-        });
-        window.__aiSuggestedReply = null;
-        
-        if (data.success) {
-            // Refresh messages to get the actual status
-            const refreshData = await apiCall(`/chat/${currentSupportChatPhone}`);
-            if (refreshData && refreshData.success) {
-                renderSupportChatMessages(refreshData.messages);
-            }
+function renderWidgetConversation(messages) {
+    const container = document.getElementById('wcConvoMessages');
+    container.innerHTML = '';
+    messages.forEach(m => {
+        const div = document.createElement('div');
+        const isAdmin = m.sender === 'admin';
+        const isBot = m.sender === 'bot';
+        if (isAdmin) {
+            div.className = 'chat-msg outgoing wc-admin-msg';
+            div.innerHTML = `<div class="wc-admin-sender-label">Admin (You)</div><div>${esc(m.content || '')}</div><div class="chat-msg-time">${formatTime(m.created_at)}</div>`;
         } else {
-            // Mark as failed
-            msgDiv.classList.add('msg-failed');
-            const metaDiv = msgDiv.querySelector('.msg-meta');
-            if (metaDiv) metaDiv.innerHTML += '<span class="msg-error">Failed</span>';
+            div.className = `chat-msg ${isBot ? 'outgoing' : 'incoming'}`;
+            let metaHtml = '';
+            if (isBot && (m.prompt_tokens || m.completion_tokens)) {
+                const tok = (m.prompt_tokens || 0) + (m.completion_tokens || 0);
+                metaHtml = `<div class="wc-msg-meta">${formatTokens(tok)} tok · $${parseFloat(m.cost_usd || 0).toFixed(4)}${m.model ? ' · ' + esc(m.model) : ''}${m.suggested_action ? ' · ' + esc(m.suggested_action) : ''}</div>`;
+            }
+            div.innerHTML = `<div>${esc(m.content || '')}${renderWidgetRichContent(m.rich_content)}${metaHtml}</div><div class="chat-msg-time">${formatTime(m.created_at)}</div>`;
         }
+        container.appendChild(div);
+    });
+    container.scrollTop = container.scrollHeight;
+}
+
+async function loadWidgetChatAnalytics() {
+    try {
+        const data = await apiFetch('/widget-chats/analytics');
+        if (!data?.success) return;
+        const a = data.analytics;
+
+        setText('wcAnaSessions', a.totalSessions || 0);
+        setText('wcAnaMessages', a.totalMessages || 0);
+        setText('wcAnaTokens', formatTokens(a.totalTokens || 0));
+        setText('wcAnaTokensBreakdown', `prompt: ${formatTokens(a.totalPromptTokens || 0)} / completion: ${formatTokens(a.totalCompletionTokens || 0)}`);
+        setText('wcAnaCost', `$${(a.totalCostUsd || 0).toFixed(4)}`);
+        setText('wcAnaAvgCost', `avg $${(a.avgCostPerSession || 0).toFixed(4)}/session`);
+        setText('wcAnaEscRate', `${a.escalationRate || 0}%`);
+        setText('wcAnaEscCount', `${a.sessionsWithTickets || 0} of ${a.totalSessions || 0} sessions`);
+        setText('wcAnaAvgTokens', formatTokens(a.avgTokensPerSession || 0));
+
+        renderWcDailyChart(a.dailyUsage || []);
+        renderWcHourlyHeatmap(a.hourlyDistribution || []);
+        renderWcModelUsage(a.modelUsage || []);
     } catch (err) {
-        // Mark as failed
-        msgDiv.classList.add('msg-failed');
-        const metaDiv = msgDiv.querySelector('.msg-meta');
-        if (metaDiv) metaDiv.innerHTML += '<span class="msg-error">Failed</span>';
+        console.error('Widget chat analytics error:', err);
     }
 }
 
-// Helper: escape HTML
-function escapeHtml(text) {
-    if (!text) return '';
+function renderWcDailyChart(daily) {
+    const el = document.getElementById('wcDailyChart');
+    if (!el) return;
+    if (!daily.length) { el.innerHTML = '<p class="text-muted text-small" style="text-align:center;padding:24px">No data yet</p>'; return; }
+    const maxMsg = Math.max(...daily.map(d => d.messages || 0), 1);
+    const maxCost = Math.max(...daily.map(d => parseFloat(d.cost) || 0), 0.001);
+    el.innerHTML = `<div class="wc-daily-bars">${daily.map(d => {
+        const msgH = Math.max(((d.messages || 0) / maxMsg) * 100, 2);
+        const label = new Date(d.day + 'T00:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' });
+        return `<div class="wc-daily-bar-group">
+            <div class="wc-daily-bar" style="height:${msgH}%" title="${d.messages || 0} msgs · ${formatTokens(d.tokens || 0)} tok · $${parseFloat(d.cost || 0).toFixed(4)}"></div>
+            <span class="wc-daily-label">${label}</span>
+        </div>`;
+    }).join('')}</div>`;
+}
+
+function renderWcHourlyHeatmap(hourly) {
+    const el = document.getElementById('wcHourlyHeatmap');
+    if (!el) return;
+    if (!hourly.length) { el.innerHTML = '<p class="text-muted text-small" style="text-align:center;padding:24px;width:100%">No data</p>'; return; }
+    const max = Math.max(...hourly.map(h => h.count), 1);
+    let html = '';
+    for (let h = 0; h < 24; h++) {
+        const data = hourly.find(x => x.hour === h);
+        const count = data ? data.count : 0;
+        const ratio = count / max;
+        let heat = 'heat-1';
+        if (ratio > 0.8) heat = 'heat-5';
+        else if (ratio > 0.6) heat = 'heat-4';
+        else if (ratio > 0.4) heat = 'heat-3';
+        else if (ratio > 0.2) heat = 'heat-2';
+        html += `<div class="heatmap-cell ${heat}" title="${h}:00 — ${count} messages">${count || ''}</div>`;
+    }
+    el.innerHTML = html + '<div class="heatmap-labels" style="width:100%"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span></div>';
+}
+
+function renderWcModelUsage(models) {
+    const el = document.getElementById('wcModelUsage');
+    if (!el) return;
+    if (!models.length) { el.innerHTML = '<p class="text-muted text-small">No model data yet</p>'; return; }
+    el.innerHTML = models.map(m => {
+        const tok = (m.prompt_tokens || 0) + (m.completion_tokens || 0);
+        return `<div class="wc-model-row">
+            <span class="wc-model-name">${esc(m.model)}</span>
+            <span class="wc-model-stats">${m.calls || 0} calls · ${formatTokens(tok)} tok · $${parseFloat(m.cost || 0).toFixed(4)}</span>
+        </div>`;
+    }).join('');
+}
+
+async function loadWidgetChatSettings() {
+    try {
+        const data = await apiFetch('/widget-chats/settings');
+        if (!data?.success) return;
+        const s = data.settings;
+        setText('wcSetProvider', s.provider || '—');
+        setText('wcSetModel', s.model || '—');
+        setText('wcSetInputCost', `$${s.inputCostPer1M || 0} per 1M`);
+        setText('wcSetOutputCost', `$${s.outputCostPer1M || 0} per 1M`);
+        setText('wcSetTTL', `${s.sessionTtlMinutes || 15} min`);
+        setText('wcSetMaxSess', s.maxSessions || 200);
+        setText('wcSetHistory', s.maxHistoryTurns || 10);
+        setText('wcSetRetention', `${s.retentionDays || 90} days`);
+    } catch { /* silent */ }
+}
+
+async function purgeWidgetChats() {
+    const days = document.getElementById('wcPurgeDays')?.value || 90;
+    if (!confirm(`Purge all widget chats older than ${days} days?`)) return;
+    const result = document.getElementById('wcPurgeResult');
+    try {
+        const data = await apiFetch(`/widget-chats/purge?days=${days}`, { method: 'DELETE' });
+        if (data?.success) {
+            result.textContent = `Purged ${data.purged.chats} messages and ${data.purged.sessions} sessions.`;
+            loadWidgetChats();
+        } else {
+            result.textContent = data?.error || 'Failed to purge';
+        }
+    } catch {
+        result.textContent = 'Error purging data';
+    }
+}
+
+// ===================================
+// Live Sessions + Admin Override
+// ===================================
+let liveRefreshTimer = null;
+let currentWcSessionId = null;
+let currentWcAdminActive = false;
+const LIVE_REFRESH_MS = 15000; // 15 seconds
+
+function startLiveRefresh() {
+    stopLiveRefresh();
+    loadLiveSessions();
+    liveRefreshTimer = setInterval(loadLiveSessions, LIVE_REFRESH_MS);
+}
+function stopLiveRefresh() {
+    if (liveRefreshTimer) { clearInterval(liveRefreshTimer); liveRefreshTimer = null; }
+}
+
+async function loadLiveSessions() {
+    try {
+        const data = await apiFetch('/widget-chats/live');
+        if (!data?.success) return;
+        const sessions = data.sessions || [];
+        const section = document.getElementById('wcLiveSection');
+        const container = document.getElementById('wcLiveSessions');
+        const countEl = document.getElementById('wcLiveCount');
+
+        if (!sessions.length) {
+            section.style.display = 'none';
+            return;
+        }
+
+        section.style.display = 'flex';
+        countEl.textContent = sessions.length;
+        container.innerHTML = sessions.map(s => {
+            const sid = esc(s.session_id || '');
+            const shortSid = sid.length > 18 ? sid.substring(0, 18) + '…' : sid;
+            const adminBadge = s.admin_active
+                ? '<span class="wc-live-admin-badge" title="Admin in control">Admin</span>'
+                : '<span class="wc-live-ai-badge">AI</span>';
+            const ticketBadge = s.has_ticket
+                ? `<span class="wc-live-admin-badge" style="background:rgba(16,185,129,0.12);color:#10b981" title="Ticket ${esc(s.ticket_number || '')}">${esc(s.ticket_number || 'T')}</span>`
+                : '';
+            const msgs = s.preview_messages || [];
+            const adminClass = s.admin_active ? ' admin-active' : '';
+
+            // Build chat preview bubbles
+            let previewHTML = '';
+            if (msgs.length) {
+                previewHTML = msgs.map(m => {
+                    const sender = m.sender || 'bot';
+                    const bubbleClass = sender === 'customer' ? 'wc-live-bubble-customer' : sender === 'admin' ? 'wc-live-bubble-admin' : 'wc-live-bubble-bot';
+                    const text = esc((m.content || '').substring(0, 120));
+                    const time = formatTimeAgo(m.created_at);
+                    return `<div class="wc-live-bubble ${bubbleClass}">${text}</div>`;
+                }).join('');
+            } else {
+                previewHTML = '<div style="font-size:11px;color:var(--text-tertiary);padding:4px 0">No messages yet</div>';
+            }
+
+            const takeoverBtn = s.admin_active
+                ? `<button class="wc-live-takeover-btn" onclick="event.stopPropagation();openWidgetChat('${sid}')" title="Open chat"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Open</button>`
+                : `<button class="wc-live-takeover-btn" onclick="event.stopPropagation();quickTakeover('${sid}')" title="Take over this chat"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Takeover</button>`;
+
+            return `<div class="wc-live-card${adminClass}" onclick="openWidgetChat('${sid}')">
+                <div class="wc-live-card-header">
+                    <div class="wc-live-card-header-left">
+                        <span class="wc-live-card-session-id" title="${sid}">${shortSid}</span>
+                        <span class="wc-live-card-meta">${s.message_count || 0} msgs</span>
+                    </div>
+                    <div class="wc-live-card-badges">
+                        ${adminBadge}
+                        ${ticketBadge}
+                    </div>
+                </div>
+                <div class="wc-live-card-preview">
+                    ${previewHTML}
+                </div>
+                <div class="wc-live-card-footer">
+                    <span class="wc-live-card-time">${formatTimeAgo(s.last_message_at)}</span>
+                    <div class="wc-live-card-actions">
+                        ${takeoverBtn}
+                        <button class="wc-live-expand-btn" onclick="event.stopPropagation();openWidgetChat('${sid}')" title="Expand full conversation">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                            Expand
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+    } catch { /* silent */ }
+}
+
+async function quickTakeover(sessionId) {
+    // Open the conversation modal and immediately focus the admin input
+    await openWidgetChat(sessionId);
+    setTimeout(() => {
+        const input = document.getElementById('wcAdminInput');
+        if (input) input.focus();
+    }, 300);
+}
+
+async function sendAdminMessage() {
+    const input = document.getElementById('wcAdminInput');
+    const message = input?.value?.trim();
+    if (!message || !currentWcSessionId) return;
+
+    const btn = document.getElementById('wcAdminSendBtn');
+    btn.disabled = true;
+
+    try {
+        const data = await apiFetch('/widget-chats/admin-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: currentWcSessionId, message })
+        });
+        if (data?.success) {
+            input.value = '';
+            currentWcAdminActive = true;
+            updateAdminStatusUI();
+            // Append the admin message to the conversation view immediately
+            const container = document.getElementById('wcConvoMessages');
+            const div = document.createElement('div');
+            div.className = 'chat-msg wc-admin-msg';
+            div.innerHTML = `<div class="wc-admin-sender-label">Admin (You)</div><div>${esc(message)}</div><div class="chat-msg-time">${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}</div>`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+    } catch { /* silent */ }
+    btn.disabled = false;
+}
+
+async function releaseAdminControl() {
+    if (!currentWcSessionId) return;
+    try {
+        await apiFetch(`/widget-chats/release/${encodeURIComponent(currentWcSessionId)}`, { method: 'POST' });
+        currentWcAdminActive = false;
+        updateAdminStatusUI();
+    } catch { /* silent */ }
+}
+
+function updateAdminStatusUI() {
+    const modeEl = document.getElementById('wcAdminMode');
+    const releaseBtn = document.getElementById('wcAdminReleaseBtn');
+    if (currentWcAdminActive) {
+        modeEl.innerHTML = '<span class="wc-admin-active-dot"></span> You are controlling this chat';
+        modeEl.className = 'wc-admin-mode wc-admin-mode-active';
+        releaseBtn.style.display = 'inline-flex';
+    } else {
+        modeEl.innerHTML = 'AI is handling this chat';
+        modeEl.className = 'wc-admin-mode wc-admin-mode-ai';
+        releaseBtn.style.display = 'none';
+    }
+}
+
+function formatTokens(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+    return String(n);
+}
+
+// ===================================
+// Utilities
+// ===================================
+function esc(str) {
+    if (!str) return '';
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = str;
     return div.innerHTML;
 }
 
-// Helper: format message content for display
-function formatMessageContent(content, msg) {
-    if (!content) return '';
-    let text = content;
-    
-    // Check if this is a template message
-    const templateMatch = text.match(/^\[Template: (\w+)\]\s*(.*)$/);
-    if (templateMatch) {
-        const templateName = templateMatch[1];
-        const paramsText = templateMatch[2]?.trim();
-        
-        // Render as a template card
-        return `
-            <div class="template-message-card">
-                <div class="template-card-header">
-                    <span class="template-badge">📨 ${escapeHtml(templateName)}</span>
-                </div>
-                ${paramsText ? `<div class="template-card-content">${formatTemplateParams(paramsText)}</div>` : ''}
-            </div>
-        `;
-    }
-    
-    if (text.startsWith('[Image] ')) {
-        text = text.replace(/^\[Image\] /, '📷 ');
-    }
-    return escapeHtml(text).replace(/\n/g, '<br>');
-}
-
-// Helper: format template parameters for display
-function formatTemplateParams(paramsText) {
-    if (!paramsText) return '';
-    
-    // Split by | separator and format each parameter
-    const params = paramsText.split('|').map(p => p.trim()).filter(Boolean);
-    
-    if (params.length === 0) return escapeHtml(paramsText);
-    
-    // Format as a list or structured display
-    return params.map(param => {
-        const escaped = escapeHtml(param);
-        // Try to detect common patterns and format them nicely
-        if (escaped.match(/^(#\d+|Order)/i)) {
-            return `<div class="template-param"><strong>Order:</strong> ${escaped}</div>`;
-        }
-        if (escaped.match(/^Rs\.?\s*\d+/i)) {
-            return `<div class="template-param"><strong>Amount:</strong> ${escaped}</div>`;
-        }
-        if (escaped.match(/^(Processing|Confirmed|Shipped|Delivered|Cancelled)/i)) {
-            return `<div class="template-param"><strong>Status:</strong> ${escaped}</div>`;
-        }
-        return `<div class="template-param">${escaped}</div>`;
-    }).join('');
-}
-
-// Load Broadcast History
-async function loadBroadcastHistory() {
-    try {
-        const response = await apiCall('/broadcast/history');
-
-        if (response.success) {
-            const container = document.getElementById('broadcastHistory');
-
-            if (response.broadcasts.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <div class="empty-state-icon">
-                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                        </div>
-                        <div class="empty-state-title">No broadcasts yet</div>
-                        <div class="empty-state-text">Your broadcast campaigns will appear here</div>
-                    </div>
-                `;
-                return;
-            }
-
-            container.innerHTML = response.broadcasts.map(b => `
-                <div class="card" style="margin-bottom: 16px;">
-                    <div class="card-body">
-                        <div class="d-flex justify-between align-center mb-2">
-                            <strong>${b.title || 'Broadcast Campaign'}</strong>
-                            <span class="text-small text-muted">${formatDate(b.created_at)}</span>
-                        </div>
-                        <p class="text-small mb-2">${truncate(b.message, 100)}</p>
-                        <div class="d-flex gap-2">
-                            <span class="badge badge-info">${b.total_recipients} recipients</span>
-                            <span class="badge badge-success">${b.sent_count} sent</span>
-                        </div>
-                    </div>
-                </div>
-            `).join('');
-        }
-    } catch (error) {
-        console.error('Failed to load broadcast history:', error);
-    }
-}
-
-// Load Analytics
-async function loadAnalytics() {
-    try {
-        const response = await apiCall('/analytics/detailed');
-
-        if (response.success) {
-            // FAQ Chart
-            createBarChart('faqChart', response.faqData);
-
-            // Growth Chart
-            createAreaChart('growthChart', response.growthData);
-        }
-    } catch (error) {
-        console.error('Failed to load analytics:', error);
-    }
-}
-
-// Load Settings
-async function loadSettings() {
-    try {
-        const response = await apiCall('/settings');
-        if (response.success && response.settings) {
-            const firstDelayInput = document.getElementById('abandonedCartFirstDelay');
-            if (firstDelayInput) firstDelayInput.value = response.settings.abandoned_cart_first_delay_hours;
-            
-            const secondDelayInput = document.getElementById('abandonedCartSecondDelay');
-            if (secondDelayInput) secondDelayInput.value = response.settings.abandoned_cart_second_delay_hours;
-
-            const templateToggle = document.getElementById('autoTemplateToggle');
-            if (templateToggle) {
-                templateToggle.checked = response.settings.auto_template_sending;
-            }
-        }
-    } catch (error) {
-        console.error('Failed to load settings:', error);
-    }
-}
-
-// Toggle Auto Templates for Shopper Hub
-async function toggleAutoTemplates() {
-    const isEnabled = document.getElementById('autoTemplateToggle').checked;
-    try {
-        const response = await apiCall('/settings', 'POST', {
-            auto_template_sending: isEnabled
-        });
-        if (response.success) {
-            showToast(`Auto Templates ${isEnabled ? 'Enabled' : 'Disabled'}`, 'success');
-        } else {
-            document.getElementById('autoTemplateToggle').checked = !isEnabled;
-            showToast('Failed to update config', 'error');
-        }
-    } catch (error) {
-        document.getElementById('autoTemplateToggle').checked = !isEnabled;
-        showToast('Error updating config', 'error');
-    }
-}
-
-// ===================================
-// Chart Functions
-// ===================================
-
-function createLineChart(canvasId, data) {
-    const ctx = document.getElementById(canvasId);
-    if (!ctx) return;
-
-    if (charts[canvasId]) {
-        charts[canvasId].destroy();
-    }
-
-    charts[canvasId] = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: data.labels || [],
-            datasets: [{
-                label: 'Messages',
-                data: data.values || [],
-                borderColor: '#4F46E5',
-                backgroundColor: 'rgba(79, 70, 229, 0.1)',
-                tension: 0.4,
-                fill: true
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false }
-            },
-            scales: {
-                y: { beginAtZero: true }
-            }
-        }
-    });
-}
-
-function createDoughnutChart(canvasId, data) {
-    const ctx = document.getElementById(canvasId);
-    if (!ctx) return;
-
-    if (charts[canvasId]) {
-        charts[canvasId].destroy();
-    }
-
-    charts[canvasId] = new Chart(ctx, {
-        type: 'doughnut',
-        data: {
-            labels: data.labels || [],
-            datasets: [{
-                data: data.values || [],
-                backgroundColor: [
-                    '#4F46E5',
-                    '#059669',
-                    '#D97706',
-                    '#DC2626',
-                    '#0284C7'
-                ]
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { position: 'bottom' }
-            }
-        }
-    });
-}
-
-function createBarChart(canvasId, data) {
-    const ctx = document.getElementById(canvasId);
-    if (!ctx) return;
-
-    if (charts[canvasId]) {
-        charts[canvasId].destroy();
-    }
-
-    charts[canvasId] = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: data.labels || [],
-            datasets: [{
-                label: 'Queries',
-                data: data.values || [],
-                backgroundColor: '#4F46E5'
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false }
-            },
-            scales: {
-                y: { beginAtZero: true }
-            }
-        }
-    });
-}
-
-function createAreaChart(canvasId, data) {
-    const ctx = document.getElementById(canvasId);
-    if (!ctx) return;
-
-    if (charts[canvasId]) {
-        charts[canvasId].destroy();
-    }
-
-    charts[canvasId] = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: data.labels || [],
-            datasets: [{
-                label: 'Customers',
-                data: data.values || [],
-                borderColor: '#059669',
-                backgroundColor: 'rgba(5, 150, 105, 0.1)',
-                tension: 0.4,
-                fill: true
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false }
-            },
-            scales: {
-                y: { beginAtZero: true }
-            }
-        }
-    });
-}
-
-// ===================================
-// Actions
-// ===================================
-
-async function handleSettingsSave(e) {
-    e.preventDefault();
-
-    const saveText = document.getElementById('settingsSaveText');
-    const loader = document.getElementById('settingsLoader');
-
-    saveText.style.display = 'none';
-    loader.style.display = 'inline-block';
-
-    try {
-        const firstDelay = document.getElementById('abandonedCartFirstDelay').value;
-        const secondDelay = document.getElementById('abandonedCartSecondDelay').value;
-
-        const response = await apiCall('/settings', 'POST', {
-            abandoned_cart_first_delay_hours: firstDelay,
-            abandoned_cart_second_delay_hours: secondDelay
-        });
-
-        if (response.success) {
-            alert('✅ Settings saved successfully!');
-        } else {
-            throw new Error(response.error || 'Failed to save settings');
-        }
-    } catch (error) {
-        alert(`❌ Error saving settings: ${error.message}`);
-    } finally {
-        saveText.style.display = 'inline-block';
-        loader.style.display = 'none';
-    }
-}
-
-async function handleBroadcast(e) {
-    e.preventDefault();
-
-    const type = document.querySelector('input[name="broadcastType"]:checked')?.value || 'text';
-    const delay = document.getElementById('broadcastDelay').value || 5;
-    
-    // Determine recipients
-    let segment = null;
-    let phones = [];
-    
-    // IF preview is active (visible), respect checkboxes EVEN IF segment is selected
-    const isShowingPreview = document.getElementById('selectionPreview').style.display !== 'none';
-
-    if (currentBroadcastTab === 'segmentTab' && !isShowingPreview) {
-        segment = document.getElementById('broadcastRecipients').value;
-    } else {
-        // Collect checked phones from preview (works for Segment, File, or Manual if previewed)
-        document.querySelectorAll('.recipient-checkbox:checked').forEach(cb => {
-            phones.push(cb.value);
-        });
-        if (phones.length === 0) {
-            alert('Please select or add recipients first');
-            return;
-        }
-    }
-
-    const recipientDesc = segment ? `${segment} segment` : `${phones.length} selected contacts`;
-    if (!confirm(`Send ${type} broadcast to ${recipientDesc}?`)) return;
-
-    try {
-        let response;
-        const commonData = {
-            segment,
-            phones,
-            delay_seconds: delay
-        };
-
-        if (type === 'text') {
-            const message = document.getElementById('broadcastMessage').value;
-            const imageUrl = document.getElementById('broadcastImageUrl').value;
-            if (!message) throw new Error('Message is required');
-
-            response = await apiCall('/broadcast/send', 'POST', {
-                ...commonData,
-                message,
-                imageUrl
-            });
-        } else {
-            // Template broadcast with variable support
-            const selectedCard = document.querySelector('.template-card.selected');
-            const templateName = selectedCard ? selectedCard.dataset.template : '';
-            
-            if (!templateName) throw new Error('Please select a template');
-
-            const template = window.metaTemplates?.find(t => t.name === templateName);
-            
-            // Collect variable values if template has variables
-            const varInputs = document.querySelectorAll('.template-var-input');
-            const components = [];
-            
-            if (varInputs.length > 0) {
-                const parameters = Array.from(varInputs).map(input => ({
-                    type: 'text',
-                    text: input.value || `[${input.dataset.var}]`
-                }));
-                
-                components.push({
-                    type: 'body',
-                    parameters
-                });
-            }
-
-            response = await apiCall('/broadcast/template', 'POST', {
-                ...commonData,
-                templateName,
-                language: template?.language || 'en_US',
-                components
-            });
-        }
-
-        if (response.success) {
-            showToast(`Broadcast queued for ${response.totalRecipients} customers!`, 'success');
-            document.getElementById('broadcastForm').reset();
-            currentBroadcastRecipients = [];
-            document.getElementById('selectionPreview').style.display = 'none';
-            document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
-            document.getElementById('templateVariablesArea').style.display = 'none';
-            toggleBroadcastType();
-            loadBroadcastHistory();
-            updateRecipientCount();
-        } else {
-            throw new Error(response.message || 'Failed to send broadcast');
-        }
-    } catch (error) {
-        alert(`❌ Error: ${error.message}`);
-    }
-}
-
-async function pauseBroadcast() {
-    try {
-        const response = await apiCall('/broadcast/pause', 'POST');
-        if (response.success) {
-            showToast('Broadcast queue paused', 'info');
-            loadBroadcastHistory();
-        }
-    } catch (error) {
-        alert('Failed to pause: ' + error.message);
-    }
-}
-
-async function resumeBroadcast() {
-    try {
-        const response = await apiCall('/broadcast/resume', 'POST');
-        if (response.success) {
-            showToast('Broadcast queue resumed', 'success');
-            loadBroadcastHistory();
-        }
-    } catch (error) {
-        alert('Failed to resume: ' + error.message);
-    }
-}
-
-// New Ultimate Broadcast Functions
-function switchBroadcastTab(e, tabId) {
-    currentBroadcastTab = tabId;
-    
-    // Update tab UI
-    document.querySelectorAll('.wa-tab').forEach(t => t.classList.remove('active'));
-    e.currentTarget.classList.add('active');
-    
-    // Update content
-    document.querySelectorAll('.wa-broadcast-tab-content').forEach(c => c.classList.remove('active'));
-    document.getElementById(tabId).classList.add('active');
-    
-    // Reset selection if moving away from preview-based tabs
-    if (tabId === 'segmentTab') {
-        document.getElementById('selectionPreview').style.display = 'none';
-        currentBroadcastRecipients = [];
-    }
-    
-    updateRecipientCount();
-}
-
-async function previewSegment() {
-    const segment = document.getElementById('broadcastRecipients').value;
-    try {
-        const response = await apiCall(`/broadcast/preview?segment=${segment}`);
-        if (response.success) {
-            renderPreviewTable(response.customers);
-        }
-    } catch (error) {
-        showToast('Failed to load preview', 'danger');
-    }
-}
-
-function renderPreviewTable(customers) {
-    currentBroadcastRecipients = customers;
-    const tbody = document.getElementById('previewTableBody');
-    const previewArea = document.getElementById('selectionPreview');
-    
-    previewArea.style.display = 'block';
-    tbody.innerHTML = customers.map(c => `
-        <tr>
-            <td><input type="checkbox" class="recipient-checkbox" value="${c.phone}" checked></td>
-            <td>${c.name || 'Unknown'}</td>
-            <td>${formatPhone(c.phone)}</td>
-        </tr>
-    `).join('');
-    
-    updateRecipientCount();
-}
-
-function toggleAllRecipients(cb) {
-    document.querySelectorAll('.recipient-checkbox').forEach(box => {
-        box.checked = cb.checked;
-    });
-    updateRecipientCount();
-}
-
-async function handleBroadcastFile(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    document.getElementById('fileNameDisplay').textContent = `Loading ${file.name}...`;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-        const base64 = event.target.result.split(',')[1];
-        try {
-            const response = await apiCall('/broadcast/import', 'POST', {
-                fileBase64: base64,
-                fileName: file.name
-            });
-            if (response.success) {
-                document.getElementById('fileNameDisplay').textContent = `Imported ${response.count} contacts from ${file.name}`;
-                renderPreviewTable(response.customers);
-            }
-        } catch (error) {
-            alert('Error parsing file: ' + error.message);
-        }
-    };
-    reader.readAsDataURL(file);
-}
-
-function parseManualPhones() {
-    const text = document.getElementById('manualPhoneList').value;
-    const lines = text.split(/[\n,]/);
-    const customers = [];
-    
-    lines.forEach(line => {
-        const clean = line.trim();
-        if (clean.length >= 10) {
-            customers.push({
-                phone: clean,
-                name: 'Manual Contact'
-            });
-        }
-    });
-
-    if (customers.length > 0) {
-        renderPreviewTable(customers);
-    } else {
-        alert('No valid phone numbers found. Please enter at least 10 digits.');
-    }
-}
-
-async function startDirectChat() {
-    const phone = document.getElementById('directChatPhone').value;
-    const message = document.getElementById('directChatMessage').value;
-    
-    if (!phone || !message) {
-        alert('Please enter both phone and message');
-        return;
-    }
-
-    try {
-        const response = await apiCall('/chat/start', 'POST', { phone, message });
-        if (response.success) {
-            showToast('Message sent! Opening chat...', 'success');
-            setTimeout(() => {
-                viewCustomerDetails(phone);
-            }, 1000);
-        }
-    } catch (error) {
-        alert('Error: ' + error.message);
-    }
-}
-
-async function updateRecipientCount() {
-    const countEl = document.getElementById('recipientCount');
-    const selectedCountEl = document.getElementById('selectedCount');
-    
-    if (currentBroadcastTab === 'segmentTab' && !document.getElementById('selectionPreview').offsetParent) {
-        // Normal segment count
-        const segment = document.getElementById('broadcastRecipients').value;
-        try {
-            const data = await apiCall(`/broadcast/count?segment=${segment}`);
-            countEl.textContent = data.count || 0;
-        } catch (e) {
-            countEl.textContent = '0';
-        }
-    } else {
-        // Count checked boxes in preview
-        const checkedCount = document.querySelectorAll('.recipient-checkbox:checked').length;
-        countEl.textContent = checkedCount;
-        if (selectedCountEl) selectedCountEl.textContent = checkedCount;
-    }
-}
-
-function toggleBroadcastType() {
-    const type = document.querySelector('input[name="broadcastType"]:checked')?.value || 'text';
-    document.getElementById('customMessageArea').style.display = type === 'text' ? 'block' : 'none';
-    document.getElementById('templateArea').style.display = type === 'template' ? 'block' : 'none';
-    
-    if (type === 'template' && (!window.metaTemplates || window.metaTemplates.length === 0)) {
-        loadTemplates();
-    }
-}
-
-// Template search functionality
-function initTemplateSearch() {
-    const searchInput = document.getElementById('templateSearch');
-    if (!searchInput) return;
-    
-    searchInput.addEventListener('input', (e) => {
-        const searchTerm = e.target.value.toLowerCase();
-        const filtered = window.metaTemplates?.filter(t => 
-            t.status === 'APPROVED' && (
-                t.name.toLowerCase().includes(searchTerm) ||
-                t.category.toLowerCase().includes(searchTerm)
-            )
-        ) || [];
-        
-        renderTemplateList(filtered);
-    });
-}
-
-async function loadTemplates() {
-    try {
-        const tbody = document.getElementById('templatesTableBody');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="text-center">Loading...</td></tr>';
-
-        const response = await apiCall('/templates');
-        if (response.success) {
-            window.metaTemplates = response.templates || [];
-            renderTemplatesTable(window.metaTemplates);
-            updateTemplateDropdown(window.metaTemplates);
-            
-            // Also render template cards for broadcast if container exists
-            renderTemplateList(window.metaTemplates);
-        }
-    } catch (error) {
-        console.error('Failed to load templates:', error);
-    }
-}
-
-async function syncTemplates() {
-    try {
-        const btn = event.currentTarget;
-        const originalHtml = btn.innerHTML;
-        btn.innerHTML = '<div class="wa-spinner" style="width:16px; height:16px;"></div> Syncing...';
-        btn.disabled = true;
-
-        const response = await apiCall('/templates/sync');
-        if (response.success) {
-            alert(`Successfully synced ${response.count} templates from Meta!`);
-            await loadTemplates();
-        } else {
-            alert('Failed to sync: ' + (response.error || 'Unknown error'));
-        }
-        
-        btn.innerHTML = originalHtml;
-        btn.disabled = false;
-    } catch (error) {
-        console.error('Failed to sync templates:', error);
-        alert('Sync failed. Please check your Meta API credentials.');
-    }
-}
-
-function renderTemplatesTable(templates) {
-    const tbody = document.getElementById('templatesTableBody');
-    if (!tbody) return;
-
-    if (!templates || templates.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center">No Meta templates found</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = templates.map(t => `
-        <tr>
-            <td><strong>${t.name}</strong></td>
-            <td><span class="badge badge-gray">${t.category}</span></td>
-            <td>${t.language || 'N/A'}</td>
-            <td><span class="badge ${t.status === 'APPROVED' ? 'badge-success' : 'badge-warning'}">${t.status || 'UNKNOWN'}</span></td>
-            <td>
-                <button class="btn btn-sm btn-primary" data-action="initiateTemplateBroadcast" data-template="${t.name}">
-                    Use
-                </button>
-            </td>
-        </tr>
-    `).join('');
-}
-
-function updateTemplateDropdown(templates) {
-    const select = document.getElementById('broadcastTemplate');
-    if (!select) return;
-
-    const approved = templates.filter(t => t.status === 'APPROVED');
-    
-    select.innerHTML = '<option value="">-- Select Template --</option>' + 
-        approved.map(t => `<option value="${t.name}">${t.name}</option>`).join('');
-}
-
-function handleTemplateSelect() {
-    const name = document.getElementById('broadcastTemplate').value;
-    const preview = document.getElementById('templatePreview');
-    if (!preview) return;
-
-    if (!name) {
-        preview.style.display = 'none';
-        return;
-    }
-
-    const template = window.metaTemplates?.find(t => t.name === name);
-    if (template) {
-        const bodyComp = template.components?.find(c => c.type === 'BODY');
-        preview.textContent = bodyComp?.text || 'No preview available';
-        preview.style.display = 'block';
-    }
-}
-
-function initiateTemplateBroadcast(name) {
-    navigateTo('broadcast');
-    const radio = document.querySelector('input[name="broadcastType"][value="template"]');
-    if (radio) {
-        radio.checked = true;
-        toggleBroadcastType();
-        setTimeout(() => {
-            const select = document.getElementById('broadcastTemplate');
-            if (select) {
-                select.value = name;
-                handleTemplateSelect();
-            }
-        }, 100);
-    }
-}
-
-
-function viewCustomerDetails(phone) {
-    // Show modal with customer details
-    const modal = document.getElementById('customerModal');
-    const modalBody = document.getElementById('customerModalBody');
-
-    modalBody.innerHTML = '<div class="loading"></div>';
-    modal.classList.add('active');
-
-    apiCall(`/customers/${phone}/details`).then(response => {
-        if (response.success) {
-            const customer = response.customer;
-            modalBody.innerHTML = `
-                <div>
-                    <h4>${customer.name || 'Unknown'}</h4>
-                    <p class="text-muted">${formatPhone(customer.phone)}</p>
-                    <hr>
-                    <div class="stats-grid" style="margin-top: 20px;">
-                        <div>
-                            <div class="text-small text-muted">Total Orders</div>
-                            <div style="font-size: 24px; font-weight: 700;">${customer.order_count || 0}</div>
-                        </div>
-                        <div>
-                            <div class="text-small text-muted">Total Messages</div>
-                            <div style="font-size: 24px; font-weight: 700;">${customer.message_count || 0}</div>
-                        </div>
-                    </div>
-                    <hr>
-                    <h5 class="mt-3">Recent Orders</h5>
-                    ${customer.orders && customer.orders.length > 0 ?
-                    customer.orders.map(o => `
-                            <div style="padding: 12px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 8px;">
-                                <div class="d-flex justify-between">
-                                    <strong>${o.order_id}</strong>
-                                    ${getStatusBadge(o.status)}
-                                </div>
-                                <div class="text-small text-muted mt-1">${formatDate(o.created_at)}</div>
-                            </div>
-                        `).join('') :
-                    '<p class="text-muted">No orders yet</p>'
-                }
-                </div>
-            `;
-        }
-    });
-}
-
-function closeCustomerModal() {
-    document.getElementById('customerModal').classList.remove('active');
-}
-
-function viewOrderDetails(orderId) {
-    alert(`Order Details: ${orderId}\n\nThis will show full order information, tracking timeline, and customer details.`);
-}
-
-// ===================================
-// Filters & Search
-// ===================================
-
-function filterCustomers() {
-    const searchTerm = document.getElementById('customerSearch').value.toLowerCase();
-    const filtered = window.customersData.filter(c =>
-        (c.name && c.name.toLowerCase().includes(searchTerm)) ||
-        c.phone.includes(searchTerm)
-    );
-    renderCustomersTable(filtered);
-}
-
-function filterOrders() {
-    const searchTerm = document.getElementById('orderSearch').value.toLowerCase();
-    const statusFilter = document.getElementById('orderStatusFilter').value;
-
-    let filtered = window.ordersData;
-
-    if (searchTerm) {
-        filtered = filtered.filter(o =>
-            o.order_id.toLowerCase().includes(searchTerm) ||
-            (o.customer_name && o.customer_name.toLowerCase().includes(searchTerm))
-        );
-    }
-
-    if (statusFilter) {
-        filtered = filtered.filter(o => o.status === statusFilter);
-    }
-
-    renderOrdersTable(filtered);
-}
-
-function filterMessages() {
-    const typeFilter = document.getElementById('messageTypeFilter').value;
-    const dateFilter = document.getElementById('messageDateFilter').value;
-
-    // Safety check for undefined window.messagesData
-    let filtered = window.messagesData || [];
-
-    if (typeFilter) {
-        filtered = filtered.filter(m => m.message_type === typeFilter);
-    }
-
-    if (dateFilter) {
-        filtered = filtered.filter(m => m.created_at && m.created_at.startsWith(dateFilter));
-    }
-
-    renderMessagesTable(filtered);
-}
-
-// ===================================
-// Export Functions
-// ===================================
-
-function exportCustomers() {
-    const csv = convertToCSV(window.customersData, ['phone', 'name', 'order_count', 'message_count', 'created_at']);
-    downloadCSV(csv, 'customers.csv');
-}
-
-function exportMessages() {
-    const csv = convertToCSV(window.messagesData, ['created_at', 'customer_phone', 'message_type', 'message_content']);
-    downloadCSV(csv, 'messages.csv');
-}
-
-function convertToCSV(data, fields) {
-    const header = fields.join(',');
-    const rows = data.map(item =>
-        fields.map(field => `"${item[field] || ''}"`).join(',')
-    );
-    return [header, ...rows].join('\n');
-}
-
-function downloadCSV(csv, filename) {
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-}
-
-// ===================================
-// Utility Functions
-// ===================================
-
-async function apiCall(endpoint, method = 'GET', body = null) {
-    // Always read fresh token from localStorage to handle page reloads
-    const token = localStorage.getItem('authToken') || authToken;
-    const options = {
-        method,
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        }
-    };
-
-    if (body) {
-        options.body = JSON.stringify(body);
-    }
-
-    const response = await fetch(`${API_BASE}${endpoint}`, options);
-
-    if (response.status === 401) {
-        handleLogout();
-        throw new Error('Unauthorized');
-    }
-
-    return await response.json();
-}
-
-function formatDate(dateString) {
-    if (!dateString) return 'N/A';
-    const d = new Date(dateString);
-    if (isNaN(d.getTime())) return 'N/A';
-    const istOffsetMs = 5.5 * 60 * 60 * 1000;
-    const istDate = new Date(d.getTime() + istOffsetMs);
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${istDate.getUTCDate()} ${months[istDate.getUTCMonth()]} ${istDate.getUTCFullYear()}`;
-}
-
-function formatTime(dateString) {
-    if (!dateString) return 'N/A';
-    const d = new Date(dateString);
-    if (isNaN(d.getTime())) return 'N/A';
-    const istOffsetMs = 5.5 * 60 * 60 * 1000;
-    const istDate = new Date(d.getTime() + istOffsetMs);
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    let hours = istDate.getUTCHours();
-    const minutes = istDate.getUTCMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    return `${istDate.getUTCDate()} ${months[istDate.getUTCMonth()]}, ${hours}:${minutes} ${ampm}`;
-}
-
-function formatTimeAgo(dateString) {
-    const date = new Date(dateString);
+function formatTimeAgo(dateStr) {
+    if (!dateStr) return '';
     const now = new Date();
-    const seconds = Math.floor((now - date) / 1000);
-
-    if (seconds < 60) return 'Just now';
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-    return `${Math.floor(seconds / 86400)}d ago`;
+    const d = new Date(dateStr);
+    const diff = Math.floor((now - d) / 1000);
+    if (diff < 60) return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+    return d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }
 
-function formatPhone(phone) {
-    return phone.replace(/(\d{2})(\d{5})(\d{5})/, '+$1 $2-$3');
+function formatTime(dateStr) {
+    if (!dateStr) return '';
+    return new Date(dateStr).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
-function truncate(str, maxLen) {
-    if (!str) return '';
-    if (str.length <= maxLen) return str;
-    return str.substring(0, maxLen) + '...';
-}
-
-function getStatusBadge(status) {
-    const badges = {
-        pending: '<span class="badge badge-warning">Pending</span>',
-        confirmed: '<span class="badge badge-info">Confirmed</span>',
-        shipped: '<span class="badge badge-primary">Shipped</span>',
-        delivered: '<span class="badge badge-success">Delivered</span>',
-        cancelled: '<span class="badge badge-danger">Cancelled</span>'
-    };
-    return badges[status] || `<span class="badge badge-gray">${status}</span>`;
-}
-
-// --- Unified Data Sync ---
-async function syncAllData() {
-    try {
-        const text = document.getElementById('syncBtnText');
-        const loader = document.getElementById('syncLoader');
-        
-        text.style.display = 'none';
-        loader.style.display = 'inline-block';
-        
-        const response = await apiCall('/sync/all', 'POST');
-        
-        text.style.display = 'inline-block';
-        loader.style.display = 'none';
-        
-        if (response.success) {
-            alert(response.message || '✅ Synchronization started in background!\nRefresh the page in a few minutes to see updated data.');
-            
-            // Refresh dashboard data occasionally to show progress
-            setTimeout(() => {
-                if (typeof loadOverviewStats === 'function') loadOverviewStats();
-                if (activePage === 'customers' && typeof loadCustomers === 'function') loadCustomers();
-            }, 5000);
-        }
-    } catch (error) {
-        document.getElementById('syncBtnText').style.display = 'inline-block';
-        document.getElementById('syncLoader').style.display = 'none';
-        alert('❌ Synchronization failed: ' + error.message);
-    }
-}
-
-// --- Customer Segmentation Utils ---
-async function loadSegments() {
-    try {
-        const response = await apiCall('/customers/segments');
-        if (response.success && response.segments) {
-            if (document.getElementById('oneTimeCustomers')) document.getElementById('oneTimeCustomers').textContent = response.segments.oneTime || 0;
-            if (document.getElementById('repeatCustomers')) document.getElementById('repeatCustomers').textContent = response.segments.repeat || 0;
-            if (document.getElementById('inactiveCustomers')) document.getElementById('inactiveCustomers').textContent = response.segments.inactive || 0;
-        }
-    } catch (e) {
-        console.error('Failed to load segments:', e);
-    }
-}
-
-async function loadRecentCustomers() {
-    await loadCustomers();
-}
-
-// Navigation wrapper for page-specific data loading
-if (typeof navigateTo === 'function') {
-    const originalNavigateTo = navigateTo;
-    window.navigateTo = function(page) {
-        originalNavigateTo(page);
-        if (page === 'customers') { loadSegments(); }
-    };
+function debounce(fn, ms) {
+    let timer;
+    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
 }
 
 // ===================================
-// Shopper Hub Logic
+// Sidebar / Mobile
 // ===================================
-
-let shopperLimit = 50;
-let shopperOffset = 0;
-let currentShopperStatus = 'all';
-let shopperSearchTimeout = null;
-
-async function loadShoppers() {
-    const tbody = document.getElementById('shoppersTableBody');
-    if (!tbody) return;
-
-    tbody.innerHTML = '<tr><td colspan="6" class="text-center"><div class="loading"></div></td></tr>';
-
-    const search = document.getElementById('shopperSearch')?.value || '';
-    const startDate = document.getElementById('shopperStartDate')?.value || '';
-    const endDate = document.getElementById('shopperEndDate')?.value || '';
-
-    try {
-        const query = new URLSearchParams({
-            limit: shopperLimit,
-            offset: shopperOffset,
-            status: currentShopperStatus,
-            search,
-            startDate,
-            endDate
-        });
-
-        const response = await apiCall(`/shoppers?${query.toString()}`);
-        if (response.success) {
-            renderShoppersTable(response.shoppers, response.total, Math.floor(shopperOffset / shopperLimit) + 1);
-        }
-    } catch (error) {
-        console.error('Failed to load shoppers:', error);
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger">Failed to load data</td></tr>';
-    }
+function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('collapsed');
 }
 
-function renderShoppersTable(shoppers, total, page) {
-    const tbody = document.getElementById('shoppersTableBody');
-    const info = document.getElementById('shoppersPaginationInfo');
-    const btnPrev = document.getElementById('btnPrevShoppers');
-    const btnNext = document.getElementById('btnNextShoppers');
-
-    if (!shoppers || shoppers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding: 40px;">No shoppers found</td></tr>';
-        if (info) info.innerText = 'SHOWING 0-0 OF 0 SHOPPERS';
-        if (btnPrev) btnPrev.disabled = true;
-        if (btnNext) btnNext.disabled = true;
-        return;
-    }
-
-    tbody.innerHTML = shoppers.map(s => `
-        <tr>
-            <td style="padding: 12px;"><input type="checkbox" class="shopper-checkbox" value="${s.id}"></td>
-            <td style="padding: 12px; font-weight: bold;">${s.name || 'Unknown'}</td>
-            <td style="padding: 12px;">${formatPhone(s.phone)}</td>
-            <td style="padding: 12px;"><span style="font-family: monospace;">${s.order_id || 'N/A'}</span></td>
-            <td style="padding: 12px;">
-                <span class="badge ${getShopperStatusClass(s.status)}" style="border: 1px solid #000; border-radius: 0;">
-                    ${s.status.toUpperCase().replace('_', ' ')}
-                </span>
-            </td>
-            <td style="padding: 12px; font-size: 12px;">${formatDate(s.created_at)}</td>
-        </tr>
-    `).join('');
-
-    if (info) {
-        const start = shopperOffset + 1;
-        const end = Math.min(shopperOffset + shopperLimit, total);
-        info.innerText = `SHOWING ${start}-${end} OF ${total} SHOPPERS`;
-    }
-
-    if (btnPrev) btnPrev.disabled = shopperOffset <= 0;
-    if (btnNext) btnNext.disabled = shopperOffset + shopperLimit >= total;
-
-    // Handle checkboxes
-    const selectAll = document.getElementById('selectAllShoppers');
-    if (selectAll) {
-        selectAll.checked = false;
-        selectAll.onchange = (e) => {
-            document.querySelectorAll('.shopper-checkbox').forEach(cb => cb.checked = e.target.checked);
-            updateShopperSelection();
-        };
-    }
+function toggleMobileMenu() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    sidebar.classList.toggle('mobile-open');
+    overlay.classList.toggle('active');
 }
 
-function getShopperStatusClass(status) {
-    switch (status) {
-        case 'confirmed': return 'badge-success';
-        case 'shipped': return 'badge-primary';
-        case 'cancelled': return 'badge-danger';
-        case 'edit_details': return 'badge-warning';
-        default: return 'badge-gray';
-    }
-}
-
-function filterShoppersByStatus(status) {
-    currentShopperStatus = status;
-    shopperOffset = 0;
-    
-    // Update active tab
-    document.querySelectorAll('#shoppersPage .tab-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.status === status);
-        if (btn.dataset.status === status) {
-            btn.style.fontWeight = 'bold';
-            btn.style.borderBottom = '3px solid #000';
-        } else {
-            btn.style.fontWeight = 'normal';
-            btn.style.borderBottom = 'none';
-        }
-    });
-    
-    loadShoppers();
-}
-
-function debounceShopperSearch() {
-    clearTimeout(shopperSearchTimeout);
-    shopperSearchTimeout = setTimeout(() => {
-        shopperOffset = 0;
-        loadShoppers();
-    }, 500);
-}
-
-function updateShopperSelection() {
-    const selected = document.querySelectorAll('.shopper-checkbox:checked');
-    const deleteBtn = document.getElementById('btnDeleteShoppers');
-    if (deleteBtn) {
-        deleteBtn.style.display = selected.length > 0 ? 'inline-block' : 'none';
-        deleteBtn.innerHTML = `<span>🗑️</span> DELETE SELECTED (${selected.length})`;
-    }
-}
-
-async function deleteSelectedShoppers() {
-    const selected = Array.from(document.querySelectorAll('.shopper-checkbox:checked')).map(cb => cb.value);
-    if (selected.length === 0) return;
-
-    if (!confirm(`Are you sure you want to delete ${selected.length} records? This cannot be undone.`)) return;
-
-    try {
-        const response = await apiCall('/shoppers/bulk', 'DELETE', { ids: selected });
-        if (response.success) {
-            showToast(`Successfully deleted ${selected.length} records`, 'success');
-            loadShoppers();
-        }
-    } catch (error) {
-        alert('Failed to delete shooters: ' + error.message);
-    }
-}
-
-async function exportShoppers() {
-    const search = document.getElementById('shopperSearch')?.value || '';
-    const startDate = document.getElementById('shopperStartDate')?.value || '';
-    const endDate = document.getElementById('shopperEndDate')?.value || '';
-
-    const query = new URLSearchParams({
-        status: currentShopperStatus,
-        search,
-        startDate,
-        endDate
-    });
-
-    try {
-        const token = localStorage.getItem('authToken') || authToken;
-        const response = await fetch(`${API_BASE}/shoppers/export?${query.toString()}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `shoppers_${currentShopperStatus}_${new Date().toISOString().split('T')[0]}.xlsx`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            a.remove();
-        } else {
-            alert('Failed to export Excel');
-        }
-    } catch (error) {
-        console.error('Export error:', error);
-    }
-}
-
-// Pagination listeners
-document.getElementById('btnPrevShoppers')?.addEventListener('click', () => {
-    if (shopperOffset >= shopperLimit) {
-        shopperOffset -= shopperLimit;
-        loadShoppers();
-    }
-});
-
-document.getElementById('btnNextShoppers')?.addEventListener('click', () => {
-    shopperOffset += shopperLimit;
-    loadShoppers();
-});
-
-// All Orders Modal Functions
-async function showAllOrdersModal(phone) {
-    const modal = document.getElementById('allOrdersModal');
-    const loading = document.getElementById('allOrdersLoading');
-    const content = document.getElementById('allOrdersContent');
-    const empty = document.getElementById('allOrdersEmpty');
-    const phoneDisplay = document.getElementById('allOrdersCustomerPhone');
-    const sourceDisplay = document.getElementById('allOrdersSource');
-    
-    // Reset state
-    loading.style.display = 'flex';
-    content.style.display = 'none';
-    empty.style.display = 'none';
-    phoneDisplay.textContent = formatPhone(phone);
-    modal.classList.add('active');
-    
-    // Update loading message to indicate fetching from database
-    loading.innerHTML = `
-        <div class="spinner"></div>
-        <span>Loading orders from database...</span>
-    `;
-    
-    try {
-        const data = await apiCall(`/customers/${phone}/all-orders`);
-        loading.style.display = 'none';
-        
-        if (data.success && data.orders && data.orders.length > 0) {
-            content.style.display = 'block';
-            if (sourceDisplay) {
-                sourceDisplay.textContent = `(from synced database)`;
-            }
-            renderAllOrders(data.orders);
-        } else {
-            empty.style.display = 'flex';
-        }
-    } catch (error) {
-        loading.style.display = 'none';
-        empty.style.display = 'flex';
-        showToast('Failed to fetch orders', 'error');
-        console.error('Error fetching all orders:', error);
-    }
-}
-
-function renderAllOrders(orders) {
-    const summary = document.getElementById('allOrdersSummary');
-    const list = document.getElementById('allOrdersList');
-    
-    // Summary stats
-    const totalOrders = orders.length;
-    const statusCounts = orders.reduce((acc, o) => {
-        acc[o.status] = (acc[o.status] || 0) + 1;
-        return acc;
-    }, {});
-    
-    summary.innerHTML = `
-        <div class="stats-grid">
-            <div>
-                <div class="text-small text-muted">Total Orders</div>
-                <div style="font-size: 24px; font-weight: 700;">${totalOrders}</div>
-            </div>
-            ${Object.entries(statusCounts).map(([status, count]) => `
-                <div>
-                    <div class="text-small text-muted">${status.charAt(0).toUpperCase() + status.slice(1)}</div>
-                    <div style="font-size: 24px; font-weight: 700;">${count}</div>
-                </div>
-            `).join('')}
-        </div>
-    `;
-    
-    // Orders list
-    list.innerHTML = orders.map(order => `
-        <div class="order-item">
-            <div class="order-item-header">
-                <strong>${order.order_id || 'N/A'}</strong>
-                ${getStatusBadge(order.status)}
-            </div>
-            <div class="order-item-details">
-                <div class="text-small text-muted">
-                    ${formatDate(order.created_at)} 
-                    ${order.total ? `• ₹${parseFloat(order.total).toFixed(2)}` : ''}
-                    ${order.payment_method ? `• ${order.payment_method}` : ''}
-                </div>
-                ${order.product_name ? `<div class="text-small">${escapeHtml(order.product_name)}</div>` : ''}
-                ${order.awb ? `<div class="text-small">AWB: ${order.awb}</div>` : ''}
-            </div>
-        </div>
-    `).join('');
-}
-
-// ===================================
-// Template Editor & Management Functions
-// ===================================
-
-// Initialize template editor when modal opens
-function initTemplateEditor() {
-    // Toolbar actions
-    document.querySelectorAll('.toolbar-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const action = e.currentTarget.dataset.action;
-            handleToolbarAction(action);
-        });
-    });
-    
-    // Auto-detect variables
-    const bodyTextarea = document.getElementById('templateBody');
-    if (bodyTextarea) {
-        bodyTextarea.addEventListener('input', updateVariables);
-        bodyTextarea.addEventListener('input', updateTemplatePreview);
-    }
-    
-    // Header type change
-    const headerType = document.getElementById('headerType');
-    if (headerType) {
-        headerType.addEventListener('change', handleHeaderTypeChange);
-    }
-    
-    // Footer change
-    const footerInput = document.getElementById('templateFooter');
-    if (footerInput) {
-        footerInput.addEventListener('input', updateTemplatePreview);
-    }
-    
-    // Initialize emoji picker
-    initEmojiPicker();
-}
-
-function handleToolbarAction(action) {
-    const textarea = document.getElementById('templateBody');
-    if (!textarea) return;
-    
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = textarea.value.substring(start, end);
-    let replacement = '';
-    
-    switch(action) {
-        case 'formatBold':
-            replacement = `*${selectedText || 'bold text'}*`;
-            break;
-        case 'formatItalic':
-            replacement = `_${selectedText || 'italic text'}_`;
-            break;
-        case 'formatStrikethrough':
-            replacement = `~${selectedText || 'strikethrough'}~`;
-            break;
-        case 'insertEmoji':
-            toggleEmojiPicker();
-            return;
-        case 'insertVariable':
-            replacement = insertNextVariable();
-            break;
-    }
-    
-    textarea.value = textarea.value.substring(0, start) + replacement + textarea.value.substring(end);
-    textarea.focus();
-    textarea.selectionStart = textarea.selectionEnd = start + replacement.length;
-    updateVariables();
-    updateTemplatePreview();
-}
-
-function insertNextVariable() {
-    const body = document.getElementById('templateBody').value;
-    const existingVars = body.match(/\{\{(\d+)\}\}/g) || [];
-    const nextNum = existingVars.length + 1;
-    return `{{${nextNum}}}`;
-}
-
-function updateVariables() {
-    const body = document.getElementById('templateBody').value;
-    const variables = body.match(/\{\{(\d+)\}\}/g) || [];
-    const uniqueVars = [...new Set(variables)];
-    
-    const variablesList = document.getElementById('variablesList');
-    if (!variablesList) return;
-    
-    if (uniqueVars.length === 0) {
-        variablesList.innerHTML = '<p class="text-small text-muted">Variables will appear here as you type them in the body</p>';
-        return;
-    }
-    
-    variablesList.innerHTML = uniqueVars.map(v => `
-        <div class="variable-item">
-            <span>${v}</span>
-            <input type="text" class="wa-input variable-example" data-var="${v}" 
-                   placeholder="Example value for ${v}">
-        </div>
-    `).join('');
-}
-
-function updateTemplatePreview() {
-    const body = document.getElementById('templateBody').value;
-    const headerType = document.getElementById('headerType').value;
-    const headerText = document.getElementById('headerText').value;
-    const footer = document.getElementById('templateFooter').value;
-    
-    if (!body) {
-        document.getElementById('templateLivePreview').innerHTML = `
-            <div class="preview-body" style="color: #999;">
-                Start typing to see preview...
-            </div>
-        `;
-        return;
-    }
-    
-    // Convert WhatsApp markdown to HTML for preview
-    let htmlBody = escapeHtml(body)
-        .replace(/\*([^*]+)\*/g, '<strong>$1</strong>')
-        .replace(/_([^_]+)_/g, '<em>$1</em>')
-        .replace(/~([^~]+)~/g, '<s>$1</s>')
-        .replace(/```([^`]+)```/g, '<code>$1</code>')
-        .replace(/\n/g, '<br>');
-    
-    let previewHTML = '';
-    
-    if (headerType === 'TEXT' && headerText) {
-        previewHTML += `<div class="preview-header">${escapeHtml(headerText)}</div>`;
-    } else if (headerType === 'IMAGE') {
-        previewHTML += `<div class="preview-header">[Image Header]</div>`;
-    }
-    
-    previewHTML += `<div class="preview-body">${htmlBody}</div>`;
-    
-    if (footer) {
-        previewHTML += `<div class="preview-footer">${escapeHtml(footer)}</div>`;
-    }
-    
-    document.getElementById('templateLivePreview').innerHTML = previewHTML;
-}
-
-function handleHeaderTypeChange() {
-    const headerType = document.getElementById('headerType').value;
-    const headerContentArea = document.getElementById('headerContentArea');
-    const textHeaderArea = document.getElementById('textHeaderArea');
-    const imageHeaderArea = document.getElementById('imageHeaderArea');
-    
-    if (headerType === 'NONE') {
-        headerContentArea.style.display = 'none';
-    } else {
-        headerContentArea.style.display = 'block';
-        textHeaderArea.style.display = headerType === 'TEXT' ? 'block' : 'none';
-        imageHeaderArea.style.display = headerType === 'IMAGE' ? 'block' : 'none';
-    }
-}
-
-// Simple emoji picker
-function initEmojiPicker() {
-    const emojis = [
-        '😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊',
-        '😇', '🙂', '😉', '😌', '😍', '🥰', '😘', '😗',
-        '👍', '👎', '👏', '🙏', '💪', '❤️', '🔥', '⭐',
-        '✅', '❌', '⚡', '🎉', '🎊', '💯', '📦', '🛒',
-        '📞', '📧', '💬', '👋', '🤝', '🎁', '💰', '📱'
-    ];
-    
-    const picker = document.getElementById('emojiPicker');
-    if (!picker) return;
-    
-    picker.innerHTML = emojis.map(emoji => 
-        `<button type="button" class="emoji-btn" data-emoji="${emoji}">${emoji}</button>`
-    ).join('');
-    
-    picker.addEventListener('click', (e) => {
-        if (e.target.classList.contains('emoji-btn')) {
-            const emoji = e.target.dataset.emoji;
-            const textarea = document.getElementById('templateBody');
-            const start = textarea.selectionStart;
-            const end = textarea.selectionEnd;
-            
-            textarea.value = textarea.value.substring(0, start) + emoji + textarea.value.substring(end);
-            textarea.focus();
-            toggleEmojiPicker();
-            updateTemplatePreview();
-        }
-    });
-}
-
-function toggleEmojiPicker() {
-    const picker = document.getElementById('emojiPicker');
-    if (picker) {
-        picker.style.display = picker.style.display === 'none' ? 'block' : 'none';
-    }
-}
-
-// Button management
-function addButtonRow(text = '') {
-    const builder = document.getElementById('quickReplyBuilder');
-    if (!builder) return;
-    
-    if (builder.children.length >= 3) {
-        alert('Maximum 3 buttons allowed');
-        return;
-    }
-    
-    const div = document.createElement('div');
-    div.className = 'd-flex gap-2 mb-2';
-    div.innerHTML = `
-        <input type="text" class="wa-input btn-text" style="flex:1" placeholder="Button text" maxlength="25" value="${text}">
-        <button type="button" class="btn btn-danger btn-sm btn-remove-row">×</button>
-    `;
-    builder.appendChild(div);
-    
-    // Add remove handler
-    div.querySelector('.btn-remove-row').addEventListener('click', () => {
-        div.remove();
-    });
-}
-
-// Submit template to Meta
-async function submitTemplate(e) {
-    e.preventDefault();
-    
-    const name = document.getElementById('templateNameInput').value.trim();
-    const category = document.getElementById('templateCategory').value;
-    const language = document.getElementById('templateLanguage').value;
-    const headerType = document.getElementById('headerType').value;
-    const headerText = document.getElementById('headerText').value;
-    const headerImageUrl = document.getElementById('headerImageUrl').value;
-    const body = document.getElementById('templateBody').value.trim();
-    const footer = document.getElementById('templateFooter').value.trim();
-    
-    if (!name || !body) {
-        alert('Template name and body content are required');
-        return;
-    }
-    
-    // Collect buttons
-    const buttons = Array.from(document.querySelectorAll('#quickReplyBuilder .d-flex')).map(row => {
-        const text = row.querySelector('.btn-text').value.trim();
-        return text ? { text } : null;
-    }).filter(b => b);
-    
-    // Collect example values
-    const exampleInputs = document.querySelectorAll('.variable-example');
-    const exampleValues = Array.from(exampleInputs).map(input => input.value || `Example ${input.dataset.var}`);
-    
-    const payload = {
-        name,
-        category,
-        language,
-        headerType,
-        headerText,
-        headerImageUrl,
-        body,
-        footer,
-        buttons,
-        exampleValues
-    };
-    
-    try {
-        const submitBtn = document.getElementById('submitTemplateBtn');
-        const originalHTML = submitBtn.innerHTML;
-        submitBtn.innerHTML = '<div class="wa-spinner" style="width:16px;height:16px;"></div> Submitting...';
-        submitBtn.disabled = true;
-        
-        const response = await apiCall('/templates/create', 'POST', payload);
-        
-        submitBtn.innerHTML = originalHTML;
-        submitBtn.disabled = false;
-        
-        if (response.success) {
-            alert('✅ ' + response.message);
-            closeTemplateModal();
-            loadTemplates(); // Refresh template list
-        } else {
-            alert('❌ ' + (response.error || 'Failed to create template'));
-        }
-    } catch (error) {
-        console.error('Template submission error:', error);
-        alert('Failed to submit template: ' + error.message);
-        document.getElementById('submitTemplateBtn').disabled = false;
-    }
-}
-
-function openTemplateModal() {
-    document.getElementById('createTemplateModal').style.display = 'block';
-    initTemplateEditor();
-    updateTemplatePreview();
-}
-
-function closeTemplateModal() {
-    document.getElementById('createTemplateModal').style.display = 'none';
-    document.getElementById('createTemplateForm').reset();
-    document.getElementById('quickReplyBuilder').innerHTML = '';
-    document.getElementById('variablesList').innerHTML = '<p class="text-small text-muted">Variables will appear here as you type them in the body</p>';
-    updateTemplatePreview();
-}
-
-// Enhanced template table rendering
-function renderTemplatesTable(templates) {
-    const tbody = document.getElementById('templatesTableBody');
-    if (!tbody) return;
-
-    if (!templates || templates.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center">No templates found. Click "Refresh" to sync from Meta or "Create New" to build a template.</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = templates.map(t => {
-        const components = typeof t.components === 'string' ? JSON.parse(t.components) : t.components;
-        const bodyComp = components?.find(c => c.type === 'BODY');
-        const buttons = components?.find(c => c.type === 'BUTTONS')?.buttons || [];
-        
-        return `
-        <tr>
-            <td>
-                <strong>${t.name}</strong>
-                <div class="text-small text-muted">${bodyComp?.text?.substring(0, 50) || 'No body'}...</div>
-            </td>
-            <td><span class="badge badge-gray">${t.category}</span></td>
-            <td>${t.language || 'N/A'}</td>
-            <td>
-                <span class="badge ${
-                    t.status === 'APPROVED' ? 'badge-success' : 
-                    t.status === 'PENDING' ? 'badge-warning' : 
-                    t.status === 'REJECTED' ? 'badge-danger' : 'badge-gray'
-                }">${t.status || 'UNKNOWN'}</span>
-                ${t.status === 'REJECTED' && t.rejection_reason ? 
-                    `<div class="text-small text-danger" title="${escapeHtml(t.rejection_reason)}">⚠️ Rejected</div>` : ''}
-            </td>
-            <td>
-                <div class="d-flex gap-1">
-                    ${t.status === 'APPROVED' ? 
-                        `<button class="btn btn-sm btn-primary" data-action="initiateTemplateBroadcast" data-template="${t.name}">Use</button>` : ''}
-                    ${t.status === 'PENDING' ? 
-                        `<button class="btn btn-sm btn-secondary" data-action="checkTemplateStatus" data-id="${t.id}">Check Status</button>` : ''}
-                    ${t.status !== 'APPROVED' ? 
-                        `<button class="btn btn-sm btn-danger" data-action="deleteTemplate" data-id="${t.id}">Delete</button>` : ''}
-                </div>
-            </td>
-        </tr>
-        `;
-    }).join('');
-}
-
-// Enhanced template list for broadcast
-function renderTemplateList(templates) {
-    const container = document.getElementById('templateList');
-    if (!container) return;
-    
-    const approved = templates.filter(t => t.status === 'APPROVED');
-    
-    if (approved.length === 0) {
-        container.innerHTML = '<p class="text-center text-muted">No approved templates available</p>';
-        return;
-    }
-    
-    container.innerHTML = approved.map(t => {
-        const components = typeof t.components === 'string' ? JSON.parse(t.components) : t.components;
-        const bodyComp = components?.find(c => c.type === 'BODY');
-        const buttons = components?.find(c => c.type === 'BUTTONS')?.buttons || [];
-        
-        return `
-        <div class="template-card" data-template="${t.name}" data-action="selectTemplate">
-            <div class="template-card-header">
-                <strong>${t.name}</strong>
-                <span class="badge badge-success">${t.category}</span>
-            </div>
-            <div class="template-card-body">
-                ${bodyComp?.text?.substring(0, 100) || 'No preview'}...
-            </div>
-            ${buttons.length > 0 ? `
-                <div class="template-card-buttons">
-                    ${buttons.map(b => `<span class="badge badge-gray">${b.text}</span>`).join(' ')}
-                </div>
-            ` : ''}
-        </div>
-        `;
-    }).join('');
-}
-
-// Handle template selection in broadcast
-function handleTemplateSelection(templateName) {
-    const template = window.metaTemplates?.find(t => t.name === templateName);
-    if (!template) return;
-    
-    // Highlight selected template
-    document.querySelectorAll('.template-card').forEach(card => {
-        card.classList.toggle('selected', card.dataset.template === templateName);
-    });
-    
-    // Show variables area
-    const components = typeof template.components === 'string' ? JSON.parse(template.components) : template.components;
-    const bodyComp = components?.find(c => c.type === 'BODY');
-    const variables = bodyComp?.text?.match(/\{\{(\d+)\}\}/g) || [];
-    const uniqueVars = [...new Set(variables)];
-    
-    const variablesArea = document.getElementById('templateVariablesArea');
-    const variablesInputs = document.getElementById('templateVariablesInputs');
-    
-    if (uniqueVars.length > 0 && variablesArea && variablesInputs) {
-        variablesArea.style.display = 'block';
-        variablesInputs.innerHTML = uniqueVars.map(v => `
-            <div class="form-group">
-                <label>Variable ${v}</label>
-                <input type="text" class="wa-input template-var-input" data-var="${v}" 
-                       placeholder="Enter value for ${v}">
-            </div>
-        `).join('');
-    } else if (variablesArea) {
-        variablesArea.style.display = 'none';
-    }
-    
-    // Update broadcast form
-    document.getElementById('broadcastTemplate').value = templateName;
-}
-
-// Check template status
-async function checkTemplateStatus(id) {
-    try {
-        const response = await apiCall(`/templates/${id}/status`);
-        if (response.success) {
-            alert(`Template status: ${response.status}${response.rejection_reason ? '\nReason: ' + response.rejection_reason : ''}`);
-            loadTemplates();
-        }
-    } catch (error) {
-        alert('Failed to check template status: ' + error.message);
-    }
-}
-
-// Delete template
-async function deleteTemplate(id) {
-    if (!confirm('Are you sure you want to delete this template? This action cannot be undone.')) {
-        return;
-    }
-    
-    try {
-        const response = await apiCall(`/templates/${id}`, 'DELETE');
-        if (response.success) {
-            alert('Template deleted successfully');
-            loadTemplates();
-        }
-    } catch (error) {
-        alert('Failed to delete template: ' + error.message);
-    }
-}
-
-// Enhanced broadcast with template variables
-async function startTemplateBroadcast(phones) {
-    const templateName = document.getElementById('broadcastTemplate').value;
-    if (!templateName) {
-        alert('Please select a template');
-        return;
-    }
-    
-    // Collect variable values
-    const varInputs = document.querySelectorAll('.template-var-input');
-    const components = [];
-    
-    if (varInputs.length > 0) {
-        const parameters = Array.from(varInputs).map(input => ({
-            type: 'text',
-            text: input.value || `[${input.dataset.var}]`
-        }));
-        
-        components.push({
-            type: 'body',
-            parameters
-        });
-    }
-    
-    const payload = {
-        templateName,
-        language: 'en_US',
-        components,
-        delay_seconds: parseInt(document.getElementById('broadcastDelay').value) || 5,
-        phones
-    };
-    
-    const response = await apiCall('/broadcast/template', 'POST', payload);
-    if (response.success) {
-        showToast(`✅ Template broadcast queued for ${response.totalRecipients} recipients!`, 'success');
-        return true;
-    } else {
-        alert('❌ ' + (response.error || 'Failed to start broadcast'));
-        return false;
-    }
+function closeMobileMenu() {
+    document.getElementById('sidebar').classList.remove('mobile-open');
+    document.getElementById('sidebarOverlay').classList.remove('active');
 }
