@@ -281,37 +281,43 @@ async function syncOrderToZoho(shopifyOrder) {
             ]
         );
 
-        // Step 7: Native-integration duplicate sweep — if the Zoho ↔ Shopify
-        // native integration is still active, it may have created a second
-        // invoice with the same reference_number. Detect and remove it now.
-        // This is a safety net; the real fix is disconnecting the native
-        // integration in Zoho Inventory settings.
-        try {
-            const allRefs = await zohoService.searchInvoice({ reference_number: orderId });
-            const others = allRefs.filter(
-                inv => inv.invoice_id !== zohoInvoice?.invoice_id
-                    && inv.status !== 'void' && inv.status !== 'deleted'
-            );
-            if (others.length > 0) {
-                console.warn(`⚠️ Zoho sync #${orderId}: found ${others.length} duplicate invoice(s) from native integration — removing`);
-                for (const dup of others) {
-                    try {
-                        // Delete any payments on the duplicate first
-                        const pmts = await zohoService.getPayments(null, dup.invoice_number);
-                        for (const p of pmts) {
-                            try { await zohoService.deletePayment(p.payment_id); } catch (_) { /* best effort */ }
+        // Step 7: Native-integration duplicate sweep — the native Zoho ↔ Shopify
+        // integration may create a second invoice with the same reference_number.
+        // Run an immediate sweep AND a delayed sweep (60s later) to catch both
+        // timing cases: native faster than middleware, and native slower.
+        const sweepDuplicates = async (label) => {
+            try {
+                const allRefs = await zohoService.searchInvoice({ reference_number: orderId });
+                const others = allRefs.filter(
+                    inv => inv.invoice_id !== zohoInvoice?.invoice_id
+                        && inv.status !== 'void' && inv.status !== 'deleted'
+                );
+                if (others.length > 0) {
+                    console.warn(`⚠️ Zoho sync #${orderId} [${label}]: found ${others.length} duplicate(s) — removing`);
+                    for (const dup of others) {
+                        try {
+                            const pmts = await zohoService.getPayments(null, dup.invoice_number);
+                            for (const p of pmts) {
+                                try { await zohoService.deletePayment(p.payment_id); } catch (_) {}
+                            }
+                            if (dup.status !== 'void') await zohoService.voidInvoice(dup.invoice_id);
+                            await zohoService.deleteInvoice(dup.invoice_id);
+                            console.log(`✅ Zoho sync #${orderId} [${label}]: removed duplicate ${dup.invoice_number}`);
+                        } catch (dupErr) {
+                            console.warn(`⚠️ Zoho sync #${orderId} [${label}]: failed to remove ${dup.invoice_number}: ${dupErr.message}`);
                         }
-                        if (dup.status !== 'void') await zohoService.voidInvoice(dup.invoice_id);
-                        await zohoService.deleteInvoice(dup.invoice_id);
-                        console.log(`✅ Zoho sync #${orderId}: removed native-integration duplicate ${dup.invoice_number}`);
-                    } catch (dupErr) {
-                        console.warn(`⚠️ Zoho sync #${orderId}: failed to remove duplicate ${dup.invoice_number}: ${dupErr.message}`);
                     }
                 }
+            } catch (sweepErr) {
+                console.warn(`⚠️ Zoho sync #${orderId} [${label}]: sweep failed (${sweepErr.message}) — non-critical`);
             }
-        } catch (sweepErr) {
-            console.warn(`⚠️ Zoho sync #${orderId}: duplicate sweep failed (${sweepErr.message}) — non-critical`);
-        }
+        };
+
+        // Immediate sweep (catches native integration that was already faster)
+        await sweepDuplicates('immediate');
+        // Delayed sweep at 60s and 180s (catches native integration that's slower)
+        setTimeout(() => sweepDuplicates('60s-delayed'), 60_000).unref();
+        setTimeout(() => sweepDuplicates('180s-delayed'), 180_000).unref();
 
         console.log(`✅ Zoho sync: order #${orderId} → invoice ${zohoInvoice?.invoice_id || 'created'}`);
         return {
