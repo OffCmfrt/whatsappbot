@@ -238,9 +238,8 @@ app.use('/api/admin/zoho', zohoRoutes);
 
 // Instagram Messaging Webhook (Meta Instagram Login)
 // Completely separate from the WhatsApp /webhook endpoint.
-// DEACTIVATED for now — uncomment to re-enable
-// const instagramWebhookRoutes = require('./src/routes/instagramWebhookRoutes');
-// app.use(instagramWebhookRoutes);
+const instagramWebhookRoutes = require('./src/routes/instagramWebhookRoutes');
+app.use(instagramWebhookRoutes);
 
 // Cron Jobs
 const abandonedCartCron = require('./src/services/abandonedCartCron');
