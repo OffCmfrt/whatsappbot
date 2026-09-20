@@ -19,8 +19,10 @@ async function apiFetch(path, options = {}) {
         }
     });
     if (res.status === 401) {
+        const banner = document.getElementById('authAlertBanner');
+        if (banner) banner.style.display = 'flex';
         window.parent.postMessage({ type: 'session_expired' }, '*');
-        throw new Error('Session expired');
+        throw new Error('Session expired. Please sign in to the Command Center.');
     }
     return res.json();
 }
@@ -57,67 +59,189 @@ document.querySelectorAll('.section-tab').forEach(tab => {
 function loadSection(section) {
     switch (section) {
         case 'overview': loadOverview(); break;
-        case 'sync': loadSyncLog(); break;
-        case 'tax': loadTaxCorrections(); break;
-        case 'returns': loadReturns(); break;
-        case 'cod': loadCodLog(); break;
+        case 'sync': loadSyncLog(syncLogState.page); break;
+        case 'tax': loadTaxCorrections(taxState.page); break;
+        case 'returns': loadReturns(returnsState.page); break;
+        case 'cod': loadCodLog(codState.page); break;
         case 'config': loadConfig(); break;
     }
 }
 
 // ============================================================
-// Overview
+// Overview & Sync Activity (State & Logic)
 // ============================================================
 
-async function loadOverview() {
+const overviewSyncState = {
+    page: 1,
+    limit: 25,
+    status: '',
+    search: '',
+    total: 0,
+    totalPages: 1,
+    isLoading: false
+};
+
+async function loadOverviewStats() {
     try {
         const data = await apiFetch('/stats');
-        if (!data.success) return;
+        if (!data || !data.success) {
+            console.warn('Stats fetch unsuccessful:', data?.error);
+            return null;
+        }
 
         const { sync, returns, cod } = data;
-        const total = sync.today.total || 1;
-        const rate = Math.round((sync.today.synced / total) * 100);
+        const total = sync?.today?.total || ((sync?.today?.synced || 0) + (sync?.today?.failed || 0)) || 1;
+        const rate = Math.round(((sync?.today?.synced || 0) / total) * 100);
 
-        document.getElementById('statSyncedToday').textContent = sync.today.synced;
-        document.getElementById('statSuccessRate').textContent = `${rate}%`;
-        document.getElementById('statFailed').textContent = sync.today.failed;
-        document.getElementById('statPendingRetry').textContent = sync.today.pendingRetry;
-        document.getElementById('statReturnsToday').textContent = returns.today.returns + returns.today.rtos;
-        document.getElementById('statCodPending').textContent = cod.pending;
+        const elSynced = document.getElementById('statSyncedToday');
+        const elRate = document.getElementById('statSuccessRate');
+        const elFailed = document.getElementById('statFailed');
+        const elPending = document.getElementById('statPendingRetry');
+        const elReturns = document.getElementById('statReturnsToday');
+        const elCod = document.getElementById('statCodPending');
 
-        const syncData = await apiFetch('/sync?limit=10');
-        if (syncData.success) {
-            renderSyncRows(syncData.data, 'recentSyncBody', false);
+        if (elSynced) elSynced.textContent = sync?.today?.synced ?? 0;
+        if (elRate) elRate.textContent = `${rate}%`;
+        if (elFailed) elFailed.textContent = sync?.today?.failed ?? 0;
+        if (elPending) elPending.textContent = sync?.today?.pendingRetry ?? 0;
+        if (elReturns) elReturns.textContent = (returns?.today?.returns || 0) + (returns?.today?.rtos || 0);
+        if (elCod) elCod.textContent = cod?.pending ?? 0;
+
+        return data;
+    } catch (err) {
+        console.warn('Overview stats error:', err.message);
+        return null;
+    }
+}
+
+async function loadOverviewSync(page = overviewSyncState.page) {
+    overviewSyncState.page = Math.max(1, parseInt(page, 10) || 1);
+
+    const searchInput = document.getElementById('overviewSyncSearch');
+    const statusSelect = document.getElementById('overviewStatusFilter');
+    const limitSelect = document.getElementById('overviewLimitSelect');
+
+    if (searchInput) overviewSyncState.search = searchInput.value.trim();
+    if (statusSelect) overviewSyncState.status = statusSelect.value;
+    if (limitSelect) overviewSyncState.limit = parseInt(limitSelect.value, 10) || 25;
+
+    const tbody = document.getElementById('recentSyncBody');
+    if (tbody && (!tbody.children.length || tbody.querySelector('.empty-state'))) {
+        tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><span class="loading-spinner"></span><p style="margin-top:8px">Loading sync activity...</p></div></td></tr>`;
+    }
+
+    try {
+        const query = new URLSearchParams({
+            page: String(overviewSyncState.page),
+            limit: String(overviewSyncState.limit)
+        });
+        if (overviewSyncState.status) query.set('status', overviewSyncState.status);
+        if (overviewSyncState.search) query.set('search', overviewSyncState.search);
+
+        const data = await apiFetch(`/sync?${query.toString()}`);
+        if (!data || !data.success) {
+            if (tbody) tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p style="color:var(--bad)">Failed to load sync activity: ${escHtml(data?.error || 'Server error')}</p></div></td></tr>`;
+            return data;
+        }
+
+        overviewSyncState.total = data.total || 0;
+        overviewSyncState.totalPages = data.totalPages || 1;
+
+        const countPill = document.getElementById('overviewSyncCount');
+        if (countPill) countPill.textContent = data.total ? data.total.toLocaleString('en-IN') : '0';
+
+        renderSyncRows(data.data || [], 'recentSyncBody', true);
+        renderPaginationBar('overviewPaginationButtons', 'overviewPaginationInfo', data, 'overview-page');
+        return data;
+    } catch (err) {
+        console.error('Overview sync error:', err);
+        if (tbody) tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p style="color:var(--bad)">Error: ${escHtml(err.message)}</p></div></td></tr>`;
+    }
+}
+
+async function loadOverview(userInitiated = false) {
+    const btn = document.getElementById('btnRefreshOverview');
+    const textEl = document.getElementById('refreshBtnText');
+
+    if (btn) {
+        btn.classList.add('is-refreshing');
+        if (textEl) textEl.textContent = 'Refreshing...';
+    }
+
+    try {
+        const [statsRes, syncRes] = await Promise.allSettled([
+            loadOverviewStats(),
+            loadOverviewSync(userInitiated ? 1 : overviewSyncState.page)
+        ]);
+
+        if (userInitiated) {
+            const syncData = syncRes.status === 'fulfilled' ? syncRes.value : null;
+            const count = syncData?.total !== undefined ? syncData.total : overviewSyncState.total;
+            toast(`Sync activity refreshed (${count} records)`, 'ok');
         }
     } catch (err) {
-        console.error('Overview load error:', err);
+        console.error('loadOverview error:', err);
+        if (userInitiated) toast('Refresh error: ' + err.message, 'err');
+    } finally {
+        if (btn) {
+            btn.classList.remove('is-refreshing');
+            if (textEl) textEl.textContent = 'Refresh';
+        }
     }
 }
 
 // ============================================================
-// Sync Log
+// Sync Log (Dedicated Tab)
 // ============================================================
 
-let syncPage = 1;
+const syncLogState = {
+    page: 1,
+    limit: 25,
+    status: '',
+    search: '',
+    totalPages: 1
+};
 
-async function loadSyncLog(page = 1) {
-    syncPage = page;
-    const search = document.getElementById('syncSearch').value;
-    const status = document.getElementById('syncStatusFilter').value;
+async function loadSyncLog(page = 1, userInitiated = false) {
+    syncLogState.page = Math.max(1, parseInt(page, 10) || 1);
+    syncLogState.limit = parseInt(document.getElementById('syncLimitSelect')?.value || '25', 10);
+    syncLogState.status = document.getElementById('syncStatusFilter')?.value || '';
+    syncLogState.search = document.getElementById('syncSearch')?.value.trim() || '';
+
+    const btn = document.getElementById('btnRefreshSync');
+    if (userInitiated && btn) btn.classList.add('is-refreshing');
 
     try {
-        const data = await apiFetch(`/sync?page=${page}&limit=25&status=${status}&search=${encodeURIComponent(search)}`);
-        if (!data.success) return;
+        const query = new URLSearchParams({
+            page: syncLogState.page,
+            limit: syncLogState.limit,
+            status: syncLogState.status,
+            search: syncLogState.search
+        });
+        const data = await apiFetch(`/sync?${query.toString()}`);
+        if (!data || !data.success) return;
 
-        renderSyncRows(data.data, 'syncLogBody', true);
-        renderPagination('syncPagination', data, loadSyncLog);
+        syncLogState.totalPages = data.totalPages || 1;
+        const countBadge = document.getElementById('syncCount');
+        if (countBadge) countBadge.textContent = (data.total || 0).toLocaleString('en-IN');
+
+        renderSyncRows(data.data || [], 'syncLogBody', true);
+        renderPaginationBar('syncPaginationButtons', 'syncPaginationInfo', data, 'sync-page');
+
+        if (userInitiated) {
+            toast(`Order sync log refreshed (${(data.total || 0).toLocaleString('en-IN')} total)`, 'ok');
+        }
     } catch (err) {
         console.error('Sync log load error:', err);
+        if (userInitiated) toast('Failed to load sync log: ' + err.message, 'err');
+    } finally {
+        if (btn) btn.classList.remove('is-refreshing');
     }
 }
 
 function renderSyncRows(rows, tbodyId, showActions) {
     const tbody = document.getElementById(tbodyId);
+    if (!tbody) return;
     if (!rows || rows.length === 0) {
         tbody.innerHTML = `<tr><td colspan="${showActions ? 7 : 4}"><div class="empty-state"><p>No sync records found</p></div></td></tr>`;
         return;
@@ -125,17 +249,40 @@ function renderSyncRows(rows, tbodyId, showActions) {
 
     tbody.innerHTML = rows.map(row => {
         const transform = row.transformation || {};
-        const hasTransforms = (transform.bundle_breaks?.length || 0) + (transform.tax_corrections?.length || 0) > 0;
-        const time = new Date(row.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' });
+        const bundlesCount = transform.bundle_breaks?.length || 0;
+        const taxCount = transform.tax_corrections?.length || 0;
+        const hasTransforms = (bundlesCount + taxCount) > 0;
+        const time = new Date(row.created_at).toLocaleString('en-IN', {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
+
+        let transformHtml = '<span style="color:var(--text-faint)">None</span>';
+        if (hasTransforms) {
+            const tags = [];
+            if (bundlesCount > 0) tags.push(`<span class="pill-tag">${bundlesCount} bundle${bundlesCount > 1 ? 's' : ''}</span>`);
+            if (taxCount > 0) tags.push(`<span class="pill-tag">${taxCount} tax fix</span>`);
+            transformHtml = tags.join('');
+        }
+
+        const isFailed = row.status === 'failed';
+        const errorMsg = row.error_message || '';
+        const errorShort = errorMsg.length > 42 ? errorMsg.substring(0, 42) + '...' : errorMsg;
 
         return `<tr class="clickable-row" data-action="show-transform" data-id="${row.id}">
             <td><strong>#${escHtml(row.shopify_order_id)}</strong></td>
-            <td>${row.zoho_invoice_id ? escHtml(row.zoho_invoice_id) : '—'}</td>
+            <td>${row.zoho_invoice_id ? `<span style="font-family:monospace">${escHtml(row.zoho_invoice_id)}</span>` : '<span style="color:var(--text-faint)">—</span>'}</td>
             <td><span class="badge badge-${row.status}">${row.status}</span></td>
-            ${showActions ? `<td>${hasTransforms ? `${transform.bundle_breaks?.length || 0} bundles, ${transform.tax_corrections?.length || 0} tax` : 'None'}</td>` : ''}
-            ${showActions ? `<td class="truncate" title="${escHtml(row.error_message || '')}">${row.error_message ? escHtml(row.error_message.substring(0, 50)) : '—'}</td>` : ''}
-            <td>${time}</td>
-            ${showActions ? `<td>${row.status === 'failed' ? `<button class="btn btn-sm btn-outline" data-action="retry-sync" data-id="${row.id}">Retry</button>` : ''}</td>` : ''}
+            ${showActions ? `<td>${transformHtml}</td>` : ''}
+            ${showActions ? `<td class="truncate" title="${escHtml(errorMsg)}" style="${isFailed ? 'color:var(--bad);font-size:12px' : ''}">${errorMsg ? escHtml(errorShort) : '<span style="color:var(--text-faint)">—</span>'}</td>` : ''}
+            <td style="white-space:nowrap">${time}</td>
+            ${showActions ? `<td>
+                ${isFailed ? `<button class="btn btn-xs btn-outline" style="border-color:var(--bad);color:var(--bad);margin-right:4px" data-action="retry-sync" data-id="${row.id}">Retry</button>` : ''}
+                <button class="btn btn-xs btn-ghost" data-action="show-transform" data-id="${row.id}">View</button>
+            </td>` : ''}
         </tr>`;
     }).join('');
 }
@@ -144,7 +291,9 @@ async function retrySync(id) {
     try {
         const data = await apiFetch(`/sync/retry/${id}`, { method: 'POST' });
         toast(data.success ? 'Sync retry initiated' : `Retry failed: ${data.error}`, data.success ? 'ok' : 'err');
-        loadSyncLog(syncPage);
+        loadOverviewSync(overviewSyncState.page);
+        loadSyncLog(syncLogState.page);
+        loadOverviewStats();
     } catch (err) {
         toast('Retry error: ' + err.message, 'err');
     }
@@ -155,7 +304,9 @@ async function retryAllFailed() {
     try {
         const data = await apiFetch('/sync/retry', { method: 'POST' });
         toast(`Retried ${data.retried} syncs — ${data.succeeded} succeeded`, 'ok');
-        loadSyncLog(syncPage);
+        loadOverviewSync(1);
+        loadSyncLog(1);
+        loadOverviewStats();
     } catch (err) {
         toast('Retry error: ' + err.message, 'err');
     }
@@ -165,41 +316,79 @@ async function retryAllFailed() {
 // Tax Corrections
 // ============================================================
 
-async function loadTaxCorrections() {
-    const type = document.getElementById('taxTypeFilter').value;
+const taxState = {
+    page: 1,
+    limit: 25,
+    type: '',
+    search: '',
+    totalPages: 1
+};
+
+async function loadTaxCorrections(page = 1, userInitiated = false) {
+    taxState.page = Math.max(1, parseInt(page, 10) || 1);
+    taxState.limit = parseInt(document.getElementById('taxLimitSelect')?.value || '25', 10);
+    taxState.type = document.getElementById('taxTypeFilter')?.value || '';
+    taxState.search = document.getElementById('taxSearch')?.value.trim() || '';
+
+    const btn = document.getElementById('btnRefreshTax');
+    if (userInitiated && btn) btn.classList.add('is-refreshing');
+
     try {
-        const data = await apiFetch(`/tax-corrections?limit=50&type=${type}`);
-        if (!data.success) return;
+        const query = new URLSearchParams({
+            page: taxState.page,
+            limit: taxState.limit,
+            type: taxState.type,
+            search: taxState.search
+        });
+        const data = await apiFetch(`/tax-corrections?${query.toString()}`);
+        if (!data || !data.success) return;
+
+        taxState.totalPages = data.totalPages || 1;
+        const countBadge = document.getElementById('taxCount');
+        if (countBadge) countBadge.textContent = (data.total || 0).toLocaleString('en-IN');
+
+        const stats = data.stats || {};
+        if (stats.today !== undefined) document.getElementById('statTaxCorrected').textContent = stats.today;
+        if (stats.rateFixes !== undefined) document.getElementById('statRateFixes').textContent = stats.rateFixes;
+        if (stats.stateFixes !== undefined) document.getElementById('statStateFixes').textContent = stats.stateFixes;
 
         const tbody = document.getElementById('taxCorrectionsBody');
         const rows = data.data || [];
 
-        const rateFixes = rows.filter(r => r.correction_type === 'rate_fix').length;
-        const stateFixes = rows.filter(r => r.correction_type === 'state_fix' || r.correction_type === 'intra_state' || r.correction_type === 'inter_state').length;
-        document.getElementById('statTaxCorrected').textContent = rows.length;
-        document.getElementById('statRateFixes').textContent = rateFixes;
-        document.getElementById('statStateFixes').textContent = stateFixes;
-
         if (rows.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><p>No tax corrections yet</p></div></td></tr>`;
-            return;
+            tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><p>No tax corrections found</p></div></td></tr>`;
+        } else {
+            tbody.innerHTML = rows.map(row => {
+                const time = new Date(row.created_at).toLocaleString('en-IN', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                });
+                const origTax = row.original_tax ? JSON.stringify(row.original_tax).substring(0, 60) : '—';
+                const corrTax = row.corrected_tax ? JSON.stringify(row.corrected_tax).substring(0, 60) : '—';
+
+                return `<tr>
+                    <td><strong>#${escHtml(row.shopify_order_id)}</strong></td>
+                    <td><span class="badge badge-${row.correction_type === 'rate_fix' ? 'return' : 'exchange'}">${row.correction_type || '—'}</span></td>
+                    <td class="truncate" title="${escHtml(origTax)}">${escHtml(origTax)}</td>
+                    <td class="truncate" title="${escHtml(corrTax)}">${escHtml(corrTax)}</td>
+                    <td style="white-space:nowrap">${time}</td>
+                </tr>`;
+            }).join('');
         }
 
-        tbody.innerHTML = rows.map(row => {
-            const time = new Date(row.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' });
-            const origTax = row.original_tax ? JSON.stringify(row.original_tax).substring(0, 60) : '—';
-            const corrTax = row.corrected_tax ? JSON.stringify(row.corrected_tax).substring(0, 60) : '—';
+        renderPaginationBar('taxPaginationButtons', 'taxPaginationInfo', data, 'tax-page');
 
-            return `<tr>
-                <td><strong>#${escHtml(row.shopify_order_id)}</strong></td>
-                <td><span class="badge badge-${row.correction_type === 'rate_fix' ? 'return' : 'exchange'}">${row.correction_type || '—'}</span></td>
-                <td class="truncate" title="${escHtml(origTax)}">${escHtml(origTax)}</td>
-                <td class="truncate" title="${escHtml(corrTax)}">${escHtml(corrTax)}</td>
-                <td>${time}</td>
-            </tr>`;
-        }).join('');
+        if (userInitiated) {
+            toast(`Tax corrections refreshed (${(data.total || 0).toLocaleString('en-IN')} total)`, 'ok');
+        }
     } catch (err) {
         console.error('Tax corrections load error:', err);
+        if (userInitiated) toast('Failed to load tax corrections: ' + err.message, 'err');
+    } finally {
+        if (btn) btn.classList.remove('is-refreshing');
     }
 }
 
@@ -207,48 +396,91 @@ async function loadTaxCorrections() {
 // Returns & RTO
 // ============================================================
 
-async function loadReturns() {
-    const type = document.getElementById('returnTypeFilter').value;
-    const status = document.getElementById('returnStatusFilter').value;
+const returnsState = {
+    page: 1,
+    limit: 25,
+    type: '',
+    status: '',
+    search: '',
+    totalPages: 1
+};
+
+async function loadReturns(page = 1, userInitiated = false) {
+    returnsState.page = Math.max(1, parseInt(page, 10) || 1);
+    returnsState.limit = parseInt(document.getElementById('returnLimitSelect')?.value || '25', 10);
+    returnsState.type = document.getElementById('returnTypeFilter')?.value || '';
+    returnsState.status = document.getElementById('returnStatusFilter')?.value || '';
+    returnsState.search = document.getElementById('returnSearch')?.value.trim() || '';
+
+    const btn = document.getElementById('btnRefreshReturns');
+    if (userInitiated && btn) btn.classList.add('is-refreshing');
 
     try {
-        const [statsData, logData] = await Promise.all([
+        const query = new URLSearchParams({
+            page: returnsState.page,
+            limit: returnsState.limit,
+            returnType: returnsState.type,
+            status: returnsState.status,
+            search: returnsState.search
+        });
+
+        const [statsResult, logResult] = await Promise.allSettled([
             apiFetch('/stats'),
-            apiFetch(`/returns?limit=50&returnType=${type}&status=${status}`)
+            apiFetch(`/returns?${query.toString()}`)
         ]);
 
-        if (statsData.success) {
-            document.getElementById('statReturns').textContent = statsData.returns.today.returns;
-            document.getElementById('statRTOs').textContent = statsData.returns.today.rtos;
-            document.getElementById('statCreditNotes').textContent = statsData.returns.creditNotesCreated;
-            document.getElementById('statFailedReturns').textContent = statsData.returns.failedReturns;
+        if (statsResult.status === 'fulfilled' && statsResult.value && statsResult.value.success) {
+            const retStats = statsResult.value.returns || {};
+            document.getElementById('statReturns').textContent = retStats.today?.returns || 0;
+            document.getElementById('statRTOs').textContent = retStats.today?.rtos || 0;
+            document.getElementById('statCreditNotes').textContent = retStats.creditNotesCreated || 0;
+            document.getElementById('statFailedReturns').textContent = retStats.failedReturns || 0;
         }
 
-        if (!logData.success) return;
-        const tbody = document.getElementById('returnsBody');
-        const rows = logData.data || [];
+        if (logResult.status === 'fulfilled' && logResult.value && logResult.value.success) {
+            const logData = logResult.value;
+            returnsState.totalPages = logData.totalPages || 1;
+            const countBadge = document.getElementById('returnsCount');
+            if (countBadge) countBadge.textContent = (logData.total || 0).toLocaleString('en-IN');
 
-        if (rows.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>No returns/RTOs yet</p></div></td></tr>`;
-            return;
+            const tbody = document.getElementById('returnsBody');
+            const rows = logData.data || [];
+
+            if (rows.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>No returns/RTOs found</p></div></td></tr>`;
+            } else {
+                tbody.innerHTML = rows.map(row => {
+                    const time = new Date(row.created_at).toLocaleString('en-IN', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true
+                    });
+                    const items = row.original_items ? JSON.stringify(row.original_items).substring(0, 50) : '—';
+
+                    return `<tr>
+                        <td><strong>#${escHtml(row.shopify_order_id)}</strong></td>
+                        <td><span class="badge badge-${row.return_type}">${row.return_type}</span></td>
+                        <td>${row.zoho_credit_note_id ? escHtml(row.zoho_credit_note_id) : '<span style="color:var(--text-faint)">—</span>'}</td>
+                        <td class="truncate" title="${escHtml(items)}">${escHtml(items)}</td>
+                        <td><span class="badge badge-${row.status}">${row.status}</span></td>
+                        <td style="white-space:nowrap">${time}</td>
+                        <td>${row.status === 'failed' ? `<button class="btn btn-xs btn-outline" style="border-color:var(--bad);color:var(--bad)" data-action="retry-return" data-id="${row.id}">Retry</button>` : ''}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            renderPaginationBar('returnsPaginationButtons', 'returnsPaginationInfo', logData, 'returns-page');
+            if (userInitiated) {
+                toast(`Returns & RTO refreshed (${(logData.total || 0).toLocaleString('en-IN')} records)`, 'ok');
+            }
         }
-
-        tbody.innerHTML = rows.map(row => {
-            const time = new Date(row.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' });
-            const items = row.original_items ? JSON.stringify(row.original_items).substring(0, 50) : '—';
-
-            return `<tr>
-                <td><strong>#${escHtml(row.shopify_order_id)}</strong></td>
-                <td><span class="badge badge-${row.return_type}">${row.return_type}</span></td>
-                <td>${row.zoho_credit_note_id ? escHtml(row.zoho_credit_note_id) : '—'}</td>
-                <td class="truncate" title="${escHtml(items)}">${escHtml(items)}</td>
-                <td><span class="badge badge-${row.status}">${row.status}</span></td>
-                <td>${time}</td>
-                <td>${row.status === 'failed' ? `<button class="btn btn-sm btn-outline" data-action="retry-return" data-id="${row.id}">Retry</button>` : ''}</td>
-            </tr>`;
-        }).join('');
     } catch (err) {
         console.error('Returns load error:', err);
+        if (userInitiated) toast('Failed to load returns: ' + err.message, 'err');
+    } finally {
+        if (btn) btn.classList.remove('is-refreshing');
     }
 }
 
@@ -256,7 +488,7 @@ async function retryReturn(id) {
     try {
         const data = await apiFetch(`/returns/retry/${id}`, { method: 'POST' });
         toast(data.success ? 'Return retry initiated' : `Retry failed: ${data.error}`, data.success ? 'ok' : 'err');
-        loadReturns();
+        loadReturns(returnsState.page);
     } catch (err) {
         toast('Retry error: ' + err.message, 'err');
     }
@@ -266,46 +498,86 @@ async function retryReturn(id) {
 // COD Payments
 // ============================================================
 
-async function loadCodLog() {
-    const search = document.getElementById('codSearch').value;
-    const status = document.getElementById('codStatusFilter').value;
+const codState = {
+    page: 1,
+    limit: 25,
+    status: '',
+    search: '',
+    totalPages: 1
+};
+
+async function loadCodLog(page = 1, userInitiated = false) {
+    codState.page = Math.max(1, parseInt(page, 10) || 1);
+    codState.limit = parseInt(document.getElementById('codLimitSelect')?.value || '25', 10);
+    codState.status = document.getElementById('codStatusFilter')?.value || '';
+    codState.search = document.getElementById('codSearch')?.value.trim() || '';
+
+    const btn = document.getElementById('btnRefreshCod');
+    if (userInitiated && btn) btn.classList.add('is-refreshing');
 
     try {
-        const [statsData, logData] = await Promise.all([
+        const query = new URLSearchParams({
+            page: codState.page,
+            limit: codState.limit,
+            status: codState.status,
+            search: codState.search
+        });
+
+        const [statsResult, logResult] = await Promise.allSettled([
             apiFetch('/stats'),
-            apiFetch(`/cod?limit=50&status=${status}&search=${encodeURIComponent(search)}`)
+            apiFetch(`/cod?${query.toString()}`)
         ]);
 
-        if (statsData.success) {
-            document.getElementById('statCodPending').textContent = statsData.cod.pending;
-            document.getElementById('statCodReconciled').textContent = statsData.cod.reconciledToday.count;
-            document.getElementById('statCodAmount').textContent = `₹${statsData.cod.reconciledToday.amount.toLocaleString('en-IN')}`;
+        if (statsResult.status === 'fulfilled' && statsResult.value && statsResult.value.success) {
+            const codStats = statsResult.value.cod || {};
+            document.getElementById('statCodPending').textContent = codStats.pending || 0;
+            document.getElementById('statCodReconciled').textContent = codStats.reconciledToday?.count || 0;
+            document.getElementById('statCodAmount').textContent = `₹${(codStats.reconciledToday?.amount || 0).toLocaleString('en-IN')}`;
         }
 
-        if (!logData.success) return;
-        const tbody = document.getElementById('codBody');
-        const rows = logData.data || [];
+        if (logResult.status === 'fulfilled' && logResult.value && logResult.value.success) {
+            const logData = logResult.value;
+            codState.totalPages = logData.totalPages || 1;
+            const countBadge = document.getElementById('codCount');
+            if (countBadge) countBadge.textContent = (logData.total || 0).toLocaleString('en-IN');
 
-        if (rows.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>No COD payments yet</p></div></td></tr>`;
-            return;
+            const tbody = document.getElementById('codBody');
+            const rows = logData.data || [];
+
+            if (rows.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>No COD payments found</p></div></td></tr>`;
+            } else {
+                tbody.innerHTML = rows.map(row => {
+                    const time = row.reconciled_at ? new Date(row.reconciled_at).toLocaleString('en-IN', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true
+                    }) : '<span style="color:var(--text-faint)">—</span>';
+
+                    return `<tr>
+                        <td><strong>#${escHtml(row.shopify_order_id)}</strong></td>
+                        <td>${row.awb || '<span style="color:var(--text-faint)">—</span>'}</td>
+                        <td>${escHtml(row.carrier || '—')}</td>
+                        <td>₹${parseFloat(row.amount || 0).toLocaleString('en-IN')}</td>
+                        <td><span class="badge badge-${row.payment_status === 'reconciled' ? 'reconciled' : row.payment_status}">${row.payment_status}</span></td>
+                        <td style="white-space:nowrap">${time}</td>
+                        <td>${row.payment_status === 'pending' || row.payment_status === 'failed' ? `<button class="btn btn-xs btn-primary" data-action="reconcile-cod" data-id="${row.id}">Reconcile</button>` : ''}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            renderPaginationBar('codPaginationButtons', 'codPaginationInfo', logData, 'cod-page');
+            if (userInitiated) {
+                toast(`COD payments refreshed (${(logData.total || 0).toLocaleString('en-IN')} records)`, 'ok');
+            }
         }
-
-        tbody.innerHTML = rows.map(row => {
-            const time = row.reconciled_at ? new Date(row.reconciled_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' }) : '—';
-
-            return `<tr>
-                <td><strong>#${escHtml(row.shopify_order_id)}</strong></td>
-                <td>${row.awb || '—'}</td>
-                <td>${escHtml(row.carrier || '—')}</td>
-                <td>₹${parseFloat(row.amount || 0).toLocaleString('en-IN')}</td>
-                <td><span class="badge badge-${row.payment_status === 'reconciled' ? 'reconciled' : row.payment_status}">${row.payment_status}</span></td>
-                <td>${time}</td>
-                <td>${row.payment_status === 'pending' || row.payment_status === 'failed' ? `<button class="btn btn-sm btn-primary" data-action="reconcile-cod" data-id="${row.id}">Reconcile</button>` : ''}</td>
-            </tr>`;
-        }).join('');
     } catch (err) {
         console.error('COD log load error:', err);
+        if (userInitiated) toast('Failed to load COD log: ' + err.message, 'err');
+    } finally {
+        if (btn) btn.classList.remove('is-refreshing');
     }
 }
 
@@ -313,7 +585,7 @@ async function reconcileCod(id) {
     try {
         const data = await apiFetch(`/cod/reconcile/${id}`, { method: 'POST' });
         toast(data.success ? 'COD reconciled successfully' : `Reconciliation failed: ${data.error}`, data.success ? 'ok' : 'err');
-        loadCodLog();
+        loadCodLog(codState.page);
     } catch (err) {
         toast('Reconcile error: ' + err.message, 'err');
     }
@@ -748,57 +1020,200 @@ function escAttr(str) {
 // Delegated click handling (CSP blocks inline event handlers)
 // ============================================================
 
-let paginationHandler = null;
-
 document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const id = parseInt(el.dataset.id || '0', 10);
     const title = el.dataset.title || '';
     switch (el.dataset.action) {
-        case 'refresh-overview': loadOverview(); break;
-        case 'search-sync': loadSyncLog(); break;
+        // Overview actions
+        case 'refresh-overview': loadOverview(true); break;
+        case 'overview-page': {
+            const p = parseInt(el.dataset.page, 10);
+            if (!isNaN(p) && p >= 1 && p <= overviewSyncState.totalPages) {
+                loadOverviewSync(p);
+            }
+            break;
+        }
+
+        // Dedicated Order Sync actions
+        case 'refresh-sync': loadSyncLog(syncLogState.page, true); break;
+        case 'sync-page': {
+            const p = parseInt(el.dataset.page, 10);
+            if (!isNaN(p) && p >= 1 && p <= syncLogState.totalPages) {
+                loadSyncLog(p);
+            }
+            break;
+        }
+        case 'search-sync': loadSyncLog(1); break;
         case 'retry-all-failed': retryAllFailed(); break;
-        case 'filter-tax': loadTaxCorrections(); break;
-        case 'filter-returns': loadReturns(); break;
-        case 'search-cod': loadCodLog(); break;
+
+        // Tax Corrections actions
+        case 'refresh-tax': loadTaxCorrections(taxState.page, true); break;
+        case 'tax-page': {
+            const p = parseInt(el.dataset.page, 10);
+            if (!isNaN(p) && p >= 1 && p <= taxState.totalPages) {
+                loadTaxCorrections(p);
+            }
+            break;
+        }
+        case 'filter-tax': loadTaxCorrections(1); break;
+
+        // Returns & RTO actions
+        case 'refresh-returns': loadReturns(returnsState.page, true); break;
+        case 'returns-page': {
+            const p = parseInt(el.dataset.page, 10);
+            if (!isNaN(p) && p >= 1 && p <= returnsState.totalPages) {
+                loadReturns(p);
+            }
+            break;
+        }
+        case 'filter-returns': loadReturns(1); break;
+        case 'retry-return': retryReturn(id); break;
+
+        // COD Payments actions
+        case 'refresh-cod': loadCodLog(codState.page, true); break;
+        case 'cod-page': {
+            const p = parseInt(el.dataset.page, 10);
+            if (!isNaN(p) && p >= 1 && p <= codState.totalPages) {
+                loadCodLog(p);
+            }
+            break;
+        }
+        case 'search-cod': loadCodLog(1); break;
+        case 'reconcile-cod': reconcileCod(id); break;
+
+        // Bundle & Config actions
         case 'test-connection': testConnection(); break;
         case 'apply-all-ready': applyAllReady(); break;
         case 'wizard-filter': filterWizard(el.dataset.filter); break;
         case 'add-bundle-row': addBundleMapping(); break;
         case 'close-modal': closeModal(el.dataset.modal); break;
         case 'show-transform': showTransformDetail(id); break;
-        case 'retry-sync': retrySync(id); break;
-        case 'retry-return': retryReturn(id); break;
-        case 'reconcile-cod': reconcileCod(id); break;
+        case 'retry-sync': {
+            e.stopPropagation();
+            retrySync(id);
+            break;
+        }
         case 'toggle-colorway': toggleColorway(title, el.dataset.base); break;
         case 'edit-bundle': editBundle(title); break;
         case 'remove-bundle': removeBundle(title); break;
         case 'apply-bundle': applyBundle(title); break;
         case 'cancel-edit': cancelEdit(title); break;
         case 'delete-bundle': deleteBundle(id); break;
-        case 'page': if (paginationHandler) paginationHandler(parseInt(el.dataset.page, 10)); break;
+        case 'page': {
+            const p = parseInt(el.dataset.page, 10);
+            if (!isNaN(p)) loadSyncLog(p);
+            break;
+        }
     }
 });
 
-function renderPagination(containerId, data, loadFn) {
-    const container = document.getElementById(containerId);
-    if (!data.totalPages || data.totalPages <= 1) {
-        container.innerHTML = '';
+function renderPaginationBar(controlsId, infoId, data, actionName = 'page') {
+    const controls = document.getElementById(controlsId);
+    const info = infoId ? document.getElementById(infoId) : null;
+    const page = data.page || 1;
+    const limit = data.limit || 25;
+    const total = data.total || 0;
+    const totalPages = data.totalPages || (total > 0 ? Math.ceil(total / limit) : 1);
+
+    if (info) {
+        if (total === 0) {
+            info.innerHTML = 'Showing <strong>0</strong> records';
+        } else {
+            const start = ((page - 1) * limit) + 1;
+            const end = Math.min(page * limit, total);
+            info.innerHTML = `Showing <strong>${start}–${end}</strong> of <strong>${total.toLocaleString('en-IN')}</strong> records (Page ${page} of ${totalPages})`;
+        }
+    }
+
+    if (!controls) return;
+    if (totalPages <= 1) {
+        controls.innerHTML = '';
         return;
     }
 
-    let html = '';
-    for (let i = 1; i <= data.totalPages; i++) {
-        html += `<button class="${i === data.page ? 'active' : ''}" data-action="page" data-page="${i}">${i}</button>`;
+    const pages = [];
+    const delta = 2;
+    for (let i = 1; i <= totalPages; i++) {
+        if (i === 1 || i === totalPages || (i >= page - delta && i <= page + delta)) {
+            pages.push(i);
+        } else if (pages[pages.length - 1] !== '...') {
+            pages.push('...');
+        }
     }
-    container.innerHTML = html;
 
-    paginationHandler = loadFn;
+    let html = '';
+    html += `<button data-action="${actionName}" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''} title="Previous page">&lsaquo; Prev</button>`;
+
+    for (const p of pages) {
+        if (p === '...') {
+            html += `<span style="color:var(--text-faint);padding:0 3px">&hellip;</span>`;
+        } else {
+            html += `<button class="${p === page ? 'active' : ''}" data-action="${actionName}" data-page="${p}">${p}</button>`;
+        }
+    }
+
+    html += `<button data-action="${actionName}" data-page="${page + 1}" ${page >= totalPages ? 'disabled' : ''} title="Next page">Next &rsaquo;</button>`;
+
+    controls.innerHTML = html;
+}
+
+// Legacy pagination helper alias (keeps existing tabs working)
+function renderPagination(containerId, data, loadFn) {
+    renderPaginationBar(containerId, null, data, 'page');
 }
 
 // ============================================================
-// Init
+// Init & Filter Listeners (Clean, Memory-Smart, Debounced)
 // ============================================================
 
-loadOverview();
+function setupDebouncedInput(inputId, onTrigger) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    let timer = null;
+    input.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(onTrigger, 280);
+    });
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            clearTimeout(timer);
+            onTrigger();
+        }
+    });
+}
+
+function setupSelectChange(selectId, onTrigger) {
+    const el = document.getElementById(selectId);
+    if (el) el.addEventListener('change', onTrigger);
+}
+
+// Overview listeners
+setupDebouncedInput('overviewSyncSearch', () => loadOverviewSync(1));
+setupSelectChange('overviewStatusFilter', () => loadOverviewSync(1));
+setupSelectChange('overviewLimitSelect', () => loadOverviewSync(1));
+
+// Order Sync tab listeners
+setupDebouncedInput('syncSearch', () => loadSyncLog(1));
+setupSelectChange('syncStatusFilter', () => loadSyncLog(1));
+setupSelectChange('syncLimitSelect', () => loadSyncLog(1));
+
+// Tax Corrections tab listeners
+setupDebouncedInput('taxSearch', () => loadTaxCorrections(1));
+setupSelectChange('taxTypeFilter', () => loadTaxCorrections(1));
+setupSelectChange('taxLimitSelect', () => loadTaxCorrections(1));
+
+// Returns & RTO tab listeners
+setupDebouncedInput('returnSearch', () => loadReturns(1));
+setupSelectChange('returnTypeFilter', () => loadReturns(1));
+setupSelectChange('returnStatusFilter', () => loadReturns(1));
+setupSelectChange('returnLimitSelect', () => loadReturns(1));
+
+// COD Payments tab listeners
+setupDebouncedInput('codSearch', () => loadCodLog(1));
+setupSelectChange('codStatusFilter', () => loadCodLog(1));
+setupSelectChange('codLimitSelect', () => loadCodLog(1));
+
+// Initial load
+loadOverview(false);

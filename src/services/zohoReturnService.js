@@ -805,7 +805,7 @@ async function getReturnStats() {
 /**
  * Get returns log with pagination.
  */
-async function getReturnLog({ page = 1, limit = 50, status, returnType } = {}) {
+async function getReturnLog({ page = 1, limit = 50, status, returnType, search } = {}) {
     let where = [];
     let params = [];
     let paramIdx = 1;
@@ -817,6 +817,11 @@ async function getReturnLog({ page = 1, limit = 50, status, returnType } = {}) {
     if (returnType) {
         where.push(`return_type = $${paramIdx++}`);
         params.push(returnType);
+    }
+    if (search) {
+        where.push(`(shopify_order_id ILIKE $${paramIdx} OR zoho_credit_note_id ILIKE $${paramIdx})`);
+        params.push(`%${search.trim()}%`);
+        paramIdx++;
     }
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
@@ -830,12 +835,13 @@ async function getReturnLog({ page = 1, limit = 50, status, returnType } = {}) {
         dbAdapter.query(`SELECT COUNT(*) as total FROM zoho_returns ${whereClause}`, params)
     ]);
 
+    const total = parseInt(countResult[0]?.total || 0, 10);
     return {
         data: rows,
-        total: countResult[0]?.total || 0,
+        total,
         page,
         limit,
-        totalPages: Math.ceil((countResult[0]?.total || 0) / limit)
+        totalPages: Math.ceil(total / limit)
     };
 }
 

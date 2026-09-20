@@ -94,7 +94,7 @@ router.post('/sync/retry/:id', requireAdmin, async (req, res) => {
 
 router.get('/tax-corrections', async (req, res) => {
     try {
-        const { page = 1, limit = 50, type } = req.query;
+        const { page = 1, limit = 50, type, search } = req.query;
         let where = [];
         let params = [];
         let paramIdx = 1;
@@ -103,24 +103,49 @@ router.get('/tax-corrections', async (req, res) => {
             where.push(`correction_type = $${paramIdx++}`);
             params.push(type);
         }
+        if (search) {
+            where.push(`(shopify_order_id ILIKE $${paramIdx} OR correction_type ILIKE $${paramIdx})`);
+            params.push(`%${search.trim()}%`);
+            paramIdx++;
+        }
 
         const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-        const offset = (parseInt(page) - 1) * parseInt(limit);
+        const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+        const parsedLimit = Math.max(1, parseInt(limit, 10) || 50);
+        const offset = (parsedPage - 1) * parsedLimit;
 
-        const [rows, countResult] = await Promise.all([
+        const [rows, countResult, statsResult] = await Promise.all([
             dbAdapter.query(
                 `SELECT * FROM zoho_tax_corrections ${whereClause} ORDER BY created_at DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,
-                [...params, parseInt(limit), offset]
+                [...params, parsedLimit, offset]
             ),
-            dbAdapter.query(`SELECT COUNT(*) as total FROM zoho_tax_corrections ${whereClause}`, params)
+            dbAdapter.query(`SELECT COUNT(*) as total FROM zoho_tax_corrections ${whereClause}`, params),
+            dbAdapter.query(`
+                SELECT 
+                    COUNT(*) as total_count,
+                    COUNT(CASE WHEN created_at >= CURRENT_DATE THEN 1 END) as today_count,
+                    COUNT(CASE WHEN correction_type = 'rate_fix' THEN 1 END) as rate_fixes,
+                    COUNT(CASE WHEN correction_type IN ('state_fix', 'intra_state', 'inter_state') THEN 1 END) as state_fixes
+                FROM zoho_tax_corrections
+            `).catch(() => [{}])
         ]);
+
+        const total = parseInt(countResult[0]?.total || 0, 10);
+        const statsRow = statsResult[0] || {};
 
         res.json({
             success: true,
             data: rows,
-            total: countResult[0]?.total || 0,
-            page: parseInt(page),
-            limit: parseInt(limit)
+            total,
+            page: parsedPage,
+            limit: parsedLimit,
+            totalPages: Math.ceil(total / parsedLimit),
+            stats: {
+                today: parseInt(statsRow.today_count || 0, 10),
+                rateFixes: parseInt(statsRow.rate_fixes || 0, 10),
+                stateFixes: parseInt(statsRow.state_fixes || 0, 10),
+                total: parseInt(statsRow.total_count || total, 10)
+            }
         });
     } catch (err) {
         console.error('❌ Zoho tax corrections error:', err.message);
@@ -134,12 +159,13 @@ router.get('/tax-corrections', async (req, res) => {
 
 router.get('/returns', async (req, res) => {
     try {
-        const { page = 1, limit = 50, status, returnType } = req.query;
+        const { page = 1, limit = 50, status, returnType, search } = req.query;
         const result = await zohoReturnService.getReturnLog({
             page: parseInt(page),
             limit: parseInt(limit),
             status,
-            returnType
+            returnType,
+            search
         });
         res.json({ success: true, ...result });
     } catch (err) {
