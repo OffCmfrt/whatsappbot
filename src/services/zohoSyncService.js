@@ -1,5 +1,5 @@
 const zohoService = require('./zohoService');
-const { buildZohoInvoicePayload } = require('./zohoTransform');
+const { buildZohoInvoicePayload, buildCodPaymentPayload } = require('./zohoTransform');
 const { createItemResolver } = require('./zohoItemResolver');
 const { dbAdapter } = require('../database/db');
 
@@ -253,6 +253,36 @@ async function syncOrderToZoho(shopifyOrder) {
             await zohoService.markInvoiceSent(zohoInvoice.invoice_id);
         } catch (sentErr) {
             console.warn(`⚠️ Zoho sync #${orderId}: mark-sent failed (${sentErr.message}) — invoice left as draft`);
+        }
+
+        // Step 4.6: Prepaid orders — record payment immediately so the invoice
+        // shows as "Paid" in Zoho. COD orders are handled later by the shipment
+        // hook when the carrier confirms delivery + COD collection.
+        const financialStatus = (shopifyOrder.financial_status || '').toLowerCase();
+        if (financialStatus === 'paid' || financialStatus === 'partially_paid') {
+            try {
+                const existingPayments = await zohoService.getPayments(zohoInvoice.invoice_id);
+                if (existingPayments.length === 0) {
+                    // Re-fetch to get customer_id and accurate total after mark-sent
+                    const paidInvoice = await zohoService.getInvoice(zohoInvoice.invoice_id);
+                    const paidAmount = parseFloat(paidInvoice?.total || shopifyOrder.total_price || 0);
+                    if (paidAmount > 0) {
+                        const paymentPayload = buildCodPaymentPayload(
+                            zohoInvoice.invoice_id,
+                            paidAmount,
+                            shopifyOrder.created_at || new Date().toISOString(),
+                            paidInvoice?.customer_id || zohoCustomer?.contact_id
+                        );
+                        // Override payment mode to match the actual gateway
+                        paymentPayload.payment_mode = 'online';
+                        paymentPayload.description = `Prepaid Payment — ${((shopifyOrder.payment_gateway_names || []).join('/') || 'online')}`;
+                        const payment = await zohoService.recordPayment(paymentPayload);
+                        console.log(`✅ Zoho sync #${orderId}: prepaid payment recorded ${payment?.payment_id || ''} (₹${paidAmount})`);
+                    }
+                }
+            } catch (payErr) {
+                console.warn(`⚠️ Zoho sync #${orderId}: prepaid payment recording failed (${payErr.message}) — invoice left unpaid`);
+            }
         }
 
         // Step 5: Log tax corrections to the tax_corrections table

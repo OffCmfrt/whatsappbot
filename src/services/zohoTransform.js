@@ -103,6 +103,37 @@ function normalizeStateCode(code) {
 }
 
 // ============================================================
+// Size extraction from product title
+// ============================================================
+
+// Common apparel size tokens — used to detect size suffixes in product titles
+// when Shopify variant_title is empty (single-variant products).
+const SIZE_TOKENS = new Set([
+    'XS', 'S', 'M', 'L', 'XL', 'XXL', '2XL', '3XL', '4XL', '5XL',
+    '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48',
+    'FREE', 'FREE SIZE', 'ONESIZE', 'ONE SIZE', 'DEFAULT'
+]);
+
+/**
+ * Extract size from a product title like "Relaxed Tee - M" or
+ * "Oversized Shirt (L)". Returns empty string when no size is found.
+ */
+function extractSizeFromTitle(title) {
+    if (!title) return '';
+    // Pattern 1: " - SIZE" at the end
+    const dashMatch = title.match(/\s-\s(\S+)\s*$/);
+    if (dashMatch && SIZE_TOKENS.has(dashMatch[1].toUpperCase().trim())) {
+        return dashMatch[1].trim();
+    }
+    // Pattern 2: "(SIZE)" at the end
+    const parenMatch = title.match(/\((\S+?)\)\s*$/);
+    if (parenMatch && SIZE_TOKENS.has(parenMatch[1].toUpperCase().trim())) {
+        return parenMatch[1].trim();
+    }
+    return '';
+}
+
+// ============================================================
 // Bundle Breaking
 // ============================================================
 
@@ -190,8 +221,15 @@ function breakBundleLineItems(lineItems, bundleMap) {
         } else {
             // Not a bundle — pass through (preserve variant for size in Zoho)
             const variant = String(item.variant || '').trim();
+            // When the variant was extracted from the title (single-variant
+            // product), the title already ends with " - SIZE" — strip it from
+            // the name so we don't end up with "Product - M (M)".
+            let name = item.title || item.sku || 'Item';
+            if (variant && SIZE_TOKENS.has(variant.toUpperCase())) {
+                name = name.replace(new RegExp(`\\s*-\\s+${variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i'), '');
+            }
             result.push({
-                name: item.title || item.sku || 'Item',
+                name,
                 variant: variant,
                 sku: item.sku || '',
                 quantity: parseInt(item.quantity || 1),
@@ -336,16 +374,24 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
     );
 
     // Extract line items from Shopify order
-    const rawLineItems = (shopifyOrder.line_items || []).map(li => ({
-        title: li.title,
-        sku: li.sku || '',
-        quantity: li.quantity,
-        price: parseFloat(li.price || 0),
-        variant: li.variant_title || '',
-        discount_allocations: li.discount_allocations || [],
-        tax_rate: li.tax_lines?.[0]?.rate ? li.tax_lines[0].rate * 100 : null,
-        gst_rate: li.tax_lines?.[0]?.rate ? li.tax_lines[0].rate * 100 : 5
-    }));
+    const rawLineItems = (shopifyOrder.line_items || []).map(li => {
+        // For single-variant products Shopify returns empty variant_title —
+        // fall back to extracting size from the product title (e.g. "Relaxed Tee - M")
+        const variantFromShopify = String(li.variant_title || '').trim();
+        const variant = variantFromShopify && variantFromShopify.toLowerCase() !== 'default title'
+            ? variantFromShopify
+            : extractSizeFromTitle(li.title);
+        return {
+            title: li.title,
+            sku: li.sku || '',
+            quantity: li.quantity,
+            price: parseFloat(li.price || 0),
+            variant,
+            discount_allocations: li.discount_allocations || [],
+            tax_rate: li.tax_lines?.[0]?.rate ? li.tax_lines[0].rate * 100 : null,
+            gst_rate: li.tax_lines?.[0]?.rate ? li.tax_lines[0].rate * 100 : 5
+        };
+    });
 
     // Order-level discounts prorated onto each line so Zoho invoices
     // (and later credit notes) reflect the real discounted amounts
@@ -360,15 +406,18 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
     const { lineItems: correctedItems, corrections, taxDecision } = correctTax(brokenItems, sellerState, customerState);
 
     // Step 3: Build Zoho invoice line items
-    // Include variant/size in the description so Zoho invoices show what
-    // size was ordered (e.g. "Relaxed Tee (M)") — critical for Delhivery
-    // and all other carriers alike.
+    // Size/variant goes in BOTH the item name AND the description. Zoho tracks
+    // inventory per item name — without the size in the name, stock isn't
+    // deducted from the right size SKU. The description mirrors it for display.
     const zohoLineItems = correctedItems.map(item => {
+        const name = item.variant
+            ? `${item.name} (${item.variant})`
+            : item.name;
         const desc = item.variant
             ? `${item.name} (${item.variant})`
             : (item.is_bundle_component ? `(from ${item.parent_bundle_name})` : (item.name || 'Item'));
         return {
-            name: item.name,
+            name: name,
             description: desc,
             item_id: item.sku, // Will be resolved to Zoho item_id at sync time
             quantity: item.quantity,
@@ -766,6 +815,7 @@ module.exports = {
     buildCodPaymentPayload,
     allocateOrderDiscounts,
     taxFromInvoiceLine,
+    extractSizeFromTitle,
 
     // Constants
     INDIAN_STATES,
