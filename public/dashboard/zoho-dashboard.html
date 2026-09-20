@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OFFCOMFRT — Zoho Sync Console</title>
-    <link rel="stylesheet" href="/dashboard/css/zoho-dashboard.css?v=2">
+    <link rel="stylesheet" href="/dashboard/css/zoho-dashboard.css?v=3">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -64,48 +64,101 @@
                     <div class="stat-value" id="statCodPending">0</div>
                 </div>
             </div>
-            <div class="section-header">
-                <h3>Recent Sync Activity</h3>
-                <button class="btn btn-sm btn-outline" data-action="refresh-overview">Refresh</button>
+            <div id="authAlertBanner" class="auth-banner" style="display:none">
+                <span>⚠️ Session expired or not signed in. Some live operations may fail.</span>
+                <a href="/dashboard/index.html">Sign In to Command Center &rarr;</a>
             </div>
-            <div class="table-container">
+
+            <div class="section-header-compact">
+                <div class="section-header-left">
+                    <h3>Recent Sync Activity</h3>
+                    <span class="count-pill" id="overviewSyncCount">0</span>
+                </div>
+                <div class="section-header-actions">
+                    <input type="text" id="overviewSyncSearch" placeholder="Search order # or invoice..." class="filter-input filter-input-compact">
+                    <select id="overviewStatusFilter" class="filter-select filter-select-compact">
+                        <option value="">All Status</option>
+                        <option value="synced">Synced</option>
+                        <option value="failed">Failed</option>
+                        <option value="pending">Pending</option>
+                        <option value="retry">Retry</option>
+                    </select>
+                    <select id="overviewLimitSelect" class="filter-select filter-select-compact" title="Rows per page">
+                        <option value="10">10 / page</option>
+                        <option value="25" selected>25 / page</option>
+                        <option value="50">50 / page</option>
+                        <option value="100">100 / page</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline refresh-btn" id="btnRefreshOverview" data-action="refresh-overview" title="Refresh sync activity & stats">
+                        <svg class="refresh-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                        <span id="refreshBtnText">Refresh</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline" data-action="retry-all-failed" title="Retry all failed syncs">Retry All Failed</button>
+                </div>
+            </div>
+
+            <div class="table-scroll-container">
                 <table class="data-table" id="recentSyncTable">
                     <thead>
                         <tr>
                             <th>Order ID</th>
                             <th>Zoho Invoice</th>
                             <th>Status</th>
+                            <th>Transformations</th>
+                            <th>Error / Notes</th>
                             <th>Time</th>
+                            <th>Action</th>
                         </tr>
                     </thead>
                     <tbody id="recentSyncBody"></tbody>
                 </table>
             </div>
+
+            <div class="pagination-bar" id="overviewPaginationBar">
+                <div class="pagination-info" id="overviewPaginationInfo">Showing 0 records</div>
+                <div class="pagination-controls" id="overviewPaginationButtons"></div>
+            </div>
         </div>
 
         <!-- Section: Order Sync -->
         <div id="section-sync" class="section-content">
-            <div class="filters-bar">
-                <input type="text" id="syncSearch" placeholder="Search order ID or invoice..." class="filter-input">
-                <select id="syncStatusFilter" class="filter-select">
-                    <option value="">All Status</option>
-                    <option value="synced">Synced</option>
-                    <option value="failed">Failed</option>
-                    <option value="pending">Pending</option>
-                    <option value="retry">Retry</option>
-                </select>
-                <button class="btn btn-sm btn-primary" data-action="search-sync">Search</button>
-                <button class="btn btn-sm btn-outline" data-action="retry-all-failed">Retry All Failed</button>
+            <div class="section-header-compact">
+                <div class="section-header-left">
+                    <h3>All Order Sync Logs</h3>
+                    <span class="count-pill" id="syncCount">0</span>
+                </div>
+                <div class="section-header-actions">
+                    <input type="text" id="syncSearch" placeholder="Search order ID or invoice..." class="filter-input filter-input-compact">
+                    <select id="syncStatusFilter" class="filter-select filter-select-compact">
+                        <option value="">All Status</option>
+                        <option value="synced">Synced</option>
+                        <option value="failed">Failed</option>
+                        <option value="pending">Pending</option>
+                        <option value="retry">Retry</option>
+                    </select>
+                    <select id="syncLimitSelect" class="filter-select filter-select-compact" title="Rows per page">
+                        <option value="10">10 / page</option>
+                        <option value="25" selected>25 / page</option>
+                        <option value="50">50 / page</option>
+                        <option value="100">100 / page</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline refresh-btn" id="btnRefreshSync" data-action="refresh-sync" title="Refresh sync log">
+                        <svg class="refresh-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                        <span>Refresh</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline" style="border-color:var(--bad);color:var(--bad)" data-action="retry-all-failed" title="Retry all failed syncs">Retry All Failed</button>
+                </div>
             </div>
-            <div class="table-container">
-                <table class="data-table">
+
+            <div class="table-scroll-container">
+                <table class="data-table" id="syncTable">
                     <thead>
                         <tr>
                             <th>Order ID</th>
                             <th>Zoho Invoice</th>
                             <th>Status</th>
                             <th>Transformations</th>
-                            <th>Error</th>
+                            <th>Error / Notes</th>
                             <th>Time</th>
                             <th>Action</th>
                         </tr>
@@ -113,7 +166,11 @@
                     <tbody id="syncLogBody"></tbody>
                 </table>
             </div>
-            <div class="pagination" id="syncPagination"></div>
+
+            <div class="pagination-bar" id="syncPaginationBar">
+                <div class="pagination-info" id="syncPaginationInfo">Showing 0 records</div>
+                <div class="pagination-controls" id="syncPaginationButtons"></div>
+            </div>
         </div>
 
         <!-- Section: Tax Corrections -->
@@ -132,18 +189,36 @@
                     <div class="stat-value" id="statStateFixes">0</div>
                 </div>
             </div>
-            <div class="filters-bar">
-                <select id="taxTypeFilter" class="filter-select">
-                    <option value="">All Types</option>
-                    <option value="rate_fix">Rate Fix</option>
-                    <option value="state_fix">State Fix</option>
-                    <option value="intra_state">Intra-state (CGST+SGST)</option>
-                    <option value="inter_state">Inter-state (IGST)</option>
-                </select>
-                <button class="btn btn-sm btn-primary" data-action="filter-tax">Filter</button>
+
+            <div class="section-header-compact">
+                <div class="section-header-left">
+                    <h3>Tax Corrections Log</h3>
+                    <span class="count-pill" id="taxCount">0</span>
+                </div>
+                <div class="section-header-actions">
+                    <input type="text" id="taxSearch" placeholder="Search order ID..." class="filter-input filter-input-compact">
+                    <select id="taxTypeFilter" class="filter-select filter-select-compact">
+                        <option value="">All Types</option>
+                        <option value="rate_fix">Rate Fix</option>
+                        <option value="state_fix">State Fix</option>
+                        <option value="intra_state">Intra-state (CGST+SGST)</option>
+                        <option value="inter_state">Inter-state (IGST)</option>
+                    </select>
+                    <select id="taxLimitSelect" class="filter-select filter-select-compact" title="Rows per page">
+                        <option value="10">10 / page</option>
+                        <option value="25" selected>25 / page</option>
+                        <option value="50">50 / page</option>
+                        <option value="100">100 / page</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline refresh-btn" id="btnRefreshTax" data-action="refresh-tax" title="Refresh tax corrections">
+                        <svg class="refresh-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                        <span>Refresh</span>
+                    </button>
+                </div>
             </div>
-            <div class="table-container">
-                <table class="data-table">
+
+            <div class="table-scroll-container">
+                <table class="data-table" id="taxTable">
                     <thead>
                         <tr>
                             <th>Order ID</th>
@@ -155,6 +230,11 @@
                     </thead>
                     <tbody id="taxCorrectionsBody"></tbody>
                 </table>
+            </div>
+
+            <div class="pagination-bar" id="taxPaginationBar">
+                <div class="pagination-info" id="taxPaginationInfo">Showing 0 records</div>
+                <div class="pagination-controls" id="taxPaginationButtons"></div>
             </div>
         </div>
 
@@ -178,23 +258,41 @@
                     <div class="stat-value" id="statFailedReturns">0</div>
                 </div>
             </div>
-            <div class="filters-bar">
-                <select id="returnTypeFilter" class="filter-select">
-                    <option value="">All Types</option>
-                    <option value="return">Returns</option>
-                    <option value="rto">RTO</option>
-                    <option value="exchange">Exchange</option>
-                </select>
-                <select id="returnStatusFilter" class="filter-select">
-                    <option value="">All Status</option>
-                    <option value="synced">Synced</option>
-                    <option value="failed">Failed</option>
-                    <option value="pending">Pending</option>
-                </select>
-                <button class="btn btn-sm btn-primary" data-action="filter-returns">Filter</button>
+
+            <div class="section-header-compact">
+                <div class="section-header-left">
+                    <h3>Returns &amp; RTO Activity</h3>
+                    <span class="count-pill" id="returnsCount">0</span>
+                </div>
+                <div class="section-header-actions">
+                    <input type="text" id="returnSearch" placeholder="Search order ID or credit note..." class="filter-input filter-input-compact">
+                    <select id="returnTypeFilter" class="filter-select filter-select-compact">
+                        <option value="">All Types</option>
+                        <option value="return">Returns</option>
+                        <option value="rto">RTO</option>
+                        <option value="exchange">Exchange</option>
+                    </select>
+                    <select id="returnStatusFilter" class="filter-select filter-select-compact">
+                        <option value="">All Status</option>
+                        <option value="synced">Synced</option>
+                        <option value="failed">Failed</option>
+                        <option value="pending">Pending</option>
+                    </select>
+                    <select id="returnLimitSelect" class="filter-select filter-select-compact" title="Rows per page">
+                        <option value="10">10 / page</option>
+                        <option value="25" selected>25 / page</option>
+                        <option value="50">50 / page</option>
+                        <option value="100">100 / page</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline refresh-btn" id="btnRefreshReturns" data-action="refresh-returns" title="Refresh returns log">
+                        <svg class="refresh-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                        <span>Refresh</span>
+                    </button>
+                </div>
             </div>
-            <div class="table-container">
-                <table class="data-table">
+
+            <div class="table-scroll-container">
+                <table class="data-table" id="returnsTable">
                     <thead>
                         <tr>
                             <th>Order ID</th>
@@ -208,6 +306,11 @@
                     </thead>
                     <tbody id="returnsBody"></tbody>
                 </table>
+            </div>
+
+            <div class="pagination-bar" id="returnsPaginationBar">
+                <div class="pagination-info" id="returnsPaginationInfo">Showing 0 records</div>
+                <div class="pagination-controls" id="returnsPaginationButtons"></div>
             </div>
         </div>
 
@@ -227,18 +330,35 @@
                     <div class="stat-value" id="statCodAmount">₹0</div>
                 </div>
             </div>
-            <div class="filters-bar">
-                <input type="text" id="codSearch" placeholder="Search order ID, AWB, carrier..." class="filter-input">
-                <select id="codStatusFilter" class="filter-select">
-                    <option value="">All Status</option>
-                    <option value="reconciled">Reconciled</option>
-                    <option value="pending">Pending</option>
-                    <option value="failed">Failed</option>
-                </select>
-                <button class="btn btn-sm btn-primary" data-action="search-cod">Search</button>
+
+            <div class="section-header-compact">
+                <div class="section-header-left">
+                    <h3>COD Payments &amp; Reconciliation</h3>
+                    <span class="count-pill" id="codCount">0</span>
+                </div>
+                <div class="section-header-actions">
+                    <input type="text" id="codSearch" placeholder="Search order ID, AWB, carrier..." class="filter-input filter-input-compact">
+                    <select id="codStatusFilter" class="filter-select filter-select-compact">
+                        <option value="">All Status</option>
+                        <option value="reconciled">Reconciled</option>
+                        <option value="pending">Pending</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                    <select id="codLimitSelect" class="filter-select filter-select-compact" title="Rows per page">
+                        <option value="10">10 / page</option>
+                        <option value="25" selected>25 / page</option>
+                        <option value="50">50 / page</option>
+                        <option value="100">100 / page</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline refresh-btn" id="btnRefreshCod" data-action="refresh-cod" title="Refresh COD log">
+                        <svg class="refresh-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                        <span>Refresh</span>
+                    </button>
+                </div>
             </div>
-            <div class="table-container">
-                <table class="data-table">
+
+            <div class="table-scroll-container">
+                <table class="data-table" id="codTable">
                     <thead>
                         <tr>
                             <th>Order ID</th>
@@ -252,6 +372,11 @@
                     </thead>
                     <tbody id="codBody"></tbody>
                 </table>
+            </div>
+
+            <div class="pagination-bar" id="codPaginationBar">
+                <div class="pagination-info" id="codPaginationInfo">Showing 0 records</div>
+                <div class="pagination-controls" id="codPaginationButtons"></div>
             </div>
         </div>
 
@@ -320,7 +445,7 @@
                     <input type="number" id="newGstRate" placeholder="GST %" value="5" class="filter-input filter-input-sm">
                     <button class="btn btn-sm btn-primary" data-action="add-bundle-row">Add Row</button>
                 </div>
-                <div class="table-container">
+                <div class="table-scroll-container" style="max-height: 420px">
                     <table class="data-table data-table-sm">
                         <thead>
                             <tr>
@@ -352,6 +477,6 @@
     <!-- Toast stack -->
     <div id="toastStack" class="toast-stack"></div>
 
-    <script src="/dashboard/js/zoho-dashboard.js?v=2"></script>
+    <script src="/dashboard/js/zoho-dashboard.js?v=4"></script>
 </body>
 </html>
