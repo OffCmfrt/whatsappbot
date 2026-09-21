@@ -2533,6 +2533,15 @@ function renderCards(shoppers, total, append = false) {
     // Only clear grid if not appending
     if (!append) {
         grid.innerHTML = '';
+        // Track visible shoppers for "Select All Visible"
+        allMatchingShoppers = shoppers.slice();
+    } else {
+        // When appending (load more), extend the visible set
+        shoppers.forEach(s => {
+            if (!allMatchingShoppers.find(x => x.id === s.id)) {
+                allMatchingShoppers.push(s);
+            }
+        });
     }
     shoppers.forEach((s, i) => {
         shopperEditCache[String(s.id)] = s;
