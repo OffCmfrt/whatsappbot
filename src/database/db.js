@@ -656,9 +656,12 @@ async function initializeShipmentBatchesTable() {
         manifest_url TEXT,
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         completed_at TIMESTAMP
       )
     `);
+
+    await pool.query('ALTER TABLE shipment_batches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP');
 
     await pool.query('CREATE INDEX IF NOT EXISTS idx_batches_created_at ON shipment_batches(created_at DESC)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_batches_shipped_by ON shipment_batches(shipped_by)');

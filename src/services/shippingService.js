@@ -557,21 +557,27 @@ async function createBatch({ shippedBy, carrier, totalOrders, packageDefaults })
 }
 
 async function updateBatch(batchId, { successfulCount, failedCount, status }) {
-    const updates = { updated_at: new Date().toISOString() };
-    if (successfulCount !== undefined) updates.successful_count = successfulCount;
-    if (failedCount !== undefined) updates.failed_count = failedCount;
-    if (status) updates.status = status;
-    if (status && status !== 'processing') updates.completed_at = new Date().toISOString();
+    const setClauses = ['updated_at = CURRENT_TIMESTAMP'];
+    const params = [];
 
-    await dbAdapter.query(`
-        UPDATE shipment_batches
-        SET successful_count = COALESCE(?, successful_count),
-            failed_count = COALESCE(?, failed_count),
-            status = COALESCE(?, status),
-            completed_at = CASE WHEN ? IS NOT NULL AND ? != 'processing' THEN CURRENT_TIMESTAMP ELSE completed_at END,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    `, [successfulCount ?? null, failedCount ?? null, status || null, status || null, status || null, batchId]);
+    if (successfulCount !== undefined) {
+        params.push(successfulCount);
+        setClauses.push(`successful_count = ?`);
+    }
+    if (failedCount !== undefined) {
+        params.push(failedCount);
+        setClauses.push(`failed_count = ?`);
+    }
+    if (status) {
+        params.push(status);
+        setClauses.push(`status = ?`);
+        if (status !== 'processing') {
+            setClauses.push(`completed_at = CURRENT_TIMESTAMP`);
+        }
+    }
+
+    params.push(batchId);
+    await dbAdapter.query(`UPDATE shipment_batches SET ${setClauses.join(', ')} WHERE id = ?`, params);
 }
 
 async function getBatch(batchId) {
