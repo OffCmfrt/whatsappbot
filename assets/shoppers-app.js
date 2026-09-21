@@ -6,7 +6,7 @@
 const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? `${window.location.protocol}//${window.location.hostname}:${window.location.port}/api/admin`
     : 'https://whatsappbot-4l4b.onrender.com/api/admin';
-console.log(' Shopper Hub App Loaded - Ver: 1712800004, API:', API_BASE);
+console.log(' Shopper Hub App Loaded - Ver: 1712800005, API:', API_BASE);
 
 // Check for cross-domain token in URL
 const urlParams = new URLSearchParams(window.location.search);

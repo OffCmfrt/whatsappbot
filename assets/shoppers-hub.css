@@ -1356,6 +1356,7 @@
         /* ── Customer Context Panels (Premium Collapsible) ── */
         .customer-context-panels {
             flex: 1;
+            min-height: 200px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
