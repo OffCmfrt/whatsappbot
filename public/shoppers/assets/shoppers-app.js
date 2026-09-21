@@ -3,11 +3,10 @@
 // With Live Chat, Customer Messages & Analytics
 // ==========================================
 
-// Same-origin API base; keeps the absolute URL only if this copy is ever loaded from Shopify
-const API_BASE = window.location.hostname.endsWith('myshopify.com')
-    ? 'https://whatsappbot-4l4b.onrender.com/api/admin'
-    : '/api/admin';
-console.log('🚀 Shopper Hub App Loaded - Ver: 1788000000');
+const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? `${window.location.protocol}//${window.location.hostname}:${window.location.port}/api/admin`
+    : 'https://whatsappbot-4l4b.onrender.com/api/admin';
+console.log(' Shopper Hub App Loaded - Ver: 1712800005, API:', API_BASE);
 
 // Check for cross-domain token in URL
 const urlParams = new URLSearchParams(window.location.search);
@@ -65,11 +64,11 @@ function applyRolePermissions() {
     const identity = getHubIdentity();
     const isAdmin = identity.role === 'admin';
 
-    // User badge in the sidebar footer
+    // User badge in the nav bar
     const badge = document.getElementById('hubUserBadge');
     if (badge) {
-        badge.textContent = isAdmin ? 'Admin' : (identity.name || identity.username);
-        badge.style.display = 'flex';
+        badge.textContent = `${isAdmin ? '👑 Admin' : '👤 ' + (identity.name || identity.username)}`;
+        badge.style.display = 'inline-block';
     }
 
     // Nav buttons ↔ page permissions
@@ -88,7 +87,7 @@ function applyRolePermissions() {
 
     // Team button — master admin only
     const teamBtn = document.getElementById('teamBtn');
-    if (teamBtn) teamBtn.style.display = isAdmin ? 'flex' : 'none';
+    if (teamBtn) teamBtn.style.display = isAdmin ? 'inline-flex' : 'none';
 
     // Logout — clears the session for both admin and operator accounts
     const logoutBtn = document.getElementById('hubLogoutBtn');
@@ -104,7 +103,7 @@ function applyRolePermissions() {
     // CSS-level hiding of row/bulk actions the operator can't perform
     let css = '';
     if (!hubHasPerm('edit_orders')) {
-        css += `.btn-text-edit, button[onclick^="openEditModal"], button[onclick^="bulkUpdateStatus"], #bulkDeleteBtn, .bulk-btn-delete, button[onclick^="openShopifyCancelModal"], .status-actions .status-pill, .row-status-pills .status-pill-mini, .multi-order-actions .btn { display: none !important; }`;
+        css += `.btn-text-edit, button[onclick^="openEditModal"], button[onclick^="bulkUpdateStatus"], #bulkDeleteBtn, .bulk-btn-delete, button[onclick^="openShopifyCancelModal"] { display: none !important; }`;
     }
     if (!hubHasPerm('send_messages')) {
         css += `#sendChatBtn, .btn-chat[onclick^="openChat"] { display: none !important; }`;
@@ -130,7 +129,6 @@ const limitPerPage = 50;
 // Safety cap for one bulk-ship run — protects carrier APIs (rate limits /
 // freight spend) and the browser from runaway batches. Raise cautiously.
 const MAX_BULK_SHIP = 200;
-const MAX_BULK_CANCEL = 200; // hub-side cancellation cap (single run, incl. WhatsApp notice per order)
 let searchTimeout = null;
 let filterTimeout = null;
 let currentChatPhone = null;
@@ -182,108 +180,8 @@ let soTotal = 0;
 const SO_PAGE_SIZE = 25;
 let soSearchTimeout = null;
 
-// ============================================================
-// SINGLE-WINDOW LOCK — an operator may run Shoppers Hub in only
-// ONE window/tab per browser. The first window claims the lock and
-// heartbeats it; any later window shows a blocker screen instead of
-// the app and takes over automatically once the other window closes.
-// Admins are exempt; the server also enforces one login per account.
-// ============================================================
-let hubWindowLockId = null;
-let hubWindowLockChannel = null;
-let hubWindowIsHolder = false;
-let hubWindowLockHeartbeat = null;
-
-function acquireWindowLock(probeMs = 700) {
-    return new Promise(resolve => {
-        const identity = getHubIdentity();
-        if (!identity || identity.role !== 'operator' || typeof BroadcastChannel === 'undefined') {
-            return resolve(true);
-        }
-
-        hubWindowLockId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-        hubWindowLockChannel = new BroadcastChannel('offcomfrt-hub-window-lock');
-        let answered = false;
-
-        hubWindowLockChannel.onmessage = (ev) => {
-            const msg = ev.data || {};
-            if (!msg.id || msg.id === hubWindowLockId) return;
-            if (msg.type === 'claim') {
-                if (hubWindowIsHolder) {
-                    // Two simultaneous holders — deterministic tie-break: the
-                    // lexicographically smaller id keeps the lock
-                    if (msg.id < hubWindowLockId) {
-                        hubWindowIsHolder = false;
-                        if (hubWindowLockHeartbeat) { clearInterval(hubWindowLockHeartbeat); hubWindowLockHeartbeat = null; }
-                        showWindowBlockedScreen();
-                    } else {
-                        hubWindowLockChannel.postMessage({ type: 'claim', id: hubWindowLockId });
-                    }
-                } else if (!answered) {
-                    answered = true;
-                    resolve(false);
-                }
-            } else if (msg.type === 'probe' && hubWindowIsHolder) {
-                hubWindowLockChannel.postMessage({ type: 'claim', id: hubWindowLockId });
-            }
-        };
-
-        hubWindowLockChannel.postMessage({ type: 'probe', id: hubWindowLockId });
-        setTimeout(() => {
-            if (answered) return;
-            hubWindowIsHolder = true;
-            hubWindowLockChannel.postMessage({ type: 'claim', id: hubWindowLockId });
-            hubWindowLockHeartbeat = setInterval(() => {
-                hubWindowLockChannel.postMessage({ type: 'claim', id: hubWindowLockId });
-            }, 3000);
-            window.addEventListener('pagehide', () => {
-                try { hubWindowLockChannel.postMessage({ type: 'release', id: hubWindowLockId }); } catch (_) {}
-            });
-            resolve(true);
-        }, probeMs);
-    });
-}
-
-// Full-screen blocker shown to a second window of the same operator session
-function showWindowBlockedScreen() {
-    if (document.getElementById('windowLockOverlay')) return;
-    document.body.innerHTML = '';
-    const overlay = document.createElement('div');
-    overlay.id = 'windowLockOverlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:999999;background:#0b0b0b;color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;font-family:inherit;';
-    overlay.innerHTML = `
-        <div style="max-width:420px;padding:32px;">
-            <div style="font-size:42px;margin-bottom:16px;">⚠️</div>
-            <h2 style="margin:0 0 12px;font-size:20px;letter-spacing:.5px;">ALREADY OPEN IN ANOTHER WINDOW</h2>
-            <p style="color:#999;font-size:14px;line-height:1.6;margin:0 0 8px;">
-                This operator account is active in another window or tab.<br>
-                Only one window is allowed at a time.
-            </p>
-            <p style="color:#666;font-size:12px;line-height:1.6;margin:0;">
-                Close the other window and this page will take over automatically.
-            </p>
-        </div>`;
-    document.body.appendChild(overlay);
-
-    // Poll: if the holder stops answering, this window takes over via reload
-    setInterval(() => {
-        if (hubWindowIsHolder) return;
-        let gotClaim = false;
-        const onMsg = (ev) => {
-            const msg = ev.data || {};
-            if (msg.type === 'claim' && msg.id !== hubWindowLockId) gotClaim = true;
-        };
-        hubWindowLockChannel.addEventListener('message', onMsg);
-        hubWindowLockChannel.postMessage({ type: 'probe', id: hubWindowLockId });
-        setTimeout(() => {
-            hubWindowLockChannel.removeEventListener('message', onMsg);
-            if (!gotClaim) window.location.reload();
-        }, 1600);
-    }, 5000);
-}
-
 // Initialize
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
     try {
         console.log('🔄 DOM Content Loaded - Initializing Dashboard...');
         if (!authToken) {
@@ -305,15 +203,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         document.getElementById('loginView').style.display = 'none';
         document.getElementById('dashboardView').style.display = 'block';
-
-        // Single-window rule: block this window if the operator session is
-        // already open elsewhere in this browser (admin bypasses)
-        const hasWindowLock = await acquireWindowLock();
-        if (!hasWindowLock) {
-            showWindowBlockedScreen();
-            return;
-        }
-
         applyRolePermissions();
         setupEventListeners();
         setupModalEvents();
@@ -345,7 +234,7 @@ function setupLoginEvents() {
         try {
             // Smart login: Operator ID + password, or blank ID + master access code
             localStorage.removeItem('hubIdentity'); // never carry a stale identity
-            const res = await fetch(`${window.location.origin}/api/internal/shoppers/auth`, {
+            const res = await fetch('https://whatsappbot-4l4b.onrender.com/api/internal/shoppers/auth', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -583,18 +472,6 @@ function setupEventListeners() {
         const q = e.target.value.trim();
         soLookupTimeout = setTimeout(() => runSoLookup(q), 350);
     });
-
-    // Shipping Batches View
-    document.getElementById('soBatchesBtn')?.addEventListener('click', openShippingBatches);
-    document.getElementById('backToShippedFromBatches')?.addEventListener('click', closeShippingBatches);
-    document.getElementById('sbRefreshBtn')?.addEventListener('click', () => fetchBatchesList());
-    document.getElementById('sbMergeBtn')?.addEventListener('click', mergeSelectedBatches);
-    document.getElementById('bdCloseBtn')?.addEventListener('click', closeBatchDetail);
-    document.getElementById('bdManifestBtn')?.addEventListener('click', () => downloadBatchManifest(currentBatchDetailId));
-    document.getElementById('bdLabelsBtn')?.addEventListener('click', () => downloadBatchLabels(currentBatchDetailId));
-    document.getElementById('bdSplitBtn')?.addEventListener('click', () => toggleSplitDialog(currentBatchDetailId));
-    document.getElementById('sbPrevBtn')?.addEventListener('click', () => { sbPage = Math.max(0, sbPage - 1); fetchBatchesList(); });
-    document.getElementById('sbNextBtn')?.addEventListener('click', () => { sbPage++; fetchBatchesList(); });
 
     // Shipped Orders - Status Pills
     document.querySelectorAll('.so-status-pill').forEach(pill => {
@@ -968,14 +845,8 @@ async function apiCall(endpoint, method = 'GET', body = null) {
     
     if (res.status === 401) {
         console.error('[API] Auth failed, clearing token');
-        let message = 'Session expired — please log in again.';
-        try {
-            const data = await res.json();
-            if (data && data.error) message = data.error;
-        } catch (_) { /* non-JSON 401 body */ }
         localStorage.removeItem('authToken');
         localStorage.removeItem('hubIdentity');
-        alert(message);
         window.location.reload();
         return;
     }
@@ -1243,7 +1114,7 @@ async function fetchInboxCounts() {
 }
 
 function showInboxView() {
-    document.querySelector('.dashboard-main').style.display = 'none';
+    document.getElementById('dashboardView').style.display = 'none';
     document.getElementById('inboxView').style.display = 'block';
     inboxPageOffset = 0;
 
@@ -1267,7 +1138,7 @@ function showInboxView() {
 
 function hideInboxView() {
     document.getElementById('inboxView').style.display = 'none';
-    document.querySelector('.dashboard-main').style.display = 'block';
+    document.getElementById('dashboardView').style.display = 'block';
 }
 
 // ==========================================
@@ -1275,7 +1146,7 @@ function hideInboxView() {
 // ==========================================
 
 function showMultiOrdersView() {
-    document.querySelector('.dashboard-main').style.display = 'none';
+    document.getElementById('dashboardView').style.display = 'none';
     document.getElementById('multiOrdersView').style.display = 'block';
 
     if (moQuickDate) {
@@ -1298,7 +1169,7 @@ function showMultiOrdersView() {
 
 function hideMultiOrdersView() {
     document.getElementById('multiOrdersView').style.display = 'none';
-    document.querySelector('.dashboard-main').style.display = 'block';
+    document.getElementById('dashboardView').style.display = 'block';
 }
 
 async function fetchMultiOrdersData() {
@@ -1471,7 +1342,6 @@ function parseItemsWithQty(itemsJson) {
 }
 
 async function confirmMultiOrder(id) {
-    if (!hubRequirePerm('edit_orders', 'change order statuses')) return;
     if (!confirm('Are you sure you want to CONFIRM this order?')) return;
     try {
         const data = await apiCall(`/shoppers/${id}/status`, 'POST', { status: 'confirmed' });
@@ -1486,13 +1356,24 @@ async function confirmMultiOrder(id) {
 }
 
 async function cancelMultiOrder(id) {
-    if (!hubRequirePerm('edit_orders', 'change order statuses')) return;
-    // Reasons are mandatory — the modal collects it, then notifies the customer
-    openCancelReasonModal([id]);
+    if (!confirm('Are you sure you want to CANCEL this order?')) return;
+    try {
+        const data = await apiCall(`/shoppers/${id}/status`, 'POST', { status: 'cancelled' });
+        if (data.success) {
+            // Surface carrier cancellation outcome for shipped orders
+            if (data.shipmentCancellation?.hadShipment) {
+                alert(data.message);
+            }
+            fetchMultiOrdersData();
+        } else {
+            alert('Failed to cancel order');
+        }
+    } catch (err) {
+        alert('Error cancelling order');
+    }
 }
 
 function editMultiOrder(id, nameEnc, phone, orderId, addressEnc, itemsEnc, paymentEnc, orderTotal) {
-    if (!hubRequirePerm('edit_orders', 'edit order details')) return;
     document.getElementById('editShopperId').value = id;
     document.getElementById('editName').value = nameEnc ? decodeURIComponent(nameEnc) : '';
     document.getElementById('editPhone').value = phone || '';
@@ -2447,13 +2328,7 @@ async function selectAllMatching() {
 async function bulkUpdateStatus(status) {
     if (!hubRequirePerm('edit_orders', 'change shopper statuses')) return;
     if (selectedShoppers.size === 0) return;
-
-    // Cancellations must carry a reason — route through the reason modal
-    if (status === 'cancelled') {
-        openCancelReasonModal(Array.from(selectedShoppers));
-        return;
-    }
-
+    
     if (!confirm(`Are you sure you want to mark ${selectedShoppers.size} orders as ${status.toUpperCase()}?`)) {
         return;
     }
@@ -2545,15 +2420,6 @@ function renderCards(shoppers, total, append = false) {
     // Only clear grid if not appending
     if (!append) {
         grid.innerHTML = '';
-        // Track visible shoppers for "Select All Visible"
-        allMatchingShoppers = shoppers.slice();
-    } else {
-        // When appending (load more), extend the visible set
-        shoppers.forEach(s => {
-            if (!allMatchingShoppers.find(x => x.id === s.id)) {
-                allMatchingShoppers.push(s);
-            }
-        });
     }
     shoppers.forEach((s, i) => {
         shopperEditCache[String(s.id)] = s;
@@ -2609,20 +2475,6 @@ function renderCards(shoppers, total, append = false) {
         const rtoChipHtml = (rtoRisk === 'high' || rtoRisk === 'medium')
             ? `<span class="rto-chip rto-${rtoRisk}" title="GoKwik RTO risk: ${rtoRisk.toUpperCase()}">${rtoRisk === 'high' ? 'HIGH RTO' : 'MED RTO'}</span>`
             : '';
-
-        // Synced badge: cancelled order that is ALSO cancelled on the order
-        // channel (Shopify) — lets operators see channel sync at a glance.
-        let syncedBadgeHtml = '';
-        if (s.status === 'cancelled' && s.shopify_cancelled_at) {
-            const refundAmt = parseFloat(s.shopify_refund_amount);
-            const syncedTitle = `Cancelled on the order channel (Shopify) · synced ${formatDate(s.shopify_cancelled_at)}${refundAmt > 0 ? ` · refunded ₹${refundAmt.toLocaleString('en-IN')}` : ''}`;
-            syncedBadgeHtml = `<span class="badge badge-synced" title="${escapeHtml(syncedTitle)}"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="margin-right:3px;"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>Synced</span>`;
-        }
-
-        // Cancellation reason chip (AUTO = customer cancelled via WhatsApp)
-        const cancelReasonChipHtml = (s.status === 'cancelled' && s.cancel_reason)
-            ? `<span class="badge badge-cancel-reason" title="Cancellation reason">${String(s.cancel_reason).toUpperCase() === 'AUTO' ? 'Customer · AUTO' : escapeHtml(s.cancel_reason)}</span>`
-            : '';
         
         if (currentViewMode === 'cards') {
             card.innerHTML = `
@@ -2633,8 +2485,6 @@ function renderCards(shoppers, total, append = false) {
                     <div class="source-info">
                         <span class="badge badge-shopify">Shopify</span>
                         <span class="badge badge-status ${statusBadgeClass}">${statusLabel}</span>
-                        ${syncedBadgeHtml}
-                        ${cancelReasonChipHtml}
                         <span class="badge badge-delivery">${s.delivery_type || 'Standard'}</span>
                         ${rtoChipHtml}
                     </div>
@@ -2702,8 +2552,6 @@ function renderCards(shoppers, total, append = false) {
 
             <div class="row-status">
                 <span class="badge badge-status ${statusBadgeClass}">${statusLabel}</span>
-                ${syncedBadgeHtml}
-                ${cancelReasonChipHtml}
                 ${rtoChipHtml}
             </div>
 
@@ -2903,6 +2751,229 @@ async function openChat(phone, nameEnc, orderId, status) {
     } catch (err) {
         chatMessages.innerHTML = '<div class="chat-loading">Error loading conversation</div>';
     }
+
+    // Fire-and-forget: load customer context into sidebar
+    loadCustomerContext(phone);
+}
+
+// ── Customer Context (Orders / RTO / Returns & Exchanges) ──
+// Memory-smart cache: Map with TTL, survives across chat opens in same session.
+const _ctxCache = new Map();
+const _CTX_TTL = 5 * 60 * 1000; // 5 min
+
+function _ctxCacheGet(key) {
+    const entry = _ctxCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.at > _CTX_TTL) { _ctxCache.delete(key); return null; }
+    return entry.data;
+}
+function _ctxCacheSet(key, data) {
+    _ctxCache.set(key, { data, at: Date.now() });
+}
+
+async function loadCustomerContext(phone) {
+    const loadingEl = document.getElementById('ctxLoading');
+    const errorEl = document.getElementById('ctxError');
+    const ordersSection = document.getElementById('ctxOrdersSection');
+    const rtoSection = document.getElementById('ctxRtoSection');
+    const returnsSection = document.getElementById('ctxReturnsSection');
+    const panelsContainer = document.getElementById('customerContextPanels');
+
+    console.log('[customer-context] Starting for phone:', phone);
+    console.log('[customer-context] DOM elements:', {
+        loadingEl: !!loadingEl,
+        errorEl: !!errorEl,
+        ordersSection: !!ordersSection,
+        panelsContainer: !!panelsContainer
+    });
+
+    if (!loadingEl || !errorEl) {
+        console.error('[customer-context] CRITICAL: Panel elements not found in DOM');
+        return;
+    }
+
+    // Reset
+    errorEl.style.display = 'none';
+    errorEl.textContent = '';
+    ordersSection.style.display = 'none';
+    rtoSection.style.display = 'none';
+    returnsSection.style.display = 'none';
+    loadingEl.style.display = 'flex';
+
+    const cacheKey = String(phone).replace(/\D/g, '').slice(-10);
+    const cached = _ctxCacheGet(cacheKey);
+    if (cached) {
+        console.log('[customer-context] Using cached data');
+        loadingEl.style.display = 'none';
+        renderCustomerContext(cached);
+        return;
+    }
+
+    try {
+        console.log('[customer-context] Fetching from API...');
+        const data = await apiCall(`/customer-context/${encodeURIComponent(phone)}`);
+        console.log('[customer-context] API response:', data ? `success=${data.success}, orders=${data.orders?.length || 0}` : 'null/undefined');
+        
+        if (!data || !data.success) throw new Error(data?.error || `API returned ${JSON.stringify(data)}`);
+        _ctxCacheSet(cacheKey, data);
+        loadingEl.style.display = 'none';
+        renderCustomerContext(data);
+    } catch (err) {
+        loadingEl.style.display = 'none';
+        errorEl.style.display = 'block';
+        errorEl.textContent = `Could not load history: ${err.message}`;
+        console.error('[customer-context] fetch failed:', err);
+    }
+}
+
+function renderCustomerContext(data) {
+    console.log('[customer-context] renderCustomerContext called with:', {
+        orders: data.orders?.length || 0,
+        rto: data.rto?.length || 0,
+        returns: data.returns?.length || 0,
+        exchanges: data.exchanges?.length || 0
+    });
+    
+    const ordersSection = document.getElementById('ctxOrdersSection');
+    const rtoSection = document.getElementById('ctxRtoSection');
+    const returnsSection = document.getElementById('ctxReturnsSection');
+    const ordersBody = document.getElementById('ctxOrders');
+    const rtoBody = document.getElementById('ctxRto');
+    const returnsBody = document.getElementById('ctxReturns');
+
+    // ── Orders ──
+    const orders = data.orders || [];
+    document.getElementById('ctxOrdersCount').textContent = orders.length;
+    if (orders.length > 0) {
+        ordersSection.style.display = 'block';
+        ordersBody.innerHTML = orders.slice(0, 10).map(o => {
+            const date = o.created_at ? new Date(o.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+            const statusClass = getStatusClass(o.status);
+            const items = safeParseItems(o.items_json);
+            const itemsPreview = items.length > 0 ? items.map(i => i.title || i.name || '').filter(Boolean).slice(0, 2).join(', ') : '';
+            return `<div class="ctx-order-card">
+                <div class="ctx-order-top">
+                    <span class="ctx-order-id" title="${o.order_id}">#${String(o.order_id).slice(-6)}</span>
+                    <span class="ctx-status-pill ${statusClass}">${(o.status || 'unknown').toUpperCase()}</span>
+                </div>
+                ${itemsPreview ? `<div class="ctx-order-items">${escapeHtml(itemsPreview)}</div>` : ''}
+                <div class="ctx-order-meta">
+                    <span>${date}</span>
+                    <span>${o.payment_method || ''}</span>
+                    ${o.order_total ? `<span>₹${Number(o.order_total).toLocaleString('en-IN')}</span>` : ''}
+                </div>
+                ${o.awb ? `<div class="ctx-order-awb">AWB: ${o.awb}</div>` : ''}
+            </div>`;
+        }).join('');
+        if (orders.length > 10) {
+            ordersBody.innerHTML += `<div class="ctx-more-note">+${orders.length - 10} more orders</div>`;
+        }
+    }
+
+    // ── RTO ──
+    const rto = data.rto || [];
+    document.getElementById('ctxRtoCount').textContent = rto.length;
+    if (rto.length > 0) {
+        rtoSection.style.display = 'block';
+        rtoBody.innerHTML = rto.map(r => {
+            const date = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+            return `<div class="ctx-rto-card">
+                <div class="ctx-rto-top">
+                    <span class="ctx-order-id">#${String(r.order_id).slice(-6)}</span>
+                    <span class="ctx-rto-badge">RTO</span>
+                </div>
+                <div class="ctx-order-meta">
+                    <span>${date}</span>
+                    ${r.awb ? `<span>AWB: ${r.awb}</span>` : ''}
+                    ${r.courier_name ? `<span>${r.courier_name}</span>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    // ── Returns & Exchanges ──
+    const returns = data.returns || [];
+    const exchanges = data.exchanges || [];
+    const totalRE = returns.length + exchanges.length;
+    document.getElementById('ctxReturnsCount').textContent = totalRE;
+    if (totalRE > 0) {
+        returnsSection.style.display = 'block';
+        let html = '';
+        returns.forEach(r => {
+            const date = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+            const srcLabel = r.source === 'portal' ? 'Portal' : 'Local';
+            html += `<div class="ctx-return-card">
+                <div class="ctx-return-top">
+                    <span class="ctx-return-type type-return">RETURN</span>
+                    <span class="ctx-return-status ${getStatusClass(r.status)}">${(r.status || 'unknown').toUpperCase()}</span>
+                </div>
+                <div class="ctx-order-meta">
+                    <span>#${String(r.order_id || r.order_number || '').slice(-6)}</span>
+                    <span>${date}</span>
+                    <span class="ctx-source-tag">${srcLabel}</span>
+                </div>
+                ${r.reason ? `<div class="ctx-return-reason">${escapeHtml(r.reason)}</div>` : ''}
+            </div>`;
+        });
+        exchanges.forEach(e => {
+            const date = e.created_at ? new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+            const srcLabel = e.source === 'portal' ? 'Portal' : 'Local';
+            html += `<div class="ctx-return-card">
+                <div class="ctx-return-top">
+                    <span class="ctx-return-type type-exchange">EXCHANGE</span>
+                    <span class="ctx-return-status ${getStatusClass(e.status)}">${(e.status || 'unknown').toUpperCase()}</span>
+                </div>
+                <div class="ctx-order-meta">
+                    <span>#${String(e.order_id || e.order_number || '').slice(-6)}</span>
+                    <span>${date}</span>
+                    <span class="ctx-source-tag">${srcLabel}</span>
+                </div>
+            </div>`;
+        });
+        returnsBody.innerHTML = html;
+    }
+}
+
+// Toggle collapsible section
+function toggleCtxSection(bodyId) {
+    const body = document.getElementById(bodyId);
+    if (!body) return;
+    const isCollapsed = body.classList.contains('ctx-collapsed');
+    if (isCollapsed) {
+        body.classList.remove('ctx-collapsed');
+        body.style.maxHeight = body.scrollHeight + 'px';
+        body.style.opacity = '1';
+        body.style.padding = '8px 0';
+    } else {
+        body.classList.add('ctx-collapsed');
+        body.style.maxHeight = '0';
+        body.style.opacity = '0';
+        body.style.padding = '0';
+    }
+    // Rotate chevron
+    const section = body.closest('.ctx-section');
+    const chevron = section?.querySelector('.ctx-chevron');
+    if (chevron) chevron.style.transform = isCollapsed ? 'rotate(0deg)' : 'rotate(180deg)';
+}
+
+// Helpers
+function safeParseItems(json) {
+    if (!json) return [];
+    try { const arr = JSON.parse(json); return Array.isArray(arr) ? arr : []; }
+    catch { return []; }
+}
+function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+function getStatusClass(status) {
+    const s = (status || '').toLowerCase();
+    if (['delivered', 'completed', 'approved', 'picked_up'].includes(s)) return 'ctx-status-success';
+    if (['cancelled', 'rejected', 'rto'].includes(s)) return 'ctx-status-danger';
+    if (['in_transit', 'scheduled', 'pickup_booked', 'waiting_payment'].includes(s)) return 'ctx-status-info';
+    if (['pending', 'initiated', 'pickup_pending'].includes(s)) return 'ctx-status-warning';
+    return 'ctx-status-neutral';
 }
 
 // Helper: format time only (IST) for chat messages – e.g. "09:31 PM"
@@ -3583,10 +3654,6 @@ function getOrderEditorState() {
 }
 
 async function updateStatus(id, status) {
-    if (!hubRequirePerm('edit_orders', 'change order statuses')) return;
-    // Cancelling requires a reason — the modal collects it and triggers the
-    // WhatsApp cancellation notice to the customer.
-    if (status === 'cancelled') { openCancelReasonModal([id]); return; }
     if (!confirm(`Are you sure you want to change status to ${status.toUpperCase()}?`)) return;
 
     try {
@@ -3618,8 +3685,8 @@ let currentAnalyticsData = null;
 let analyticsDateRange = { start: null, end: null };
 
 function showAnalyticsView() {
-    // Hide dashboard main (sidebar stays visible), show analytics
-    document.querySelector('.dashboard-main').style.display = 'none';
+    // Hide dashboard, show analytics
+    document.getElementById('dashboardView').style.display = 'none';
     document.getElementById('analyticsView').style.display = 'block';
     
     // Reset days to show counter
@@ -3631,7 +3698,7 @@ function showAnalyticsView() {
 
 function hideAnalyticsView() {
     document.getElementById('analyticsView').style.display = 'none';
-    document.querySelector('.dashboard-main').style.display = 'block';
+    document.getElementById('dashboardView').style.display = 'block';
 }
 
 function formatDateForInput(date) {
@@ -5914,9 +5981,6 @@ async function reshipContinue(force = false) {
 // ---------- Bulk Ship ----------
 
 let bulkShipRunning = false;
-let bulkShipPaused = false;
-let bulkShipMinimized = false;
-let bulkShipState = null; // { ids, carrier, packageOverrides, okCount, failCount, done, total }
 
 async function openBulkShipModal() {
     if (!hubRequirePerm('ship_orders', 'ship orders')) return;
@@ -5955,85 +6019,12 @@ async function openBulkShipModal() {
     startBtn.disabled = false;
     startBtn.textContent = 'Start Shipping';
     document.getElementById('bulkShipModal').dataset.ids = JSON.stringify(eligible.map(s => s.id));
-    // Reset pause/minimize buttons
-    document.getElementById('bulkShipPauseBtn').style.display = 'none';
-    document.getElementById('bulkShipMinimizeBtn').style.display = 'none';
     document.getElementById('bulkShipModal').classList.add('active');
-    bulkShipMinimized = false;
 }
 
 function closeBulkShipModal() {
-    if (bulkShipRunning) {
-        // If running, minimize instead of closing
-        minimizeBulkShip();
-        return;
-    }
+    if (bulkShipRunning) { showShipToast('Bulk shipping in progress — wait for it to finish', true); return; }
     document.getElementById('bulkShipModal').classList.remove('active');
-    bulkShipMinimized = false;
-}
-
-function minimizeBulkShip() {
-    if (!bulkShipRunning && !bulkShipState) {
-        // Not running, just close
-        document.getElementById('bulkShipModal').classList.remove('active');
-        return;
-    }
-    bulkShipMinimized = true;
-    document.getElementById('bulkShipModal').classList.remove('active');
-    // Show the background progress bar
-    const bar = document.getElementById('bgBulkShipBar');
-    bar.style.display = 'flex';
-    updateBgBulkShipBar();
-}
-
-function restoreBulkShipModal() {
-    bulkShipMinimized = false;
-    document.getElementById('bulkShipModal').classList.add('active');
-    // Hide background bar
-    document.getElementById('bgBulkShipBar').style.display = 'none';
-}
-
-function toggleBulkShipPause() {
-    if (!bulkShipRunning) return;
-    bulkShipPaused = !bulkShipPaused;
-    // Update modal button
-    const pauseBtn = document.getElementById('bulkShipPauseBtn');
-    const bgPauseBtn = document.getElementById('bgBulkShipPauseBtn');
-    if (bulkShipPaused) {
-        pauseBtn.textContent = '▶ Resume';
-        pauseBtn.classList.add('paused');
-        bgPauseBtn.textContent = '▶';
-        document.getElementById('bgBulkShipBar').classList.add('paused');
-        document.getElementById('bgBulkShipBar').classList.remove('finished');
-        document.getElementById('bgBulkShipLabel').textContent = 'Bulk Shipping (Paused)';
-    } else {
-        pauseBtn.textContent = '⏸ Pause';
-        pauseBtn.classList.remove('paused');
-        bgPauseBtn.textContent = '⏸';
-        document.getElementById('bgBulkShipBar').classList.remove('paused');
-        document.getElementById('bgBulkShipLabel').textContent = 'Bulk Shipping...';
-    }
-}
-
-function updateBgBulkShipBar() {
-    if (!bulkShipState) return;
-    const { done, total, okCount, failCount } = bulkShipState;
-    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-    document.getElementById('bgBulkShipFill').style.width = `${pct}%`;
-    document.getElementById('bgBulkShipCount').textContent = `${done}/${total}`;
-    if (!bulkShipPaused) {
-        document.getElementById('bgBulkShipLabel').textContent = bulkShipRunning ? 'Bulk Shipping...' : 'Bulk Shipping (Paused)';
-    }
-}
-
-function waitForResume() {
-    return new Promise(resolve => {
-        const check = () => {
-            if (!bulkShipPaused) { resolve(); return; }
-            setTimeout(check, 200);
-        };
-        check();
-    });
 }
 
 async function startBulkShip() {
@@ -6049,128 +6040,44 @@ async function startBulkShip() {
         heightCm: parseFloat(document.getElementById('bulkShipHeight').value) || 2
     };
 
-    // Create a batch record to group this bulk-ship run
-    let currentBatchId = null;
-    try {
-        const batchRes = await apiCall('/shipping/batches', 'POST', {
-            carrier,
-            totalOrders: ids.length,
-            packageDefaults: packageOverrides
-        });
-        currentBatchId = batchRes?.batch?.id || null;
-    } catch (e) {
-        console.warn('⚠️ Failed to create batch record (continuing without batch):', e.message);
-    }
-
     bulkShipRunning = true;
-    bulkShipPaused = false;
-    bulkShipState = { ids, carrier, packageOverrides, okCount: 0, failCount: 0, done: 0, total: ids.length, batchId: currentBatchId };
-
     const startBtn = document.getElementById('bulkShipStartBtn');
     startBtn.disabled = true;
     startBtn.textContent = 'Shipping...';
-    // Show pause and minimize buttons
-    document.getElementById('bulkShipPauseBtn').style.display = 'inline-flex';
-    document.getElementById('bulkShipMinimizeBtn').style.display = 'inline-flex';
-    document.getElementById('bulkShipPauseBtn').textContent = '⏸ Pause';
-    document.getElementById('bulkShipPauseBtn').classList.remove('paused');
-    // Update bg bar buttons
-    document.getElementById('bgBulkShipPauseBtn').textContent = '⏸';
-    document.getElementById('bgBulkShipBar').classList.remove('paused');
 
-    // If minimized, show the background bar
-    if (bulkShipMinimized) {
-        document.getElementById('bgBulkShipBar').style.display = 'flex';
-        updateBgBulkShipBar();
-    }
-
-    let { okCount, failCount } = bulkShipState;
+    let okCount = 0, failCount = 0;
+    let done = 0;
     for (const id of ids) {
-        // Check for pause
-        if (bulkShipPaused) {
-            await waitForResume();
-        }
-
-        bulkShipState.done++;
-        const done = bulkShipState.done;
+        done++;
         startBtn.textContent = `Shipping ${done}/${ids.length}...`;
         const resultEl = document.getElementById(`bs-result-${id}`);
         if (resultEl) { resultEl.textContent = 'Shipping...'; resultEl.className = 'bs-result run'; }
         try {
-            const shipPayload = {
+            const data = await apiCall('/shipping/ship', 'POST', {
                 shopperId: id,
                 carrier,
                 courierId: 'auto',
                 packageOverrides,
                 notifyCustomer: false
-            };
-            if (currentBatchId) shipPayload.batchId = currentBatchId;
-
-            const data = await apiCall('/shipping/ship', 'POST', shipPayload);
+            });
             if (data && data.success) {
                 okCount++;
-                bulkShipState.okCount = okCount;
                 if (resultEl) { resultEl.textContent = `✅ AWB ${data.awb}`; resultEl.className = 'bs-result ok'; }
             } else {
                 failCount++;
-                bulkShipState.failCount = failCount;
                 if (resultEl) { resultEl.textContent = `❌ ${data?.error || 'Failed'}`; resultEl.className = 'bs-result err'; }
             }
         } catch (err) {
             failCount++;
-            bulkShipState.failCount = failCount;
             if (resultEl) { resultEl.textContent = '❌ Network error'; resultEl.className = 'bs-result err'; }
-        }
-
-        // Update background bar
-        if (bulkShipMinimized) {
-            updateBgBulkShipBar();
-        }
-    }
-
-    // Finalize the batch record with actual counts
-    if (currentBatchId) {
-        const batchStatus = failCount === 0 ? 'completed' : (okCount > 0 ? 'partial' : 'processing');
-        try {
-            await apiCall(`/shipping/batches/${currentBatchId}`, 'PATCH', {
-                successfulCount: okCount,
-                failedCount: failCount,
-                status: batchStatus
-            });
-        } catch (e) {
-            console.warn('⚠️ Failed to update batch record:', e.message);
         }
     }
 
     bulkShipRunning = false;
-    bulkShipPaused = false;
     startBtn.textContent = 'Done';
     const parts = [`${okCount} shipped`];
     if (failCount) parts.push(`${failCount} failed`);
-    if (currentBatchId) parts.push(`Batch #${currentBatchId}`);
     showShipToast(`Bulk ship finished: ${parts.join(', ')}`, failCount > 0);
-
-    // Update background bar to finished state
-    if (bulkShipMinimized) {
-        document.getElementById('bgBulkShipLabel').textContent = `Bulk Ship Done: ${parts.join(', ')}`;
-        document.getElementById('bgBulkShipBar').classList.add('finished');
-        document.getElementById('bgBulkShipBar').classList.remove('paused');
-        document.getElementById('bgBulkShipPauseBtn').textContent = '✓';
-        // Auto-hide after 8 seconds
-        setTimeout(() => {
-            if (bulkShipMinimized) {
-                document.getElementById('bgBulkShipBar').style.display = 'none';
-                bulkShipMinimized = false;
-                bulkShipState = null;
-            }
-        }, 8000);
-    } else {
-        // Hide pause/minimize buttons when done
-        document.getElementById('bulkShipPauseBtn').style.display = 'none';
-        document.getElementById('bulkShipMinimizeBtn').style.display = 'none';
-        bulkShipState = null;
-    }
-
     clearSelection();
     fetchShoppersData();
 }
@@ -6192,9 +6099,6 @@ window.closeShipmentsDrawer = closeShipmentsDrawer;
 window.openBulkShipModal = openBulkShipModal;
 window.closeBulkShipModal = closeBulkShipModal;
 window.startBulkShip = startBulkShip;
-window.minimizeBulkShip = minimizeBulkShip;
-window.restoreBulkShipModal = restoreBulkShipModal;
-window.toggleBulkShipPause = toggleBulkShipPause;
 
 // ==========================================
 // PREMIUM: SHOPIFY CANCEL & REFUND (bulk)
@@ -6212,21 +6116,11 @@ async function openShopifyCancelModal() {
     if (!hubRequirePerm('edit_orders', 'cancel orders in Shopify')) return;
     if (selectedShoppers.size === 0) { showShipToast('Select some orders first', true); return; }
 
-    // Pool = records rendered on the page + records fetched by "Select All
-    // Matching Filters" — so bulk cancel is no longer limited to one 50-row page
-    const pool = new Map();
-    allLoadedShoppers.forEach(s => pool.set(s.id, s));
-    bulkMatchingShoppers.forEach(s => { if (!pool.has(s.id)) pool.set(s.id, s); });
-
-    const eligible = [...pool.values()].filter(s =>
+    const eligible = allLoadedShoppers.filter(s =>
         selectedShoppers.has(s.id) && s.status === 'cancelled'
     );
     if (eligible.length === 0) {
         showShipToast('No cancelled orders selected — open the Cancelled tab and select the orders to cancel in Shopify', true);
-        return;
-    }
-    if (eligible.length > MAX_BULK_CANCEL) {
-        showShipToast(`Bulk Shopify cancel is capped at ${MAX_BULK_CANCEL} orders per run — narrow the filters and split the batch`, true);
         return;
     }
 
@@ -6273,11 +6167,9 @@ async function startShopifyCancel() {
     startBtn.textContent = 'Cancelling...';
 
     let okCount = 0, failCount = 0, refundedCount = 0;
-    let done = 0;
     for (const id of ids) {
         const resultEl = document.getElementById(`sc-result-${id}`);
         if (resultEl) { resultEl.textContent = 'Cancelling...'; resultEl.className = 'bs-result run'; }
-        startBtn.textContent = `Cancelling ${done + 1} / ${ids.length}...`;
         try {
             // Sequential on purpose: keeps Shopify API rate limits happy
             const data = await apiCall(`/shoppers/${id}/shopify-cancel`, 'POST', { refundPrepaid });
@@ -6298,7 +6190,6 @@ async function startShopifyCancel() {
             failCount++;
             if (resultEl) { resultEl.textContent = '❌ Network error'; resultEl.className = 'bs-result err'; }
         }
-        done++;
     }
 
     shopifyCancelRunning = false;
@@ -6313,97 +6204,11 @@ window.closeShopifyCancelModal = closeShopifyCancelModal;
 window.startShopifyCancel = startShopifyCancel;
 
 // ==========================================
-// CANCELLATION REASONS (single + bulk)
-// Every manual cancel must carry a reason. Customer-initiated WhatsApp
-// cancels are stamped 'AUTO' by the bot; manual reasons are sent to the
-// customer via a WhatsApp cancellation template.
-// ==========================================
-let cancelReasonIds = [];
-let cancelReasonRunning = false;
-
-function openCancelReasonModal(ids) {
-    if (!ids || ids.length === 0) return;
-    if (ids.length > MAX_BULK_CANCEL) {
-        showShipToast(`Bulk cancel is capped at ${MAX_BULK_CANCEL} orders per run — narrow the filters and split the batch`, true);
-        return;
-    }
-    cancelReasonIds = ids;
-    document.getElementById('crOrderCount').textContent = ids.length === 1 ? '1 order' : `${ids.length} orders`;
-    document.getElementById('crReasonText').value = '';
-    document.querySelectorAll('.cr-chip').forEach(c => c.classList.remove('selected'));
-    const btn = document.getElementById('crConfirmBtn');
-    btn.disabled = false;
-    btn.textContent = ids.length === 1 ? 'Cancel Order' : `Cancel ${ids.length} Orders`;
-    document.getElementById('cancelReasonModal').classList.add('active');
-}
-
-function closeCancelReasonModal() {
-    if (cancelReasonRunning) { showShipToast('Cancellation in progress — wait for it to finish', true); return; }
-    document.getElementById('cancelReasonModal').classList.remove('active');
-    cancelReasonIds = [];
-}
-
-function selectCancelReason(chip) {
-    document.querySelectorAll('.cr-chip').forEach(c => c.classList.remove('selected'));
-    chip.classList.add('selected');
-    // A picked chip wins over any stale free text
-    document.getElementById('crReasonText').value = '';
-}
-
-function clearCancelReasonChips() {
-    // Typing a custom reason deselects the preset chips
-    document.querySelectorAll('.cr-chip').forEach(c => c.classList.remove('selected'));
-}
-
-async function confirmCancelWithReason() {
-    if (cancelReasonRunning) return;
-    const freeText = document.getElementById('crReasonText').value.trim();
-    const chip = document.querySelector('.cr-chip.selected');
-    const reason = freeText || chip?.dataset.reason || '';
-    if (!reason) { showShipToast('Pick or type a cancellation reason first', true); return; }
-
-    const ids = [...cancelReasonIds];
-    if (ids.length === 0) return;
-
-    cancelReasonRunning = true;
-    const btn = document.getElementById('crConfirmBtn');
-    btn.disabled = true;
-
-    let okCount = 0, failCount = 0;
-    // Batches of 5 — the server sends a WhatsApp notice per cancel, so keep
-    // concurrency modest to stay within Meta rate limits
-    for (let i = 0; i < ids.length; i += 5) {
-        const batch = ids.slice(i, i + 5);
-        btn.textContent = `Cancelling ${Math.min(i + 5, ids.length)} / ${ids.length}...`;
-        const results = await Promise.all(batch.map(id =>
-            apiCall(`/shoppers/${id}/status`, 'POST', { status: 'cancelled', reason })
-                .then(d => (d && d.success) ? true : false)
-                .catch(() => false)
-        ));
-        results.forEach(ok => { if (ok) okCount++; else failCount++; });
-    }
-
-    cancelReasonRunning = false;
-    document.getElementById('cancelReasonModal').classList.remove('active');
-    cancelReasonIds = [];
-    showShipToast(`${okCount} order(s) cancelled — customers notified on WhatsApp with the reason${failCount ? ` · ${failCount} failed` : ''}`, failCount > 0);
-    fetchShoppersData();
-    fetchInboxCounts();
-    if (typeof fetchMultiOrdersData === 'function') fetchMultiOrdersData();
-}
-
-window.openCancelReasonModal = openCancelReasonModal;
-window.closeCancelReasonModal = closeCancelReasonModal;
-window.selectCancelReason = selectCancelReason;
-window.clearCancelReasonChips = clearCancelReasonChips;
-window.confirmCancelWithReason = confirmCancelWithReason;
-
-// ==========================================
 // SHIPPED ORDERS VIEW - Full shipment history
 // ==========================================
 
 function showShippedOrdersView() {
-    document.querySelector('.dashboard-main').style.display = 'none';
+    document.getElementById('dashboardView').style.display = 'none';
     document.getElementById('shippedOrdersView').style.display = 'block';
 
     if (soQuickDate) {
@@ -6461,7 +6266,7 @@ async function syncShipmentStatuses(announce = false) {
 
 function hideShippedOrdersView() {
     document.getElementById('shippedOrdersView').style.display = 'none';
-    document.querySelector('.dashboard-main').style.display = 'block';
+    document.getElementById('dashboardView').style.display = 'block';
 }
 
 function buildSoParams(limit, offset) {
@@ -6916,7 +6721,7 @@ async function teamApiFetch(path, method = 'GET', body = null) {
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`${API_BASE}${path}`, opts);
     const data = await res.json().catch(() => ({}));
-    if (res.status === 401) { alert(data.error || 'Session expired — please log in again.'); location.reload(); throw new Error('unauthorized'); }
+    if (res.status === 401) { alert('Session expired — please log in again.'); location.reload(); throw new Error('unauthorized'); }
     if (!res.ok || data.success === false) throw new Error(data.error || `Request failed (${res.status})`);
     return data;
 }
@@ -7205,456 +7010,3 @@ function setupTeamEvents() {
     });
 }
 setupTeamEvents();
-
-// ==========================================
-// PREMIUM INVENTORY CONTROL TOWER
-// Data loading, rendering, filtering, sorting and CSV export are fully
-// delegated to the tower module (assets/shoppers-inventory-tower.js).
-// This block only owns view show/hide and the sidebar entry point.
-// ==========================================
-function showInventoryView() {
-    const iv = document.getElementById('inventoryView');
-    if (iv.style.display === 'block') return; // already open — skip re-render (preserves Stock Room state)
-    document.querySelector('.dashboard-main').style.display = 'none';
-    iv.style.display = 'block';
-    window.InventoryTower?.open();
-}
-
-function hideInventoryView() {
-    document.getElementById('inventoryView').style.display = 'none';
-    document.querySelector('.dashboard-main').style.display = 'block';
-}
-
-(function setupInventoryEvents() {
-    document.getElementById('inventoryBtn')?.addEventListener('click', showInventoryView);
-    document.getElementById('backToShoppersFromInventory')?.addEventListener('click', hideInventoryView);
-})();
-
-
-// ===== Premium sidebar: drawer toggle + active-state tracking =====
-// ═══════════════════════════════════════════════════════════════════
-// SHIPPING BATCHES — Premium batch management module
-// Memory-optimized: paginated fetch, client-side selection state,
-// lazy detail loading, no full DOM re-renders.
-// ═══════════════════════════════════════════════════════════════════
-
-let sbPage = 0;
-const SB_PAGE_SIZE = 25;
-let sbTotal = 0;
-let sbBatchesCache = []; // current page's batch data
-let sbSelectedBatchIds = new Set(); // selection for merge
-let currentBatchDetailId = null;
-
-function openShippingBatches() {
-    document.getElementById('shippingBatchesView').style.display = 'block';
-    sbPage = 0;
-    sbSelectedBatchIds.clear();
-    updateMergeBtnState();
-    fetchBatchesList();
-}
-
-function closeShippingBatches() {
-    document.getElementById('shippingBatchesView').style.display = 'none';
-}
-
-async function fetchBatchesList() {
-    const container = document.getElementById('sbListContainer');
-    container.innerHTML = `<div class="sb-loading"><div class="spinner" style="width:40px;height:40px;border:3px solid rgba(255,255,255,0.1);border-top-color:#53bdeb;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:1rem;"></div><span>Loading batches...</span></div>`;
-
-    try {
-        const data = await apiCall(`/shipping/batches?limit=${SB_PAGE_SIZE}&offset=${sbPage * SB_PAGE_SIZE}`);
-        if (!data || !data.success) throw new Error(data?.error || 'Failed to fetch batches');
-
-        sbBatchesCache = data.batches || [];
-        sbTotal = data.total || 0;
-        const stats = data.stats || {};
-
-        // Update stats bar
-        document.getElementById('sbStatBatches').textContent = stats.total_batches || 0;
-        document.getElementById('sbStatOrders').textContent = stats.total_orders_shipped || 0;
-        document.getElementById('sbStatSuccessful').textContent = stats.total_successful || 0;
-        document.getElementById('sbStatFailed').textContent = stats.total_failed || 0;
-        const totalAttempted = (stats.total_successful || 0) + (stats.total_failed || 0);
-        const rate = totalAttempted > 0 ? Math.round(((stats.total_successful || 0) / totalAttempted) * 100) : 0;
-        document.getElementById('sbStatRate').textContent = `${rate}%`;
-
-        renderBatchesList(sbBatchesCache);
-        updatePagination();
-    } catch (err) {
-        container.innerHTML = `<div class="sb-empty-state"><h4>Failed to load batches</h4><p>${err.message}</p></div>`;
-    }
-}
-
-function renderBatchesList(batches) {
-    const container = document.getElementById('sbListContainer');
-
-    if (!batches || batches.length === 0) {
-        container.innerHTML = `
-            <div class="sb-empty-state">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <rect x="1" y="3" width="22" height="18" rx="2"/><line x1="1" y1="9" x2="23" y2="9"/><line x1="8" y1="3" x2="8" y2="21"/>
-                </svg>
-                <h4>No shipping batches yet</h4>
-                <p>Batches are created automatically when you use "Ship Selected" to bulk-ship orders.</p>
-            </div>`;
-        return;
-    }
-
-    const fragment = document.createDocumentFragment();
-    for (const batch of batches) {
-        const card = document.createElement('div');
-        card.className = `sb-batch-card${sbSelectedBatchIds.has(batch.id) ? ' selected' : ''}`;
-        card.dataset.batchId = batch.id;
-
-        const total = batch.total_orders || 0;
-        const ok = batch.successful_count || 0;
-        const fail = batch.failed_count || 0;
-        const pct = total > 0 ? Math.round((ok / total) * 100) : 0;
-        const statusClass = batch.status === 'completed' ? 'sb-status-completed'
-            : batch.status === 'processing' ? 'sb-status-processing'
-            : batch.status === 'partial' ? 'sb-status-partial'
-            : 'sb-status-merged';
-        const statusLabel = batch.status === 'merged' ? 'MERGED' : batch.status === 'split' ? 'SPLIT' : (batch.status || 'processing').toUpperCase();
-        const fillClass = pct >= 80 ? 'sb-fill-success' : 'sb-fill-partial';
-        const createdDate = new Date(batch.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-
-        card.innerHTML = `
-            <div class="sb-batch-top">
-                <div class="sb-batch-identity">
-                    <input type="checkbox" class="sb-batch-checkbox" data-batch-id="${batch.id}" ${sbSelectedBatchIds.has(batch.id) ? 'checked' : ''} ${['merged','split'].includes(batch.status) ? 'disabled' : ''}>
-                    <span class="sb-batch-number">${batch.batch_number}</span>
-                    <span class="sb-batch-status ${statusClass}">${statusLabel}</span>
-                </div>
-                <div class="sb-batch-actions-row">
-                    <button class="sb-mini-btn sb-mini-primary" onclick="openBatchDetail(${batch.id})" title="View details">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                        View
-                    </button>
-                    <button class="sb-mini-btn" onclick="event.stopPropagation(); downloadBatchManifest(${batch.id})" title="Download manifest">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        CSV
-                    </button>
-                    <button class="sb-mini-btn" onclick="event.stopPropagation(); downloadBatchLabels(${batch.id})" title="Download labels">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="22" height="18" rx="2"/><line x1="1" y1="9" x2="23" y2="9"/></svg>
-                        Labels
-                    </button>
-                </div>
-            </div>
-            <div class="sb-batch-meta-row">
-                <span class="sb-meta-item">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                    ${createdDate}
-                </span>
-                <span class="sb-meta-divider"></span>
-                <span class="sb-meta-item">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                    ${batch.shipped_by || 'admin'}
-                </span>
-                <span class="sb-meta-divider"></span>
-                <span class="sb-meta-item">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/></svg>
-                    ${batch.carrier || 'unknown'}
-                </span>
-                <span class="sb-meta-divider"></span>
-                <span class="sb-meta-item">${total} orders</span>
-            </div>
-            <div class="sb-batch-progress-row">
-                <div class="sb-progress-track">
-                    <div class="sb-progress-fill ${fillClass}" style="width: ${pct}%;"></div>
-                </div>
-                <span class="sb-progress-count">${ok}/${total} ${fail > 0 ? `(${fail} failed)` : ''}</span>
-            </div>`;
-
-        // Checkbox selection handler
-        const checkbox = card.querySelector('.sb-batch-checkbox');
-        checkbox?.addEventListener('change', (e) => {
-            e.stopPropagation();
-            const id = parseInt(e.target.dataset.batchId);
-            if (e.target.checked) {
-                sbSelectedBatchIds.add(id);
-                card.classList.add('selected');
-            } else {
-                sbSelectedBatchIds.delete(id);
-                card.classList.remove('selected');
-            }
-            updateMergeBtnState();
-        });
-
-        // Click card to open detail (but not on checkbox or buttons)
-        card.addEventListener('click', (e) => {
-            if (e.target.closest('.sb-mini-btn') || e.target.closest('.sb-batch-checkbox')) return;
-            openBatchDetail(batch.id);
-        });
-
-        fragment.appendChild(card);
-    }
-
-    container.innerHTML = '';
-    container.appendChild(fragment);
-}
-
-function updateMergeBtnState() {
-    const btn = document.getElementById('sbMergeBtn');
-    if (btn) btn.disabled = sbSelectedBatchIds.size < 2;
-}
-
-function updatePagination() {
-    const pag = document.getElementById('sbPagination');
-    const totalPages = Math.ceil(sbTotal / SB_PAGE_SIZE);
-    if (totalPages <= 1) {
-        pag.style.display = 'none';
-        return;
-    }
-    pag.style.display = 'flex';
-    document.getElementById('sbPageInfo').textContent = `Page ${sbPage + 1} of ${totalPages}`;
-    document.getElementById('sbPrevBtn').disabled = sbPage === 0;
-    document.getElementById('sbNextBtn').disabled = sbPage >= totalPages - 1;
-}
-
-async function openBatchDetail(batchId) {
-    currentBatchDetailId = batchId;
-    const modal = document.getElementById('batchDetailModal');
-    const titleEl = document.getElementById('bdTitle');
-    const metaEl = document.getElementById('bdMeta');
-    const listEl = document.getElementById('bdShipmentsList');
-
-    modal.style.display = 'flex';
-    titleEl.textContent = 'Loading...';
-    metaEl.textContent = '';
-    listEl.innerHTML = `<div class="sb-loading" style="padding:2rem;"><div class="spinner" style="width:30px;height:30px;border:3px solid rgba(255,255,255,0.1);border-top-color:#53bdeb;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:0.75rem;"></div><span>Loading batch details...</span></div>`;
-
-    try {
-        const data = await apiCall(`/shipping/batches/${batchId}`);
-        if (!data || !data.batch) throw new Error('Batch not found');
-
-        const batch = data.batch;
-        const createdDate = new Date(batch.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        titleEl.textContent = `${batch.batch_number}`;
-        metaEl.textContent = `${batch.carrier} | ${batch.shipped_by} | ${createdDate} | ${batch.successful_count || 0} successful, ${batch.failed_count || 0} failed`;
-
-        // Show/hide split button based on status
-        const splitBtn = document.getElementById('bdSplitBtn');
-        splitBtn.style.display = ['merged', 'split'].includes(batch.status) ? 'none' : 'inline-flex';
-
-        const shipments = batch.shipments || [];
-        if (shipments.length === 0) {
-            listEl.innerHTML = `<div class="sb-empty-state" style="padding:2rem;"><h4>No shipments in this batch</h4></div>`;
-            return;
-        }
-
-        const fragment = document.createDocumentFragment();
-        for (const s of shipments) {
-            const row = document.createElement('div');
-            row.className = 'sb-shipment-row';
-
-            const statusClass = s.status === 'awb_assigned' ? 'st-awb'
-                : ['in_transit', 'out_for_delivery', 'pickup_scheduled'].includes(s.status) ? 'st-transit'
-                : s.status === 'delivered' ? 'st-delivered'
-                : ['failed', 'cancelled'].includes(s.status) ? 'st-failed'
-                : 'st-default';
-
-            row.innerHTML = `
-                <span class="sb-shipment-order">${s.order_id}</span>
-                <span class="sb-shipment-awb">${s.awb || '—'}</span>
-                <span class="sb-shipment-customer">${s.customer_name || '—'}</span>
-                <span class="sb-shipment-status ${statusClass}">${s.status || 'unknown'}</span>
-                ${s.label_url ? `<a class="sb-shipment-label-link" href="${s.label_url}" target="_blank" rel="noopener">Label</a>` : '<span style="opacity:0.3;font-size:0.7rem;">No label</span>'}`;
-
-            fragment.appendChild(row);
-        }
-
-        listEl.innerHTML = '';
-        listEl.appendChild(fragment);
-    } catch (err) {
-        listEl.innerHTML = `<div class="sb-empty-state" style="padding:2rem;"><h4>Failed to load batch</h4><p>${err.message}</p></div>`;
-    }
-}
-
-function closeBatchDetail() {
-    document.getElementById('batchDetailModal').style.display = 'none';
-    currentBatchDetailId = null;
-}
-
-function downloadBatchManifest(batchId) {
-    if (!batchId) return;
-    // Open manifest CSV download in new tab
-    const token = localStorage.getItem('hubToken') || '';
-    const url = `/api/admin/shipping/batches/${batchId}/manifest`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.setAttribute('download', '');
-    // Use fetch with auth header for the download
-    fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
-        .then(res => {
-            if (!res.ok) throw new Error('Failed to download manifest');
-            return res.blob();
-        })
-        .then(blob => {
-            const blobUrl = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = blobUrl;
-            link.download = `batch_${batchId}_manifest.csv`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(blobUrl);
-        })
-        .catch(err => showShipToast(`Manifest download failed: ${err.message}`, true));
-}
-
-async function downloadBatchLabels(batchId) {
-    if (!batchId) return;
-    try {
-        const data = await apiCall(`/shipping/batches/${batchId}/labels`);
-        const labels = data?.data?.labels || [];
-        if (labels.length === 0) {
-            showShipToast('No labels available yet for this batch', true);
-            return;
-        }
-        // Open each label URL in a new tab (browser popup handling)
-        labels.forEach((l, i) => {
-            if (l.label_url) {
-                setTimeout(() => window.open(l.label_url, '_blank'), i * 200);
-            }
-        });
-        showShipToast(`Opening ${labels.length} label(s)...`);
-    } catch (err) {
-        showShipToast(`Failed to fetch labels: ${err.message}`, true);
-    }
-}
-
-async function mergeSelectedBatches() {
-    if (sbSelectedBatchIds.size < 2) return;
-    if (!confirm(`Merge ${sbSelectedBatchIds.size} batches into one? The original batches will be marked as merged.`)) return;
-
-    try {
-        const data = await apiCall('/shipping/batches/merge', 'POST', {
-            batchIds: Array.from(sbSelectedBatchIds)
-        });
-        if (data?.success) {
-            showShipToast(`Batches merged into ${data.mergedBatch?.batch_number || 'new batch'}`);
-            sbSelectedBatchIds.clear();
-            updateMergeBtnState();
-            fetchBatchesList();
-        } else {
-            showShipToast(data?.error || 'Merge failed', true);
-        }
-    } catch (err) {
-        showShipToast(`Merge failed: ${err.message}`, true);
-    }
-}
-
-function toggleSplitDialog(batchId) {
-    if (!batchId) return;
-    const listEl = document.getElementById('bdShipmentsList');
-    // Check if dialog already exists
-    const existing = listEl.querySelector('.sb-split-dialog');
-    if (existing) {
-        existing.remove();
-        return;
-    }
-
-    const dialog = document.createElement('div');
-    dialog.className = 'sb-split-dialog';
-    dialog.innerHTML = `
-        <label>Orders per sub-batch:</label>
-        <input type="number" id="sbSplitSize" value="10" min="1" max="500">
-        <button class="sb-action-btn sb-action-primary" id="sbSplitConfirm">Split</button>
-        <button class="sb-action-btn" id="sbSplitCancel">Cancel</button>`;
-
-    listEl.insertBefore(dialog, listEl.firstChild);
-
-    dialog.querySelector('#sbSplitCancel').addEventListener('click', () => dialog.remove());
-    dialog.querySelector('#sbSplitConfirm').addEventListener('click', async () => {
-        const size = parseInt(dialog.querySelector('#sbSplitSize').value) || 10;
-        if (size < 1) return showShipToast('Split size must be at least 1', true);
-        if (!confirm(`Split this batch into sub-batches of ${size} orders each?`)) return;
-
-        try {
-            const data = await apiCall(`/shipping/batches/${batchId}/split`, 'POST', { splitSize: size });
-            if (data?.success) {
-                showShipToast(`Batch split into ${data.subBatches?.length || 0} sub-batches`);
-                closeBatchDetail();
-                fetchBatchesList();
-            } else {
-                showShipToast(data?.error || 'Split failed', true);
-            }
-        } catch (err) {
-            showShipToast(`Split failed: ${err.message}`, true);
-        }
-    });
-}
-
-// Expose for inline onclick handlers
-window.openShippingBatches = openShippingBatches;
-window.closeShippingBatches = closeShippingBatches;
-window.openBatchDetail = openBatchDetail;
-window.closeBatchDetail = closeBatchDetail;
-window.downloadBatchManifest = downloadBatchManifest;
-window.downloadBatchLabels = downloadBatchLabels;
-window.mergeSelectedBatches = mergeSelectedBatches;
-window.toggleSplitDialog = toggleSplitDialog;
-
-(function initHubSidebar() {
-    const sidebar = document.getElementById('hubSidebar');
-    if (!sidebar) return;
-
-    const toggle = document.getElementById('sidebarToggle');
-    const backdrop = document.getElementById('sidebarBackdrop');
-    const closeDrawer = () => document.body.classList.remove('sidebar-open');
-    toggle?.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
-    backdrop?.addEventListener('click', closeDrawer);
-
-    const setActive = (key) => {
-        sidebar.querySelectorAll('.sidebar-item[data-nav]').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.nav === key);
-        });
-    };
-    // nav key -> sub-view element. Each show*View() only hides the dashboard,
-    // so switching views from the sidebar would stack stale sub-views on top.
-    const NAV_VIEWS = {
-        inbox: 'inboxView',
-        follow_up: 'followUpView',
-        multi_orders: 'multiOrdersView',
-        shipped: 'shippedOrdersView',
-        analytics: 'analyticsView',
-        inventory: 'inventoryView',
-        team: 'teamView',
-    };
-    sidebar.addEventListener('click', (e) => {
-        const item = e.target.closest('.sidebar-item[data-nav]');
-        if (!item) return;
-        setActive(item.dataset.nav);
-        // Capture phase: runs BEFORE the button's own show*View handler so
-        // stale sub-views are closed first, immune to stopPropagation.
-        const targetView = NAV_VIEWS[item.dataset.nav];
-        Object.values(NAV_VIEWS).forEach(id => {
-            if (id !== targetView) document.getElementById(id).style.display = 'none';
-        });
-        if (!targetView) document.querySelector('.dashboard-main').style.display = 'block';
-        if (window.innerWidth < 1024) closeDrawer();
-    }, true);
-    // Returning to the main list re-activates the Shoppers item
-    ['backToShoppers', 'backToShoppersFromInbox', 'backToShoppersFromFollowUp',
-     'backToShoppersFromMultiOrders', 'backToShoppersFromTeam', 'backToShoppersFromShipped',
-     'backToShoppersFromInventory'
-    ].forEach(id => {
-        document.getElementById(id)?.addEventListener('click', () => setActive('shoppers'));
-    });
-
-    // Desktop collapse-to-rail toggle (persisted across reloads)
-    const collapseBtn = document.getElementById('sidebarCollapseBtn');
-    const setCollapsed = (on) => {
-        document.body.classList.toggle('sidebar-collapsed', on);
-        if (collapseBtn) {
-            collapseBtn.title = on ? 'Expand sidebar' : 'Collapse sidebar';
-            collapseBtn.setAttribute('aria-label', collapseBtn.title);
-        }
-        try { localStorage.setItem('hubSidebarCollapsed', on ? '1' : '0'); } catch (e) { /* private mode */ }
-    };
-    collapseBtn?.addEventListener('click', () =>
-        setCollapsed(!document.body.classList.contains('sidebar-collapsed')));
-    try {
-        if (localStorage.getItem('hubSidebarCollapsed') === '1') setCollapsed(true);
-    } catch (e) { /* private mode */ }
-})();
