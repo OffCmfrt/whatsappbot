@@ -2105,8 +2105,13 @@ router.get('/customer-context/:phone', verifyToken, async (req, res) => {
         `, [digits, `91${digits}`, digits.replace(/^91/, '')]);
 
         // 4) External returns server pipeline (Shopify portal submissions)
-        const rsData = await fetchReturnsServerPipeline(90);
-        const rsRequests = rsData.requests || [];
+        let rsRequests = [];
+        try {
+            const rsData = await fetchReturnsServerPipeline(90);
+            rsRequests = rsData.requests || [];
+        } catch (rsErr) {
+            console.warn('[customer-context] Returns server unavailable, skipping portal data:', rsErr.message);
+        }
 
         // Filter returns-server requests to this customer's orders
         const customerOrderIds = new Set(ordersRows.map(r => String(r.order_id)));

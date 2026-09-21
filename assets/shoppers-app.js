@@ -4,7 +4,7 @@
 // ==========================================
 
 const API_BASE = 'https://whatsappbot-4l4b.onrender.com/api/admin';
-console.log('🚀 Shopper Hub App Loaded - Ver: 1712800001');
+console.log(' Shopper Hub App Loaded - Ver: 1712800002');
 
 // Check for cross-domain token in URL
 const urlParams = new URLSearchParams(window.location.search);
@@ -2776,8 +2776,14 @@ async function loadCustomerContext(phone) {
     const rtoSection = document.getElementById('ctxRtoSection');
     const returnsSection = document.getElementById('ctxReturnsSection');
 
+    if (!loadingEl || !errorEl) {
+        console.warn('[customer-context] Panel elements not found in DOM');
+        return;
+    }
+
     // Reset
     errorEl.style.display = 'none';
+    errorEl.textContent = '';
     ordersSection.style.display = 'none';
     rtoSection.style.display = 'none';
     returnsSection.style.display = 'none';
@@ -2793,15 +2799,15 @@ async function loadCustomerContext(phone) {
 
     try {
         const data = await apiCall(`/customer-context/${encodeURIComponent(phone)}`);
-        if (!data || !data.success) throw new Error(data?.error || 'Failed to load');
+        if (!data || !data.success) throw new Error(data?.error || `API returned ${JSON.stringify(data)}`);
         _ctxCacheSet(cacheKey, data);
         loadingEl.style.display = 'none';
         renderCustomerContext(data);
     } catch (err) {
         loadingEl.style.display = 'none';
         errorEl.style.display = 'block';
-        errorEl.textContent = 'Could not load history';
-        console.warn('[customer-context] fetch failed:', err.message);
+        errorEl.textContent = `Could not load history: ${err.message}`;
+        console.error('[customer-context] fetch failed:', err);
     }
 }
 
