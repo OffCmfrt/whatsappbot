@@ -4,7 +4,7 @@
 // ==========================================
 
 const API_BASE = 'https://whatsappbot-4l4b.onrender.com/api/admin';
-console.log('🚀 Shopper Hub App Loaded - Ver: 1712700000');
+console.log('🚀 Shopper Hub App Loaded - Ver: 1712800001');
 
 // Check for cross-domain token in URL
 const urlParams = new URLSearchParams(window.location.search);
@@ -2749,6 +2749,203 @@ async function openChat(phone, nameEnc, orderId, status) {
     } catch (err) {
         chatMessages.innerHTML = '<div class="chat-loading">Error loading conversation</div>';
     }
+
+    // Fire-and-forget: load customer context into sidebar
+    loadCustomerContext(phone);
+}
+
+// ── Customer Context (Orders / RTO / Returns & Exchanges) ──
+// Memory-smart cache: Map with TTL, survives across chat opens in same session.
+const _ctxCache = new Map();
+const _CTX_TTL = 5 * 60 * 1000; // 5 min
+
+function _ctxCacheGet(key) {
+    const entry = _ctxCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.at > _CTX_TTL) { _ctxCache.delete(key); return null; }
+    return entry.data;
+}
+function _ctxCacheSet(key, data) {
+    _ctxCache.set(key, { data, at: Date.now() });
+}
+
+async function loadCustomerContext(phone) {
+    const loadingEl = document.getElementById('ctxLoading');
+    const errorEl = document.getElementById('ctxError');
+    const ordersSection = document.getElementById('ctxOrdersSection');
+    const rtoSection = document.getElementById('ctxRtoSection');
+    const returnsSection = document.getElementById('ctxReturnsSection');
+
+    // Reset
+    errorEl.style.display = 'none';
+    ordersSection.style.display = 'none';
+    rtoSection.style.display = 'none';
+    returnsSection.style.display = 'none';
+    loadingEl.style.display = 'flex';
+
+    const cacheKey = String(phone).replace(/\D/g, '').slice(-10);
+    const cached = _ctxCacheGet(cacheKey);
+    if (cached) {
+        loadingEl.style.display = 'none';
+        renderCustomerContext(cached);
+        return;
+    }
+
+    try {
+        const data = await apiCall(`/customer-context/${encodeURIComponent(phone)}`);
+        if (!data || !data.success) throw new Error(data?.error || 'Failed to load');
+        _ctxCacheSet(cacheKey, data);
+        loadingEl.style.display = 'none';
+        renderCustomerContext(data);
+    } catch (err) {
+        loadingEl.style.display = 'none';
+        errorEl.style.display = 'block';
+        errorEl.textContent = 'Could not load history';
+        console.warn('[customer-context] fetch failed:', err.message);
+    }
+}
+
+function renderCustomerContext(data) {
+    const ordersSection = document.getElementById('ctxOrdersSection');
+    const rtoSection = document.getElementById('ctxRtoSection');
+    const returnsSection = document.getElementById('ctxReturnsSection');
+    const ordersBody = document.getElementById('ctxOrders');
+    const rtoBody = document.getElementById('ctxRto');
+    const returnsBody = document.getElementById('ctxReturns');
+
+    // ── Orders ──
+    const orders = data.orders || [];
+    document.getElementById('ctxOrdersCount').textContent = orders.length;
+    if (orders.length > 0) {
+        ordersSection.style.display = 'block';
+        ordersBody.innerHTML = orders.slice(0, 10).map(o => {
+            const date = o.created_at ? new Date(o.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+            const statusClass = getStatusClass(o.status);
+            const items = safeParseItems(o.items_json);
+            const itemsPreview = items.length > 0 ? items.map(i => i.title || i.name || '').filter(Boolean).slice(0, 2).join(', ') : '';
+            return `<div class="ctx-order-card">
+                <div class="ctx-order-top">
+                    <span class="ctx-order-id" title="${o.order_id}">#${String(o.order_id).slice(-6)}</span>
+                    <span class="ctx-status-pill ${statusClass}">${(o.status || 'unknown').toUpperCase()}</span>
+                </div>
+                ${itemsPreview ? `<div class="ctx-order-items">${escapeHtml(itemsPreview)}</div>` : ''}
+                <div class="ctx-order-meta">
+                    <span>${date}</span>
+                    <span>${o.payment_method || ''}</span>
+                    ${o.order_total ? `<span>₹${Number(o.order_total).toLocaleString('en-IN')}</span>` : ''}
+                </div>
+                ${o.awb ? `<div class="ctx-order-awb">AWB: ${o.awb}</div>` : ''}
+            </div>`;
+        }).join('');
+        if (orders.length > 10) {
+            ordersBody.innerHTML += `<div class="ctx-more-note">+${orders.length - 10} more orders</div>`;
+        }
+    }
+
+    // ── RTO ──
+    const rto = data.rto || [];
+    document.getElementById('ctxRtoCount').textContent = rto.length;
+    if (rto.length > 0) {
+        rtoSection.style.display = 'block';
+        rtoBody.innerHTML = rto.map(r => {
+            const date = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+            return `<div class="ctx-rto-card">
+                <div class="ctx-rto-top">
+                    <span class="ctx-order-id">#${String(r.order_id).slice(-6)}</span>
+                    <span class="ctx-rto-badge">RTO</span>
+                </div>
+                <div class="ctx-order-meta">
+                    <span>${date}</span>
+                    ${r.awb ? `<span>AWB: ${r.awb}</span>` : ''}
+                    ${r.courier_name ? `<span>${r.courier_name}</span>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    // ── Returns & Exchanges ──
+    const returns = data.returns || [];
+    const exchanges = data.exchanges || [];
+    const totalRE = returns.length + exchanges.length;
+    document.getElementById('ctxReturnsCount').textContent = totalRE;
+    if (totalRE > 0) {
+        returnsSection.style.display = 'block';
+        let html = '';
+        returns.forEach(r => {
+            const date = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+            const srcLabel = r.source === 'portal' ? 'Portal' : 'Local';
+            html += `<div class="ctx-return-card">
+                <div class="ctx-return-top">
+                    <span class="ctx-return-type type-return">RETURN</span>
+                    <span class="ctx-return-status ${getStatusClass(r.status)}">${(r.status || 'unknown').toUpperCase()}</span>
+                </div>
+                <div class="ctx-order-meta">
+                    <span>#${String(r.order_id || r.order_number || '').slice(-6)}</span>
+                    <span>${date}</span>
+                    <span class="ctx-source-tag">${srcLabel}</span>
+                </div>
+                ${r.reason ? `<div class="ctx-return-reason">${escapeHtml(r.reason)}</div>` : ''}
+            </div>`;
+        });
+        exchanges.forEach(e => {
+            const date = e.created_at ? new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+            const srcLabel = e.source === 'portal' ? 'Portal' : 'Local';
+            html += `<div class="ctx-return-card">
+                <div class="ctx-return-top">
+                    <span class="ctx-return-type type-exchange">EXCHANGE</span>
+                    <span class="ctx-return-status ${getStatusClass(e.status)}">${(e.status || 'unknown').toUpperCase()}</span>
+                </div>
+                <div class="ctx-order-meta">
+                    <span>#${String(e.order_id || e.order_number || '').slice(-6)}</span>
+                    <span>${date}</span>
+                    <span class="ctx-source-tag">${srcLabel}</span>
+                </div>
+            </div>`;
+        });
+        returnsBody.innerHTML = html;
+    }
+}
+
+// Toggle collapsible section
+function toggleCtxSection(bodyId) {
+    const body = document.getElementById(bodyId);
+    if (!body) return;
+    const isCollapsed = body.classList.contains('ctx-collapsed');
+    if (isCollapsed) {
+        body.classList.remove('ctx-collapsed');
+        body.style.maxHeight = body.scrollHeight + 'px';
+        body.style.opacity = '1';
+        body.style.padding = '8px 0';
+    } else {
+        body.classList.add('ctx-collapsed');
+        body.style.maxHeight = '0';
+        body.style.opacity = '0';
+        body.style.padding = '0';
+    }
+    // Rotate chevron
+    const section = body.closest('.ctx-section');
+    const chevron = section?.querySelector('.ctx-chevron');
+    if (chevron) chevron.style.transform = isCollapsed ? 'rotate(0deg)' : 'rotate(180deg)';
+}
+
+// Helpers
+function safeParseItems(json) {
+    if (!json) return [];
+    try { const arr = JSON.parse(json); return Array.isArray(arr) ? arr : []; }
+    catch { return []; }
+}
+function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+function getStatusClass(status) {
+    const s = (status || '').toLowerCase();
+    if (['delivered', 'completed', 'approved', 'picked_up'].includes(s)) return 'ctx-status-success';
+    if (['cancelled', 'rejected', 'rto'].includes(s)) return 'ctx-status-danger';
+    if (['in_transit', 'scheduled', 'pickup_booked', 'waiting_payment'].includes(s)) return 'ctx-status-info';
+    if (['pending', 'initiated', 'pickup_pending'].includes(s)) return 'ctx-status-warning';
+    return 'ctx-status-neutral';
 }
 
 // Helper: format time only (IST) for chat messages – e.g. "09:31 PM"

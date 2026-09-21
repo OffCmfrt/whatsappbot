@@ -6,7 +6,7 @@
     <title>Shopper Management | OFFCOMFRT</title>
     <!-- Google Fonts: Outfit, Inter, Archivo Narrow -->
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Inter:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1789200001">
+        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1712800001">
 </head>
 <body class="dark-theme">
     <!-- Login View -->
@@ -350,7 +350,55 @@
                     </div>
                 </div>
                 <button class="btn btn-outline" id="viewOrderBtn" style="width: 100%; margin-bottom: 0.5rem;">View Order Details</button>
-                <button class="btn btn-primary" id="markResolvedBtn" style="width: 100%;">Mark as Resolved</button>
+                <button class="btn btn-primary" id="markResolvedBtn" style="width: 100%; margin-bottom: 0.75rem;">Mark as Resolved</button>
+
+                <!-- Customer Context Panels (Collapsible & Premium) -->
+                <div id="customerContextPanels" class="customer-context-panels">
+                    <div id="ctxLoading" class="ctx-loading" style="display:none;">
+                        <div class="ctx-spinner"></div>
+                        <span>Loading history...</span>
+                    </div>
+                    <div id="ctxError" class="ctx-error" style="display:none;"></div>
+
+                    <!-- Orders Section -->
+                    <div class="ctx-section" id="ctxOrdersSection" style="display:none;">
+                        <button class="ctx-section-header" onclick="toggleCtxSection('ctxOrders')">
+                            <span class="ctx-section-title">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+                                Orders
+                                <span class="ctx-badge" id="ctxOrdersCount">0</span>
+                            </span>
+                            <svg class="ctx-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                        <div class="ctx-section-body" id="ctxOrders"></div>
+                    </div>
+
+                    <!-- RTO Section -->
+                    <div class="ctx-section" id="ctxRtoSection" style="display:none;">
+                        <button class="ctx-section-header ctx-section-danger" onclick="toggleCtxSection('ctxRto')">
+                            <span class="ctx-section-title">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                RTO
+                                <span class="ctx-badge ctx-badge-danger" id="ctxRtoCount">0</span>
+                            </span>
+                            <svg class="ctx-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                        <div class="ctx-section-body" id="ctxRto"></div>
+                    </div>
+
+                    <!-- Returns & Exchanges Section -->
+                    <div class="ctx-section" id="ctxReturnsSection" style="display:none;">
+                        <button class="ctx-section-header ctx-section-warning" onclick="toggleCtxSection('ctxReturns')">
+                            <span class="ctx-section-title">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/></svg>
+                                Returns / Exchanges
+                                <span class="ctx-badge ctx-badge-warning" id="ctxReturnsCount">0</span>
+                            </span>
+                            <svg class="ctx-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                        <div class="ctx-section-body" id="ctxReturns"></div>
+                    </div>
+                </div>
             </div>
             <div class="chat-main">
                 <div class="chat-header">
@@ -1780,7 +1828,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/shoppers/assets/shoppers-app.js?v=1789200001"></script>
+    <script src="/shoppers/assets/shoppers-app.js?v=1712800001"></script>
     <script src="/shoppers/assets/shoppers-inventory-tower.js?v=1788900001"></script>
     <script src="/shoppers/assets/shoppers-stock-room.js?v=1789010000"></script>
     <script src="/shoppers/assets/shoppers-ai-copilot-pro.js?v=1788900000"></script>

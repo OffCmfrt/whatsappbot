@@ -2060,6 +2060,117 @@ router.get('/shoppers', verifyToken, async (req, res) => {
     }
 });
 
+// ── Customer Context for Chat Sidebar ──
+// Returns all orders, RTOs, and return/exchange requests for a customer
+// so the chat sidebar can show full history when an operator opens a chat.
+router.get('/customer-context/:phone', verifyToken, async (req, res) => {
+    try {
+        const { phone } = req.params;
+        if (!phone) return res.status(400).json({ success: false, error: 'phone required' });
+
+        // Normalize phone for matching: strip to digits only
+        const digits = String(phone).replace(/\D/g, '');
+
+        // 1) All orders from store_shoppers (authoritative order source)
+        //    Enriched with AWB/tracking from orders table.
+        const ordersRows = await dbAdapter.query(`
+            SELECT
+                s.order_id, s.name, s.phone, s.status AS shopper_status,
+                s.items_json, s.order_total, s.payment_method, s.delivery_type,
+                s.created_at, s.address, s.city, s.province, s.zip,
+                o.awb, o.tracking_url, o.courier_name,
+                o.status AS order_status, o.delivered_at
+            FROM store_shoppers s
+            LEFT JOIN orders o ON o.order_id = s.order_id
+            WHERE REGEXP_REPLACE(COALESCE(s.phone,''),'[^0-9]','','g') IN ($1, $2)
+               OR REGEXP_REPLACE(COALESCE(s.phone,''),'[^0-9]','','g') = $3
+            ORDER BY s.created_at DESC
+            LIMIT 50
+        `, [digits, `91${digits}`, digits.replace(/^91/, '')]);
+
+        // 2) Local returns
+        const localReturns = await dbAdapter.query(`
+            SELECT return_id, order_id, items, reason, status, refund_amount, refund_status, created_at, updated_at
+            FROM returns
+            WHERE REGEXP_REPLACE(COALESCE(customer_phone,''),'[^0-9]','','g') IN ($1, $2, $3)
+            ORDER BY created_at DESC LIMIT 30
+        `, [digits, `91${digits}`, digits.replace(/^91/, '')]);
+
+        // 3) Local exchanges
+        const localExchanges = await dbAdapter.query(`
+            SELECT exchange_id, order_id, old_items, new_items, reason, status, price_difference, payment_status, created_at, updated_at
+            FROM exchanges
+            WHERE REGEXP_REPLACE(COALESCE(customer_phone,''),'[^0-9]','','g') IN ($1, $2, $3)
+            ORDER BY created_at DESC LIMIT 30
+        `, [digits, `91${digits}`, digits.replace(/^91/, '')]);
+
+        // 4) External returns server pipeline (Shopify portal submissions)
+        const rsData = await fetchReturnsServerPipeline(90);
+        const rsRequests = rsData.requests || [];
+
+        // Filter returns-server requests to this customer's orders
+        const customerOrderIds = new Set(ordersRows.map(r => String(r.order_id)));
+        const portalReturns = [];
+        const portalExchanges = [];
+        for (const req of rsRequests) {
+            if (!customerOrderIds.has(String(req.order_number))) continue;
+            const target = req.type === 'exchange' ? portalExchanges : portalReturns;
+            target.push({
+                request_id: req.request_id,
+                order_number: req.order_number,
+                type: req.type,
+                status: req.status,
+                items: req.items || [],
+                created_at: req.created_at
+            });
+        }
+
+        // 5) Compute RTO summary from orders
+        const rtoOrders = ordersRows.filter(r =>
+            r.shopper_status === 'rto' || r.order_status === 'rto'
+        );
+
+        res.json({
+            success: true,
+            phone: digits,
+            orders: ordersRows.map(r => ({
+                order_id: r.order_id,
+                status: r.shopper_status || r.order_status || 'unknown',
+                items_json: r.items_json,
+                order_total: r.order_total,
+                payment_method: r.payment_method,
+                delivery_type: r.delivery_type,
+                created_at: r.created_at,
+                awb: r.awb,
+                courier_name: r.courier_name,
+                tracking_url: r.tracking_url,
+                delivered_at: r.delivered_at,
+                city: r.city,
+                address: r.address
+            })),
+            rto: rtoOrders.map(r => ({
+                order_id: r.order_id,
+                awb: r.awb,
+                courier_name: r.courier_name,
+                status: r.shopper_status || r.order_status,
+                created_at: r.created_at,
+                delivered_at: r.delivered_at
+            })),
+            returns: [
+                ...localReturns.map(r => ({ ...r, source: 'local' })),
+                ...portalReturns.map(r => ({ ...r, source: 'portal' }))
+            ],
+            exchanges: [
+                ...localExchanges.map(r => ({ ...r, source: 'local' })),
+                ...portalExchanges.map(r => ({ ...r, source: 'portal' }))
+            ]
+        });
+    } catch (err) {
+        console.error('[customer-context] Error:', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // Update shopper details (Manual Edit)
 router.put('/shoppers/:id', verifyToken, requirePermission('edit_orders'), async (req, res) => {
     try {
