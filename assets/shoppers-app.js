@@ -6,7 +6,7 @@
 const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? `${window.location.protocol}//${window.location.hostname}:${window.location.port}/api/admin`
     : 'https://whatsappbot-4l4b.onrender.com/api/admin';
-console.log(' Shopper Hub App Loaded - Ver: 1712800003, API:', API_BASE);
+console.log(' Shopper Hub App Loaded - Ver: 1712800004, API:', API_BASE);
 
 // Check for cross-domain token in URL
 const urlParams = new URLSearchParams(window.location.search);
@@ -2777,9 +2777,18 @@ async function loadCustomerContext(phone) {
     const ordersSection = document.getElementById('ctxOrdersSection');
     const rtoSection = document.getElementById('ctxRtoSection');
     const returnsSection = document.getElementById('ctxReturnsSection');
+    const panelsContainer = document.getElementById('customerContextPanels');
+
+    console.log('[customer-context] Starting for phone:', phone);
+    console.log('[customer-context] DOM elements:', {
+        loadingEl: !!loadingEl,
+        errorEl: !!errorEl,
+        ordersSection: !!ordersSection,
+        panelsContainer: !!panelsContainer
+    });
 
     if (!loadingEl || !errorEl) {
-        console.warn('[customer-context] Panel elements not found in DOM');
+        console.error('[customer-context] CRITICAL: Panel elements not found in DOM');
         return;
     }
 
@@ -2794,13 +2803,17 @@ async function loadCustomerContext(phone) {
     const cacheKey = String(phone).replace(/\D/g, '').slice(-10);
     const cached = _ctxCacheGet(cacheKey);
     if (cached) {
+        console.log('[customer-context] Using cached data');
         loadingEl.style.display = 'none';
         renderCustomerContext(cached);
         return;
     }
 
     try {
+        console.log('[customer-context] Fetching from API...');
         const data = await apiCall(`/customer-context/${encodeURIComponent(phone)}`);
+        console.log('[customer-context] API response:', data ? `success=${data.success}, orders=${data.orders?.length || 0}` : 'null/undefined');
+        
         if (!data || !data.success) throw new Error(data?.error || `API returned ${JSON.stringify(data)}`);
         _ctxCacheSet(cacheKey, data);
         loadingEl.style.display = 'none';
@@ -2814,6 +2827,13 @@ async function loadCustomerContext(phone) {
 }
 
 function renderCustomerContext(data) {
+    console.log('[customer-context] renderCustomerContext called with:', {
+        orders: data.orders?.length || 0,
+        rto: data.rto?.length || 0,
+        returns: data.returns?.length || 0,
+        exchanges: data.exchanges?.length || 0
+    });
+    
     const ordersSection = document.getElementById('ctxOrdersSection');
     const rtoSection = document.getElementById('ctxRtoSection');
     const returnsSection = document.getElementById('ctxReturnsSection');
