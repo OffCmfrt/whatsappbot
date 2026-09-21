@@ -1254,6 +1254,24 @@
         .bulk-ship-line .bs-result.ok { color: #25d366; }
         .bulk-ship-line .bs-result.err { color: #ff6b7a; }
         .bulk-ship-line .bs-result.run { color: #ffa502; }
+        .bulk-ship-footer-right { display: flex; gap: 0.5rem; align-items: center; }
+        #bulkShipPauseBtn.paused { border-color: rgba(37,211,102,0.5); color: #25d366; }
+
+        /* Background Bulk Ship Progress Bar */
+        .bg-bulk-ship-bar { position: sticky; top: 0; z-index: 1200; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.6rem 1.2rem; background: linear-gradient(135deg, rgba(10,10,10,0.97), rgba(20,20,20,0.97)); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; margin-bottom: 0.75rem; backdrop-filter: blur(12px); box-shadow: 0 4px 20px rgba(0,0,0,0.5); animation: bgBarSlideIn 0.3s ease; }
+        @keyframes bgBarSlideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        .bg-bulk-ship-left { display: flex; align-items: center; gap: 0.7rem; flex: 1; cursor: pointer; min-width: 0; }
+        .bg-bulk-ship-icon { font-size: 1.1rem; }
+        .bg-bulk-ship-label { font-size: 0.8rem; font-weight: 600; color: #fff; white-space: nowrap; }
+        .bg-bulk-ship-progress-track { flex: 1; max-width: 220px; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; min-width: 80px; }
+        .bg-bulk-ship-progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #25d366, #00b894); border-radius: 3px; transition: width 0.3s ease; }
+        .bg-bulk-ship-count { font-size: 0.75rem; color: #aaa; font-weight: 600; white-space: nowrap; }
+        .bg-bulk-ship-right { display: flex; gap: 0.4rem; align-items: center; }
+        .bg-bulk-ship-btn { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; color: #fff; font-size: 0.85rem; padding: 0.3rem 0.55rem; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; }
+        .bg-bulk-ship-btn:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.25); }
+        .bg-bulk-ship-bar.paused .bg-bulk-ship-progress-fill { background: linear-gradient(90deg, #ffa502, #ff6348); }
+        .bg-bulk-ship-bar.paused .bg-bulk-ship-label { color: #ffa502; }
+        .bg-bulk-ship-bar.finished .bg-bulk-ship-progress-fill { background: linear-gradient(90deg, #25d366, #00b894); }
         
         /* Premium: Shopify Cancel & Refund */
         .bulk-btn-shopify-cancel {

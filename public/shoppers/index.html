@@ -6,7 +6,7 @@
     <title>Shopper Management | OFFCOMFRT</title>
     <!-- Google Fonts: Outfit, Inter, Archivo Narrow -->
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Inter:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1788900002">
+        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1789100001">
 </head>
 <body class="dark-theme">
     <!-- Login View -->
@@ -140,6 +140,22 @@
                 </div>
             </div>
             
+            <!-- Background Bulk Ship Progress Bar (persistent, visible when minimized) -->
+            <div class="bg-bulk-ship-bar" id="bgBulkShipBar" style="display:none;">
+                <div class="bg-bulk-ship-left" onclick="restoreBulkShipModal()">
+                    <span class="bg-bulk-ship-icon">🚚</span>
+                    <span class="bg-bulk-ship-label" id="bgBulkShipLabel">Bulk Shipping...</span>
+                    <div class="bg-bulk-ship-progress-track">
+                        <div class="bg-bulk-ship-progress-fill" id="bgBulkShipFill"></div>
+                    </div>
+                    <span class="bg-bulk-ship-count" id="bgBulkShipCount">0/0</span>
+                </div>
+                <div class="bg-bulk-ship-right">
+                    <button class="bg-bulk-ship-btn" id="bgBulkShipPauseBtn" onclick="toggleBulkShipPause()" title="Pause/Resume">⏸</button>
+                    <button class="bg-bulk-ship-btn" onclick="restoreBulkShipModal()" title="Expand">⬆</button>
+                </div>
+            </div>
+
             <!-- Segment & Filter Bar -->
             <div class="control-bar">
                 <!-- Row 1: Status Tabs -->
@@ -1492,7 +1508,11 @@
             </div>
             <div class="ship-footer">
                 <button class="btn btn-outline" onclick="closeBulkShipModal()">Close</button>
-                <button class="btn btn-primary" id="bulkShipStartBtn" onclick="startBulkShip()">Start Shipping</button>
+                <div class="bulk-ship-footer-right">
+                    <button class="btn btn-outline" id="bulkShipPauseBtn" onclick="toggleBulkShipPause()" style="display:none;">⏸ Pause</button>
+                    <button class="btn btn-outline" id="bulkShipMinimizeBtn" onclick="minimizeBulkShip()" style="display:none;">⬇ Minimize</button>
+                    <button class="btn btn-primary" id="bulkShipStartBtn" onclick="startBulkShip()">Start Shipping</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1652,7 +1672,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/shoppers/assets/shoppers-app.js?v=1789006000"></script>
+    <script src="/shoppers/assets/shoppers-app.js?v=1789100001"></script>
     <script src="/shoppers/assets/shoppers-inventory-tower.js?v=1788900001"></script>
     <script src="/shoppers/assets/shoppers-stock-room.js?v=1789010000"></script>
     <script src="/shoppers/assets/shoppers-ai-copilot-pro.js?v=1788900000"></script>

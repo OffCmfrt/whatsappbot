@@ -5902,6 +5902,9 @@ async function reshipContinue(force = false) {
 // ---------- Bulk Ship ----------
 
 let bulkShipRunning = false;
+let bulkShipPaused = false;
+let bulkShipMinimized = false;
+let bulkShipState = null; // { ids, carrier, packageOverrides, okCount, failCount, done, total }
 
 async function openBulkShipModal() {
     if (!hubRequirePerm('ship_orders', 'ship orders')) return;
@@ -5940,12 +5943,85 @@ async function openBulkShipModal() {
     startBtn.disabled = false;
     startBtn.textContent = 'Start Shipping';
     document.getElementById('bulkShipModal').dataset.ids = JSON.stringify(eligible.map(s => s.id));
+    // Reset pause/minimize buttons
+    document.getElementById('bulkShipPauseBtn').style.display = 'none';
+    document.getElementById('bulkShipMinimizeBtn').style.display = 'none';
     document.getElementById('bulkShipModal').classList.add('active');
+    bulkShipMinimized = false;
 }
 
 function closeBulkShipModal() {
-    if (bulkShipRunning) { showShipToast('Bulk shipping in progress — wait for it to finish', true); return; }
+    if (bulkShipRunning) {
+        // If running, minimize instead of closing
+        minimizeBulkShip();
+        return;
+    }
     document.getElementById('bulkShipModal').classList.remove('active');
+    bulkShipMinimized = false;
+}
+
+function minimizeBulkShip() {
+    if (!bulkShipRunning && !bulkShipState) {
+        // Not running, just close
+        document.getElementById('bulkShipModal').classList.remove('active');
+        return;
+    }
+    bulkShipMinimized = true;
+    document.getElementById('bulkShipModal').classList.remove('active');
+    // Show the background progress bar
+    const bar = document.getElementById('bgBulkShipBar');
+    bar.style.display = 'flex';
+    updateBgBulkShipBar();
+}
+
+function restoreBulkShipModal() {
+    bulkShipMinimized = false;
+    document.getElementById('bulkShipModal').classList.add('active');
+    // Hide background bar
+    document.getElementById('bgBulkShipBar').style.display = 'none';
+}
+
+function toggleBulkShipPause() {
+    if (!bulkShipRunning) return;
+    bulkShipPaused = !bulkShipPaused;
+    // Update modal button
+    const pauseBtn = document.getElementById('bulkShipPauseBtn');
+    const bgPauseBtn = document.getElementById('bgBulkShipPauseBtn');
+    if (bulkShipPaused) {
+        pauseBtn.textContent = '▶ Resume';
+        pauseBtn.classList.add('paused');
+        bgPauseBtn.textContent = '▶';
+        document.getElementById('bgBulkShipBar').classList.add('paused');
+        document.getElementById('bgBulkShipBar').classList.remove('finished');
+        document.getElementById('bgBulkShipLabel').textContent = 'Bulk Shipping (Paused)';
+    } else {
+        pauseBtn.textContent = '⏸ Pause';
+        pauseBtn.classList.remove('paused');
+        bgPauseBtn.textContent = '⏸';
+        document.getElementById('bgBulkShipBar').classList.remove('paused');
+        document.getElementById('bgBulkShipLabel').textContent = 'Bulk Shipping...';
+    }
+}
+
+function updateBgBulkShipBar() {
+    if (!bulkShipState) return;
+    const { done, total, okCount, failCount } = bulkShipState;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    document.getElementById('bgBulkShipFill').style.width = `${pct}%`;
+    document.getElementById('bgBulkShipCount').textContent = `${done}/${total}`;
+    if (!bulkShipPaused) {
+        document.getElementById('bgBulkShipLabel').textContent = bulkShipRunning ? 'Bulk Shipping...' : 'Bulk Shipping (Paused)';
+    }
+}
+
+function waitForResume() {
+    return new Promise(resolve => {
+        const check = () => {
+            if (!bulkShipPaused) { resolve(); return; }
+            setTimeout(check, 200);
+        };
+        check();
+    });
 }
 
 async function startBulkShip() {
@@ -5962,14 +6038,36 @@ async function startBulkShip() {
     };
 
     bulkShipRunning = true;
+    bulkShipPaused = false;
+    bulkShipState = { ids, carrier, packageOverrides, okCount: 0, failCount: 0, done: 0, total: ids.length };
+
     const startBtn = document.getElementById('bulkShipStartBtn');
     startBtn.disabled = true;
     startBtn.textContent = 'Shipping...';
+    // Show pause and minimize buttons
+    document.getElementById('bulkShipPauseBtn').style.display = 'inline-flex';
+    document.getElementById('bulkShipMinimizeBtn').style.display = 'inline-flex';
+    document.getElementById('bulkShipPauseBtn').textContent = '⏸ Pause';
+    document.getElementById('bulkShipPauseBtn').classList.remove('paused');
+    // Update bg bar buttons
+    document.getElementById('bgBulkShipPauseBtn').textContent = '⏸';
+    document.getElementById('bgBulkShipBar').classList.remove('paused');
 
-    let okCount = 0, failCount = 0;
-    let done = 0;
+    // If minimized, show the background bar
+    if (bulkShipMinimized) {
+        document.getElementById('bgBulkShipBar').style.display = 'flex';
+        updateBgBulkShipBar();
+    }
+
+    let { okCount, failCount } = bulkShipState;
     for (const id of ids) {
-        done++;
+        // Check for pause
+        if (bulkShipPaused) {
+            await waitForResume();
+        }
+
+        bulkShipState.done++;
+        const done = bulkShipState.done;
         startBtn.textContent = `Shipping ${done}/${ids.length}...`;
         const resultEl = document.getElementById(`bs-result-${id}`);
         if (resultEl) { resultEl.textContent = 'Shipping...'; resultEl.className = 'bs-result run'; }
@@ -5983,22 +6081,53 @@ async function startBulkShip() {
             });
             if (data && data.success) {
                 okCount++;
+                bulkShipState.okCount = okCount;
                 if (resultEl) { resultEl.textContent = `✅ AWB ${data.awb}`; resultEl.className = 'bs-result ok'; }
             } else {
                 failCount++;
+                bulkShipState.failCount = failCount;
                 if (resultEl) { resultEl.textContent = `❌ ${data?.error || 'Failed'}`; resultEl.className = 'bs-result err'; }
             }
         } catch (err) {
             failCount++;
+            bulkShipState.failCount = failCount;
             if (resultEl) { resultEl.textContent = '❌ Network error'; resultEl.className = 'bs-result err'; }
+        }
+
+        // Update background bar
+        if (bulkShipMinimized) {
+            updateBgBulkShipBar();
         }
     }
 
     bulkShipRunning = false;
+    bulkShipPaused = false;
     startBtn.textContent = 'Done';
     const parts = [`${okCount} shipped`];
     if (failCount) parts.push(`${failCount} failed`);
     showShipToast(`Bulk ship finished: ${parts.join(', ')}`, failCount > 0);
+
+    // Update background bar to finished state
+    if (bulkShipMinimized) {
+        document.getElementById('bgBulkShipLabel').textContent = `Bulk Ship Done: ${parts.join(', ')}`;
+        document.getElementById('bgBulkShipBar').classList.add('finished');
+        document.getElementById('bgBulkShipBar').classList.remove('paused');
+        document.getElementById('bgBulkShipPauseBtn').textContent = '✓';
+        // Auto-hide after 8 seconds
+        setTimeout(() => {
+            if (bulkShipMinimized) {
+                document.getElementById('bgBulkShipBar').style.display = 'none';
+                bulkShipMinimized = false;
+                bulkShipState = null;
+            }
+        }, 8000);
+    } else {
+        // Hide pause/minimize buttons when done
+        document.getElementById('bulkShipPauseBtn').style.display = 'none';
+        document.getElementById('bulkShipMinimizeBtn').style.display = 'none';
+        bulkShipState = null;
+    }
+
     clearSelection();
     fetchShoppersData();
 }
@@ -6020,6 +6149,9 @@ window.closeShipmentsDrawer = closeShipmentsDrawer;
 window.openBulkShipModal = openBulkShipModal;
 window.closeBulkShipModal = closeBulkShipModal;
 window.startBulkShip = startBulkShip;
+window.minimizeBulkShip = minimizeBulkShip;
+window.restoreBulkShipModal = restoreBulkShipModal;
+window.toggleBulkShipPause = toggleBulkShipPause;
 
 // ==========================================
 // PREMIUM: SHOPIFY CANCEL & REFUND (bulk)
