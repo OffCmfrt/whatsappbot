@@ -584,6 +584,18 @@ function setupEventListeners() {
         soLookupTimeout = setTimeout(() => runSoLookup(q), 350);
     });
 
+    // Shipping Batches View
+    document.getElementById('soBatchesBtn')?.addEventListener('click', openShippingBatches);
+    document.getElementById('backToShippedFromBatches')?.addEventListener('click', closeShippingBatches);
+    document.getElementById('sbRefreshBtn')?.addEventListener('click', () => fetchBatchesList());
+    document.getElementById('sbMergeBtn')?.addEventListener('click', mergeSelectedBatches);
+    document.getElementById('bdCloseBtn')?.addEventListener('click', closeBatchDetail);
+    document.getElementById('bdManifestBtn')?.addEventListener('click', () => downloadBatchManifest(currentBatchDetailId));
+    document.getElementById('bdLabelsBtn')?.addEventListener('click', () => downloadBatchLabels(currentBatchDetailId));
+    document.getElementById('bdSplitBtn')?.addEventListener('click', () => toggleSplitDialog(currentBatchDetailId));
+    document.getElementById('sbPrevBtn')?.addEventListener('click', () => { sbPage = Math.max(0, sbPage - 1); fetchBatchesList(); });
+    document.getElementById('sbNextBtn')?.addEventListener('click', () => { sbPage++; fetchBatchesList(); });
+
     // Shipped Orders - Status Pills
     document.querySelectorAll('.so-status-pill').forEach(pill => {
         pill.addEventListener('click', () => {
@@ -6037,9 +6049,22 @@ async function startBulkShip() {
         heightCm: parseFloat(document.getElementById('bulkShipHeight').value) || 2
     };
 
+    // Create a batch record to group this bulk-ship run
+    let currentBatchId = null;
+    try {
+        const batchRes = await apiCall('/shipping/batches', 'POST', {
+            carrier,
+            totalOrders: ids.length,
+            packageDefaults: packageOverrides
+        });
+        currentBatchId = batchRes?.batch?.id || null;
+    } catch (e) {
+        console.warn('⚠️ Failed to create batch record (continuing without batch):', e.message);
+    }
+
     bulkShipRunning = true;
     bulkShipPaused = false;
-    bulkShipState = { ids, carrier, packageOverrides, okCount: 0, failCount: 0, done: 0, total: ids.length };
+    bulkShipState = { ids, carrier, packageOverrides, okCount: 0, failCount: 0, done: 0, total: ids.length, batchId: currentBatchId };
 
     const startBtn = document.getElementById('bulkShipStartBtn');
     startBtn.disabled = true;
@@ -6072,13 +6097,16 @@ async function startBulkShip() {
         const resultEl = document.getElementById(`bs-result-${id}`);
         if (resultEl) { resultEl.textContent = 'Shipping...'; resultEl.className = 'bs-result run'; }
         try {
-            const data = await apiCall('/shipping/ship', 'POST', {
+            const shipPayload = {
                 shopperId: id,
                 carrier,
                 courierId: 'auto',
                 packageOverrides,
                 notifyCustomer: false
-            });
+            };
+            if (currentBatchId) shipPayload.batchId = currentBatchId;
+
+            const data = await apiCall('/shipping/ship', 'POST', shipPayload);
             if (data && data.success) {
                 okCount++;
                 bulkShipState.okCount = okCount;
@@ -6100,11 +6128,26 @@ async function startBulkShip() {
         }
     }
 
+    // Finalize the batch record with actual counts
+    if (currentBatchId) {
+        const batchStatus = failCount === 0 ? 'completed' : (okCount > 0 ? 'partial' : 'processing');
+        try {
+            await apiCall(`/shipping/batches/${currentBatchId}`, 'PATCH', {
+                successfulCount: okCount,
+                failedCount: failCount,
+                status: batchStatus
+            });
+        } catch (e) {
+            console.warn('⚠️ Failed to update batch record:', e.message);
+        }
+    }
+
     bulkShipRunning = false;
     bulkShipPaused = false;
     startBtn.textContent = 'Done';
     const parts = [`${okCount} shipped`];
     if (failCount) parts.push(`${failCount} failed`);
+    if (currentBatchId) parts.push(`Batch #${currentBatchId}`);
     showShipToast(`Bulk ship finished: ${parts.join(', ')}`, failCount > 0);
 
     // Update background bar to finished state
@@ -7189,6 +7232,369 @@ function hideInventoryView() {
 
 
 // ===== Premium sidebar: drawer toggle + active-state tracking =====
+// ═══════════════════════════════════════════════════════════════════
+// SHIPPING BATCHES — Premium batch management module
+// Memory-optimized: paginated fetch, client-side selection state,
+// lazy detail loading, no full DOM re-renders.
+// ═══════════════════════════════════════════════════════════════════
+
+let sbPage = 0;
+const SB_PAGE_SIZE = 25;
+let sbTotal = 0;
+let sbBatchesCache = []; // current page's batch data
+let sbSelectedBatchIds = new Set(); // selection for merge
+let currentBatchDetailId = null;
+
+function openShippingBatches() {
+    document.getElementById('shippingBatchesView').style.display = 'block';
+    sbPage = 0;
+    sbSelectedBatchIds.clear();
+    updateMergeBtnState();
+    fetchBatchesList();
+}
+
+function closeShippingBatches() {
+    document.getElementById('shippingBatchesView').style.display = 'none';
+}
+
+async function fetchBatchesList() {
+    const container = document.getElementById('sbListContainer');
+    container.innerHTML = `<div class="sb-loading"><div class="spinner" style="width:40px;height:40px;border:3px solid rgba(255,255,255,0.1);border-top-color:#53bdeb;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:1rem;"></div><span>Loading batches...</span></div>`;
+
+    try {
+        const data = await apiCall(`/shipping/batches?limit=${SB_PAGE_SIZE}&offset=${sbPage * SB_PAGE_SIZE}`);
+        if (!data || !data.success) throw new Error(data?.error || 'Failed to fetch batches');
+
+        sbBatchesCache = data.batches || [];
+        sbTotal = data.total || 0;
+        const stats = data.stats || {};
+
+        // Update stats bar
+        document.getElementById('sbStatBatches').textContent = stats.total_batches || 0;
+        document.getElementById('sbStatOrders').textContent = stats.total_orders_shipped || 0;
+        document.getElementById('sbStatSuccessful').textContent = stats.total_successful || 0;
+        document.getElementById('sbStatFailed').textContent = stats.total_failed || 0;
+        const totalAttempted = (stats.total_successful || 0) + (stats.total_failed || 0);
+        const rate = totalAttempted > 0 ? Math.round(((stats.total_successful || 0) / totalAttempted) * 100) : 0;
+        document.getElementById('sbStatRate').textContent = `${rate}%`;
+
+        renderBatchesList(sbBatchesCache);
+        updatePagination();
+    } catch (err) {
+        container.innerHTML = `<div class="sb-empty-state"><h4>Failed to load batches</h4><p>${err.message}</p></div>`;
+    }
+}
+
+function renderBatchesList(batches) {
+    const container = document.getElementById('sbListContainer');
+
+    if (!batches || batches.length === 0) {
+        container.innerHTML = `
+            <div class="sb-empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="1" y="3" width="22" height="18" rx="2"/><line x1="1" y1="9" x2="23" y2="9"/><line x1="8" y1="3" x2="8" y2="21"/>
+                </svg>
+                <h4>No shipping batches yet</h4>
+                <p>Batches are created automatically when you use "Ship Selected" to bulk-ship orders.</p>
+            </div>`;
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    for (const batch of batches) {
+        const card = document.createElement('div');
+        card.className = `sb-batch-card${sbSelectedBatchIds.has(batch.id) ? ' selected' : ''}`;
+        card.dataset.batchId = batch.id;
+
+        const total = batch.total_orders || 0;
+        const ok = batch.successful_count || 0;
+        const fail = batch.failed_count || 0;
+        const pct = total > 0 ? Math.round((ok / total) * 100) : 0;
+        const statusClass = batch.status === 'completed' ? 'sb-status-completed'
+            : batch.status === 'processing' ? 'sb-status-processing'
+            : batch.status === 'partial' ? 'sb-status-partial'
+            : 'sb-status-merged';
+        const statusLabel = batch.status === 'merged' ? 'MERGED' : batch.status === 'split' ? 'SPLIT' : (batch.status || 'processing').toUpperCase();
+        const fillClass = pct >= 80 ? 'sb-fill-success' : 'sb-fill-partial';
+        const createdDate = new Date(batch.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+        card.innerHTML = `
+            <div class="sb-batch-top">
+                <div class="sb-batch-identity">
+                    <input type="checkbox" class="sb-batch-checkbox" data-batch-id="${batch.id}" ${sbSelectedBatchIds.has(batch.id) ? 'checked' : ''} ${['merged','split'].includes(batch.status) ? 'disabled' : ''}>
+                    <span class="sb-batch-number">${batch.batch_number}</span>
+                    <span class="sb-batch-status ${statusClass}">${statusLabel}</span>
+                </div>
+                <div class="sb-batch-actions-row">
+                    <button class="sb-mini-btn sb-mini-primary" onclick="openBatchDetail(${batch.id})" title="View details">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        View
+                    </button>
+                    <button class="sb-mini-btn" onclick="event.stopPropagation(); downloadBatchManifest(${batch.id})" title="Download manifest">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        CSV
+                    </button>
+                    <button class="sb-mini-btn" onclick="event.stopPropagation(); downloadBatchLabels(${batch.id})" title="Download labels">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="22" height="18" rx="2"/><line x1="1" y1="9" x2="23" y2="9"/></svg>
+                        Labels
+                    </button>
+                </div>
+            </div>
+            <div class="sb-batch-meta-row">
+                <span class="sb-meta-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    ${createdDate}
+                </span>
+                <span class="sb-meta-divider"></span>
+                <span class="sb-meta-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    ${batch.shipped_by || 'admin'}
+                </span>
+                <span class="sb-meta-divider"></span>
+                <span class="sb-meta-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/></svg>
+                    ${batch.carrier || 'unknown'}
+                </span>
+                <span class="sb-meta-divider"></span>
+                <span class="sb-meta-item">${total} orders</span>
+            </div>
+            <div class="sb-batch-progress-row">
+                <div class="sb-progress-track">
+                    <div class="sb-progress-fill ${fillClass}" style="width: ${pct}%;"></div>
+                </div>
+                <span class="sb-progress-count">${ok}/${total} ${fail > 0 ? `(${fail} failed)` : ''}</span>
+            </div>`;
+
+        // Checkbox selection handler
+        const checkbox = card.querySelector('.sb-batch-checkbox');
+        checkbox?.addEventListener('change', (e) => {
+            e.stopPropagation();
+            const id = parseInt(e.target.dataset.batchId);
+            if (e.target.checked) {
+                sbSelectedBatchIds.add(id);
+                card.classList.add('selected');
+            } else {
+                sbSelectedBatchIds.delete(id);
+                card.classList.remove('selected');
+            }
+            updateMergeBtnState();
+        });
+
+        // Click card to open detail (but not on checkbox or buttons)
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('.sb-mini-btn') || e.target.closest('.sb-batch-checkbox')) return;
+            openBatchDetail(batch.id);
+        });
+
+        fragment.appendChild(card);
+    }
+
+    container.innerHTML = '';
+    container.appendChild(fragment);
+}
+
+function updateMergeBtnState() {
+    const btn = document.getElementById('sbMergeBtn');
+    if (btn) btn.disabled = sbSelectedBatchIds.size < 2;
+}
+
+function updatePagination() {
+    const pag = document.getElementById('sbPagination');
+    const totalPages = Math.ceil(sbTotal / SB_PAGE_SIZE);
+    if (totalPages <= 1) {
+        pag.style.display = 'none';
+        return;
+    }
+    pag.style.display = 'flex';
+    document.getElementById('sbPageInfo').textContent = `Page ${sbPage + 1} of ${totalPages}`;
+    document.getElementById('sbPrevBtn').disabled = sbPage === 0;
+    document.getElementById('sbNextBtn').disabled = sbPage >= totalPages - 1;
+}
+
+async function openBatchDetail(batchId) {
+    currentBatchDetailId = batchId;
+    const modal = document.getElementById('batchDetailModal');
+    const titleEl = document.getElementById('bdTitle');
+    const metaEl = document.getElementById('bdMeta');
+    const listEl = document.getElementById('bdShipmentsList');
+
+    modal.style.display = 'flex';
+    titleEl.textContent = 'Loading...';
+    metaEl.textContent = '';
+    listEl.innerHTML = `<div class="sb-loading" style="padding:2rem;"><div class="spinner" style="width:30px;height:30px;border:3px solid rgba(255,255,255,0.1);border-top-color:#53bdeb;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:0.75rem;"></div><span>Loading batch details...</span></div>`;
+
+    try {
+        const data = await apiCall(`/shipping/batches/${batchId}`);
+        if (!data || !data.batch) throw new Error('Batch not found');
+
+        const batch = data.batch;
+        const createdDate = new Date(batch.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        titleEl.textContent = `${batch.batch_number}`;
+        metaEl.textContent = `${batch.carrier} | ${batch.shipped_by} | ${createdDate} | ${batch.successful_count || 0} successful, ${batch.failed_count || 0} failed`;
+
+        // Show/hide split button based on status
+        const splitBtn = document.getElementById('bdSplitBtn');
+        splitBtn.style.display = ['merged', 'split'].includes(batch.status) ? 'none' : 'inline-flex';
+
+        const shipments = batch.shipments || [];
+        if (shipments.length === 0) {
+            listEl.innerHTML = `<div class="sb-empty-state" style="padding:2rem;"><h4>No shipments in this batch</h4></div>`;
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        for (const s of shipments) {
+            const row = document.createElement('div');
+            row.className = 'sb-shipment-row';
+
+            const statusClass = s.status === 'awb_assigned' ? 'st-awb'
+                : ['in_transit', 'out_for_delivery', 'pickup_scheduled'].includes(s.status) ? 'st-transit'
+                : s.status === 'delivered' ? 'st-delivered'
+                : ['failed', 'cancelled'].includes(s.status) ? 'st-failed'
+                : 'st-default';
+
+            row.innerHTML = `
+                <span class="sb-shipment-order">${s.order_id}</span>
+                <span class="sb-shipment-awb">${s.awb || '—'}</span>
+                <span class="sb-shipment-customer">${s.customer_name || '—'}</span>
+                <span class="sb-shipment-status ${statusClass}">${s.status || 'unknown'}</span>
+                ${s.label_url ? `<a class="sb-shipment-label-link" href="${s.label_url}" target="_blank" rel="noopener">Label</a>` : '<span style="opacity:0.3;font-size:0.7rem;">No label</span>'}`;
+
+            fragment.appendChild(row);
+        }
+
+        listEl.innerHTML = '';
+        listEl.appendChild(fragment);
+    } catch (err) {
+        listEl.innerHTML = `<div class="sb-empty-state" style="padding:2rem;"><h4>Failed to load batch</h4><p>${err.message}</p></div>`;
+    }
+}
+
+function closeBatchDetail() {
+    document.getElementById('batchDetailModal').style.display = 'none';
+    currentBatchDetailId = null;
+}
+
+function downloadBatchManifest(batchId) {
+    if (!batchId) return;
+    // Open manifest CSV download in new tab
+    const token = localStorage.getItem('hubToken') || '';
+    const url = `/api/admin/shipping/batches/${batchId}/manifest`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.setAttribute('download', '');
+    // Use fetch with auth header for the download
+    fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
+        .then(res => {
+            if (!res.ok) throw new Error('Failed to download manifest');
+            return res.blob();
+        })
+        .then(blob => {
+            const blobUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            link.download = `batch_${batchId}_manifest.csv`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(blobUrl);
+        })
+        .catch(err => showShipToast(`Manifest download failed: ${err.message}`, true));
+}
+
+async function downloadBatchLabels(batchId) {
+    if (!batchId) return;
+    try {
+        const data = await apiCall(`/shipping/batches/${batchId}/labels`);
+        const labels = data?.data?.labels || [];
+        if (labels.length === 0) {
+            showShipToast('No labels available yet for this batch', true);
+            return;
+        }
+        // Open each label URL in a new tab (browser popup handling)
+        labels.forEach((l, i) => {
+            if (l.label_url) {
+                setTimeout(() => window.open(l.label_url, '_blank'), i * 200);
+            }
+        });
+        showShipToast(`Opening ${labels.length} label(s)...`);
+    } catch (err) {
+        showShipToast(`Failed to fetch labels: ${err.message}`, true);
+    }
+}
+
+async function mergeSelectedBatches() {
+    if (sbSelectedBatchIds.size < 2) return;
+    if (!confirm(`Merge ${sbSelectedBatchIds.size} batches into one? The original batches will be marked as merged.`)) return;
+
+    try {
+        const data = await apiCall('/shipping/batches/merge', 'POST', {
+            batchIds: Array.from(sbSelectedBatchIds)
+        });
+        if (data?.success) {
+            showShipToast(`Batches merged into ${data.mergedBatch?.batch_number || 'new batch'}`);
+            sbSelectedBatchIds.clear();
+            updateMergeBtnState();
+            fetchBatchesList();
+        } else {
+            showShipToast(data?.error || 'Merge failed', true);
+        }
+    } catch (err) {
+        showShipToast(`Merge failed: ${err.message}`, true);
+    }
+}
+
+function toggleSplitDialog(batchId) {
+    if (!batchId) return;
+    const listEl = document.getElementById('bdShipmentsList');
+    // Check if dialog already exists
+    const existing = listEl.querySelector('.sb-split-dialog');
+    if (existing) {
+        existing.remove();
+        return;
+    }
+
+    const dialog = document.createElement('div');
+    dialog.className = 'sb-split-dialog';
+    dialog.innerHTML = `
+        <label>Orders per sub-batch:</label>
+        <input type="number" id="sbSplitSize" value="10" min="1" max="500">
+        <button class="sb-action-btn sb-action-primary" id="sbSplitConfirm">Split</button>
+        <button class="sb-action-btn" id="sbSplitCancel">Cancel</button>`;
+
+    listEl.insertBefore(dialog, listEl.firstChild);
+
+    dialog.querySelector('#sbSplitCancel').addEventListener('click', () => dialog.remove());
+    dialog.querySelector('#sbSplitConfirm').addEventListener('click', async () => {
+        const size = parseInt(dialog.querySelector('#sbSplitSize').value) || 10;
+        if (size < 1) return showShipToast('Split size must be at least 1', true);
+        if (!confirm(`Split this batch into sub-batches of ${size} orders each?`)) return;
+
+        try {
+            const data = await apiCall(`/shipping/batches/${batchId}/split`, 'POST', { splitSize: size });
+            if (data?.success) {
+                showShipToast(`Batch split into ${data.subBatches?.length || 0} sub-batches`);
+                closeBatchDetail();
+                fetchBatchesList();
+            } else {
+                showShipToast(data?.error || 'Split failed', true);
+            }
+        } catch (err) {
+            showShipToast(`Split failed: ${err.message}`, true);
+        }
+    });
+}
+
+// Expose for inline onclick handlers
+window.openShippingBatches = openShippingBatches;
+window.closeShippingBatches = closeShippingBatches;
+window.openBatchDetail = openBatchDetail;
+window.closeBatchDetail = closeBatchDetail;
+window.downloadBatchManifest = downloadBatchManifest;
+window.downloadBatchLabels = downloadBatchLabels;
+window.mergeSelectedBatches = mergeSelectedBatches;
+window.toggleSplitDialog = toggleSplitDialog;
+
 (function initHubSidebar() {
     const sidebar = document.getElementById('hubSidebar');
     if (!sidebar) return;

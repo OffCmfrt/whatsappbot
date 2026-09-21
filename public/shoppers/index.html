@@ -6,7 +6,7 @@
     <title>Shopper Management | OFFCOMFRT</title>
     <!-- Google Fonts: Outfit, Inter, Archivo Narrow -->
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Inter:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1789100001">
+        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?v=1789200001">
 </head>
 <body class="dark-theme">
     <!-- Login View -->
@@ -1032,6 +1032,12 @@
                 </div>
             </div>
             <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <button id="soBatchesBtn" class="btn btn-batches" title="View shipping batches">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <rect x="1" y="3" width="22" height="18" rx="2"/><line x1="1" y1="9" x2="23" y2="9"/><line x1="1" y1="15" x2="23" y2="15"/><line x1="8" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="16" y2="21"/>
+                    </svg>
+                    Batches
+                </button>
                 <button id="soNewShipBtn" class="btn btn-primary" title="Create a forward shipment for any order by its Order ID">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
                         <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -1170,6 +1176,108 @@
                 <button class="so-page-btn" id="soPrevBtn">&larr; Prev</button>
                 <span class="so-page-info" id="soPageInfo">Page 1</span>
                 <button class="so-page-btn" id="soNextBtn">Next &rarr;</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         SHIPPING BATCHES VIEW — Premium batch management overlay
+         ═══════════════════════════════════════════════════════════════════ -->
+    <div id="shippingBatchesView" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2600; overflow-y: auto;">
+        <!-- Header -->
+        <div class="sb-header">
+            <div class="sb-header-left">
+                <button id="backToShippedFromBatches" class="btn btn-outline" style="border-color: rgba(255,255,255,0.15);">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                    Back
+                </button>
+                <div>
+                    <h2 class="sb-title">Shipping Batches</h2>
+                    <p class="sb-subtitle">Manage bulk shipment batches, download manifests &amp; labels</p>
+                </div>
+            </div>
+            <div class="sb-header-actions">
+                <button id="sbMergeBtn" class="sb-action-btn" title="Merge selected batches" disabled>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6H2v16h20V6h-6"/><path d="M12 2v20"/></svg>
+                    Merge
+                </button>
+                <button id="sbRefreshBtn" class="btn btn-primary" style="background: linear-gradient(135deg, #53bdeb, #3a8fd4);">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                        <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                    </svg>
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="sb-stats-bar" id="sbStatsBar">
+            <div class="sb-stat-card">
+                <span class="sb-stat-value" id="sbStatBatches">0</span>
+                <span class="sb-stat-label">Total Batches</span>
+            </div>
+            <div class="sb-stat-card">
+                <span class="sb-stat-value" id="sbStatOrders">0</span>
+                <span class="sb-stat-label">Orders Shipped</span>
+            </div>
+            <div class="sb-stat-card">
+                <span class="sb-stat-value sb-stat-success" id="sbStatSuccessful">0</span>
+                <span class="sb-stat-label">Successful</span>
+            </div>
+            <div class="sb-stat-card">
+                <span class="sb-stat-value sb-stat-fail" id="sbStatFailed">0</span>
+                <span class="sb-stat-label">Failed</span>
+            </div>
+            <div class="sb-stat-card">
+                <span class="sb-stat-value" id="sbStatRate" style="color: #2ed573;">0%</span>
+                <span class="sb-stat-label">Success Rate</span>
+            </div>
+        </div>
+
+        <!-- Batch List Container -->
+        <div class="sb-list-container" id="sbListContainer">
+            <div class="sb-loading">
+                <div class="spinner" style="width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #53bdeb; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 1rem;"></div>
+                <span>Loading batches...</span>
+            </div>
+        </div>
+
+        <!-- Pagination -->
+        <div class="sb-pagination" id="sbPagination" style="display: none;">
+            <button class="so-page-btn" id="sbPrevBtn">&larr; Prev</button>
+            <span class="so-page-info" id="sbPageInfo">Page 1</span>
+            <button class="so-page-btn" id="sbNextBtn">Next &rarr;</button>
+        </div>
+    </div>
+
+    <!-- Batch Detail Modal -->
+    <div id="batchDetailModal" class="sb-detail-overlay" style="display: none;">
+        <div class="sb-detail-panel">
+            <div class="sb-detail-header">
+                <div>
+                    <h3 class="sb-detail-title" id="bdTitle">Batch Details</h3>
+                    <p class="sb-detail-meta" id="bdMeta"></p>
+                </div>
+                <div class="sb-detail-actions">
+                    <button id="bdSplitBtn" class="sb-action-btn" title="Split batch into sub-batches">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8"/><path d="M3 12l9-9 9 9"/></svg>
+                        Split
+                    </button>
+                    <button id="bdManifestBtn" class="sb-action-btn sb-action-primary" title="Download manifest CSV">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Manifest
+                    </button>
+                    <button id="bdLabelsBtn" class="sb-action-btn sb-action-primary" title="Download all labels">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="22" height="18" rx="2"/><line x1="1" y1="9" x2="23" y2="9"/></svg>
+                        Labels
+                    </button>
+                    <button id="bdCloseBtn" class="sb-detail-close">&times;</button>
+                </div>
+            </div>
+            <div class="sb-detail-body" id="bdShipmentsList">
+                <!-- Shipment rows rendered here -->
             </div>
         </div>
     </div>
@@ -1672,7 +1780,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/shoppers/assets/shoppers-app.js?v=1789100001"></script>
+    <script src="/shoppers/assets/shoppers-app.js?v=1789200001"></script>
     <script src="/shoppers/assets/shoppers-inventory-tower.js?v=1788900001"></script>
     <script src="/shoppers/assets/shoppers-stock-room.js?v=1789010000"></script>
     <script src="/shoppers/assets/shoppers-ai-copilot-pro.js?v=1788900000"></script>

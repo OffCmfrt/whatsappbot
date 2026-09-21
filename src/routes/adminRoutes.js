@@ -5365,7 +5365,7 @@ router.post('/shipping/serviceability', verifyToken, async (req, res) => {
 // it replaces (audit trail + replacement-worded WhatsApp notification).
 router.post('/shipping/ship', verifyToken, requirePermission('ship_orders'), async (req, res) => {
     try {
-        const { shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer, reshipOfShipmentId, reshipReason } = req.body;
+        const { shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer, reshipOfShipmentId, reshipReason, batchId } = req.body;
         if (!shopperId || !carrier) return res.status(400).json({ success: false, error: 'shopperId and carrier are required' });
         logOperatorActivity(req, 'ship_order', `Shipped shopper ${shopperId} via ${carrier}`);
 
@@ -5378,7 +5378,8 @@ router.post('/shipping/ship', verifyToken, requirePermission('ship_orders'), asy
             notifyCustomer: Boolean(notifyCustomer),
             shippedBy: req.admin?.username || 'admin',
             reshipOfShipmentId: reshipOfShipmentId ? parseInt(reshipOfShipmentId) : null,
-            reshipReason: reshipReason ? String(reshipReason).substring(0, 300) : null
+            reshipReason: reshipReason ? String(reshipReason).substring(0, 300) : null,
+            batchId: batchId ? parseInt(batchId) : null
         });
         if (result.error) {
             return res.status(result.status || 500).json({ success: false, error: result.error, status: result.status || 500, shipment: result.shipment || null });
@@ -5600,6 +5601,221 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Shipping history error:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch shipping history' });
+    }
+});
+
+// ─── SHIPMENT BATCHES ────────────────────────────────────────────────
+// Batch CRUD, manifest/label downloads, merge & split operations
+
+// Create a new batch (called at bulk-ship start)
+router.post('/shipping/batches', verifyToken, requirePermission('ship_orders'), async (req, res) => {
+    try {
+        const { carrier, totalOrders, packageDefaults } = req.body;
+        if (!carrier) return res.status(400).json({ success: false, error: 'carrier is required' });
+
+        const batch = await shippingService.createBatch({
+            shippedBy: req.admin?.username || 'admin',
+            carrier,
+            totalOrders: parseInt(totalOrders) || 0,
+            packageDefaults
+        });
+
+        logOperatorActivity(req, 'create_batch', `Created batch ${batch.batch_number} with ${totalOrders || 0} orders`);
+        res.json({ success: true, batch });
+    } catch (error) {
+        console.error('Create batch error:', error);
+        res.status(500).json({ success: false, error: 'Failed to create batch' });
+    }
+});
+
+// Update batch counts/status (called during/after bulk-ship)
+router.patch('/shipping/batches/:id', verifyToken, requirePermission('ship_orders'), async (req, res) => {
+    try {
+        const { successfulCount, failedCount, status } = req.body;
+        await shippingService.updateBatch(req.params.id, { successfulCount, failedCount, status });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Update batch error:', error);
+        res.status(500).json({ success: false, error: 'Failed to update batch' });
+    }
+});
+
+// List all batches (paginated, with stats)
+router.get('/shipping/batches', verifyToken, async (req, res) => {
+    try {
+        const { limit = 25, offset = 0 } = req.query;
+        const result = await shippingService.listBatches({ limit, offset });
+        res.json({ success: true, ...result });
+    } catch (error) {
+        console.error('List batches error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch batches' });
+    }
+});
+
+// Get batch detail with all its shipments
+router.get('/shipping/batches/:id', verifyToken, async (req, res) => {
+    try {
+        const batch = await shippingService.getBatch(req.params.id);
+        if (!batch) return res.status(404).json({ success: false, error: 'Batch not found' });
+        res.json({ success: true, batch });
+    } catch (error) {
+        console.error('Get batch error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch batch' });
+    }
+});
+
+// Download batch manifest as CSV
+router.get('/shipping/batches/:id/manifest', verifyToken, async (req, res) => {
+    try {
+        const result = await shippingService.generateBatchManifest(req.params.id);
+        if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+
+        const { batchNumber, csv, shipmentCount } = result.data;
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="${batchNumber}_manifest_${shipmentCount}_orders.csv"`);
+        res.send(csv);
+    } catch (error) {
+        console.error('Batch manifest error:', error);
+        res.status(500).json({ success: false, error: 'Failed to generate manifest' });
+    }
+});
+
+// Get all label URLs for a batch
+router.get('/shipping/batches/:id/labels', verifyToken, async (req, res) => {
+    try {
+        const result = await shippingService.getBatchLabels(req.params.id);
+        res.json(result);
+    } catch (error) {
+        console.error('Batch labels error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch labels' });
+    }
+});
+
+// Merge multiple batches into one
+router.post('/shipping/batches/merge', verifyToken, requirePermission('ship_orders'), async (req, res) => {
+    try {
+        const { batchIds } = req.body;
+        if (!Array.isArray(batchIds) || batchIds.length < 2) {
+            return res.status(400).json({ success: false, error: 'At least 2 batch IDs required' });
+        }
+
+        const { dbAdapter } = require('../database/db');
+
+        // Fetch all batches to merge
+        const batches = await dbAdapter.query(
+            `SELECT * FROM shipment_batches WHERE id = ANY(?) ORDER BY id ASC`,
+            [batchIds.map(Number)]
+        );
+
+        if (batches.length !== batchIds.length) {
+            return res.status(404).json({ success: false, error: 'One or more batches not found' });
+        }
+
+        // Create merged batch
+        const totalOrders = batches.reduce((sum, b) => sum + (b.total_orders || 0), 0);
+        const successfulCount = batches.reduce((sum, b) => sum + (b.successful_count || 0), 0);
+        const failedCount = batches.reduce((sum, b) => sum + (b.failed_count || 0), 0);
+        const carrier = batches[0].carrier; // Use first batch's carrier
+        const mergedNumber = `BATCH-MRG-${Date.now().toString(36).toUpperCase()}`;
+
+        const newBatch = await dbAdapter.query(`
+            INSERT INTO shipment_batches (batch_number, shipped_by, carrier, total_orders, successful_count, failed_count, status, package_defaults, notes, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, CURRENT_TIMESTAMP)
+            RETURNING id, batch_number
+        `, [
+            mergedNumber,
+            req.admin?.username || 'admin',
+            carrier,
+            totalOrders,
+            successfulCount,
+            failedCount,
+            JSON.stringify(batches[0].package_defaults || {}),
+            `Merged from: ${batches.map(b => b.batch_number).join(', ')}`
+        ]);
+
+        // Move all shipments to the new batch
+        await dbAdapter.query(
+            `UPDATE shipments SET batch_id = ? WHERE batch_id = ANY(?)`,
+            [newBatch[0].id, batchIds.map(Number)]
+        );
+
+        // Mark old batches as merged (soft delete)
+        await dbAdapter.query(
+            `UPDATE shipment_batches SET status = 'merged', completed_at = CURRENT_TIMESTAMP, notes = COALESCE(notes, '') || ' | Merged into ${mergedNumber}' WHERE id = ANY(?)`,
+            [batchIds.map(Number)]
+        );
+
+        logOperatorActivity(req, 'merge_batches', `Merged ${batchIds.length} batches into ${mergedNumber}`);
+        res.json({ success: true, mergedBatch: newBatch[0] });
+    } catch (error) {
+        console.error('Merge batches error:', error);
+        res.status(500).json({ success: false, error: 'Failed to merge batches' });
+    }
+});
+
+// Split a batch into smaller sub-batches
+router.post('/shipping/batches/:id/split', verifyToken, requirePermission('ship_orders'), async (req, res) => {
+    try {
+        const { splitSize } = req.body;
+        const batchSize = parseInt(splitSize) || 10;
+        if (batchSize < 1) return res.status(400).json({ success: false, error: 'splitSize must be at least 1' });
+
+        const { dbAdapter } = require('../database/db');
+
+        // Fetch the batch
+        const batches = await dbAdapter.query('SELECT * FROM shipment_batches WHERE id = ? LIMIT 1', [req.params.id]);
+        if (!batches[0]) return res.status(404).json({ success: false, error: 'Batch not found' });
+        const originalBatch = batches[0];
+
+        // Fetch all shipments in the batch
+        const shipments = await dbAdapter.query(
+            'SELECT id FROM shipments WHERE batch_id = ? ORDER BY id ASC',
+            [req.params.id]
+        );
+
+        if (shipments.length === 0) {
+            return res.status(400).json({ success: false, error: 'Batch has no shipments to split' });
+        }
+
+        // Create sub-batches
+        const subBatches = [];
+        for (let i = 0; i < shipments.length; i += batchSize) {
+            const chunk = shipments.slice(i, i + batchSize);
+            const subNumber = `BATCH-SPL-${Date.now().toString(36).toUpperCase()}-${subBatches.length + 1}`;
+
+            const newBatch = await dbAdapter.query(`
+                INSERT INTO shipment_batches (batch_number, shipped_by, carrier, total_orders, status, package_defaults, notes)
+                VALUES (?, ?, ?, ?, 'processing', ?, ?)
+                RETURNING id, batch_number
+            `, [
+                subNumber,
+                originalBatch.shipped_by,
+                originalBatch.carrier,
+                chunk.length,
+                JSON.stringify(originalBatch.package_defaults || {}),
+                `Split from: ${originalBatch.batch_number}`
+            ]);
+
+            // Move shipments to the new sub-batch
+            await dbAdapter.query(
+                'UPDATE shipments SET batch_id = ? WHERE id = ANY(?)',
+                [newBatch[0].id, chunk.map(s => s.id)]
+            );
+
+            subBatches.push({ ...newBatch[0], orderCount: chunk.length });
+        }
+
+        // Mark original batch as split
+        await dbAdapter.query(
+            `UPDATE shipment_batches SET status = 'split', completed_at = CURRENT_TIMESTAMP, notes = COALESCE(notes, '') || ' | Split into ${subBatches.length} sub-batches' WHERE id = ?`,
+            [req.params.id]
+        );
+
+        logOperatorActivity(req, 'split_batch', `Split batch ${originalBatch.batch_number} into ${subBatches.length} sub-batches`);
+        res.json({ success: true, subBatches });
+    } catch (error) {
+        console.error('Split batch error:', error);
+        res.status(500).json({ success: false, error: 'Failed to split batch' });
     }
 });
 

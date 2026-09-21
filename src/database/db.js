@@ -239,6 +239,9 @@ async function initializeDatabase() {
     
     // Initialize Shipments Table (Shopper Hub shipping module)
     await initializeShipmentsTable();
+
+    // Initialize Shipment Batches Table (bulk-ship batch tracking)
+    await initializeShipmentBatchesTable();
     
     // Initialize Hub Operators Table (smart login: operator accounts + permissions)
     await initializeHubOperatorsTable();
@@ -633,6 +636,40 @@ async function initializeShipmentsTable() {
     console.log('✅ Shipments table initialized');
   } catch (error) {
     console.error('❌ Failed to initialize shipments table:', error.message);
+  }
+}
+
+async function initializeShipmentBatchesTable() {
+  try {
+    // Batch records group bulk-ship operations: one batch = one "Ship Selected" run
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS shipment_batches (
+        id SERIAL PRIMARY KEY,
+        batch_number VARCHAR(50) UNIQUE NOT NULL,
+        shipped_by VARCHAR(100) NOT NULL,
+        carrier VARCHAR(50) NOT NULL,
+        total_orders INTEGER DEFAULT 0,
+        successful_count INTEGER DEFAULT 0,
+        failed_count INTEGER DEFAULT 0,
+        status VARCHAR(20) DEFAULT 'processing',
+        package_defaults JSONB,
+        manifest_url TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP
+      )
+    `);
+
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_batches_created_at ON shipment_batches(created_at DESC)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_batches_shipped_by ON shipment_batches(shipped_by)');
+
+    // Link shipments to their batch (nullable — single shipments have no batch)
+    await pool.query('ALTER TABLE shipments ADD COLUMN IF NOT EXISTS batch_id INTEGER');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_batch_id ON shipments(batch_id)');
+
+    console.log('✅ Shipment batches table initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize shipment batches table:', error.message);
   }
 }
 

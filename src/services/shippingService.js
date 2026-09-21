@@ -163,7 +163,7 @@ async function checkServiceability({ shopperId, carrier, packageOverrides, consi
 // Re-ship: pass reshipOfShipmentId (+ optional reshipReason) to link the new
 // shipment to the one it replaces — persisted for audit and used to word the
 // customer WhatsApp notification as a replacement shipment.
-async function ship({ shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer, shippedBy, reshipOfShipmentId, reshipReason }) {
+async function ship({ shopperId, carrier, courierId, packageOverrides, consigneeOverrides, notifyCustomer, shippedBy, reshipOfShipmentId, reshipReason, batchId }) {
     const adapter = getAdapter(carrier);
     if (!adapter) return { error: `Carrier '${carrier}' is not configured`, status: 400 };
 
@@ -223,7 +223,8 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
                 error_message: result.error,
                 shipped_by: shippedBy || 'admin',
                 reship_of_shipment_id: reshipOf ? reshipOf.id : null,
-                reship_reason: reshipReason || null
+                reship_reason: reshipReason || null,
+                batch_id: batchId || null
             });
         } catch (auditError) {
             console.error('⚠️ Failed to persist failed-shipment audit row:', auditError.message);
@@ -255,7 +256,8 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
             response_payload: result.raw ? JSON.stringify(result.raw) : null,
             shipped_by: shippedBy || 'admin',
             reship_of_shipment_id: reshipOf ? reshipOf.id : null,
-            reship_reason: reshipReason || null
+            reship_reason: reshipReason || null,
+            batch_id: batchId || null
         });
     } catch (dbError) {
         // Unique-index race: another request shipped this order between our check and insert
@@ -535,6 +537,152 @@ async function trackShipment(shipmentId) {
     return { data: { ...result.data, awb: shipment.awb, courierName: shipment.courier_name, carrier: shipment.carrier } };
 }
 
+// ─── Shipment Batches ────────────────────────────────────────────────
+// Group bulk-ship runs into a single batch record for manifest/label download
+// and operator audit trail.
+
+async function createBatch({ shippedBy, carrier, totalOrders, packageDefaults }) {
+    // Generate a human-friendly batch number: BATCH-0001, BATCH-0002, ...
+    const countRows = await dbAdapter.query('SELECT COUNT(*)::int AS c FROM shipment_batches');
+    const nextNum = (countRows[0]?.c || 0) + 1;
+    const batchNumber = `BATCH-${String(nextNum).padStart(4, '0')}`;
+
+    const rows = await dbAdapter.query(`
+        INSERT INTO shipment_batches (batch_number, shipped_by, carrier, total_orders, package_defaults, status)
+        VALUES (?, ?, ?, ?, ?, 'processing')
+        RETURNING id, batch_number, created_at
+    `, [batchNumber, shippedBy || 'admin', carrier, totalOrders || 0, JSON.stringify(packageDefaults || {})]);
+
+    return rows[0];
+}
+
+async function updateBatch(batchId, { successfulCount, failedCount, status }) {
+    const updates = { updated_at: new Date().toISOString() };
+    if (successfulCount !== undefined) updates.successful_count = successfulCount;
+    if (failedCount !== undefined) updates.failed_count = failedCount;
+    if (status) updates.status = status;
+    if (status && status !== 'processing') updates.completed_at = new Date().toISOString();
+
+    await dbAdapter.query(`
+        UPDATE shipment_batches
+        SET successful_count = COALESCE(?, successful_count),
+            failed_count = COALESCE(?, failed_count),
+            status = COALESCE(?, status),
+            completed_at = CASE WHEN ? IS NOT NULL AND ? != 'processing' THEN CURRENT_TIMESTAMP ELSE completed_at END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    `, [successfulCount ?? null, failedCount ?? null, status || null, status || null, status || null, batchId]);
+}
+
+async function getBatch(batchId) {
+    const batches = await dbAdapter.query('SELECT * FROM shipment_batches WHERE id = ? LIMIT 1', [batchId]);
+    if (!batches[0]) return null;
+
+    const shipments = await dbAdapter.query(`
+        SELECT s.*,
+               COALESCE(ss.name, '') AS customer_name,
+               COALESCE(ss.phone, '') AS customer_phone,
+               COALESCE(ss.address, '') AS customer_address,
+               COALESCE(ss.city, '') AS customer_city,
+               COALESCE(ss.province, '') AS customer_state,
+               COALESCE(ss.zip, '') AS customer_pincode,
+               COALESCE(ss.order_total, 0) AS order_total
+        FROM shipments s
+        LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
+        WHERE s.batch_id = ?
+        ORDER BY s.id ASC
+    `, [batchId]);
+
+    return { ...batches[0], shipments };
+}
+
+async function listBatches({ limit = 25, offset = 0 } = {}) {
+    const safeLimit = Math.min(parseInt(limit) || 25, 100);
+    const safeOffset = Math.max(0, parseInt(offset) || 0);
+
+    const [rows, countRows, statsRows] = await Promise.all([
+        dbAdapter.query(`
+            SELECT * FROM shipment_batches
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        `, [safeLimit, safeOffset]),
+        dbAdapter.query('SELECT COUNT(*)::int AS total FROM shipment_batches'),
+        dbAdapter.query(`
+            SELECT COUNT(*)::int AS total_batches,
+                   COALESCE(SUM(total_orders), 0)::int AS total_orders_shipped,
+                   COALESCE(SUM(successful_count), 0)::int AS total_successful,
+                   COALESCE(SUM(failed_count), 0)::int AS total_failed
+            FROM shipment_batches
+        `)
+    ]);
+
+    return {
+        batches: rows,
+        total: countRows[0]?.total || 0,
+        stats: statsRows[0] || {}
+    };
+}
+
+async function generateBatchManifest(batchId) {
+    const batch = await dbAdapter.query('SELECT * FROM shipment_batches WHERE id = ? LIMIT 1', [batchId]);
+    if (!batch[0]) return { error: 'Batch not found', status: 404 };
+
+    const shipments = await dbAdapter.query(`
+        SELECT s.order_id, s.awb, s.courier_name, s.status, s.freight_charge,
+               s.payment_mode, s.cod_amount, s.weight_grams,
+               COALESCE(ss.name, '') AS customer_name,
+               COALESCE(ss.phone, '') AS customer_phone,
+               COALESCE(ss.address, '') AS customer_address,
+               COALESCE(ss.city, '') AS customer_city,
+               COALESCE(ss.province, '') AS customer_state,
+               COALESCE(ss.zip, '') AS customer_pincode,
+               COALESCE(ss.order_total, 0) AS order_total
+        FROM shipments s
+        LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
+        WHERE s.batch_id = ? AND s.status NOT IN ('failed')
+        ORDER BY s.id ASC
+    `, [batchId]);
+
+    // Build CSV
+    const headers = ['Order ID', 'AWB', 'Courier', 'Status', 'Customer Name', 'Phone', 'Address', 'City', 'State', 'Pincode', 'Payment', 'COD Amount', 'Order Total', 'Freight', 'Weight (g)'];
+    const csvRows = [headers.join(',')];
+    for (const s of shipments) {
+        csvRows.push([
+            s.order_id, s.awb || '', s.courier_name || '', s.status || '',
+            `"${(s.customer_name || '').replace(/"/g, '""')}"`,
+            s.customer_phone || '',
+            `"${(s.customer_address || '').replace(/"/g, '""')}"`,
+            `"${(s.customer_city || '').replace(/"/g, '""')}"`,
+            `"${(s.customer_state || '').replace(/"/g, '""')}"`,
+            s.customer_pincode || '',
+            s.payment_mode || '',
+            s.cod_amount || 0,
+            s.order_total || 0,
+            s.freight_charge || 0,
+            s.weight_grams || 0
+        ].join(','));
+    }
+
+    return {
+        data: {
+            batchNumber: batch[0].batch_number,
+            csv: csvRows.join('\n'),
+            shipmentCount: shipments.length
+        }
+    };
+}
+
+async function getBatchLabels(batchId) {
+    const shipments = await dbAdapter.query(`
+        SELECT id, order_id, awb, label_url, courier_name
+        FROM shipments
+        WHERE batch_id = ? AND label_url IS NOT NULL AND status NOT IN ('failed', 'cancelled')
+        ORDER BY id ASC
+    `, [batchId]);
+
+    return { data: { labels: shipments } };
+}
+
 module.exports = {
     getConfiguredCarriers,
     buildShipmentContext,
@@ -547,5 +695,11 @@ module.exports = {
     generateDocument,
     cancelShipment,
     cancelActiveShipmentForOrder,
-    trackShipment
+    trackShipment,
+    createBatch,
+    updateBatch,
+    getBatch,
+    listBatches,
+    generateBatchManifest,
+    getBatchLabels
 };
