@@ -22,6 +22,7 @@
 
 const instagramService = require('../services/instagramService');
 const smartEngine = require('../services/igSmartEngine');
+const shiprocketService = require('../services/shiprocketService');
 const { dbAdapter } = require('../database/db');
 
 const STATES = smartEngine.STATES;
@@ -230,11 +231,19 @@ class IGBotEngine {
     async _handleStateful(igUserId, message, state, context, result) {
         switch (state) {
 
-            // ── Awaiting order ID for tracking ──
+            // ── Awaiting order ID for tracking or product issue ──
             case STATES.COLLECTING_ORDER_ID:
                 if (result.intent === 'provide_order_id') {
                     await instagramService.setBotState(igUserId, STATES.IDLE, context);
                     const id = result.entities.orderId || result.entities.awb || result.entities.bareNumber;
+
+                    // Check if this is a product issue flow
+                    if (context.flow === 'product_issue') {
+                        await this._handleProductIssueWithOrder(igUserId, id || message, context);
+                        return true;
+                    }
+
+                    // Normal tracking flow
                     await this._handleOrderTracking(igUserId, id || message);
                     return true;
                 }
@@ -274,12 +283,38 @@ class IGBotEngine {
                 }
                 if (message.length >= 3) {
                     await instagramService.setBotState(igUserId, STATES.IDLE, context);
+
+                    // Try FAQ match first before creating ticket
+                    const faqResolved = await this._tryFAQMatch(message, igUserId);
+                    if (faqResolved) {
+                        // FAQ answered - ask if they need more help
+                        await instagramService.sendMessage(
+                            igUserId,
+                            `Does this help? If you still need assistance, just let me know.`
+                        );
+                        return true;
+                    }
+
+                    // For product issue resolution flow - provide guidance
+                    if (context.flow === 'product_issue_resolution' && context.issueType) {
+                        const guidance = this._getProductIssueGuidance(context.issueType);
+                        if (guidance) {
+                            await instagramService.sendMessage(igUserId, guidance);
+                            await instagramService.sendMessage(
+                                igUserId,
+                                `If this doesn't resolve your issue, type "support" and I'll connect you with our team.`
+                            );
+                            return true;
+                        }
+                    }
+
+                    // Unable to resolve - create ticket
                     await this._createSupportTicket(igUserId, message, context);
                     return true;
                 }
                 await instagramService.sendMessage(
                     igUserId,
-                    'Please describe your issue in a few words so our team can help you.'
+                    'Please describe your issue in a few words so I can help you.'
                 );
                 return true;
 
@@ -431,41 +466,217 @@ You can also find it in your order confirmation email.`
         // Reset state
         await instagramService.setBotState(igUserId, STATES.IDLE);
 
-        // Look up the order in the database
-        const orders = await dbAdapter.query(
-            `SELECT * FROM orders
-             WHERE order_id ILIKE ? OR awb ILIKE ?
-             ORDER BY created_at DESC LIMIT 1`,
-            [`%${orderId}%`, `%${orderId}%`]
-        );
-
-        if (!orders || orders.length === 0) {
-            await instagramService.sendMessage(
-                igUserId,
-                `Order not found.
-
-Please check the Order ID and try again.
-
-You can also type "support" to talk to our team.`
-            );
+        const cleanOrderId = (orderId || '').toString().trim();
+        if (!cleanOrderId) {
+            await this._askForOrderId(igUserId, 'tracking');
             return;
         }
 
-        const order = orders[0];
+        // ── 1. Try local DB first ──────────────────────────────────
+        let order = null;
+        try {
+            const orders = await dbAdapter.query(
+                `SELECT * FROM orders
+                 WHERE order_id ILIKE ? OR awb ILIKE ?
+                 ORDER BY created_at DESC LIMIT 1`,
+                [`%${cleanOrderId}%`, `%${cleanOrderId}%`]
+            );
+            order = orders?.[0] || null;
+        } catch (e) {
+            console.error('[IG BOT] Local order lookup error:', e.message);
+        }
+
+        // ── 2. If local DB found it, show complete status ──────────
+        if (order) {
+            await this._sendCompleteOrderStatus(igUserId, order);
+            return;
+        }
+
+        // ── 3. Local DB miss → try Shiprocket API (same as WhatsApp) ──
+        try {
+            const srOrder = await shiprocketService.getOrderStatus(cleanOrderId);
+            if (srOrder) {
+                await this._sendShiprocketOrderStatus(igUserId, srOrder);
+                // Also save to local DB for future fast lookups
+                await this._saveOrderToDB(srOrder);
+                return;
+            }
+        } catch (e) {
+            console.error('[IG BOT] Shiprocket order lookup error:', e.message);
+        }
+
+        // ── 4. Nothing found → allow retry, no auto-ticket ─────────
+        await instagramService.sendMessage(
+            igUserId,
+            `I couldn't find an order with that ID or AWB.
+
+Please check the Order ID and try again.
+
+You can find it in your order confirmation email.`
+        );
+    }
+
+    /**
+     * Send complete order status from local DB data.
+     * Shows all available fields (up to 12).
+     */
+    async _sendCompleteOrderStatus(igUserId, order) {
         const statusLabel = this._getStatusText(order.status);
 
-        const trackingMsg = `ORDER STATUS
+        let msg = `ORDER STATUS
 
-Order: ${order.order_id}
-  Status: ${order.status || 'Processing'}${statusLabel ? ` (${statusLabel})` : ''}
-${order.awb ? `  AWB: ${order.awb}` : ''}
-${order.courier_name ? `  Courier: ${order.courier_name}` : ''}
-${order.expected_delivery ? `  Expected: ${new Date(order.expected_delivery).toLocaleDateString('en-IN')}` : ''}
-${order.tracking_url ? `  Track: ${order.tracking_url}` : ''}
+Order: ${order.order_id}`;
 
-Need help? Type "support" to contact us.`;
+        // Product info
+        if (order.product_name) {
+            msg += `\nItem: ${order.product_name}`;
+        }
+        if (order.total) {
+            msg += `\nOrder total: Rs.${parseFloat(order.total).toLocaleString('en-IN')}`;
+        }
+        if (order.payment_method) {
+            msg += `\nPayment: ${order.payment_method}`;
+        }
+        if (order.created_at) {
+            msg += `\nOrder date: ${new Date(order.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+        }
 
-        await instagramService.sendMessage(igUserId, trackingMsg);
+        // Shipment info
+        msg += `\nStatus: ${statusLabel || order.status || 'Processing'}`;
+        if (order.courier_name) {
+            msg += `\nCourier: ${order.courier_name}`;
+        }
+        if (order.awb) {
+            msg += `\nAWB: ${order.awb}`;
+        }
+
+        // Try live tracking from Shiprocket if AWB exists
+        if (order.awb) {
+            try {
+                const trackingData = await shiprocketService.getTrackingByAWB(order.awb);
+                if (trackingData?.tracking_data) {
+                    const trackInfo = trackingData.tracking_data.shipment_track?.[0] || trackingData.tracking_data;
+                    if (trackInfo.current_status) {
+                        msg += `\nTracking status: ${trackInfo.current_status}`;
+                    }
+                    if (trackInfo.current_location) {
+                        msg += `\nCurrent location: ${trackInfo.current_location}`;
+                    }
+                    // Latest tracking event
+                    const activities = trackingData.tracking_data.shipment_track_activities;
+                    if (activities && activities.length > 0) {
+                        const latest = activities[0];
+                        msg += `\nLatest update: ${latest.activity}`;
+                        if (latest.date) msg += ` (${latest.date})`;
+                    }
+                    if (trackInfo.edd) {
+                        msg += `\nEstimated delivery: ${trackInfo.edd}`;
+                    }
+                }
+            } catch (e) {
+                // Best-effort — local data is already shown
+                console.error('[IG BOT] Live tracking fetch error:', e.message);
+            }
+        } else if (order.expected_delivery) {
+            msg += `\nEstimated delivery: ${new Date(order.expected_delivery).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+        }
+
+        if (order.tracking_url) {
+            msg += `\nTrack: ${order.tracking_url}`;
+        }
+
+        msg += `\n\nNeed help? Just tell me what's wrong with this order.`;
+
+        await instagramService.sendMessage(igUserId, msg);
+    }
+
+    /**
+     * Send order status from Shiprocket API response.
+     * Formats the Shiprocket data into customer-friendly message.
+     */
+    async _sendShiprocketOrderStatus(igUserId, srOrder) {
+        const productName = srOrder.products?.[0]?.name || 'Item';
+        const productCount = srOrder.products?.length || 1;
+        const otherItems = productCount > 1 ? ` +${productCount - 1} others` : '';
+        const statusLabel = (srOrder.status || 'Processing').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+        let msg = `ORDER STATUS
+
+Order: ${srOrder.channelOrderId || srOrder.orderId}
+Item: ${productName}${otherItems}`;
+
+        if (srOrder.total) {
+            msg += `\nOrder total: Rs.${parseFloat(srOrder.total).toLocaleString('en-IN')}`;
+        }
+        if (srOrder.paymentMethod) {
+            msg += `\nPayment: ${srOrder.paymentMethod}`;
+        }
+        if (srOrder.orderDate) {
+            msg += `\nOrder date: ${new Date(srOrder.orderDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+        }
+
+        msg += `\nStatus: ${statusLabel}`;
+        if (srOrder.courierName) msg += `\nCourier: ${srOrder.courierName}`;
+        if (srOrder.awb) msg += `\nAWB: ${srOrder.awb}`;
+
+        // Try live tracking if AWB exists
+        if (srOrder.awb) {
+            try {
+                const trackingData = await shiprocketService.getTrackingByAWB(srOrder.awb);
+                if (trackingData?.tracking_data) {
+                    const trackInfo = trackingData.tracking_data.shipment_track?.[0] || trackingData.tracking_data;
+                    if (trackInfo.current_status) msg += `\nTracking status: ${trackInfo.current_status}`;
+                    if (trackInfo.current_location) msg += `\nCurrent location: ${trackInfo.current_location}`;
+                    const activities = trackingData.tracking_data.shipment_track_activities;
+                    if (activities && activities.length > 0) {
+                        const latest = activities[0];
+                        msg += `\nLatest update: ${latest.activity}`;
+                        if (latest.date) msg += ` (${latest.date})`;
+                    }
+                    if (trackInfo.edd) msg += `\nEstimated delivery: ${trackInfo.edd}`;
+                }
+            } catch (e) {
+                console.error('[IG BOT] Live tracking fetch error (SR):', e.message);
+            }
+        } else if (srOrder.expectedDelivery) {
+            msg += `\nEstimated delivery: ${new Date(srOrder.expectedDelivery).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+        }
+
+        msg += `\n\nNeed help? Just tell me what's wrong with this order.`;
+
+        await instagramService.sendMessage(igUserId, msg);
+    }
+
+    /**
+     * Best-effort save of Shiprocket order to local DB for faster future lookups.
+     */
+    async _saveOrderToDB(srOrder) {
+        try {
+            const existing = await dbAdapter.query(
+                'SELECT id FROM orders WHERE order_id = ? LIMIT 1',
+                [srOrder.channelOrderId || String(srOrder.orderId)]
+            );
+            if (existing?.length > 0) return; // already exists
+
+            await dbAdapter.query(
+                `INSERT INTO orders (order_id, shiprocket_order_id, awb, status, courier_name, product_name, total, payment_method, expected_delivery, tracking_url)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    srOrder.channelOrderId || String(srOrder.orderId),
+                    String(srOrder.orderId),
+                    srOrder.awb || null,
+                    srOrder.status || null,
+                    srOrder.courierName || null,
+                    srOrder.products?.[0]?.name || null,
+                    srOrder.total || null,
+                    srOrder.paymentMethod || null,
+                    srOrder.expectedDelivery || null,
+                    null // tracking_url not in SR response
+                ]
+            );
+        } catch (e) {
+            console.error('[IG BOT] Save order to DB error:', e.message);
+        }
     }
 
     // ─── Return / Exchange ──────────────────────────────────────
@@ -490,83 +701,103 @@ Need help? Type "support" to contact us.`;
         const flow = context?.flow || 'return';
         await instagramService.setBotState(igUserId, STATES.IDLE);
 
-        // Look up the order
-        const orders = await dbAdapter.query(
-            `SELECT * FROM orders WHERE order_id ILIKE ? ORDER BY created_at DESC LIMIT 1`,
-            [`%${orderId}%`]
-        );
+        const cleanOrderId = (orderId || '').toString().trim();
 
-        if (!orders || orders.length === 0) {
+        // Look up the order (local DB first)
+        let order = null;
+        try {
+            const orders = await dbAdapter.query(
+                `SELECT * FROM orders WHERE order_id ILIKE ? OR awb ILIKE ? ORDER BY created_at DESC LIMIT 1`,
+                [`%${cleanOrderId}%`, `%${cleanOrderId}%`]
+            );
+            order = orders?.[0] || null;
+        } catch (e) {
+            console.error('[IG BOT] Return/exchange order lookup error:', e.message);
+        }
+
+        // If not found locally, try Shiprocket
+        if (!order) {
+            try {
+                const srOrder = await shiprocketService.getOrderStatus(cleanOrderId);
+                if (srOrder) {
+                    await this._sendShiprocketOrderStatus(igUserId, srOrder);
+                    await this._saveOrderToDB(srOrder);
+                    // Fetch the saved order for window check
+                    const savedOrders = await dbAdapter.query(
+                        `SELECT * FROM orders WHERE order_id = ? LIMIT 1`,
+                        [srOrder.channelOrderId || String(srOrder.orderId)]
+                    );
+                    order = savedOrders?.[0] || null;
+                }
+            } catch (e) {
+                console.error('[IG BOT] Shiprocket lookup for return/exchange:', e.message);
+            }
+        }
+
+        if (!order) {
             await instagramService.sendMessage(
                 igUserId,
-                'Order not found. Please check the Order ID and try again.'
+                `I couldn't find that order. Please check the Order ID and try again.`
             );
             return;
         }
 
-        const order = orders[0];
+        // Show order details first
+        await this._sendCompleteOrderStatus(igUserId, order);
 
         // Check if within 2-day return window
-        const orderDate = new Date(order.created_at);
+        const orderDate = new Date(order.created_at || order.order_date || Date.now());
         const daysSinceOrder = (Date.now() - orderDate.getTime()) / (1000 * 60 * 60 * 24);
+        const flowLabel = flow === 'exchange' ? 'Exchange' : 'Return';
 
         if (daysSinceOrder > 2) {
             await instagramService.sendMessage(
                 igUserId,
-                `Sorry, the return/exchange window (2 days from delivery) has expired for this order.\n\nType "support" if you need further assistance.`
+                `The ${flowLabel.toLowerCase()} window (2 days from delivery) has expired for this order.
+
+If you have a special case, type "support" and our team will review it.`
             );
             return;
         }
 
-        // Create a support ticket for the return/exchange
-        const ticketNumber = await this._generateTicketNumber();
-        const customer = await dbAdapter.query(
-            'SELECT name, ig_username FROM customers WHERE ig_psid = ? LIMIT 1',
-            [igUserId]
-        );
-        const customerName = customer?.[0]?.name || customer?.[0]?.ig_username || 'Instagram Customer';
-
-        await dbAdapter.query(
-            `INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, status, channel, ig_user_id, ig_username, is_read)
-             VALUES (?, ?, ?, ?, 'open', 'instagram', ?, ?, false)`,
-            [
-                ticketNumber,
+        // Guide through the self-service process
+        if (flow === 'exchange') {
+            await instagramService.sendMessage(
                 igUserId,
-                customerName,
-                `${flow.toUpperCase()} request for order ${order.order_id}`,
-                igUserId,
-                customer?.[0]?.ig_username || null
-            ]
-        );
+                `Here's how to exchange your item:
 
-        // Mark conversation as escalated
-        const ticketRows = await dbAdapter.query(
-            'SELECT id FROM support_tickets WHERE ticket_number = ? LIMIT 1',
-            [ticketNumber]
-        );
-        if (ticketRows?.[0]?.id) {
-            await instagramService.escalateToHuman(igUserId, ticketRows[0].id);
+1. Visit offcomfrt.in/pages/exchange
+2. Select your order and the new size you want
+3. We'll pick up the old item from your doorstep
+4. New size ships after quality check
+
+The exchange is free within the 2-day window.
+
+Need help with the exchange process? Type "support" and our team will assist you.`
+            );
+        } else {
+            await instagramService.sendMessage(
+                igUserId,
+                `Here's how to return your item:
+
+1. Visit offcomfrt.in/pages/return
+2. Submit your return request
+3. Our team reviews within 24-48 hours
+4. Pickup at your doorstep
+5. Store credit within 5-7 business days
+
+Conditions: Items unused, tags attached, original packaging.
+
+Need help with the return process? Type "support" and our team will assist you.`
+            );
         }
-
-        const flowLabel = flow === 'exchange' ? 'Exchange' : 'Return';
-        await instagramService.sendMessage(
-            igUserId,
-            `${flowLabel} Request Created
-
-Order: ${order.order_id}
-Ticket: ${ticketNumber}
-
-Our team will review and respond within 24 hours.
-
-You can continue chatting here for updates.`
-        );
     }
 
     // ─── Product Issues (delivery / damaged / wrong item) ───────
 
     /**
-     * Product issue reported: apologize, collect order ID + description,
-     * then the next message creates a priority support ticket.
+     * Product issue reported: apologize, collect Order ID first,
+     * check order status, then attempt resolution before creating ticket.
      */
     async _handleProductIssue(igUserId, intent, context) {
         const issueLabel = {
@@ -579,12 +810,63 @@ You can continue chatting here for updates.`
             igUserId,
             `We're really sorry about the ${issueLabel}.
 
-Please share your Order ID and a short description (a photo helps too) — I'll create a priority ticket for our team right away.`
+Please share your Order ID so I can check your order details first.`
         );
 
-        // Remember the issue type so the ticket is labeled correctly
-        context = smartEngine.updateContext(context, { lastQuestion: `${issueLabel} description` });
-        context = { ...context, issueType: intent };
+        // Remember the issue type and set flow to product_issue
+        context = { ...context, issueType: intent, flow: 'product_issue' };
+        await instagramService.setBotState(igUserId, STATES.COLLECTING_ORDER_ID, context);
+    }
+
+    /**
+     * Product issue with Order ID received: show order status,
+     * then ask for issue description to attempt resolution.
+     */
+    async _handleProductIssueWithOrder(igUserId, orderId, context) {
+        const cleanOrderId = (orderId || '').toString().trim();
+
+        // Look up the order
+        let order = null;
+        try {
+            const orders = await dbAdapter.query(
+                `SELECT * FROM orders WHERE order_id ILIKE ? OR awb ILIKE ? ORDER BY created_at DESC LIMIT 1`,
+                [`%${cleanOrderId}%`, `%${cleanOrderId}%`]
+            );
+            order = orders?.[0] || null;
+        } catch (e) {
+            console.error('[IG BOT] Product issue order lookup error:', e.message);
+        }
+
+        // If order not found locally, try Shiprocket
+        if (!order) {
+            try {
+                const srOrder = await shiprocketService.getOrderStatus(cleanOrderId);
+                if (srOrder) {
+                    await this._sendShiprocketOrderStatus(igUserId, srOrder);
+                    await this._saveOrderToDB(srOrder);
+                }
+            } catch (e) {
+                console.error('[IG BOT] Shiprocket lookup for product issue:', e.message);
+            }
+        } else {
+            // Show order status from local DB
+            await this._sendCompleteOrderStatus(igUserId, order);
+        }
+
+        // Now ask for the issue description
+        const issueLabel = {
+            delivery_issue: 'delivery issue',
+            damaged_product: 'damaged product',
+            wrong_product: 'wrong item'
+        }[context.issueType] || 'issue';
+
+        await instagramService.sendMessage(
+            igUserId,
+            `Now please describe the ${issueLabel} in a few words so I can help resolve it.`
+        );
+
+        // Set state to await description, with product_issue_resolution flow
+        context = { ...context, flow: 'product_issue_resolution' };
         await instagramService.setBotState(igUserId, STATES.AWAITING_SUPPORT_DESCRIPTION, context);
     }
 
@@ -618,25 +900,58 @@ Please share your Order ID and a short description (a photo helps too) — I'll 
                 igUserId,
                 `You already have an open ticket: ${existingTicket[0].ticket_number}
 
-Please describe your issue and our team will respond.
+Our team is reviewing it and will respond here shortly.
 
-You can message us right here.`
+If you have additional information, just send it as a message.`
             );
             await instagramService.escalateToHuman(igUserId, existingTicket[0].id);
             await instagramService.setBotState(igUserId, STATES.IDLE);
             return;
         }
 
-        // Ask user to describe their issue
-        await instagramService.sendMessage(
-            igUserId,
-            `Contact Support
+        // Check for recent orders to offer quick help
+        let recentOrder = null;
+        try {
+            const customer = await dbAdapter.query(
+                'SELECT phone FROM customers WHERE ig_psid = ? LIMIT 1',
+                [igUserId]
+            );
+            if (customer?.[0]?.phone) {
+                const orders = await dbAdapter.query(
+                    `SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC LIMIT 1`,
+                    [customer[0].phone]
+                );
+                recentOrder = orders?.[0] || null;
+            }
+        } catch (e) {
+            console.error('[IG BOT] Recent order lookup for support:', e.message);
+        }
 
-Please describe your issue below and we'll create a support ticket.
+        if (recentOrder) {
+            // Show recent order and offer quick resolution
+            const statusLabel = this._getStatusText(recentOrder.status);
+            await instagramService.sendMessage(
+                igUserId,
+                `I can help you with that.
 
-Our team will respond within 24 hours.`
-        );
-        await instagramService.setBotState(igUserId, STATES.AWAITING_SUPPORT_DESCRIPTION);
+I see your recent order: ${recentOrder.order_id}
+Status: ${statusLabel || recentOrder.status || 'Processing'}
+
+Is your issue related to this order? If so, just tell me what's wrong and I'll try to help.
+
+If it's about something else, please describe your issue and I'll connect you with our team.`
+            );
+        } else {
+            // No recent order — ask for description
+            await instagramService.sendMessage(
+                igUserId,
+                `I'm here to help.
+
+Please describe your issue and I'll do my best to resolve it. If I can't, I'll connect you with our team.`
+            );
+        }
+
+        await instagramService.setBotState(igUserId, STATES.AWAITING_SUPPORT_DESCRIPTION, { flow: 'human_support' });
     }
 
     async _createSupportTicket(igUserId, description, context = {}) {
@@ -960,6 +1275,38 @@ They'll review and reply right here within 24-48 hours.`
             'returned': 'Returned'
         };
         return statusMap[status?.toLowerCase()] || '';
+    }
+
+    /**
+     * Get guidance message for product issues based on issue type.
+     * Returns null if no guidance available (should create ticket).
+     */
+    _getProductIssueGuidance(issueType) {
+        const guidance = {
+            delivery_issue: `For delivery issues:
+
+• If your order shows "in transit" — it's still on the way. Please allow 1-2 more business days.
+• If delivery is delayed beyond the estimated date — we can investigate.
+
+Would you like us to check your shipment status?`,
+
+            damaged_product: `For damaged products:
+
+• Please keep the product and packaging as-is (photos help).
+• Visit our returns page on offcomfrt.in to initiate a replacement.
+• We'll arrange a pickup and send a replacement after quality check.
+
+Need help with the return process?`,
+
+            wrong_product: `For wrong items:
+
+• We'll arrange a free pickup of the wrong item.
+• Visit our exchange page on offcomfrt.in to request the correct size/product.
+• The correct item will be shipped after we receive the returned item.
+
+Need help with the exchange process?`
+        };
+        return guidance[issueType] || null;
     }
 }
 
