@@ -5786,10 +5786,10 @@ router.get('/shipping/batches/:id/manifest', verifyToken, async (req, res) => {
         const result = await shippingService.generateBatchManifest(req.params.id);
         if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
 
-        const { batchNumber, csv, shipmentCount } = result.data;
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', `attachment; filename="${batchNumber}_manifest_${shipmentCount}_orders.csv"`);
-        res.send(csv);
+        const { batchNumber, pdfBuffer, shipmentCount } = result.data;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${batchNumber}_manifest_${shipmentCount}_orders.pdf"`);
+        res.send(pdfBuffer);
     } catch (error) {
         console.error('Batch manifest error:', error);
         res.status(500).json({ success: false, error: 'Failed to generate manifest' });

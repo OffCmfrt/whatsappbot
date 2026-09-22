@@ -13,6 +13,8 @@
 const { dbAdapter } = require('../database/db');
 const { caches } = require('../utils/cache');
 const { extractItemSize } = require('../utils/orderItems');
+const PDFDocument = require('pdfkit');
+const bwipjs = require('bwip-js');
 const { getConfiguredCarriers, getAdapter } = require('./carriers');
 
 // Default package when admin doesn't override (apparel-friendly)
@@ -271,10 +273,27 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
             data
         };
     }
-
+    
     // Sync AWB onto the orders row so it shows across the hub instantly
     await syncOrderRow(ctx, data, shopper);
     invalidateShoppersCache();
+    
+    // Auto-generate label and persist URL so batch label downloads work
+    if (data.awb) {
+        (async () => {
+            try {
+                const lblResult = await generateLabel(shipmentRow.id);
+                if (lblResult.data?.labelUrl) {
+                    await dbAdapter.update('shipments', {
+                        label_url: lblResult.data.labelUrl,
+                        updated_at: new Date().toISOString()
+                    }, { id: shipmentRow.id });
+                }
+            } catch (lblErr) {
+                console.warn(`⚠️ Auto-label generation failed for shipment ${shipmentRow.id}: ${lblErr.message}`);
+            }
+        })();
+    }
 
     // Direct carriers have no Shopify channel, so Shopify never learns the
     // order shipped — post the fulfillment + tracking there ourselves.
@@ -651,54 +670,185 @@ async function generateBatchManifest(batchId) {
         ORDER BY s.id ASC
     `, [batchId]);
 
-    // Build CSV — enriched with product / SKU details
-    const headers = ['Order ID', 'AWB', 'Courier', 'Status', 'Customer Name', 'Phone', 'Address', 'City', 'State', 'Pincode', 'Payment', 'COD Amount', 'Order Total', 'Freight', 'Weight (g)', 'Products', 'SKU(s)'];
-    const csvRows = [headers.join(',')];
-    for (const s of shipments) {
-        // Parse items_json for product summary and SKUs
-        let productSummary = '';
-        let skuList = '';
+    // ── Barcode helper (Code-128 via bwip-js) ──────────────────────
+    async function renderBarcode(text) {
+        if (!text) return null;
+        try {
+            return await bwipjs.toBuffer({
+                bcid: 'code128', text: String(text),
+                scale: 2, height: 12, includetext: true,
+                textxalign: 'center', textsize: 9
+            });
+        } catch (_) { return null; }
+    }
+
+    // ── Build PDF ───────────────────────────────────────────────────
+    const doc = new PDFDocument({ size: 'A4', margin: 36, bufferPages: true });
+    const chunks = [];
+    doc.on('data', c => chunks.push(c));
+
+    const PW = 595.28 - 72;                       // page width minus margins
+    const batchData = batch[0];
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    // ── Header ──────────────────────────────────────────────────────
+    doc.roundedRect(36, 36, PW, 72, 6)
+       .fillAndStroke('#0f0f1a', '#2a2a4a');
+    doc.fontSize(20).font('Helvetica-Bold').fillColor('#53bdeb')
+       .text('SHIPPING MANIFEST', 36, 44, { width: PW, align: 'center' });
+    doc.fontSize(9).font('Helvetica').fillColor('#8899aa')
+       .text(`Batch: ${batchData.batch_number}    |    ${dateStr} ${timeStr}    |    ${shipments.length} Shipment(s)`,
+             36, 70, { width: PW, align: 'center' });
+    const carrierName = batchData.carrier || 'Multi-Carrier';
+    doc.fontSize(8).fillColor('#667788')
+       .text(`Carrier: ${carrierName}    |    Shipped by: ${batchData.shipped_by || 'admin'}`,
+             36, 86, { width: PW, align: 'center' });
+
+    // ── Column layout ───────────────────────────────────────────────
+    const COL = {
+        sr:    { x: 36,       w: 28  },
+        awb:   { x: 64,      w: 100 },
+        order: { x: 164,     w: 76  },
+        cust:  { x: 240,     w: 115 },
+        dest:  { x: 355,     w: 105 },
+        pay:   { x: 460,     w: 55  },
+        amt:   { x: 515,     w: 44.28 }
+    };
+    const ROW_H    = 56;
+    const HDR_H    = 20;
+    const PAGE_BOT = 842 - 50;
+
+    let y = 120;
+
+    // ── Table header (reusable) ─────────────────────────────────────
+    function drawTableHeader() {
+        doc.rect(36, y, PW, HDR_H).fill('#141428');
+        doc.fontSize(7).font('Helvetica-Bold').fillColor('#53bdeb');
+        const cols = [
+            ['#',        COL.sr.x,    COL.sr.w],
+            ['AWB',      COL.awb.x,   COL.awb.w],
+            ['ORDER',    COL.order.x,  COL.order.w],
+            ['CUSTOMER', COL.cust.x,   COL.cust.w],
+            ['DESTINATION', COL.dest.x,  COL.dest.w],
+            ['PAY',      COL.pay.x,    COL.pay.w],
+            ['AMOUNT',   COL.amt.x,    COL.amt.w]
+        ];
+        for (const [label, x, w] of cols) {
+            doc.text(label, x + 3, y + 5, { width: w - 6, align: 'left' });
+        }
+        y += HDR_H;
+    }
+    drawTableHeader();
+
+    // ── Shipment rows ───────────────────────────────────────────────
+    let totalCod = 0, totalFreight = 0;
+
+    for (let i = 0; i < shipments.length; i++) {
+        const s = shipments[i];
+
+        // Page break
+        if (y + ROW_H > PAGE_BOT) {
+            doc.addPage();
+            y = 36;
+            drawTableHeader();
+        }
+
+        const rowBg = i % 2 === 0 ? '#0d0d1a' : '#111126';
+        doc.rect(36, y, PW, ROW_H).fill(rowBg);
+        doc.strokeStyle = '#1a1a3a'; doc.lineWidth(0.4);
+        doc.rect(36, y, PW, ROW_H).stroke();
+
+        const textY = y + 6;
+        const innerH = ROW_H - 12;
+
+        // # (serial)
+        doc.fontSize(8).font('Helvetica').fillColor('#8899aa')
+           .text(String(i + 1), COL.sr.x + 3, textY, { width: COL.sr.w - 6 });
+
+        // AWB + barcode
+        if (s.awb) {
+            const bcBuf = await renderBarcode(s.awb);
+            if (bcBuf) {
+                try { doc.image(bcBuf, { fit: [COL.awb.w - 6, 30], x: COL.awb.x + 3, y: textY }); }
+                catch (_) { doc.fontSize(8).fillColor('#e0e0e0').text(s.awb, COL.awb.x + 3, textY, { width: COL.awb.w - 6 }); }
+            } else {
+                doc.fontSize(8).fillColor('#e0e0e0').text(s.awb, COL.awb.x + 3, textY, { width: COL.awb.w - 6 });
+            }
+        }
+
+        // Order ID
+        doc.fontSize(7.5).fillColor('#c0c0d0')
+           .text(String(s.order_id || ''), COL.order.x + 3, textY, { width: COL.order.w - 6 });
+
+        // Customer name + phone
+        const custText = `${s.customer_name || '-'}\n${s.customer_phone || ''}`;
+        doc.fontSize(7).fillColor('#b0b0c0')
+           .text(custText, COL.cust.x + 3, textY, { width: COL.cust.w - 6, lineBreak: false, height: innerH });
+
+        // Destination (city + state + pincode)
+        const destParts = [s.customer_city, s.customer_state, s.customer_pincode].filter(Boolean);
+        const destText = destParts.join(', ');
+        doc.fontSize(7).fillColor('#a0a0b0')
+           .text(destText || '-', COL.dest.x + 3, textY, { width: COL.dest.w - 6, lineBreak: false, height: innerH });
+
+        // Payment mode
+        const payLabel = (s.payment_mode || '').toUpperCase();
+        doc.fontSize(7)
+           .fillColor(payLabel === 'COD' ? '#ff9f43' : '#54e0c0')
+           .text(payLabel || '-', COL.pay.x + 3, textY, { width: COL.pay.w - 6 });
+
+        // Amount (COD or order total)
+        const amt = s.payment_mode === 'COD' ? (s.cod_amount || 0) : (s.order_total || 0);
+        doc.fontSize(7.5).font('Helvetica-Bold').fillColor('#e0e0e0')
+           .text(`\u20B9${amt}`, COL.amt.x + 3, textY, { width: COL.amt.w - 6 });
+
+        // Product line (below main row, inside the block)
+        let productLine = '';
         try {
             const items = JSON.parse(s.items_json || '[]');
-            const parts = [];
-            const skus = [];
-            for (const item of items) {
-                const size = extractItemSize(item) || '';
-                const title = item.title || item.name || 'Product';
-                const qty = item.quantity || 1;
-                const sizePart = size ? ` (${size})` : '';
-                parts.push(`${title}${sizePart} x${qty}`);
-                const sku = item.sku || item.variant_sku || '';
-                if (sku) skus.push(sku);
-                else if (size) skus.push(`${title}-${size}`);
-                else skus.push(title);
-            }
-            productSummary = parts.join('; ');
-            skuList = skus.join('; ');
+            productLine = items.map(it => {
+                const sz = extractItemSize(it) || '';
+                const title = it.title || it.name || 'Product';
+                const qty = it.quantity || 1;
+                return sz ? `${title} (${sz}) x${qty}` : `${title} x${qty}`;
+            }).join('  |  ');
         } catch (_) {}
+        if (productLine) {
+            doc.fontSize(6).font('Helvetica').fillColor('#667788')
+               .text(productLine, COL.cust.x + 3, y + ROW_H - 14, { width: PW - (COL.cust.x - 36) - 6, lineBreak: false });
+        }
 
-        csvRows.push([
-            s.order_id, s.awb || '', s.courier_name || '', s.status || '',
-            `"${(s.customer_name || '').replace(/"/g, '""')}"`,
-            s.customer_phone || '',
-            `"${(s.customer_address || '').replace(/"/g, '""')}"`,
-            `"${(s.customer_city || '').replace(/"/g, '""')}"`,
-            `"${(s.customer_state || '').replace(/"/g, '""')}"`,
-            s.customer_pincode || '',
-            s.payment_mode || '',
-            s.cod_amount || 0,
-            s.order_total || 0,
-            s.freight_charge || 0,
-            s.weight_grams || 0,
-            `"${productSummary.replace(/"/g, '""')}"`,
-            `"${skuList.replace(/"/g, '""')}"`
-        ].join(','));
+        totalCod    += (s.payment_mode === 'COD') ? (s.cod_amount || 0) : 0;
+        totalFreight += (s.freight_charge || 0);
+
+        y += ROW_H;
     }
+
+    // ── Footer summary ──────────────────────────────────────────────
+    y += 10;
+    doc.fontSize(8).font('Helvetica-Bold').fillColor('#53bdeb')
+       .text(`Total: ${shipments.length} shipments  |  COD Collectible: \u20B9${totalCod}  |  Freight: \u20B9${totalFreight}`,
+             36, y, { width: PW, align: 'center' });
+
+    // Page numbers on every page
+    const range = doc.bufferedPageRange();
+    for (let pg = range.start; pg < range.start + range.count; pg++) {
+        doc.switchToPage(pg);
+        doc.fontSize(7).font('Helvetica').fillColor('#556677')
+           .text(`Page ${pg + 1} of ${range.count}`, 36, 842 - 32, { width: PW, align: 'center' });
+    }
+
+    doc.end();
+    const pdfBuffer = await new Promise(resolve => {
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+    });
 
     return {
         data: {
-            batchNumber: batch[0].batch_number,
-            csv: csvRows.join('\n'),
+            batchNumber: batchData.batch_number,
+            pdfBuffer,
             shipmentCount: shipments.length
         }
     };

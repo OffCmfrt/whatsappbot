@@ -7507,12 +7507,12 @@ function downloadBatchManifest(batchId) {
             const blobUrl = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = blobUrl;
-            link.download = `batch_${batchId}_manifest.csv`;
+            link.download = `batch_${batchId}_manifest.pdf`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(blobUrl);
-            showShipToast('Manifest downloaded (includes product & SKU columns)');
+            showShipToast('Manifest PDF downloaded (with AWB barcodes)');
         })
         .catch(err => showShipToast(`Manifest download failed: ${err.message}`, true));
 }
