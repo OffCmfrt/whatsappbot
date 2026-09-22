@@ -7322,11 +7322,16 @@ function renderBatchesList(batches) {
         const fillClass = pct >= 80 ? 'sb-fill-success' : 'sb-fill-partial';
         const createdDate = new Date(batch.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+        const displayName = batch.custom_name || batch.batch_number;
         card.innerHTML = `
             <div class="sb-batch-top">
                 <div class="sb-batch-identity">
                     <input type="checkbox" class="sb-batch-checkbox" data-batch-id="${batch.id}" ${sbSelectedBatchIds.has(batch.id) ? 'checked' : ''} ${['merged','split'].includes(batch.status) ? 'disabled' : ''}>
-                    <span class="sb-batch-number">${batch.batch_number}</span>
+                    <span class="sb-batch-number">${displayName}</span>
+                    ${batch.custom_name ? `<span class="sb-batch-code">${batch.batch_number}</span>` : ''}
+                    <button class="sb-rename-btn" onclick="event.stopPropagation(); renameBatch(${batch.id}, '${(batch.custom_name || '').replace(/'/g, "\\'")}')}" title="Rename batch">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                    </button>
                     <span class="sb-batch-status ${statusClass}">${statusLabel}</span>
                 </div>
                 <div class="sb-batch-actions-row">
@@ -7433,7 +7438,8 @@ async function openBatchDetail(batchId) {
 
         const batch = data.batch;
         const createdDate = new Date(batch.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        titleEl.textContent = `${batch.batch_number}`;
+        const detailDisplayName = batch.custom_name || batch.batch_number;
+        titleEl.innerHTML = `${detailDisplayName} <button class="sb-rename-btn sb-rename-inline" onclick="renameBatch(${batch.id}, '${(batch.custom_name || '').replace(/'/g, "\\'")}')" title="Rename batch"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>${batch.custom_name ? ` <span class="sb-batch-code" style="font-size:0.75rem;opacity:0.5;">${batch.batch_number}</span>` : ''}`;
         metaEl.textContent = `${batch.carrier} | ${batch.shipped_by} | ${createdDate} | ${batch.successful_count || 0} successful, ${batch.failed_count || 0} failed`;
 
         // Show/hide split button based on status
@@ -7711,6 +7717,26 @@ function toggleSplitDialog(batchId) {
     });
 }
 
+async function renameBatch(batchId, currentName) {
+    const newName = prompt('Enter a new name for this batch:', currentName || '');
+    if (newName === null) return; // cancelled
+    const trimmed = newName.trim();
+    if (trimmed.length > 200) { showShipToast('Name must be 200 characters or less', true); return; }
+    try {
+        const data = await apiCall(`/shipping/batches/${batchId}`, 'PATCH', { customName: trimmed || null });
+        if (data?.success) {
+            showShipToast(trimmed ? `Batch renamed to "${trimmed}"` : 'Batch name cleared');
+            fetchBatchesList();
+            // Refresh detail modal if it's open for this batch
+            if (currentBatchDetailId === batchId) openBatchDetail(batchId);
+        } else {
+            showShipToast(data?.error || 'Rename failed', true);
+        }
+    } catch (err) {
+        showShipToast(`Rename failed: ${err.message}`, true);
+    }
+}
+
 // Expose for inline onclick handlers
 window.openShippingBatches = openShippingBatches;
 window.closeShippingBatches = closeShippingBatches;
@@ -7720,6 +7746,7 @@ window.downloadBatchManifest = downloadBatchManifest;
 window.downloadBatchLabels = downloadBatchLabels;
 window.mergeSelectedBatches = mergeSelectedBatches;
 window.toggleSplitDialog = toggleSplitDialog;
+window.renameBatch = renameBatch;
 
 (function initHubSidebar() {
     const sidebar = document.getElementById('hubSidebar');

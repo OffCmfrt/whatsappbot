@@ -662,6 +662,7 @@ async function initializeShipmentBatchesTable() {
     `);
 
     await pool.query('ALTER TABLE shipment_batches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP');
+    await pool.query('ALTER TABLE shipment_batches ADD COLUMN IF NOT EXISTS custom_name VARCHAR(200)');
 
     await pool.query('CREATE INDEX IF NOT EXISTS idx_batches_created_at ON shipment_batches(created_at DESC)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_batches_shipped_by ON shipment_batches(shipped_by)');

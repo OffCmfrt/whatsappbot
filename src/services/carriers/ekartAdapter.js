@@ -356,13 +356,15 @@ class EkartAdapter extends BaseCarrier {
                 return this.fail(`Ekart label generation failed: ${buffer.toString().substring(0, 300)}`);
             }
 
-            if (!process.env.CLOUDINARY_CLOUD_NAME) {
-                return this.fail('Ekart returns the label as a PDF file — configure Cloudinary (CLOUDINARY_*) to store labels, or download it from the Ekart dashboard');
+            // If Cloudinary is configured, upload for a stable URL; otherwise return the buffer directly
+            if (process.env.CLOUDINARY_CLOUD_NAME) {
+                const cloudinaryService = require('../cloudinaryService');
+                const labelUrl = await cloudinaryService.uploadBuffer(buffer, 'shipping_labels');
+                return this.ok({ labelUrl });
             }
 
-            const cloudinaryService = require('../cloudinaryService');
-            const labelUrl = await cloudinaryService.uploadBuffer(buffer, 'shipping_labels');
-            return this.ok({ labelUrl });
+            // No Cloudinary — return the raw PDF buffer so the caller can embed it directly
+            return this.ok({ labelBuffer: buffer });
         } catch (error) {
             return this.fail(`Ekart label generation failed: ${this.describeAxiosError(error)}`, error.response?.data);
         }

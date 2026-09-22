@@ -5310,6 +5310,40 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
     color: #fff;
     letter-spacing: 0.5px;
 }
+.sb-batch-code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.38);
+    letter-spacing: 0.5px;
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+}
+.sb-rename-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    border: none;
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.4);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+.sb-rename-btn:hover {
+    background: rgba(83,189,235,0.18);
+    color: #53bdeb;
+}
+.sb-rename-inline {
+    vertical-align: middle;
+    margin-left: 0.4rem;
+    width: 20px;
+    height: 20px;
+}
 .sb-batch-status {
     display: inline-flex;
     align-items: center;

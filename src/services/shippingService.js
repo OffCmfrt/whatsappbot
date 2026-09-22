@@ -576,7 +576,7 @@ async function createBatch({ shippedBy, carrier, totalOrders, packageDefaults })
     return rows[0];
 }
 
-async function updateBatch(batchId, { successfulCount, failedCount, status }) {
+async function updateBatch(batchId, { successfulCount, failedCount, status, customName }) {
     const setClauses = ['updated_at = CURRENT_TIMESTAMP'];
     const params = [];
 
@@ -594,6 +594,10 @@ async function updateBatch(batchId, { successfulCount, failedCount, status }) {
         if (status !== 'processing') {
             setClauses.push(`completed_at = CURRENT_TIMESTAMP`);
         }
+    }
+    if (customName !== undefined) {
+        params.push(customName || null);
+        setClauses.push(`custom_name = ?`);
     }
 
     params.push(batchId);
@@ -860,6 +864,9 @@ async function getBatchLabels(batchId) {
                         label_url: result.data.labelUrl,
                         updated_at: new Date().toISOString()
                     }, { id: s.id });
+                } else if (result.data?.labelBuffer) {
+                    // Carrier returned a raw PDF buffer (e.g. Ekart without Cloudinary)
+                    s._labelBuffer = result.data.labelBuffer;
                 }
             } catch (err) {
                 console.warn(`Label generation failed for shipment ${s.id}: ${err.message}`);
@@ -868,7 +875,7 @@ async function getBatchLabels(batchId) {
     }
 
     // Enrich each label with parsed SKU / product info
-    const labels = shipments.filter(s => s.label_url).map(s => {
+    const labels = shipments.filter(s => s.label_url || s._labelBuffer).map(s => {
         let skus = [];
         let productSummary = '';
         try {
@@ -896,6 +903,7 @@ async function getBatchLabels(batchId) {
             order_id: s.order_id,
             awb: s.awb,
             label_url: s.label_url,
+            label_buffer: s._labelBuffer || null,
             courier_name: s.courier_name,
             manifest_url: s.manifest_url,
             skus,
@@ -1008,11 +1016,16 @@ async function buildBatchLabelsZip(batchId, { sortBy = 'sku', format = 'flat' } 
                 ? `${(label.primary_sku || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 60)}/`
                 : '';
 
-            if (label.label_url) {
+            if (label.label_buffer) {
+                // Real carrier PDF buffer (e.g. Ekart without Cloudinary)
+                archive.append(label.label_buffer, { name: `${folder}${fileName}` });
+                labelCount++;
+            } else if (label.label_url) {
+                // Fetch label from carrier URL (Delhivery, Shiprocket)
                 archive.append(fetchLabelBuffer(label.label_url), { name: `${folder}${fileName}` });
                 labelCount++;
             } else {
-                // Generate info-sheet PDF
+                // Generate info-sheet PDF as last resort
                 const infoPdf = await buildInfoSheetPdf(label);
                 archive.append(infoPdf, { name: `${folder}${fileName}` });
                 missingCount++;

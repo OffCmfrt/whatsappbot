@@ -5747,8 +5747,8 @@ router.post('/shipping/batches', verifyToken, requirePermission('ship_orders'), 
 // Update batch counts/status (called during/after bulk-ship)
 router.patch('/shipping/batches/:id', verifyToken, requirePermission('ship_orders'), async (req, res) => {
     try {
-        const { successfulCount, failedCount, status } = req.body;
-        await shippingService.updateBatch(req.params.id, { successfulCount, failedCount, status });
+        const { successfulCount, failedCount, status, customName } = req.body;
+        await shippingService.updateBatch(req.params.id, { successfulCount, failedCount, status, customName });
         res.json({ success: true });
     } catch (error) {
         console.error('Update batch error:', error);
