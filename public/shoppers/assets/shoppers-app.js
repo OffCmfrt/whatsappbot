@@ -6527,6 +6527,7 @@ function renderShippedOrders(data) {
     setText('soStatPickup', stats.pickup_scheduled || 0);
     setText('soStatTransit', stats.in_transit || 0);
     setText('soStatDelivered', stats.delivered || 0);
+    setText('soStatRto', stats.rto || 0);
     setText('soStatCancelled', stats.cancelled || 0);
     setText('soStatCodValue', fmtMoney(stats.cod_value));
     setText('soStatFreight', fmtMoney(stats.freight_total));
@@ -6538,6 +6539,7 @@ function renderShippedOrders(data) {
     setCount('soCountPickup', stats.pickup_scheduled);
     setCount('soCountTransit', stats.in_transit);
     setCount('soCountDelivered', stats.delivered);
+    setCount('soCountRto', stats.rto);
     setCount('soCountCancelled', stats.cancelled);
 
     // Carrier dropdown (populate once from server list, preserve selection)
