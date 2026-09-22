@@ -903,70 +903,130 @@ async function getBatchLabels(batchId) {
 }
 
 // Build a ZIP file containing all labels for a batch, sorted/grouped by the
-// chosen strategy.  Returns { zipBuffer, fileName, labelCount }.
+// chosen strategy.  Always returns a ZIP — shipments without carrier labels
+// get a generated info-sheet PDF so the download never fails.
 async function buildBatchLabelsZip(batchId, { sortBy = 'sku', format = 'flat' } = {}) {
     const archiver = require('archiver');
-    const axios = require('axios');
 
-    // Fetch batch + labels with SKU data
+    // Fetch batch
     const batchRows = await dbAdapter.query('SELECT * FROM shipment_batches WHERE id = ? LIMIT 1', [batchId]);
     if (!batchRows[0]) return { error: 'Batch not found', status: 404 };
     const batch = batchRows[0];
 
+    // Get labels (now generates on-the-fly for missing ones)
     const { data: { labels } } = await getBatchLabels(batchId);
-    if (!labels || labels.length === 0) return { error: 'No labels available for this batch', status: 404 };
 
-    // Sort labels
-    const sorted = [...labels];
+    // If still empty (all carrier API calls failed), fetch raw shipment data
+    // so we can at least produce info-sheet PDFs
+    let allLabels = labels || [];
+    if (allLabels.length === 0) {
+        const rawShipments = await dbAdapter.query(`
+            SELECT s.id, s.order_id, s.awb, s.courier_name, s.status,
+                   COALESCE(ss.items_json, '[]') AS items_json
+            FROM shipments s
+            LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
+            WHERE s.batch_id = ? AND s.status NOT IN ('failed', 'cancelled')
+            ORDER BY s.id ASC
+        `, [batchId]);
+
+        allLabels = rawShipments.map(s => {
+            let productSummary = '', primarySku = 'unknown';
+            try {
+                const items = JSON.parse(s.items_json || '[]');
+                productSummary = items.map(it => {
+                    const sz = extractItemSize(it) || '';
+                    const t = it.title || it.name || 'Product';
+                    return sz ? `${t} (${sz})` : t;
+                }).join('; ');
+                const firstSku = items[0]?.sku || items[0]?.variant_sku || '';
+                primarySku = firstSku || items[0]?.title || 'unknown';
+            } catch (_) {}
+            return {
+                id: s.id, order_id: s.order_id, awb: s.awb,
+                label_url: null, courier_name: s.courier_name,
+                product_summary: productSummary, primary_sku: primarySku
+            };
+        });
+    }
+
+    if (allLabels.length === 0) return { error: 'No shipments found in this batch', status: 404 };
+
+    // Sort
+    const sorted = [...allLabels];
     switch (sortBy) {
-        case 'sku':
-            sorted.sort((a, b) => (a.primary_sku || '').localeCompare(b.primary_sku || ''));
-            break;
-        case 'awb':
-            sorted.sort((a, b) => (a.awb || '').localeCompare(b.awb || ''));
-            break;
-        case 'order_id':
-            sorted.sort((a, b) => (a.order_id || '').localeCompare(b.order_id || ''));
-            break;
-        case 'product':
-            sorted.sort((a, b) => (a.product_summary || '').localeCompare(b.product_summary || ''));
-            break;
-        default:
-            break;
+        case 'sku': sorted.sort((a, b) => (a.primary_sku || '').localeCompare(b.primary_sku || '')); break;
+        case 'awb': sorted.sort((a, b) => (a.awb || '').localeCompare(b.awb || '')); break;
+        case 'order_id': sorted.sort((a, b) => (a.order_id || '').localeCompare(b.order_id || '')); break;
+        case 'product': sorted.sort((a, b) => (a.product_summary || '').localeCompare(b.product_summary || '')); break;
+    }
+
+    // Helper: generate a simple info-sheet PDF for shipments without carrier labels
+    function buildInfoSheetPdf(label) {
+        const doc = new PDFDocument({ size: [283.46, 425.20], margin: 14 }); // ~100x150mm label
+        const chunks = [];
+        doc.on('data', c => chunks.push(c));
+        doc.fontSize(10).font('Helvetica-Bold').fillColor('#000')
+           .text(label.awb || 'NO AWB', { align: 'center' });
+        doc.moveDown(0.5);
+        doc.fontSize(8).font('Helvetica').fillColor('#333')
+           .text(`Order: ${label.order_id || '-'}`);
+        doc.text(`Courier: ${label.courier_name || '-'}`);
+        if (label.product_summary) {
+            doc.moveDown(0.3);
+            doc.fontSize(7).text(`Items: ${label.product_summary}`);
+        }
+        doc.moveDown(0.5);
+        doc.fontSize(7).fillColor('#999')
+           .text('(Carrier label could not be retrieved — please print from carrier panel)');
+        doc.end();
+        return new Promise(resolve => doc.on('end', () => resolve(Buffer.concat(chunks))));
     }
 
     // Create ZIP buffer
-    const zipBuffer = await new Promise((resolve, reject) => {
+    const zipBuffer = await new Promise(async (resolve, reject) => {
         const chunks = [];
         const archive = archiver('zip', { zlib: { level: 6 } });
         archive.on('data', chunk => chunks.push(chunk));
         archive.on('end', () => resolve(Buffer.concat(chunks)));
         archive.on('error', reject);
 
+        let labelCount = 0, missingCount = 0;
+
         for (const label of sorted) {
-            // Build a safe filename from order + AWB
             const safeOrder = (label.order_id || 'order').replace(/[^a-zA-Z0-9_-]/g, '_');
             const safeAwb = (label.awb || 'noawb').replace(/[^a-zA-Z0-9_-]/g, '_');
             const fileName = `${safeOrder}_${safeAwb}.pdf`;
+            const folder = format === 'by_sku'
+                ? `${(label.primary_sku || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 60)}/`
+                : '';
 
-            if (format === 'by_sku') {
-                // Group into folders by primary SKU
-                const safeSku = (label.primary_sku || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 60);
-                archive.append(fetchLabelBuffer(label.label_url), { name: `${safeSku}/${fileName}` });
+            if (label.label_url) {
+                archive.append(fetchLabelBuffer(label.label_url), { name: `${folder}${fileName}` });
+                labelCount++;
             } else {
-                archive.append(fetchLabelBuffer(label.label_url), { name: fileName });
+                // Generate info-sheet PDF
+                const infoPdf = await buildInfoSheetPdf(label);
+                archive.append(infoPdf, { name: `${folder}${fileName}` });
+                missingCount++;
             }
         }
 
-        // Also include a manifest index file inside the ZIP
-        const indexLines = ['Order ID,AWB,Courier,SKU,Products'];
+        // Label index CSV
+        const indexLines = ['Order ID,AWB,Courier,SKU,Products,Label Status'];
         for (const label of sorted) {
             indexLines.push([
                 label.order_id, label.awb || '', label.courier_name || '',
-                label.primary_sku || '', `"${(label.product_summary || '').replace(/"/g, '""')}"`
+                label.primary_sku || '', `"${(label.product_summary || '').replace(/"/g, '""')}"`,
+                label.label_url ? 'OK' : 'MISSING'
             ].join(','));
         }
         archive.append(indexLines.join('\n'), { name: '_label_index.csv' });
+
+        // Summary note
+        archive.append(
+            `Labels downloaded: ${labelCount}\nMissing (info-sheets): ${missingCount}\nTotal: ${sorted.length}`,
+            { name: '_download_summary.txt' }
+        );
 
         archive.finalize();
     });
@@ -975,7 +1035,7 @@ async function buildBatchLabelsZip(batchId, { sortBy = 'sku', format = 'flat' } 
     return {
         zipBuffer,
         fileName: `${safeBatchNum}_labels_${sortBy}.zip`,
-        labelCount: labels.length,
+        labelCount: allLabels.length,
         batchNumber: batch.batch_number
     };
 }
