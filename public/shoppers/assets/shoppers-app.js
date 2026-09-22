@@ -7496,9 +7496,8 @@ function closeBatchDetail() {
 
 function downloadBatchManifest(batchId) {
     if (!batchId) return;
-    const token = localStorage.getItem('hubToken') || '';
     const url = `/api/admin/shipping/batches/${batchId}/manifest`;
-    fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
+    fetch(url, { headers: { 'Authorization': `Bearer ${authToken}` } })
         .then(res => {
             if (!res.ok) throw new Error('Failed to download manifest');
             return res.blob();
@@ -7619,11 +7618,10 @@ function downloadBatchLabels(batchId) {
         confirmBtn.disabled = true;
         confirmBtn.innerHTML = `<div class="spinner" style="width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite;display:inline-block;vertical-align:middle;margin-right:6px;"></div> Building ZIP...`;
 
-        const token = localStorage.getItem('hubToken') || '';
         const url = `/api/admin/shipping/batches/${batchId}/labels/download?sortBy=${selectedSort}&format=${selectedFormat}`;
 
         try {
-            const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+            const res = await fetch(url, { headers: { 'Authorization': `Bearer ${authToken}` } });
             if (!res.ok) {
                 const errBody = await res.json().catch(() => ({}));
                 throw new Error(errBody.error || 'Download failed');
