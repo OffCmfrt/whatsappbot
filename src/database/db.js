@@ -5,10 +5,10 @@ require('dotenv').config();
 const pool = new Pool({
   connectionString: process.env.SUPABASE_DB_URL,
   ssl: { rejectUnauthorized: false },
-  max: 3, // Keep at 3 for concurrent DB operations
+  max: 5, // Keep at 5 for concurrent DB operations
   min: 0, // Allow all connections to close when idle (saves ~10MB native)
   idleTimeoutMillis: 10000, // Close idle connections after 10s (was 20s)
-  connectionTimeoutMillis: 5000 // Fail fast if no connection available
+  connectionTimeoutMillis: 15000 // Allow up to 15s during warm-up bursts
 });
 
 // CRITICAL: handle background errors from idle pooled connections.

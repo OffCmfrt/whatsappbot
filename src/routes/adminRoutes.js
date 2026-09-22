@@ -5649,9 +5649,10 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
         }
         if (carrier) { where += ' AND s.carrier = ?'; params.push(carrier); }
         if (status) {
-            // Grouped filter: 'in_transit' covers shipped + in_transit, 'cancelled' covers cancelled + failed + rto
+            // Grouped filter: 'in_transit' covers shipped + in_transit, 'rto' covers rto, 'cancelled' covers cancelled + failed
             if (status === 'in_transit') where += ` AND s.status IN ('shipped', 'in_transit', 'out_for_delivery')`;
-            else if (status === 'cancelled') where += ` AND s.status IN ('cancelled', 'failed', 'rto')`;
+            else if (status === 'rto') where += ` AND (s.status = 'rto' OR s.status LIKE 'rto_%')`;
+            else if (status === 'cancelled') where += ` AND s.status IN ('cancelled', 'failed')`;
             else if (status === 'ready') where += ` AND s.status IN ('created', 'awb_assigned')`;
             else { where += ' AND s.status = ?'; params.push(status); }
         }
@@ -5672,10 +5673,17 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
             LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
             LEFT JOIN customers c ON c.phone = o.customer_phone
         `;
+        // Memory/CPU optimization: skip 3 joins for counts & stats unless search requires them
+        const countFrom = search ? baseFrom : ' FROM shipments s ';
 
         const [rows, countRows, statsRows, carrierRows] = await Promise.all([
             dbAdapter.query(`
-                SELECT s.*,
+                SELECT s.id, s.order_id, s.shopper_id, s.carrier, s.carrier_shipment_id, s.carrier_order_id,
+                       s.awb, s.courier_name, s.status, s.payment_mode, s.cod_amount,
+                       s.weight_grams, s.length_cm, s.breadth_cm, s.height_cm, s.freight_charge,
+                       s.label_url, s.manifest_url, s.invoice_url, s.pickup_date, s.pickup_token,
+                       s.tracking_url, s.error_message, s.shipped_by, s.reship_of_shipment_id, s.reship_reason,
+                       s.created_at, s.delivered_at,
                        COALESCE(ss.name, c.name) AS customer_name,
                        COALESCE(ss.phone, o.customer_phone) AS customer_phone,
                        COALESCE(ss.address, '') AS customer_address,
@@ -5689,18 +5697,19 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
                 ORDER BY s.created_at DESC
                 LIMIT ? OFFSET ?
             `, [...params, safeLimit, safeOffset]),
-            dbAdapter.query(`SELECT COUNT(*)::int AS total ${baseFrom}${where}`, params),
+            dbAdapter.query(`SELECT COUNT(*)::int AS total ${countFrom}${where}`, params),
             dbAdapter.query(`
                 SELECT COUNT(*)::int AS total,
                        COUNT(*) FILTER (WHERE s.status IN ('created', 'awb_assigned'))::int AS ready_to_ship,
                        COUNT(*) FILTER (WHERE s.status = 'pickup_scheduled')::int AS pickup_scheduled,
                        COUNT(*) FILTER (WHERE s.status IN ('shipped', 'in_transit', 'out_for_delivery'))::int AS in_transit,
                        COUNT(*) FILTER (WHERE s.status = 'delivered')::int AS delivered,
-                       COUNT(*) FILTER (WHERE s.status IN ('cancelled', 'failed', 'rto'))::int AS cancelled,
+                       COUNT(*) FILTER (WHERE s.status = 'rto' OR s.status LIKE 'rto_%')::int AS rto,
+                       COUNT(*) FILTER (WHERE s.status IN ('cancelled', 'failed'))::int AS cancelled,
                        COUNT(*) FILTER (WHERE s.payment_mode = 'COD')::int AS cod_count,
-                       COALESCE(SUM(s.cod_amount) FILTER (WHERE s.payment_mode = 'COD' AND s.status NOT IN ('cancelled', 'failed')), 0)::float AS cod_value,
+                       COALESCE(SUM(s.cod_amount) FILTER (WHERE s.payment_mode = 'COD' AND s.status NOT IN ('cancelled', 'failed', 'rto')), 0)::float AS cod_value,
                        COALESCE(SUM(s.freight_charge) FILTER (WHERE s.status NOT IN ('cancelled', 'failed')), 0)::float AS freight_total
-                ${baseFrom}${where}
+                ${countFrom}${where}
             `, params),
             dbAdapter.query(`SELECT DISTINCT carrier FROM shipments ORDER BY carrier`)
         ]);
