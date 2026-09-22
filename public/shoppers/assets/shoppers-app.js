@@ -46,7 +46,7 @@ function getHubIdentity() {
     return identity;
 }
 
-const HUB_ALL_PERMS = ['shoppers', 'inbox', 'follow_up', 'multi_orders', 'shipped', 'analytics', 'export', 'edit_orders', 'send_messages', 'ship_orders', 'ai_copilot'];
+const HUB_ALL_PERMS = ['shoppers', 'inbox', 'follow_up', 'multi_orders', 'shipped', 'analytics', 'inventory', 'export', 'edit_orders', 'send_messages', 'ship_orders', 'ai_copilot'];
 
 function hubHasPerm(key) {
     const identity = getHubIdentity();
@@ -79,6 +79,7 @@ function applyRolePermissions() {
         multiOrdersBtn: 'multi_orders',
         shippedOrdersBtn: 'shipped',
         analyticsBtn: 'analytics',
+        inventoryBtn: 'inventory',
         exportBtn: 'export'
     };
     Object.entries(navPermMap).forEach(([id, perm]) => {

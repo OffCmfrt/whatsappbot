@@ -70,7 +70,8 @@ const PERMISSIONS = {
         { key: 'follow_up', label: 'Follow-Up Campaigns', description: 'Follow-up campaigns list and management' },
         { key: 'multi_orders', label: 'Multi Orders', description: 'Multi-order (repeat customer) view' },
         { key: 'shipped', label: 'Shipped Orders / Shipping', description: 'Shipped orders view and shipping module' },
-        { key: 'analytics', label: 'Analytics', description: 'Analytics dashboards and reports' }
+        { key: 'analytics', label: 'Analytics', description: 'Analytics dashboards and reports' },
+        { key: 'inventory', label: 'Inventory Intelligence', description: 'Premium inventory analytics, stock movements, and intelligence dashboard' }
     ],
     functions: [
         { key: 'export', label: 'Export Data', description: 'Export shoppers / inbox data to files' },
@@ -151,6 +152,7 @@ const ROUTE_PERMISSIONS = [
     { prefix: '/follow-up', key: 'follow_up' },
     { prefix: '/shipping', key: 'shipped' },
     { prefix: '/analytics', key: 'analytics' },
+    { prefix: '/inventory', key: 'inventory' },
     { prefix: '/ai/', key: 'ai_copilot' },
     { prefix: '/settings', key: null },
     { prefix: '/templates', key: null },
