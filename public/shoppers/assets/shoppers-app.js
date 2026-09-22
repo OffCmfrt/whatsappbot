@@ -7456,12 +7456,28 @@ async function openBatchDetail(batchId) {
                 : ['failed', 'cancelled'].includes(s.status) ? 'st-failed'
                 : 'st-default';
 
+            // Parse items_json for product summary
+            let productLine = '';
+            try {
+                const items = JSON.parse(s.items_json || '[]');
+                productLine = items.map(item => {
+                    const size = (item.size || item.variant_size || item.product_size || '');
+                    const sizePart = size ? ` <span class="sb-item-size">${size}</span>` : '';
+                    const qty = item.quantity || 1;
+                    const title = item.title || item.name || 'Product';
+                    return `${title}${sizePart} &times;${qty}`;
+                }).join(', ');
+            } catch (_) {}
+
             row.innerHTML = `
-                <span class="sb-shipment-order">${s.order_id}</span>
-                <span class="sb-shipment-awb">${s.awb || '—'}</span>
-                <span class="sb-shipment-customer">${s.customer_name || '—'}</span>
-                <span class="sb-shipment-status ${statusClass}">${s.status || 'unknown'}</span>
-                ${s.label_url ? `<a class="sb-shipment-label-link" href="${s.label_url}" target="_blank" rel="noopener">Label</a>` : '<span style="opacity:0.3;font-size:0.7rem;">No label</span>'}`;
+                <div class="sb-shipment-main">
+                    <span class="sb-shipment-order">${s.order_id}</span>
+                    <span class="sb-shipment-awb">${s.awb || '\u2014'}</span>
+                    <span class="sb-shipment-customer">${s.customer_name || '\u2014'}</span>
+                    <span class="sb-shipment-status ${statusClass}">${s.status || 'unknown'}</span>
+                    ${s.label_url ? `<a class="sb-shipment-label-link" href="${s.label_url}" target="_blank" rel="noopener">Label</a>` : '<span style="opacity:0.3;font-size:0.7rem;">No label</span>'}
+                </div>
+                ${productLine ? `<div class="sb-shipment-products">${productLine}</div>` : ''}`;
 
             fragment.appendChild(row);
         }
@@ -7480,13 +7496,8 @@ function closeBatchDetail() {
 
 function downloadBatchManifest(batchId) {
     if (!batchId) return;
-    // Open manifest CSV download in new tab
     const token = localStorage.getItem('hubToken') || '';
     const url = `/api/admin/shipping/batches/${batchId}/manifest`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.setAttribute('download', '');
-    // Use fetch with auth header for the download
     fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
         .then(res => {
             if (!res.ok) throw new Error('Failed to download manifest');
@@ -7501,29 +7512,142 @@ function downloadBatchManifest(batchId) {
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(blobUrl);
+            showShipToast('Manifest downloaded (includes product & SKU columns)');
         })
         .catch(err => showShipToast(`Manifest download failed: ${err.message}`, true));
 }
 
-async function downloadBatchLabels(batchId) {
+// Open the label download dialog with sort/group options
+function downloadBatchLabels(batchId) {
     if (!batchId) return;
-    try {
-        const data = await apiCall(`/shipping/batches/${batchId}/labels`);
-        const labels = data?.data?.labels || [];
-        if (labels.length === 0) {
-            showShipToast('No labels available yet for this batch', true);
-            return;
-        }
-        // Open each label URL in a new tab (browser popup handling)
-        labels.forEach((l, i) => {
-            if (l.label_url) {
-                setTimeout(() => window.open(l.label_url, '_blank'), i * 200);
-            }
+    // Remove any existing dialog
+    const existing = document.getElementById('sbLabelDownloadDialog');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'sbLabelDownloadDialog';
+    overlay.className = 'sb-label-dl-overlay';
+    overlay.innerHTML = `
+        <div class="sb-label-dl-panel">
+            <div class="sb-label-dl-header">
+                <h3>Download Labels</h3>
+                <button class="sb-label-dl-close" id="sbLabelDlClose">&times;</button>
+            </div>
+            <p class="sb-label-dl-desc">Choose how to organise and sort the label PDFs inside the ZIP.</p>
+
+            <div class="sb-label-dl-section">
+                <label class="sb-label-dl-label">Sort order</label>
+                <div class="sb-label-dl-options" id="sbLabelSortOpts">
+                    <button class="sb-label-dl-opt active" data-sort="sku">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                        <span>By SKU</span>
+                        <small>Group same products together</small>
+                    </button>
+                    <button class="sb-label-dl-opt" data-sort="awb">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M4 9h16"/><path d="M9 4v16"/></svg>
+                        <span>By AWB</span>
+                        <small>Numeric tracking order</small>
+                    </button>
+                    <button class="sb-label-dl-opt" data-sort="order_id">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        <span>By Order ID</span>
+                        <small>Shopify order number</small>
+                    </button>
+                    <button class="sb-label-dl-opt" data-sort="product">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                        <span>By Product</span>
+                        <small>Alphabetical product name</small>
+                    </button>
+                </div>
+            </div>
+
+            <div class="sb-label-dl-section">
+                <label class="sb-label-dl-label">Folder layout</label>
+                <div class="sb-label-dl-options" id="sbLabelFormatOpts">
+                    <button class="sb-label-dl-opt active" data-format="by_sku">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        <span>Grouped by SKU</span>
+                        <small>Labels in SKU-named folders</small>
+                    </button>
+                    <button class="sb-label-dl-opt" data-format="flat">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                        <span>Flat list</span>
+                        <small>All labels in one folder</small>
+                    </button>
+                </div>
+            </div>
+
+            <div class="sb-label-dl-actions">
+                <button class="sb-action-btn" id="sbLabelDlCancel">Cancel</button>
+                <button class="sb-action-btn sb-action-primary" id="sbLabelDlConfirm">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download ZIP
+                </button>
+            </div>
+        </div>`;
+
+    document.body.appendChild(overlay);
+
+    // Wire up sort option buttons
+    let selectedSort = 'sku';
+    let selectedFormat = 'by_sku';
+
+    overlay.querySelectorAll('#sbLabelSortOpts .sb-label-dl-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+            overlay.querySelectorAll('#sbLabelSortOpts .sb-label-dl-opt').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedSort = btn.dataset.sort;
         });
-        showShipToast(`Opening ${labels.length} label(s)...`);
-    } catch (err) {
-        showShipToast(`Failed to fetch labels: ${err.message}`, true);
-    }
+    });
+    overlay.querySelectorAll('#sbLabelFormatOpts .sb-label-dl-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+            overlay.querySelectorAll('#sbLabelFormatOpts .sb-label-dl-opt').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedFormat = btn.dataset.format;
+        });
+    });
+
+    // Close handlers
+    const closeDialog = () => overlay.remove();
+    overlay.querySelector('#sbLabelDlClose').addEventListener('click', closeDialog);
+    overlay.querySelector('#sbLabelDlCancel').addEventListener('click', closeDialog);
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeDialog(); });
+
+    // Confirm download
+    overlay.querySelector('#sbLabelDlConfirm').addEventListener('click', async () => {
+        const confirmBtn = overlay.querySelector('#sbLabelDlConfirm');
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = `<div class="spinner" style="width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite;display:inline-block;vertical-align:middle;margin-right:6px;"></div> Building ZIP...`;
+
+        const token = localStorage.getItem('hubToken') || '';
+        const url = `/api/admin/shipping/batches/${batchId}/labels/download?sortBy=${selectedSort}&format=${selectedFormat}`;
+
+        try {
+            const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                throw new Error(errBody.error || 'Download failed');
+            }
+            const blob = await res.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            // Extract filename from Content-Disposition or use fallback
+            const disposition = res.headers.get('Content-Disposition') || '';
+            const fnMatch = disposition.match(/filename="?([^"]+)"?/);
+            link.download = fnMatch ? fnMatch[1] : `batch_${batchId}_labels.zip`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(blobUrl);
+            closeDialog();
+            showShipToast(`Labels downloaded (${selectedSort === 'sku' ? 'grouped by SKU' : 'sorted by ' + selectedSort})`);
+        } catch (err) {
+            showShipToast(`Label download failed: ${err.message}`, true);
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download ZIP`;
+        }
+    });
 }
 
 async function mergeSelectedBatches() {

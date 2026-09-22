@@ -592,7 +592,8 @@ async function getBatch(batchId) {
                COALESCE(ss.city, '') AS customer_city,
                COALESCE(ss.province, '') AS customer_state,
                COALESCE(ss.zip, '') AS customer_pincode,
-               COALESCE(ss.order_total, 0) AS order_total
+               COALESCE(ss.order_total, 0) AS order_total,
+               COALESCE(ss.items_json, '[]') AS items_json
         FROM shipments s
         LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
         WHERE s.batch_id = ?
@@ -642,17 +643,40 @@ async function generateBatchManifest(batchId) {
                COALESCE(ss.city, '') AS customer_city,
                COALESCE(ss.province, '') AS customer_state,
                COALESCE(ss.zip, '') AS customer_pincode,
-               COALESCE(ss.order_total, 0) AS order_total
+               COALESCE(ss.order_total, 0) AS order_total,
+               COALESCE(ss.items_json, '[]') AS items_json
         FROM shipments s
         LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
         WHERE s.batch_id = ? AND s.status NOT IN ('failed')
         ORDER BY s.id ASC
     `, [batchId]);
 
-    // Build CSV
-    const headers = ['Order ID', 'AWB', 'Courier', 'Status', 'Customer Name', 'Phone', 'Address', 'City', 'State', 'Pincode', 'Payment', 'COD Amount', 'Order Total', 'Freight', 'Weight (g)'];
+    // Build CSV — enriched with product / SKU details
+    const headers = ['Order ID', 'AWB', 'Courier', 'Status', 'Customer Name', 'Phone', 'Address', 'City', 'State', 'Pincode', 'Payment', 'COD Amount', 'Order Total', 'Freight', 'Weight (g)', 'Products', 'SKU(s)'];
     const csvRows = [headers.join(',')];
     for (const s of shipments) {
+        // Parse items_json for product summary and SKUs
+        let productSummary = '';
+        let skuList = '';
+        try {
+            const items = JSON.parse(s.items_json || '[]');
+            const parts = [];
+            const skus = [];
+            for (const item of items) {
+                const size = extractItemSize(item) || '';
+                const title = item.title || item.name || 'Product';
+                const qty = item.quantity || 1;
+                const sizePart = size ? ` (${size})` : '';
+                parts.push(`${title}${sizePart} x${qty}`);
+                const sku = item.sku || item.variant_sku || '';
+                if (sku) skus.push(sku);
+                else if (size) skus.push(`${title}-${size}`);
+                else skus.push(title);
+            }
+            productSummary = parts.join('; ');
+            skuList = skus.join('; ');
+        } catch (_) {}
+
         csvRows.push([
             s.order_id, s.awb || '', s.courier_name || '', s.status || '',
             `"${(s.customer_name || '').replace(/"/g, '""')}"`,
@@ -665,7 +689,9 @@ async function generateBatchManifest(batchId) {
             s.cod_amount || 0,
             s.order_total || 0,
             s.freight_charge || 0,
-            s.weight_grams || 0
+            s.weight_grams || 0,
+            `"${productSummary.replace(/"/g, '""')}"`,
+            `"${skuList.replace(/"/g, '""')}"`
         ].join(','));
     }
 
@@ -680,13 +706,153 @@ async function generateBatchManifest(batchId) {
 
 async function getBatchLabels(batchId) {
     const shipments = await dbAdapter.query(`
-        SELECT id, order_id, awb, label_url, courier_name
-        FROM shipments
-        WHERE batch_id = ? AND label_url IS NOT NULL AND status NOT IN ('failed', 'cancelled')
-        ORDER BY id ASC
+        SELECT s.id, s.order_id, s.awb, s.label_url, s.courier_name, s.manifest_url,
+               COALESCE(ss.items_json, '[]') AS items_json
+        FROM shipments s
+        LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
+        WHERE s.batch_id = ? AND s.label_url IS NOT NULL AND s.status NOT IN ('failed', 'cancelled')
+        ORDER BY s.id ASC
     `, [batchId]);
 
-    return { data: { labels: shipments } };
+    // Enrich each label with parsed SKU / product info
+    const labels = shipments.map(s => {
+        let skus = [];
+        let productSummary = '';
+        try {
+            const items = JSON.parse(s.items_json || '[]');
+            skus = items.map(item => {
+                const size = extractItemSize(item) || '';
+                const title = item.title || item.name || 'Product';
+                const sku = item.sku || item.variant_sku || '';
+                return { title, size, sku };
+            });
+            productSummary = skus.map(s => {
+                const parts = [s.title];
+                if (s.size) parts.push(s.size);
+                return parts.join(' ');
+            }).join('; ');
+        } catch (_) {}
+
+        // Primary SKU for grouping: use first item's SKU or derive from title+size
+        const primarySku = skus.length > 0
+            ? (skus[0].sku || `${skus[0].title}${skus[0].size ? '-' + skus[0].size : ''}`)
+            : 'unknown';
+
+        return {
+            id: s.id,
+            order_id: s.order_id,
+            awb: s.awb,
+            label_url: s.label_url,
+            courier_name: s.courier_name,
+            manifest_url: s.manifest_url,
+            skus,
+            product_summary: productSummary,
+            primary_sku: primarySku
+        };
+    });
+
+    return { data: { labels } };
+}
+
+// Build a ZIP file containing all labels for a batch, sorted/grouped by the
+// chosen strategy.  Returns { zipBuffer, fileName, labelCount }.
+async function buildBatchLabelsZip(batchId, { sortBy = 'sku', format = 'flat' } = {}) {
+    const archiver = require('archiver');
+    const axios = require('axios');
+
+    // Fetch batch + labels with SKU data
+    const batchRows = await dbAdapter.query('SELECT * FROM shipment_batches WHERE id = ? LIMIT 1', [batchId]);
+    if (!batchRows[0]) return { error: 'Batch not found', status: 404 };
+    const batch = batchRows[0];
+
+    const { data: { labels } } = await getBatchLabels(batchId);
+    if (!labels || labels.length === 0) return { error: 'No labels available for this batch', status: 404 };
+
+    // Sort labels
+    const sorted = [...labels];
+    switch (sortBy) {
+        case 'sku':
+            sorted.sort((a, b) => (a.primary_sku || '').localeCompare(b.primary_sku || ''));
+            break;
+        case 'awb':
+            sorted.sort((a, b) => (a.awb || '').localeCompare(b.awb || ''));
+            break;
+        case 'order_id':
+            sorted.sort((a, b) => (a.order_id || '').localeCompare(b.order_id || ''));
+            break;
+        case 'product':
+            sorted.sort((a, b) => (a.product_summary || '').localeCompare(b.product_summary || ''));
+            break;
+        default:
+            break;
+    }
+
+    // Create ZIP buffer
+    const zipBuffer = await new Promise((resolve, reject) => {
+        const chunks = [];
+        const archive = archiver('zip', { zlib: { level: 6 } });
+        archive.on('data', chunk => chunks.push(chunk));
+        archive.on('end', () => resolve(Buffer.concat(chunks)));
+        archive.on('error', reject);
+
+        for (const label of sorted) {
+            // Build a safe filename from order + AWB
+            const safeOrder = (label.order_id || 'order').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const safeAwb = (label.awb || 'noawb').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const fileName = `${safeOrder}_${safeAwb}.pdf`;
+
+            if (format === 'by_sku') {
+                // Group into folders by primary SKU
+                const safeSku = (label.primary_sku || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 60);
+                archive.append(fetchLabelBuffer(label.label_url), { name: `${safeSku}/${fileName}` });
+            } else {
+                archive.append(fetchLabelBuffer(label.label_url), { name: fileName });
+            }
+        }
+
+        // Also include a manifest index file inside the ZIP
+        const indexLines = ['Order ID,AWB,Courier,SKU,Products'];
+        for (const label of sorted) {
+            indexLines.push([
+                label.order_id, label.awb || '', label.courier_name || '',
+                label.primary_sku || '', `"${(label.product_summary || '').replace(/"/g, '""')}"`
+            ].join(','));
+        }
+        archive.append(indexLines.join('\n'), { name: '_label_index.csv' });
+
+        archive.finalize();
+    });
+
+    const safeBatchNum = (batch.batch_number || `batch_${batchId}`).replace(/[^a-zA-Z0-9_-]/g, '_');
+    return {
+        zipBuffer,
+        fileName: `${safeBatchNum}_labels_${sortBy}.zip`,
+        labelCount: labels.length,
+        batchNumber: batch.batch_number
+    };
+}
+
+// Helper: fetch a label PDF from its URL and return as an async-readable stream
+function fetchLabelBuffer(labelUrl) {
+    const { PassThrough } = require('stream');
+    const pt = new PassThrough();
+
+    if (!labelUrl) {
+        pt.end(Buffer.alloc(0));
+        return pt;
+    }
+
+    axios.get(labelUrl, { responseType: 'stream', timeout: 30000 })
+        .then(res => {
+            res.data.pipe(pt);
+            res.data.on('error', () => pt.end());
+        })
+        .catch(() => {
+            // If the fetch fails, write an empty placeholder so the ZIP still completes
+            pt.end();
+        });
+
+    return pt;
 }
 
 module.exports = {
@@ -707,5 +873,6 @@ module.exports = {
     getBatch,
     listBatches,
     generateBatchManifest,
-    getBatchLabels
+    getBatchLabels,
+    buildBatchLabelsZip
 };

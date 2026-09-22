@@ -5931,200 +5931,139 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
             color: #000;
             box-shadow: 0 2px 8px rgba(255,255,255,0.2);
         }
-        .analytics-content {
-            padding: 2rem;
-            max-width: 1600px;
-            margin: 0 auto;
-        }
 
-        /* Stats Row */
-        .analytics-stats-row {
-            display: grid;
-            grid-template-columns: repeat(6, 1fr);
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-        .analytics-stat-card {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 12px;
-            padding: 1.5rem;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            transition: all 0.3s ease;
-        }
-        .analytics-stat-card:hover {
-            transform: translateY(-2px);
-            background: rgba(255,255,255,0.05);
-            border-color: rgba(255,255,255,0.15);
-        }
-        .analytics-stat-card .stat-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(255,255,255,0.08);
-        }
-        .analytics-stat-card.total .stat-icon { color: #fff; }
-        .analytics-stat-card.confirmed .stat-icon { background: rgba(46, 213, 115, 0.15); color: #2ed573; }
-        .analytics-stat-card.shipped .stat-icon { background: rgba(30, 144, 255, 0.15); color: #1e90ff; }
-        .analytics-stat-card.pending .stat-icon { background: rgba(255, 165, 2, 0.15); color: #ffa502; }
-        .analytics-stat-card.cancelled .stat-icon { background: rgba(255, 71, 87, 0.15); color: #ff4757; }
-        .analytics-stat-card.edits .stat-icon { background: rgba(83, 189, 235, 0.15); color: #53bdeb; }
-        .analytics-stat-card .stat-info {
-            display: flex;
-            flex-direction: column;
-        }
-        .analytics-stat-card .stat-number {
-            font-size: 1.8rem;
-            font-weight: 700;
-            font-family: 'Archivo Narrow', sans-serif;
-            color: #fff;
-            line-height: 1;
-        }
-        .analytics-stat-card .stat-label {
-            font-size: 0.75rem;
-            color: rgba(255,255,255,0.6);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-top: 0.25rem;
-        }
-        .analytics-stat-card .stat-percent {
-            font-size: 0.85rem;
-            font-weight: 600;
-            margin-top: 0.25rem;
-        }
-        .analytics-stat-card.confirmed .stat-percent { color: #2ed573; }
-        .analytics-stat-card.shipped .stat-percent { color: #1e90ff; }
-        .analytics-stat-card.pending .stat-percent { color: #ffa502; }
-        .analytics-stat-card.cancelled .stat-percent { color: #ff4757; }
-        .analytics-stat-card.edits .stat-percent { color: #53bdeb; }
+/* ── Label Download Dialog ─────────────────────────────────────────── */
+.sb-label-dl-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: sbFadeIn 0.2s ease;
+}
+@keyframes sbFadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-        /* Charts Grid */
-        .analytics-charts-grid {
-            display: grid;
-            grid-template-columns: 1fr 1.5fr;
-            gap: 1.5rem;
-            margin-bottom: 1.5rem;
-        }
-        .analytics-card {
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 12px;
-            padding: 1.5rem;
-        }
-        .analytics-card.wide {
-            grid-column: span 1;
-        }
-        .analytics-card-title {
-            margin: 0 0 1.5rem 0;
-            font-family: 'Archivo Narrow', sans-serif;
-            font-size: 0.9rem;
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-            color: rgba(255,255,255,0.8);
-        }
+.sb-label-dl-panel {
+    background: linear-gradient(145deg, #1a1a2e 0%, #16213e 100%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 1.75rem;
+    width: 480px;
+    max-width: 92vw;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(83,189,235,0.1);
+}
+.sb-label-dl-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+.sb-label-dl-header h3 {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: -0.01em;
+}
+.sb-label-dl-close {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.4);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.25rem;
+    line-height: 1;
+    transition: color 0.2s;
+}
+.sb-label-dl-close:hover { color: #fff; }
+.sb-label-dl-desc {
+    margin: 0 0 1.25rem;
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.5);
+    line-height: 1.5;
+}
+.sb-label-dl-section { margin-bottom: 1.25rem; }
+.sb-label-dl-label {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255,255,255,0.45);
+    margin-bottom: 0.6rem;
+}
+.sb-label-dl-options {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+}
+.sb-label-dl-opt {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+    padding: 0.7rem 0.8rem;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: rgba(255,255,255,0.7);
+    text-align: left;
+}
+.sb-label-dl-opt:hover {
+    background: rgba(255,255,255,0.06);
+    border-color: rgba(255,255,255,0.12);
+}
+.sb-label-dl-opt.active {
+    background: rgba(83,189,235,0.08);
+    border-color: rgba(83,189,235,0.35);
+    color: #fff;
+    box-shadow: 0 0 0 1px rgba(83,189,235,0.15), inset 0 1px 0 rgba(83,189,235,0.1);
+}
+.sb-label-dl-opt span { font-size: 0.82rem; font-weight: 500; }
+.sb-label-dl-opt small { font-size: 0.68rem; color: rgba(255,255,255,0.35); line-height: 1.3; }
+.sb-label-dl-opt.active small { color: rgba(83,189,235,0.7); }
+.sb-label-dl-opt svg { opacity: 0.5; margin-bottom: 0.15rem; }
+.sb-label-dl-opt.active svg { opacity: 1; stroke: #53bdeb; }
+.sb-label-dl-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid rgba(255,255,255,0.06);
+}
 
-        /* Circular Charts */
-        .circular-charts-container {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1.5rem;
-        }
-        .circular-chart-wrapper {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            position: relative;
-        }
-        .circular-chart {
-            width: 100px;
-            height: 100px;
-            transform: rotate(-90deg);
-        }
-        .circular-chart-bg {
-            fill: none;
-            stroke: rgba(255,255,255,0.1);
-            stroke-width: 8;
-        }
-        .circular-chart-progress {
-            fill: none;
-            stroke-width: 8;
-            stroke-linecap: round;
-            stroke-dasharray: 283;
-            stroke-dashoffset: 283;
-            transition: stroke-dashoffset 1.5s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-        .circular-chart-progress.confirmed { stroke: #2ed573; }
-        .circular-chart-progress.shipped { stroke: #1e90ff; }
-        .circular-chart-progress.pending { stroke: #ffa502; }
-        .circular-chart-progress.cancelled { stroke: #ff4757; }
-        .circular-chart-progress.edits { stroke: #53bdeb; }
-        .circular-chart-value {
-            position: absolute;
-            top: 35px;
-            font-size: 1.2rem;
-            font-weight: 700;
-            font-family: 'Archivo Narrow', sans-serif;
-        }
-        .circular-chart-label {
-            margin-top: 0.5rem;
-            font-size: 0.75rem;
-            color: rgba(255,255,255,0.6);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        /* Bar Chart */
-        .bar-chart-container {
-            display: flex;
-            align-items: flex-end;
-            justify-content: space-between;
-            height: 200px;
-            gap: 0.5rem;
-            padding: 1rem 0;
-        }
-        .bar-chart-item {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .bar-chart-bar-wrapper {
-            width: 100%;
-            height: 160px;
-            display: flex;
-            align-items: flex-end;
-            justify-content: center;
-            position: relative;
-        }
-        .bar-chart-bar {
-            width: 80%;
-            background: linear-gradient(to top, rgba(255,255,255,0.3), rgba(255,255,255,0.6));
-            border-radius: 4px 4px 0 0;
-            transition: height 1s cubic-bezier(0.16, 1, 0.3, 1);
-            position: relative;
-            min-height: 4px;
-        }
-        .bar-chart-bar::after {
-            content: attr(data-value);
-            position: absolute;
-            top: -20px;
-            left: 50%;
-            transform: translateX(-50%);
-            font-size: 0.7rem;
-            color: rgba(255,255,255,0.8);
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-        .bar-chart-item:hover .bar-chart-bar::after {
-            opacity: 1;
-        }
-        .bar-chart-label {
-            font-size: 0.65rem;
-            color: rgba(255,255,255,0.5);
-            text-align: center;
+/* ── Enhanced Shipment Rows (batch detail) ─────────────────────────── */
+.sb-shipment-main {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.sb-shipment-products {
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.4);
+    padding-left: 0.1rem;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+.sb-item-size {
+    display: inline-block;
+    background: rgba(83,189,235,0.12);
+    color: rgba(83,189,235,0.85);
+    padding: 0.1em 0.4em;
+    border-radius: 3px;
+    font-size: 0.65rem;
+    font-weight: 500;
+    margin-left: 0.2rem;
+    vertical-align: middle;
+}

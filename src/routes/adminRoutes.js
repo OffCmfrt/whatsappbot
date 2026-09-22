@@ -5796,7 +5796,7 @@ router.get('/shipping/batches/:id/manifest', verifyToken, async (req, res) => {
     }
 });
 
-// Get all label URLs for a batch
+// Get all label URLs for a batch (enriched with SKU / product data)
 router.get('/shipping/batches/:id/labels', verifyToken, async (req, res) => {
     try {
         const result = await shippingService.getBatchLabels(req.params.id);
@@ -5804,6 +5804,27 @@ router.get('/shipping/batches/:id/labels', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Batch labels error:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch labels' });
+    }
+});
+
+// Download all labels as a ZIP file, sorted/grouped by the chosen strategy
+// Query params: sortBy = sku | awb | order_id | product
+//               format  = flat | by_sku  (by_sku creates sub-folders per SKU)
+router.get('/shipping/batches/:id/labels/download', verifyToken, async (req, res) => {
+    try {
+        const { sortBy = 'sku', format = 'by_sku' } = req.query;
+        const result = await shippingService.buildBatchLabelsZip(req.params.id, { sortBy, format });
+
+        if (result.error) {
+            return res.status(result.status || 500).json({ success: false, error: result.error });
+        }
+
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
+        res.send(result.zipBuffer);
+    } catch (error) {
+        console.error('Batch label download error:', error);
+        res.status(500).json({ success: false, error: 'Failed to build label ZIP' });
     }
 });
 
