@@ -15,6 +15,7 @@ const { caches } = require('../utils/cache');
 const { extractItemSize } = require('../utils/orderItems');
 const PDFDocument = require('pdfkit');
 const bwipjs = require('bwip-js');
+const axios = require('axios');
 const { getConfiguredCarriers, getAdapter } = require('./carriers');
 
 // Default package when admin doesn't override (apparel-friendly)
@@ -844,10 +845,14 @@ async function getBatchLabels(batchId) {
     `, [batchId]);
 
     // Generate labels on-the-fly for shipments without stored label_url
+    // Each carrier call gets a 15s timeout so a slow API never blocks the whole batch
     for (const s of shipments) {
         if (!s.label_url && s.awb) {
             try {
-                const result = await generateLabel(s.id);
+                const result = await Promise.race([
+                    generateLabel(s.id),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('Label generation timeout')), 15000))
+                ]);
                 if (result.data?.labelUrl) {
                     s.label_url = result.data.labelUrl;
                     // Persist so subsequent requests are instant
@@ -906,7 +911,8 @@ async function getBatchLabels(batchId) {
 // chosen strategy.  Always returns a ZIP — shipments without carrier labels
 // get a generated info-sheet PDF so the download never fails.
 async function buildBatchLabelsZip(batchId, { sortBy = 'sku', format = 'flat' } = {}) {
-    const archiver = require('archiver');
+    const { ZipArchive } = require('archiver');
+    const { PassThrough } = require('stream');
 
     // Fetch batch
     const batchRows = await dbAdapter.query('SELECT * FROM shipment_batches WHERE id = ? LIMIT 1', [batchId]);
@@ -984,10 +990,12 @@ async function buildBatchLabelsZip(batchId, { sortBy = 'sku', format = 'flat' } 
 
     // Create ZIP buffer
     const zipBuffer = await new Promise(async (resolve, reject) => {
+        const output = new PassThrough();
         const chunks = [];
-        const archive = archiver('zip', { zlib: { level: 6 } });
-        archive.on('data', chunk => chunks.push(chunk));
-        archive.on('end', () => resolve(Buffer.concat(chunks)));
+        const archive = new ZipArchive({ zlib: { level: 6 } });
+        archive.pipe(output);
+        output.on('data', chunk => chunks.push(chunk));
+        output.on('end', () => resolve(Buffer.concat(chunks)));
         archive.on('error', reject);
 
         let labelCount = 0, missingCount = 0;
@@ -1053,10 +1061,18 @@ function fetchLabelBuffer(labelUrl) {
     axios.get(labelUrl, { responseType: 'stream', timeout: 30000 })
         .then(res => {
             res.data.pipe(pt);
-            res.data.on('error', () => pt.end());
+            res.data.on('error', (err) => {
+                console.warn(`Label stream error for ${labelUrl}: ${err.message}`);
+                pt.end();
+            });
+            res.data.on('end', () => {
+                // Ensure the stream closes cleanly when data is fully received
+                if (!pt.writableEnded) pt.end();
+            });
         })
-        .catch(() => {
+        .catch((err) => {
             // If the fetch fails, write an empty placeholder so the ZIP still completes
+            console.warn(`Label fetch failed for ${labelUrl}: ${err.message}`);
             pt.end();
         });
 
