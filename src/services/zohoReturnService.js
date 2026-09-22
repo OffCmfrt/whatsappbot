@@ -694,6 +694,24 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
             }
         }
 
+        // ── Create a note/comment on the Zoho invoice documenting the exchange ──
+        const targetInvoiceId = correctedInvoiceId || replacementInvoiceId;
+        if (targetInvoiceId) {
+            const origSummary = (originalItems || [])
+                .map(i => `${i.quantity || 1}x ${i.title || i.sku || 'item'}${i.variant ? ' (' + i.variant + ')' : ''}`)
+                .join(', ');
+            const exchSummary = (exchangedItems || [])
+                .map(i => `${i.quantity || 1}x ${i.title || i.sku || 'item'}${i.variant ? ' (' + i.variant + ')' : ''}`)
+                .join(', ');
+            const noteText = `EXCHANGE — ${new Date().toISOString().split('T')[0]}\nOriginal: ${origSummary}\nExchanged for: ${exchSummary}\nProcessed via returns server.`;
+            try {
+                await zohoService.addInvoiceComment(targetInvoiceId, noteText);
+                console.log(`📝 Zoho exchange: note added to invoice ${targetInvoiceId}`);
+            } catch (noteErr) {
+                console.warn(`⚠️ Zoho exchange: failed to add note to invoice ${targetInvoiceId}: ${noteErr.message}`);
+            }
+        }
+
         try {
             await dbAdapter.run(
                 `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, zoho_exchange_invoice_id = ?, updated_at = NOW() WHERE id = ?`,

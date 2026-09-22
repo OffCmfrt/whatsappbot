@@ -201,6 +201,16 @@ async function markInvoiceSent(invoiceId) {
     return zohoRequest('post', url);
 }
 
+/**
+ * Add a comment/note to an invoice in Zoho Books.
+ * Used to document exchanges, returns, etc. directly on the invoice.
+ */
+async function addInvoiceComment(invoiceId, commentText) {
+    const url = `${BOOKS_BASE()}/invoices/${invoiceId}/comments`;
+    const result = await zohoRequest('post', url, { description: commentText });
+    return result;
+}
+
 async function deleteCreditNote(creditNoteId) {
     const url = `${BOOKS_BASE()}/creditnotes/${creditNoteId}`;
     return zohoRequest('delete', url);
@@ -559,6 +569,7 @@ module.exports = {
 
     // Invoice updates
     updateInvoice,
+    addInvoiceComment,
 
     // Payments
     recordPayment,
