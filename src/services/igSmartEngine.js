@@ -86,7 +86,8 @@ const INTENTS = {
             ['delayed', 3], ['delay', 2.5], ['stuck', 2],
             ['no update', 3], ['where is my package', 6],
             ['package lost', 6], ['lost package', 6], ['missing order', 5.5],
-            ['never arrived', 5.5], ['not arrived', 5]
+            ['never arrived', 5.5], ['not arrived', 5],
+            ['late', 3], ['order is late', 5], ['too late', 3.5]
         ],
         description: 'Delivery problem reported'
     },

@@ -242,7 +242,7 @@ function loadPageData(page) {
         case 'widget-chats': loadWidgetChats(); break;
         case 'ai-analytics': initAnalyticsDateFilter(); loadAiAnalytics(); break;
         case 'templates': loadTemplates(); break;
-        case 'ig-comments': if (typeof loadIgComments === 'function') loadIgComments(); break;
+        case 'ig-comments': if (window.CommentsCenter && typeof window.CommentsCenter.load === 'function') window.CommentsCenter.load(); break;
         case 'settings': loadPortals(); loadUrgentKeywordsPreview(); break;
     }
 }

@@ -545,11 +545,10 @@ class InstagramService {
                     customer_id = COALESCE(?, instagram_conversations.customer_id),
                     last_customer_message_at = ?,
                     window_expires_at = ?,
-                    is_escalated = false,
                     updated_at = ?`,
                 [
                     igUserId, igUsername, customerId,
-                    now.toISOString(), expiresAt.toISOString(), now.toISOString(),
+                    now.toISOString(), expiresAt.toISOString(),
                     igUsername, customerId,
                     now.toISOString(), expiresAt.toISOString(), now.toISOString()
                 ]

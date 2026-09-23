@@ -1251,17 +1251,22 @@ They'll review and reply right here within 24-48 hours.`
         const yy = String(now.getFullYear()).slice(-2);
         const mm = String(now.getMonth() + 1).padStart(2, '0');
         const dd = String(now.getDate()).padStart(2, '0');
-        const random = Math.floor(Math.random() * 9000 + 1000);
-        const candidate = `IG-${yy}${mm}${dd}-${random}`;
+        const prefix = `IG-${yy}${mm}${dd}`;
+        const MAX_ATTEMPTS = 10;
 
-        const existing = await dbAdapter.query(
-            'SELECT id FROM support_tickets WHERE ticket_number = ? LIMIT 1',
-            [candidate]
-        );
-        if (!existing || existing.length === 0) return candidate;
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+            const random = Math.floor(Math.random() * 9000 + 1000);
+            const candidate = `${prefix}-${random}`;
 
-        // Retry with different random
-        return `IG-${yy}${mm}${dd}-${Math.floor(Math.random() * 9000 + 1000)}`;
+            const existing = await dbAdapter.query(
+                'SELECT id FROM support_tickets WHERE ticket_number = ? LIMIT 1',
+                [candidate]
+            );
+            if (!existing || existing.length === 0) return candidate;
+        }
+
+        // Fallback: append millisecond timestamp to guarantee uniqueness
+        return `${prefix}-${Date.now() % 100000}`;
     }
 
     _getStatusText(status) {
