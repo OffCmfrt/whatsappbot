@@ -135,8 +135,24 @@ async function processInstagramEvent(event) {
         return;
     }
 
-    // ── 1. Idempotency check ──────────────────────────────
+    // ── 0. Self-message / echo filtering ──────────────────────
+    // Instagram echoes back messages sent by our business account.
+    // These must be ignored BEFORE any logging, state updates, or
+    // bot processing to prevent the bot from responding to itself.
     const message = event.message;
+
+    if (message?.is_echo === true) {
+        console.log(`[IG EVENT] Echo message (mid=${message.mid}) — skipping`);
+        return;
+    }
+
+    const ownId = await instagramService.getOwnUserId();
+    if (ownId && String(senderId) === String(ownId)) {
+        console.log(`[IG EVENT] Self-message from business account ${String(ownId).substring(0, 8)}... — skipping`);
+        return;
+    }
+
+    // ── 1. Idempotency check ──────────────────────────────
     const messageId = message?.mid;
 
     if (messageId) {

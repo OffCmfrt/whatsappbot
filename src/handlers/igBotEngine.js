@@ -136,6 +136,12 @@ class IGBotEngine {
             const currentState = botState?.state || STATES.IDLE;
             let context = botState?.context || {};
 
+            // Inject current state into context — required for
+            // _detectIntentSwitch() to detect intent switching mid-flow.
+            // Without this, context.state is undefined and isIntentSwitch
+            // is always false, causing the bot to ignore new intents.
+            context.state = currentState;
+
             console.log(`[IG BOT] User ${igUserId} | State: ${currentState} | Msg: "${cleanMessage.substring(0, 50)}"`);
 
             // Referral entry (ad/link) — greet the user
@@ -247,8 +253,9 @@ class IGBotEngine {
                     await this._handleOrderTracking(igUserId, id || message);
                     return true;
                 }
-                if (result.isIntentSwitch) {
-                    await this._acknowledgeSwitch(igUserId);
+                // New intent detected — switch instead of re-asking
+                if (this._isNewIntent(result)) {
+                    if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId);
                     await this._routeIntent(igUserId, message, result, context);
                     return true;
                 }
@@ -263,8 +270,9 @@ class IGBotEngine {
                     await this._handleReturnExchange(igUserId, id || message, context);
                     return true;
                 }
-                if (result.isIntentSwitch) {
-                    await this._acknowledgeSwitch(igUserId);
+                // New intent detected — switch instead of re-asking
+                if (this._isNewIntent(result)) {
+                    if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId);
                     await this._routeIntent(igUserId, message, result, context);
                     return true;
                 }
@@ -276,8 +284,9 @@ class IGBotEngine {
 
             // ── Awaiting issue description for support ticket ──
             case STATES.AWAITING_SUPPORT_DESCRIPTION:
-                if (result.isIntentSwitch) {
-                    await this._acknowledgeSwitch(igUserId);
+                // New intent detected — switch instead of treating as description
+                if (this._isNewIntent(result)) {
+                    if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId);
                     await this._routeIntent(igUserId, message, result, context);
                     return true;
                 }
@@ -335,6 +344,39 @@ class IGBotEngine {
      */
     async _acknowledgeSwitch(igUserId) {
         await instagramService.sendMessage(igUserId, "No problem — let's take care of that instead.");
+    }
+
+    /**
+     * Determine whether a classified message represents a new intent
+     * that should override the current collecting/flow state.
+     *
+     * Returns true for:
+     *   - High-confidence intent switches (from _detectIntentSwitch)
+     *   - Greetings (never treat "hi" as an order ID)
+     *   - Any recognized intent with at least MEDIUM confidence
+     *
+     * This prevents the bot from endlessly re-asking for an Order ID
+     * when the customer clearly wants to talk about something else.
+     */
+    _isNewIntent(result) {
+        // High-confidence intent switch (detected by smart engine)
+        if (result.isIntentSwitch) return true;
+
+        // Greetings always override — "hi" is never an order ID
+        if (result.intent === 'greeting') return true;
+
+        // Human support requests always override
+        if (result.intent === 'human_support') return true;
+
+        // Any recognized intent with at least MEDIUM confidence
+        // (excludes unknown, positive_message, and very low-confidence guesses)
+        if (result.intent !== 'unknown' &&
+            result.intent !== 'positive_message' &&
+            result.confidence >= CONFIDENCE.MEDIUM) {
+            return true;
+        }
+
+        return false;
     }
 
     // ─── Intent Routing ─────────────────────────────────────────
