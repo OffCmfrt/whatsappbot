@@ -548,7 +548,7 @@ class InstagramService {
                     updated_at = ?`,
                 [
                     igUserId, igUsername, customerId,
-                    now.toISOString(), expiresAt.toISOString(),
+                    now.toISOString(), expiresAt.toISOString(), now.toISOString(),
                     igUsername, customerId,
                     now.toISOString(), expiresAt.toISOString(), now.toISOString()
                 ]
