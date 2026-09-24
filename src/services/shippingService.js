@@ -12,7 +12,7 @@
 
 const { dbAdapter } = require('../database/db');
 const { caches } = require('../utils/cache');
-const { extractItemSize } = require('../utils/orderItems');
+const { extractItemSize, extractItemColour } = require('../utils/orderItems');
 const PDFDocument = require('pdfkit');
 const bwipjs = require('bwip-js');
 const axios = require('axios');
@@ -41,9 +41,10 @@ function parseItems(itemsJson) {
             sku: item.sku || item.variant_id ? String(item.sku || item.variant_id) : null,
             quantity: parseInt(item.quantity) || 1,
             price: Number(item.price) || 0,
-            // Shopify keeps the size in variant_title — resolve every shape
-            // so carriers can print it on the label
-            size: extractItemSize(item)
+            // Shopify keeps the size and colour in variant_title — resolve every shape
+            // so carriers can print them on the label
+            size: extractItemSize(item),
+            colour: extractItemColour(item)
         }));
     } catch (e) {
         return [];

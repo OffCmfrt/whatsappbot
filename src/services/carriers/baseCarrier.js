@@ -90,15 +90,16 @@ class BaseCarrier {
     }
 
     // Product line printed on the label / packing slip:
-    //   "Relaxed Tee (M) x2, Cargo Pants (32) x1"
-    // Size matters for apparel returns & warehouse picking, so it is always
-    // included when the item carries one. Drops whole items (never half a
-    // product name) when the carrier's field length runs out.
+    //   "Relaxed Tee - Black (M) x2, Cargo Pants - Navy (32) x1"
+    // Size and colour matter for apparel returns & warehouse picking, so they
+    // are always included when the item carries them. Drops whole items (never
+    // half a product name) when the carrier's field length runs out.
     formatProductsDesc(items = [], maxLength = 200, fallback = 'Apparel') {
         const parts = [];
         let length = 0;
         for (const item of items) {
-            const part = `${item.name}${item.size ? ` (${item.size})` : ''} x${item.quantity || 1}`;
+            const variant = [item.colour, item.size].filter(Boolean).join(', ');
+            const part = `${item.name}${variant ? ` - ${variant}` : ''} x${item.quantity || 1}`;
             const added = parts.length ? part.length + 2 : part.length; // ', ' separator
             if (length + added > maxLength) break;
             parts.push(part);

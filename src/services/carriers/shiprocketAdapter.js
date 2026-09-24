@@ -706,13 +706,16 @@ class ShiprocketAdapter extends BaseCarrier {
             const lastName = stripNonAlpha(nameParts.slice(1).join(' '));
 
             const orderItems = (ctx.items.length > 0 ? ctx.items : [{ name: 'Product', quantity: 1, price: ctx.payment.declaredValue || 0 }])
-                .map((item, idx) => ({
-                    // Size goes in the name — Shiprocket labels/invoices print it from here
-                    name: `${item.name}${item.size ? ` (${item.size})` : ''}`,
-                    sku: item.sku || `SKU-${ctx.orderId}-${idx + 1}`,
-                    units: item.quantity || 1,
-                    selling_price: Number(item.price) || 0
-                }));
+                .map((item, idx) => {
+                    // Size and colour go in the name — Shiprocket labels/invoices print from here
+                    const variant = [item.colour, item.size].filter(Boolean).join(', ');
+                    return {
+                        name: `${item.name}${variant ? ` - ${variant}` : ''}`,
+                        sku: item.sku || `SKU-${ctx.orderId}-${idx + 1}`,
+                        units: item.quantity || 1,
+                        selling_price: Number(item.price) || 0
+                    };
+                });
 
             const subTotal = orderItems.reduce((sum, i) => sum + (i.selling_price * i.units), 0) || Number(ctx.payment.declaredValue) || 0;
 

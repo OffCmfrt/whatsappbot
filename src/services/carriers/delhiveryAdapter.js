@@ -284,15 +284,18 @@ class DelhiveryAdapter extends BaseCarrier {
             shipment_length: String(ctx.package.lengthCm || 30),
             shipment_width: String(ctx.package.breadthCm || 40),
             shipment_height: String(ctx.package.heightCm || 2),
-            products: (ctx.items && ctx.items.length ? ctx.items : [{ name: 'Apparel', sku: 'SKU', price: declared, quantity: 1 }]).map(item => ({
-                sku: item.sku || 'SKU',
-                name: `${item.name}${item.size ? ` (${item.size})` : ''}`.substring(0, 100),
-                order: orderId,
-                price: Number(item.price) || 0,
-                quantity: item.quantity || 1,
-                weight: String(weightGrams), // grams, mirrors the package weight
-                hsn: '6109' // apparel default
-            }))
+            products: (ctx.items && ctx.items.length ? ctx.items : [{ name: 'Apparel', sku: 'SKU', price: declared, quantity: 1 }]).map(item => {
+                const variant = [item.colour, item.size].filter(Boolean).join(', ');
+                return {
+                    sku: item.sku || 'SKU',
+                    name: `${item.name}${variant ? ` - ${variant}` : ''}`.substring(0, 100),
+                    order: orderId,
+                    price: Number(item.price) || 0,
+                    quantity: item.quantity || 1,
+                    weight: String(weightGrams), // grams, mirrors the package weight
+                    hsn: '6109' // apparel default
+                };
+            })
         };
 
         const cmuPayload = {
