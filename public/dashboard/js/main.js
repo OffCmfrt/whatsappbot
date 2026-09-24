@@ -544,6 +544,11 @@ function classifyPortal(p) {
     if (p.type === 'time_based' && p.config) {
         const start = p.config.time_start || p.shift_start || '';
         const end = p.config.time_end || p.shift_end || '';
+        // Overnight shift: end is earlier than start (e.g. 17:00–09:00)
+        if (end && start && end < start) {
+            // Classify by the START time: 17:00+ → evening, otherwise morning
+            return start >= '17:00' ? 'evening' : 'morning';
+        }
         if (start >= '09:00' && end <= '17:00') return 'morning';
         if (start >= '17:00' && end <= '21:00') return 'evening';
         return 'other';
