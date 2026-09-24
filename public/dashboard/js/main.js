@@ -332,8 +332,9 @@ function renderTickets(tickets, append) {
             <div class="ticket-col ticket-meta">
                 <span class="ticket-channel-badge ${channel}">${channelLabel}</span>
                 <span class="ticket-time">${timeAgo}</span>
+                ${statusClass === 'follow_up' ? dashboardFollowUpChip(t.follow_up_at) : ''}
             </div>
-            <div class="ticket-col"><span class="ticket-status-badge ${statusClass}">${statusClass}</span></div>
+            <div class="ticket-col"><span class="ticket-status-badge ${statusClass}">${statusLabel(statusClass)}</span></div>
             <div class="ticket-col">
                 <div class="ticket-portal-name">${esc(t.portal_name || 'Unassigned')}</div>
                 <div class="ticket-actions">
@@ -358,7 +359,37 @@ function updateStatsRow(meta) {
     document.getElementById('statOpen').textContent = meta.open || 0;
     document.getElementById('statUnread').textContent = meta.unread || 0;
     document.getElementById('statResolved').textContent = meta.resolved || 0;
+    document.getElementById('statFollowUp').textContent = meta.follow_up || 0;
     document.getElementById('statUrgent').textContent = meta.urgent || 0;
+}
+
+const STATUS_LABELS = { open: 'Open', resolved: 'Resolved', closed: 'Closed', follow_up: 'Follow-Up' };
+function statusLabel(status) { return STATUS_LABELS[status] || status || 'Open'; }
+
+// Follow-up due chip for the ticket list (due / overdue badge)
+function dashboardFollowUpChip(followUpStr) {
+    if (!followUpStr) return '';
+    const due = new Date(followUpStr);
+    if (isNaN(due.getTime())) return '';
+    const now = new Date();
+    const diffMs = due - now;
+    const overdue = diffMs <= 0;
+    let label;
+    if (overdue) {
+        const mins = Math.floor(-diffMs / 60000);
+        if (mins < 60) label = `Overdue ${mins}m`;
+        else if (mins < 1440) label = `Overdue ${Math.floor(mins / 60)}h`;
+        else label = `Overdue ${Math.floor(mins / 1440)}d`;
+    } else {
+        const time = due.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const dueDay = new Date(due); dueDay.setHours(0, 0, 0, 0);
+        const dayDiff = Math.round((dueDay - today) / 86400000);
+        if (dayDiff === 0) label = `Today ${time}`;
+        else if (dayDiff === 1) label = `Tomorrow ${time}`;
+        else label = `${due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${time}`;
+    }
+    return `<span class="ticket-followup-chip${overdue ? ' overdue' : ''}">${overdue ? '⚠' : '⏰'} ${esc(label)}</span>`;
 }
 
 function updatePagination() {

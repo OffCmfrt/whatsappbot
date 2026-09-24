@@ -5,6 +5,10 @@ const jwt = require('jsonwebtoken');
 const whatsappService = require('../services/whatsappService');
 const { dbAdapter } = require('../database/db');
 
+// Allowed ticket status values — 'follow_up' parks a ticket for later action.
+// It is NOT resolved and still counts as active work for the portal.
+const SUPPORT_TICKET_STATUSES = ['open', 'resolved', 'closed', 'follow_up'];
+
 // Portal auth middleware
 async function verifyPortalToken(req, res, next) {
     const token = req.headers['authorization']?.split(' ')[1];
@@ -488,7 +492,7 @@ router.post('/:slug/chat/send', verifyPortalToken, async (req, res) => {
 router.put('/:slug/tickets/:id', verifyPortalToken, async (req, res) => {
     try {
         const { slug, id } = req.params;
-        const { status } = req.body;
+        const { status, follow_up_at, follow_up_note } = req.body;
 
         if (slug !== req.portal.slug) {
             return res.status(403).json({ error: 'Portal mismatch' });
@@ -496,6 +500,10 @@ router.put('/:slug/tickets/:id', verifyPortalToken, async (req, res) => {
 
         if (!status) {
             return res.status(400).json({ success: false, error: 'Status is required' });
+        }
+
+        if (!SUPPORT_TICKET_STATUSES.includes(status)) {
+            return res.status(400).json({ success: false, error: `Invalid status. Allowed: ${SUPPORT_TICKET_STATUSES.join(', ')}` });
         }
 
         // Verify ticket belongs to portal
@@ -539,9 +547,38 @@ router.put('/:slug/tickets/:id', verifyPortalToken, async (req, res) => {
             }
         }
 
+        // Build the status update. Marking follow-up stores the optional reminder
+        // date + note; resolving closes the follow-up loop and drops the reminder.
+        const updates = ['status = ?'];
+        const updateParams = [status];
+
+        if (status === 'follow_up') {
+            if (follow_up_at !== undefined) {
+                updates.push('follow_up_at = ?');
+                updateParams.push(follow_up_at || null);
+            }
+            if (follow_up_note !== undefined) {
+                updates.push('follow_up_note = ?');
+                updateParams.push(follow_up_note || null);
+            }
+        } else if (status === 'resolved' || status === 'closed') {
+            updates.push('follow_up_at = NULL', 'follow_up_note = NULL');
+        }
+
+        updateParams.push(id);
         await dbAdapter.run(
-            'UPDATE support_tickets SET status = ? WHERE id = ?',
-            [status, id]
+            `UPDATE support_tickets SET ${updates.join(', ')} WHERE id = ?`,
+            updateParams
+        );
+
+        // Keep the portal's assigned_count in sync (open + follow-up = active work)
+        const countResult = await dbAdapter.query(
+            `SELECT COUNT(*) as count FROM support_tickets WHERE portal_id = ? AND status IN ('open', 'follow_up')`,
+            [portal.id]
+        );
+        await dbAdapter.run(
+            'UPDATE support_portals SET assigned_count = ? WHERE id = ?',
+            [countResult[0]?.count || 0, portal.id]
         );
 
         res.json({ success: true, message: 'Ticket updated successfully' });

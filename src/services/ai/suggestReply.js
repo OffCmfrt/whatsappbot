@@ -149,12 +149,18 @@ async function suggestReply({ actor, phone, ticketId, prefetch = false }) {
     const pending = inFlight.get(cacheKey);
     if (pending) return pending;
 
-    // Separate daily cap for suggestions (shared across admins). Prefetches
-    // stop at 90% so explicit ✨ clicks keep the last slice of the budget.
-    const dailyLimit = parseInt(await Settings.get('ai_suggest_reply_daily_limit', '100')) || 100;
-    const totalToday = await countAllSuggestionsToday();
-    if (totalToday >= dailyLimit || (prefetch && totalToday >= dailyLimit * 0.9)) {
-        const err = new Error(`AI suggestion daily limit reached (${dailyLimit}). Try again tomorrow.`);
+    // Per-actor daily cap for suggestions — every admin username and every CX
+    // portal (`portal:<slug>`) gets its OWN budget instead of draining one shared
+    // pool. Prefetches stop at 90% so explicit ✨ clicks keep the last slice.
+    const dailyLimit = parseInt(await Settings.get(
+        'ai_suggest_reply_daily_limit',
+        process.env.AI_SUGGEST_REPLY_DAILY_LIMIT || '500'
+    )) || 500;
+    const actorKey = actor || 'unknown';
+    const usedToday = await aiStore.getTodayUsageCount(actorKey, 'suggest_reply');
+    if (usedToday >= dailyLimit || (prefetch && usedToday >= dailyLimit * 0.9)) {
+        const subject = String(actorKey).startsWith('portal:') ? 'portal' : 'admin';
+        const err = new Error(`AI suggestion daily limit reached (${dailyLimit}/day for this ${subject}). Try again tomorrow or raise the limit in AI settings.`);
         err.code = 'AI_LIMIT';
         throw err;
     }
@@ -227,14 +233,6 @@ async function generateSuggestions({ actor, context, cacheKey }) {
         suggestionCache.set(cacheKey, { latestMsgId: context.latestMsgId, result, at: Date.now() });
     }
     return result;
-}
-
-async function countAllSuggestionsToday() {
-    const rows = await dbAdapter.query(
-        `SELECT COUNT(*)::int AS count FROM ai_usage_log
-         WHERE kind = 'suggest_reply' AND created_at >= date_trunc('day', NOW())`
-    );
-    return rows[0]?.count || 0;
 }
 
 module.exports = { suggestReply };

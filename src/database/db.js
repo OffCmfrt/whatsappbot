@@ -471,6 +471,11 @@ async function initializeSupportPortalsTable() {
     await addColumnIfNotExists('support_tickets', 'reengagement_sent', 'BOOLEAN DEFAULT false');
     await addColumnIfNotExists('support_tickets', 'reengagement_sent_at', 'TIMESTAMP');
 
+    // Follow-up workflow: executives park tickets that need further action.
+    // follow_up_at is the scheduled reminder; both fields clear on resolve.
+    await addColumnIfNotExists('support_tickets', 'follow_up_at', 'TIMESTAMP');
+    await addColumnIfNotExists('support_tickets', 'follow_up_note', 'TEXT');
+
     // Add AI classification columns (sentiment, confidence, scenario)
     await addColumnIfNotExists('support_tickets', 'sentiment', 'VARCHAR(20)');
     await addColumnIfNotExists('support_tickets', 'ai_confidence', 'DECIMAL(3,2)');
@@ -490,6 +495,9 @@ async function initializeSupportPortalsTable() {
 
     // Create re-engagement index
     await pool.query('CREATE INDEX IF NOT EXISTS idx_reengagement_pending ON support_tickets(reengagement_sent, status, created_at)');
+
+    // Follow-Up view: filter by status, sort by scheduled reminder time
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_support_tickets_follow_up ON support_tickets(status, follow_up_at)');
 
     // Add advanced distribution columns to support_portals
     const portalColumns = [

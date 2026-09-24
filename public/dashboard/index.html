@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark">
     <title>OffComfrt — Support Command Center</title>
-    <link rel="stylesheet" href="/dashboard/css/style.css?v=28">
+    <link rel="stylesheet" href="/dashboard/css/style.css?v=29">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -171,6 +171,10 @@
                             <span class="mini-stat-label">Resolved</span>
                         </div>
                         <div class="mini-stat">
+                            <span class="mini-stat-value" id="statFollowUp">0</span>
+                            <span class="mini-stat-label">Follow-Up</span>
+                        </div>
+                        <div class="mini-stat">
                             <span class="mini-stat-value" id="statUrgent">0</span>
                             <span class="mini-stat-label">Urgent</span>
                         </div>
@@ -186,6 +190,7 @@
                             <select id="ticketStatusFilter">
                                 <option value="">All Statuses</option>
                                 <option value="open">Open</option>
+                                <option value="follow_up">Follow-Up</option>
                                 <option value="resolved">Resolved</option>
                             </select>
                             <select id="portalFilter">
@@ -1032,6 +1037,7 @@
                 <div class="chat-modal-actions">
                     <select id="chatStatusSelect" class="chat-status-select">
                         <option value="open">Open</option>
+                        <option value="follow_up">Follow-Up</option>
                         <option value="resolved">Resolved</option>
                     </select>
                     <button class="modal-close" data-action="closeModal" data-modal="chatModal">&times;</button>
@@ -1120,7 +1126,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/dashboard/js/main.js?v=30" defer></script>
+    <script src="/dashboard/js/main.js?v=31" defer></script>
     <script src="/dashboard/js/comments.js?v=1" defer></script>
     <script src="/dashboard/js/ai-copilot.js?v=2" defer></script>
 </body>

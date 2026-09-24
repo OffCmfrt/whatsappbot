@@ -241,7 +241,17 @@ async function loadTickets() {
         const data = await portalApi(`/portal/${portalSlug}/tickets?${params}`);
         if (data.success) {
             allTickets = data.tickets || [];
+            // Keep open chat tabs in sync with fresh ticket data (status, follow-up)
+            allTickets.forEach(t => {
+                const chat = openChats.get(String(t.id));
+                if (chat) {
+                    chat.ticket.status = t.status;
+                    chat.ticket.followUpAt = t.follow_up_at || '';
+                    chat.ticket.followUpNote = t.follow_up_note || '';
+                }
+            });
             checkForNewMessages(allTickets);
+            updateFollowUpBadge();
             filterTickets();
             updateTicketCount();
             // Sync tab badges
@@ -279,20 +289,48 @@ function updateNotificationBadge() {
     }
 }
 
-function filterTickets() {
+function isFollowUpFilterActive() {
+    return document.getElementById('followUpFilterBtn')?.classList.contains('active') || false;
+}
+
+function updateFollowUpBadge() {
+    const count = allTickets.filter(t => t.status === 'follow_up').length;
+    const el = document.getElementById('followUpCount');
+    if (el) {
+        el.textContent = count > 99 ? '99+' : count;
+        el.style.display = count > 0 ? 'inline-flex' : 'none';
+    }
+}
+
+function getFilteredTickets() {
     const search = (document.getElementById('ticketSearch')?.value || '').toLowerCase();
     const statusFilter = document.getElementById('statusFilter')?.value || '';
     const unreadOnly = document.getElementById('unreadFilterBtn')?.classList.contains('active') || false;
+    const followUpOnly = isFollowUpFilterActive();
     let filtered = allTickets;
     if (unreadOnly) filtered = filtered.filter(t => !t.is_read);
-    if (statusFilter) filtered = filtered.filter(t => t.status === statusFilter);
+    if (followUpOnly) {
+        // Dedicated Follow-Up view: due-soonest first, unscheduled at the end
+        filtered = filtered.filter(t => t.status === 'follow_up')
+            .sort((a, b) => {
+                const ta = a.follow_up_at ? new Date(a.follow_up_at).getTime() : Infinity;
+                const tb = b.follow_up_at ? new Date(b.follow_up_at).getTime() : Infinity;
+                return ta - tb;
+            });
+    } else if (statusFilter) {
+        filtered = filtered.filter(t => t.status === statusFilter);
+    }
     if (search) filtered = filtered.filter(t =>
         (t.ticket_number || '').toLowerCase().includes(search) ||
         (t.customer_name || '').toLowerCase().includes(search) ||
         (t.customer_phone || '').toLowerCase().includes(search) ||
         (t.message || '').toLowerCase().includes(search)
     );
-    renderSidebarTickets(filtered);
+    return filtered;
+}
+
+function filterTickets() {
+    renderSidebarTickets(getFilteredTickets());
 }
 
 function renderSidebarTickets(tickets) {
@@ -310,17 +348,19 @@ function renderSidebarTickets(tickets) {
         const channel = t.channel || 'whatsapp';
         const chClass = channel === 'instagram' ? 'ig' : 'wa';
         const isActive = openChats.has(t.id) && t.id === activeChatId;
-        return `<div class="sidebar-ticket-card${isActive ? ' active' : ''}${isUnread ? ' unread' : ''}" data-ticket-id="${t.id}" data-phone="${escapeJs(t.customer_phone)}" data-name="${escapeJs(t.customer_name || 'Customer')}" data-status="${t.status}" data-channel="${channel}">
+        const dueChip = t.status === 'follow_up' ? followUpDueChip(t.follow_up_at) : null;
+        return `<div class="sidebar-ticket-card${isActive ? ' active' : ''}${isUnread ? ' unread' : ''}" data-ticket-id="${t.id}" data-phone="${escapeJs(t.customer_phone)}" data-name="${escapeJs(t.customer_name || 'Customer')}" data-status="${t.status}" data-channel="${channel}" data-followup="${escapeJs(t.follow_up_at || '')}">
             <div class="stc-top">
                 <span class="stc-name">${isUnread ? '<span class="unread-dot-sm"></span>' : ''}${escapeHtml(t.customer_name || 'Customer')}</span>
                 <span class="stc-time">${formatDate(t.created_at)}</span>
             </div>
             <div class="stc-mid">
                 <span class="stc-ticket-num">${escapeHtml(t.ticket_number || 'N/A')}</span>
-                <span class="stc-status ${t.status}">${t.status}</span>
+                <span class="stc-status ${t.status}">${statusLabel(t.status)}</span>
                 <span class="stc-channel ${chClass}">${channelIconSvg(channel, 12)}</span>
             </div>
             <div class="stc-message">${escapeHtml(truncate(t.message, 60))}</div>
+            ${dueChip ? `<div class="stc-followup${dueChip.overdue ? ' overdue' : ''}">${dueChip.icon}<span>${escapeHtml(dueChip.label)}</span></div>` : ''}
         </div>`;
     }).join('');
 
@@ -328,7 +368,7 @@ function renderSidebarTickets(tickets) {
 
     list.querySelectorAll('.sidebar-ticket-card').forEach(card => {
         card.addEventListener('click', () => {
-            openChat(card.dataset.ticketId, card.dataset.phone, card.dataset.name, card.dataset.status, card.dataset.channel || 'whatsapp');
+            openChat(card.dataset.ticketId, card.dataset.phone, card.dataset.name, card.dataset.status, card.dataset.channel || 'whatsapp', card.dataset.followup || '');
         });
     });
 }
@@ -336,13 +376,13 @@ function renderSidebarTickets(tickets) {
 // ══════════════════════════════════════════════════════════
 // MULTI-CHAT TAB SYSTEM
 // ══════════════════════════════════════════════════════════
-function openChat(ticketId, phone, name, status, channel = 'whatsapp') {
+function openChat(ticketId, phone, name, status, channel = 'whatsapp', followUpAt = '') {
     ticketId = String(ticketId);
     // If already open, just focus
     if (openChats.has(ticketId)) { focusTab(ticketId); return; }
 
     const chatState = {
-        ticket: { id: ticketId, phone, name, status, channel },
+        ticket: { id: ticketId, phone, name, status, channel, followUpAt, followUpNote: '' },
         messages: [],
         pollingInterval: null,
         lastMsgCount: 0,
@@ -378,9 +418,27 @@ function focusTab(ticketId) {
     } else {
         phoneDisplay.innerHTML = `${escapeHtml(t.phone)} <span class="chat-channel-badge whatsapp">${chIcon} ${escapeHtml(chLbl)}</span>`;
     }
-    // Resolve button
+    // Resolve + Follow-Up buttons (hidden once resolved — nothing left to do)
+    const isResolved = t.status === 'resolved';
     const resolveBtn = document.getElementById('resolveChatBtn');
-    if (resolveBtn) resolveBtn.style.display = t.status === 'resolved' ? 'none' : 'inline-flex';
+    if (resolveBtn) resolveBtn.style.display = isResolved ? 'none' : 'inline-flex';
+    const followUpBtn = document.getElementById('followUpChatBtn');
+    if (followUpBtn) followUpBtn.style.display = isResolved ? 'none' : 'inline-flex';
+
+    // Scheduled follow-up badge in the chat header
+    const fuBadge = document.getElementById('chatFollowUpBadge');
+    if (fuBadge) {
+        if (t.status === 'follow_up') {
+            const chip = followUpDueChip(t.followUpAt);
+            fuBadge.innerHTML = chip
+                ? `${chip.icon}<span>Follow-up ${chip.overdue ? 'overdue' : 'due'}: ${escapeHtml(chip.label)}</span>`
+                : '<span>Awaiting follow-up</span>';
+            fuBadge.classList.toggle('overdue', Boolean(chip?.overdue));
+            fuBadge.style.display = 'inline-flex';
+        } else {
+            fuBadge.style.display = 'none';
+        }
+    }
 
     // Render messages for this chat
     renderChatMessages(chat.messages, true);
@@ -640,16 +698,116 @@ async function resolveCurrentTicket() {
     if (!activeChatId) return;
     const chat = openChats.get(String(activeChatId));
     if (!chat) return;
-    if (!confirm('Mark this ticket as resolved?')) return;
+    const wasFollowUp = chat.ticket.status === 'follow_up';
+    if (!confirm(wasFollowUp ? 'Follow-up complete — mark this ticket as resolved?' : 'Mark this ticket as resolved?')) return;
     try {
         const data = await portalApi(`/portal/${portalSlug}/tickets/${chat.ticket.id}`, 'PUT', { status: 'resolved' });
         if (data.success) {
-            showToast('Ticket resolved!', 'success');
+            showToast(wasFollowUp ? 'Follow-up complete — ticket resolved!' : 'Ticket resolved!', 'success');
             chat.ticket.status = 'resolved';
+            chat.ticket.followUpAt = '';
             closeChatTab(activeChatId);
             loadTickets();
         } else throw new Error(data.error);
     } catch (error) { showToast(error.message || 'Failed to resolve', 'error'); }
+}
+
+// ══════════════════════════════════════════════════════════
+// FOLLOW-UP WORKFLOW
+// ══════════════════════════════════════════════════════════
+let followUpTicketId = null;
+
+function statusLabel(status) {
+    if (status === 'follow_up') return 'Follow-Up';
+    return status || 'open';
+}
+
+// Chip info for a scheduled follow-up: overdue/due formatting for badges
+function followUpDueChip(followUpStr) {
+    if (!followUpStr) return null;
+    const due = new Date(followUpStr);
+    if (isNaN(due.getTime())) return null;
+    const now = new Date();
+    const diffMs = due - now;
+    const overdue = diffMs <= 0;
+    let label;
+    if (overdue) {
+        const mins = Math.floor(-diffMs / 60000);
+        if (mins < 60) label = `Overdue ${mins}m`;
+        else if (mins < 1440) label = `Overdue ${Math.floor(mins / 60)}h`;
+        else label = `Overdue ${Math.floor(mins / 1440)}d`;
+    } else {
+        const time = formatTime(followUpStr);
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const dueDay = new Date(due); dueDay.setHours(0, 0, 0, 0);
+        const dayDiff = Math.round((dueDay - today) / 86400000);
+        if (dayDiff === 0) label = `Today ${time}`;
+        else if (dayDiff === 1) label = `Tomorrow ${time}`;
+        else label = `${due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${time}`;
+    }
+    const icon = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+    return { label: overdue ? label : `Due ${label}`, overdue, icon };
+}
+
+// DB timestamp → value for <input type="datetime-local"> (browser-local time)
+function toLocalInputValue(date) {
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+}
+
+function openFollowUpModal() {
+    if (!activeChatId) { showToast('Open a chat first', 'error'); return; }
+    const chat = openChats.get(String(activeChatId));
+    if (!chat) return;
+    if (chat.ticket.status === 'resolved') { showToast('Ticket is already resolved', 'error'); return; }
+    followUpTicketId = chat.ticket.id;
+
+    document.getElementById('followUpTicketRef').textContent =
+        `${chat.ticket.name || 'Customer'} — ${chat.ticket.phone}`;
+    document.getElementById('followUpDateTime').value =
+        chat.ticket.followUpAt ? toLocalInputValue(new Date(chat.ticket.followUpAt)) : '';
+    document.getElementById('followUpNote').value = chat.ticket.followUpNote || '';
+    document.getElementById('followUpModal').style.display = 'flex';
+}
+
+function closeFollowUpModal() {
+    document.getElementById('followUpModal').style.display = 'none';
+    followUpTicketId = null;
+}
+
+async function saveFollowUp() {
+    if (!followUpTicketId) return;
+    const chat = openChats.get(String(followUpTicketId));
+    if (!chat) { closeFollowUpModal(); return; }
+
+    const dtValue = document.getElementById('followUpDateTime').value;
+    const note = (document.getElementById('followUpNote').value || '').trim();
+    const followUpAt = dtValue ? new Date(dtValue).toISOString() : '';
+
+    const saveBtn = document.getElementById('followUpSaveBtn');
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+        const data = await portalApi(`/portal/${portalSlug}/tickets/${chat.ticket.id}`, 'PUT', {
+            status: 'follow_up',
+            follow_up_at: followUpAt || null,
+            follow_up_note: note || null
+        });
+        if (data.success) {
+            chat.ticket.status = 'follow_up';
+            chat.ticket.followUpAt = followUpAt;
+            chat.ticket.followUpNote = note;
+            showToast(followUpAt ? 'Follow-up scheduled — ticket moved to the Follow-Up list' : 'Ticket marked for follow-up', 'success');
+            closeFollowUpModal();
+            focusTab(chat.ticket.id);
+            loadTickets();
+        } else {
+            showToast(data.error || 'Failed to schedule follow-up', 'error');
+        }
+    } catch (error) {
+        showToast(error.message || 'Failed to schedule follow-up', 'error');
+    } finally {
+        saveBtn.disabled = false; saveBtn.textContent = 'Mark for Follow-Up';
+    }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -879,6 +1037,19 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('statusFilter')?.addEventListener('change', filterTickets);
     document.getElementById('refreshTicketsBtn')?.addEventListener('click', loadTickets);
     document.getElementById('resolveChatBtn')?.addEventListener('click', resolveCurrentTicket);
+
+    // Follow-Up workflow
+    document.getElementById('followUpChatBtn')?.addEventListener('click', openFollowUpModal);
+    document.getElementById('followUpSaveBtn')?.addEventListener('click', saveFollowUp);
+    document.getElementById('followUpCancelBtn')?.addEventListener('click', closeFollowUpModal);
+    document.getElementById('followUpModalClose')?.addEventListener('click', closeFollowUpModal);
+    document.getElementById('followUpModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'followUpModal') closeFollowUpModal();
+    });
+    document.getElementById('followUpFilterBtn')?.addEventListener('click', () => {
+        document.getElementById('followUpFilterBtn').classList.toggle('active');
+        filterTickets();
+    });
     document.getElementById('toggleDetailsBtn')?.addEventListener('click', toggleDetailsPanel);
     document.getElementById('closeDetailsBtn')?.addEventListener('click', toggleDetailsPanel);
     document.getElementById('refreshDetailsBtn')?.addEventListener('click', () => {

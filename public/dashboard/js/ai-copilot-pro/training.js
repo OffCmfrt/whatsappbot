@@ -507,8 +507,8 @@
                 <input class="input-field setting-input" type="number" id="setDailyLimit" value="200">
             </div>
             <div class="setting-item">
-                <div><div class="setting-label">Daily Suggestion Limit</div><div class="setting-desc">Max reply suggestions per day (shared)</div></div>
-                <input class="input-field setting-input" type="number" id="setSuggestLimit" value="100">
+                <div><div class="setting-label">Daily Suggestion Limit</div><div class="setting-desc">Max reply suggestions per admin / portal per day</div></div>
+                <input class="input-field setting-input" type="number" id="setSuggestLimit" value="500">
             </div>
 
             <!-- New Phase 5 settings -->
@@ -552,9 +552,20 @@
 
     async function loadSettings() {
         try {
-            const data = await CP.apiFetch('/ai/usage');
-            // Settings are loaded from system_settings via the usage endpoint
-            // In production, a dedicated GET /ai/settings endpoint would populate these
+            const data = await CP.apiFetch('/ai/settings');
+            const s = data?.settings || {};
+            if (s.ai_admin_copilot_enabled !== null && s.ai_admin_copilot_enabled !== undefined) {
+                document.getElementById('setCopilotOn').checked = String(s.ai_admin_copilot_enabled) !== 'false';
+            }
+            if (s.ai_learning_enabled !== null && s.ai_learning_enabled !== undefined) {
+                document.getElementById('setLearningOn').checked = String(s.ai_learning_enabled) !== 'false';
+            }
+            if (s.ai_daily_admin_limit !== null && s.ai_daily_admin_limit !== undefined) {
+                document.getElementById('setDailyLimit').value = s.ai_daily_admin_limit;
+            }
+            if (s.ai_suggest_reply_daily_limit !== null && s.ai_suggest_reply_daily_limit !== undefined) {
+                document.getElementById('setSuggestLimit').value = s.ai_suggest_reply_daily_limit;
+            }
         } catch (e) { /* use defaults */ }
     }
 

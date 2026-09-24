@@ -1513,6 +1513,10 @@ function timeRangeSqlClause(config, col = 'created_at') {
         : `(${mins} >= ${start} OR ${mins} < ${end})`;
 }
 
+// Allowed ticket status values. 'follow_up' parks a ticket for later action —
+// it is NOT resolved and still counts toward the portal's active workload.
+const SUPPORT_TICKET_STATUSES = ['open', 'resolved', 'closed', 'follow_up'];
+
 router.get('/support-tickets', verifyToken, async (req, res) => {
     try {
         const { status, is_read, date_from, date_to, time_from, time_to, search, portal, sort, urgent, urgent_filter, channel } = req.query;
@@ -1640,7 +1644,7 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
         // the full conversation separately. Keeps each page well under the response cap.
         const buildDataSql = (withOrderId) => `SELECT id, ticket_number, customer_phone, customer_name,
                 LEFT(message, 600) AS message, status, is_read, portal_id, sentiment,
-                ai_scenario, ai_confidence, source, channel${withOrderId ? ', order_id' : ''}, created_at, updated_at
+                ai_scenario, ai_confidence, source, channel, follow_up_at, follow_up_note${withOrderId ? ', order_id' : ''}, created_at, updated_at
             FROM support_tickets${whereSql}
             ORDER BY ${orderSql}
             LIMIT ? OFFSET ?`;
@@ -1651,6 +1655,7 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
                 COUNT(*) FILTER (WHERE is_read = false)::int AS unread,
                 COUNT(*) FILTER (WHERE status = 'open')::int AS open,
                 COUNT(*) FILTER (WHERE status = 'resolved')::int AS resolved,
+                COUNT(*) FILTER (WHERE status = 'follow_up')::int AS follow_up,
                 COUNT(*) FILTER (WHERE ${urgentClauseLiteral || 'false'})::int AS urgent
             FROM support_tickets${whereSql}`;
 
@@ -1699,6 +1704,7 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
                 unread: statsRow.unread || 0,
                 open: statsRow.open || 0,
                 resolved: statsRow.resolved || 0,
+                follow_up: statsRow.follow_up || 0,
                 urgent: statsRow.urgent || 0,
                 page,
                 limit,
@@ -1714,10 +1720,14 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
 router.put('/support-tickets/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, is_read } = req.body;
+        const { status, is_read, follow_up_at, follow_up_note } = req.body;
 
         if (!status && is_read === undefined) {
             return res.status(400).json({ success: false, error: 'Status or is_read is required' });
+        }
+
+        if (status && !SUPPORT_TICKET_STATUSES.includes(status)) {
+            return res.status(400).json({ success: false, error: `Invalid status. Allowed: ${SUPPORT_TICKET_STATUSES.join(', ')}` });
         }
 
         const updates = [];
@@ -1726,6 +1736,21 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
         if (status) {
             updates.push('status = ?');
             params.push(status);
+
+            if (status === 'follow_up') {
+                // Scheduled reminder (optional) + note shown in the Follow-Up view
+                if (follow_up_at !== undefined) {
+                    updates.push('follow_up_at = ?');
+                    params.push(follow_up_at || null);
+                }
+                if (follow_up_note !== undefined) {
+                    updates.push('follow_up_note = ?');
+                    params.push(follow_up_note || null);
+                }
+            } else if (status === 'resolved' || status === 'closed') {
+                // Resolving closes the follow-up loop — drop any pending reminder
+                updates.push('follow_up_at = NULL', 'follow_up_note = NULL');
+            }
         }
 
         if (is_read !== undefined) {
@@ -1740,7 +1765,8 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
             params
         );
         
-        // If status changed, update the portal's assigned_count
+        // If status changed, update the portal's assigned_count.
+        // Follow-up tickets are still active work — they count as assigned.
         if (status) {
             const ticket = await dbAdapter.query(
                 'SELECT portal_id FROM support_tickets WHERE id = ?',
@@ -1749,7 +1775,7 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
             
             if (ticket[0]?.portal_id) {
                 const countResult = await dbAdapter.query(
-                    'SELECT COUNT(*) as count FROM support_tickets WHERE portal_id = ? AND status = \'open\'',
+                    'SELECT COUNT(*) as count FROM support_tickets WHERE portal_id = ? AND status IN (\'open\', \'follow_up\')',
                     [ticket[0].portal_id]
                 );
                 const newCount = countResult[0]?.count || 0;
@@ -6174,6 +6200,23 @@ router.get('/ai/learned/test', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('AI learned test error:', error.message);
         res.status(500).json({ success: false, error: 'Test failed' });
+    }
+});
+
+// Current AI settings — lets the settings panel show stored values instead of
+// stale hardcoded defaults (the save endpoint already accepts these keys)
+router.get('/ai/settings', verifyToken, async (req, res) => {
+    try {
+        const Settings = require('../../models/Settings');
+        const keys = ['ai_admin_copilot_enabled', 'ai_learning_enabled', 'ai_daily_admin_limit', 'ai_suggest_reply_daily_limit'];
+        const settings = {};
+        for (const key of keys) {
+            settings[key] = await Settings.get(key, null);
+        }
+        res.json({ success: true, settings });
+    } catch (error) {
+        console.error('AI settings fetch error:', error.message);
+        res.status(500).json({ success: false, error: 'Failed to fetch AI settings' });
     }
 });
 

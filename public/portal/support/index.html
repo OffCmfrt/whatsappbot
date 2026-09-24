@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/style.css?v=20">
+    <link rel="stylesheet" href="css/style.css?v=21">
 </head>
 <body>
     <!-- Login Screen -->
@@ -59,8 +59,14 @@
                     <select id="statusFilter">
                         <option value="">All Status</option>
                         <option value="open">Open</option>
+                        <option value="follow_up">Follow-Up</option>
                         <option value="resolved">Resolved</option>
                     </select>
+                    <button class="filter-pill" id="followUpFilterBtn" title="Show Follow-Up tickets only">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        Follow-Up
+                        <span class="pill-count" id="followUpCount">0</span>
+                    </button>
                     <button class="filter-pill" id="unreadFilterBtn" title="Unread only">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
                         Unread
@@ -101,9 +107,14 @@
                             <div class="chat-header-details">
                                 <h4 id="chatCustomerName">Customer</h4>
                                 <span class="chat-phone" id="chatCustomerPhone">-</span>
+                                <span class="chat-followup-badge" id="chatFollowUpBadge" style="display:none;"></span>
                             </div>
                         </div>
                         <div class="chat-header-actions">
+                            <button class="btn btn-secondary btn-sm" id="followUpChatBtn" title="Schedule a follow-up — further action needed">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                Follow-Up
+                            </button>
                             <button class="btn btn-secondary btn-sm" id="resolveChatBtn" title="Mark resolved">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
                                 Resolve
@@ -155,9 +166,31 @@
     <!-- Notification badge (floating) -->
     <span class="notification-badge" id="notificationBadge" style="display: none;">0</span>
 
+    <!-- Follow-Up Modal -->
+    <div id="followUpModal" class="fu-overlay" style="display: none;">
+        <div class="fu-modal">
+            <div class="fu-modal-header">
+                <h3>Schedule Follow-Up</h3>
+                <button class="fu-modal-close" id="followUpModalClose" title="Close">&times;</button>
+            </div>
+            <div class="fu-modal-body">
+                <div class="fu-ticket-ref" id="followUpTicketRef">—</div>
+                <label class="fu-label">Remind me on <span class="fu-optional">(optional)</span></label>
+                <input type="datetime-local" id="followUpDateTime" class="fu-input">
+                <label class="fu-label">Note <span class="fu-optional">(optional)</span></label>
+                <textarea id="followUpNote" class="fu-input" rows="3" placeholder="What needs to be done next?"></textarea>
+                <div class="fu-hint">The ticket stays in the Follow-Up list until you mark it Resolved.</div>
+            </div>
+            <div class="fu-modal-footer">
+                <button class="btn btn-secondary btn-sm" id="followUpCancelBtn">Cancel</button>
+                <button class="btn btn-primary btn-sm" id="followUpSaveBtn">Mark for Follow-Up</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast -->
     <div id="toast" class="toast"></div>
 
-    <script src="js/main.js?v=20"></script>
+    <script src="js/main.js?v=21"></script>
 </body>
 </html>
