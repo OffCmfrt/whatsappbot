@@ -1,0 +1,1733 @@
+/* ═══════════════════════════════════════════════════════════════════
+   OFFCOMFRT SHOPPERS HUB — MONOCHROMATIC LUXE THEME v1
+   Loaded LAST to override all existing color schemes.
+   90% Black / White / Grey  ·  10% muted accent
+   Aesthetic typography  ·  Subtle sparkling borders
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Design Tokens — Monochromatic Palette ──────────────────────── */
+:root {
+    /* 80% Grey and 20% Off-White Balanced Palette */
+    --mono-bg-base:      #19191e;
+    --mono-bg:           #1e1e24;
+    --mono-bg-surface:   #23232a;
+    --mono-bg-raised:    #2a2a33;
+    --mono-bg-card:      rgba(255, 255, 255, 0.032);
+    
+    /* 20% Off-White Aura & Highlights */
+    --mono-white:        #fcfcfe;
+    --mono-offwhite:     #e9e9ee;
+    
+    /* Greyscale Typography */
+    --mono-text:         #f1f1f4;
+    --mono-text-mid:     #a4a4b0;
+    --mono-text-dim:     #6f6f7d;
+    --mono-text-ghost:   rgba(255, 255, 255, 0.25);
+    
+    /* Sparkling Border Tokens */
+    --mono-border:       rgba(255, 255, 255, 0.075);
+    --mono-border-hover: rgba(255, 255, 255, 0.16);
+
+    /* Strict Monochromatic Shades (NO yellow, NO red, NO bright hues) */
+    --accent-green:      #ffffff;  /* Success / confirmed in crisp white */
+    --accent-blue:       #d8d8de;  /* Info / shipped in light silver grey */
+    --accent-purple:     #e4e4ea;  /* Special / copilot in pearl grey */
+    --accent-amber:      #b4b4c0;  /* Warning / pending in muted grey (NO yellow) */
+    --accent-red:        #e2e2e8;  /* Danger / cancelled in soft white/grey (NO red) */
+
+    /* Delicate sparkle speed */
+    --sparkle-speed:     5s;
+}
+
+/* ── Subtle Sparkling Border Keyframes (delicate, barely noticeable) ─ */
+@keyframes borderSparkle {
+    0%   { border-color: rgba(255, 255, 255, 0.05); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.01); }
+    25%  { border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 0 5px rgba(255, 255, 255, 0.02); }
+    50%  { border-color: rgba(255, 255, 255, 0.14); box-shadow: 0 0 9px rgba(255, 255, 255, 0.035); }
+    75%  { border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 0 5px rgba(255, 255, 255, 0.02); }
+    100% { border-color: rgba(255, 255, 255, 0.05); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.01); }
+}
+
+@keyframes borderSparkleHover {
+    0%   { border-color: rgba(255, 255, 255, 0.12); box-shadow: 0 0 6px rgba(255, 255, 255, 0.03); }
+    50%  { border-color: rgba(255, 255, 255, 0.20); box-shadow: 0 0 12px rgba(255, 255, 255, 0.06); }
+    100% { border-color: rgba(255, 255, 255, 0.12); box-shadow: 0 0 6px rgba(255, 255, 255, 0.03); }
+}
+
+/* Extremely subtle shimmer highlight on card top edges */
+@keyframes topEdgeShimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+/* ── Delicate Glowing Sparkling Border on EVERY Box & Button ────── */
+/* Every box container */
+.stat-box,
+.shopper-card,
+.order-card,
+.card,
+.cards-view .shopper-card,
+.analytics-card,
+.analytics-stat-card,
+.modal-content,
+.order-modal-content,
+.op-modal-content,
+.ship-modal-content,
+.export-modal-content,
+.hub-modal-content,
+#loginView > div,
+.copilot-card,
+.copilot-drawer,
+.copilot-box,
+.tower-card,
+.inventory-tower-card,
+.stockroom-card,
+.segment-tabs,
+.view-toggle-wrapper,
+.search-box,
+.search-box input,
+.date-filter-container,
+.date-filter input,
+.order-id-filter,
+.order-id-input,
+.filter-dropdown select,
+.orders-table-wrapper,
+.table-wrapper,
+.card-section,
+.customer-message-box,
+.customer-message-preview,
+.ship-items-summary,
+.ship-awb-display,
+.ship-carrier-card,
+.ship-notify-row,
+.ship-error-box,
+.ship-ok-box,
+.ship-validation-errors,
+.oe-summary,
+.oe-row,
+.chat-sidebar,
+.chat-messages,
+.chat-customer-info,
+.chat-input-area,
+.chat-input-area textarea,
+.form-group input,
+.form-group textarea,
+.export-option-group select,
+.export-option-group input,
+.bulk-actions-bar,
+.bg-bulk-ship-bar,
+.shipment-entry,
+/* Every button */
+button,
+.btn,
+.btn-primary,
+.btn-outline,
+.btn-danger,
+.btn-success,
+.btn-chat,
+.btn-call,
+.btn-call-icon,
+.action-btn,
+.action-icon-btn,
+.btn-apply-small,
+.clear-filters-btn,
+.quick-date-btn,
+.quick-filter-btn,
+.view-toggle-btn,
+.segment-tabs .tab,
+.status-pill,
+.status-pill-mini,
+.ship-btn,
+.ship-icon-btn,
+.addr-sync-btn,
+.btn-remove-item,
+.btn-add-item,
+.cr-chip,
+.bulk-btn,
+.bulk-btn-delete,
+.bulk-btn-shopify-cancel,
+.bulk-btn-select-all,
+.ship-step-tab,
+.oe-pay-btn,
+.ship-awb-copy,
+.bg-bulk-ship-btn,
+.shipment-entry-actions button {
+    animation: borderSparkle var(--sparkle-speed) ease-in-out infinite !important;
+}
+
+/* Hover glow on every button and card */
+button:hover,
+.btn:hover,
+.btn-primary:hover,
+.btn-outline:hover,
+.action-btn:hover,
+.action-icon-btn:hover,
+.quick-date-btn:hover,
+.quick-filter-btn:hover,
+.view-toggle-btn:hover,
+.stat-box:hover,
+.shopper-card:hover,
+.order-card:hover,
+.analytics-stat-card:hover,
+.ship-btn:hover {
+    animation: borderSparkleHover var(--sparkle-speed) ease-in-out infinite !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BASE — Body & Global (80% Grey + 20% Off-White Gradient Atmosphere)
+   ═══════════════════════════════════════════════════════════════════ */
+body, body.dark-theme {
+    background-color: #1a1a20 !important;
+    background-image: 
+        radial-gradient(ellipse 90% 45% at 50% -8%, rgba(245, 245, 250, 0.08) 0%, rgba(235, 235, 240, 0.03) 35%, transparent 70%),
+        linear-gradient(180deg, #24242a 0%, #1e1e24 40%, #17171c 100%) !important;
+    background-attachment: fixed !important;
+    color: var(--mono-text) !important;
+}
+
+.hub-shell, .hub-main {
+    background: transparent !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LOGIN VIEW — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+#loginView {
+    background: var(--mono-bg) !important;
+}
+#loginView > div {
+    background: rgba(24,24,27,0.85) !important;
+    border-color: var(--mono-border) !important;
+    animation: borderSparkle var(--sparkle-speed) ease-in-out infinite !important;
+}
+#loginView h1 {
+    color: var(--mono-white) !important;
+    font-weight: 300 !important;
+    letter-spacing: 8px !important;
+}
+#loginView .btn-primary {
+    background: var(--mono-white) !important;
+    color: var(--mono-bg) !important;
+    box-shadow: none !important;
+    border: 1px solid rgba(255,255,255,0.15) !important;
+    font-weight: 700 !important;
+    letter-spacing: 2px !important;
+}
+#loginView .btn-primary:hover {
+    background: var(--mono-offwhite) !important;
+    box-shadow: 0 0 20px rgba(255,255,255,0.08) !important;
+}
+#loginView input {
+    background: rgba(0,0,0,0.35) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text) !important;
+}
+#loginView input:focus {
+    border-color: rgba(255,255,255,0.2) !important;
+}
+#loginView label {
+    color: var(--mono-text-dim) !important;
+}
+#errorMessage {
+    color: var(--mono-white) !important;
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    padding: 8px 14px !important;
+    border-radius: 8px !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SIDEBAR — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.hub-sidebar {
+    background: linear-gradient(180deg, #131315 0%, var(--mono-bg) 100%) !important;
+    border-right-color: var(--mono-border) !important;
+}
+.sidebar-brand {
+    border-bottom-color: var(--mono-border) !important;
+}
+.sidebar-brand h1 {
+    color: var(--mono-white) !important;
+    font-weight: 300 !important;
+    letter-spacing: 4px !important;
+}
+.brand-subtitle {
+    color: var(--mono-text-dim) !important;
+    letter-spacing: 2px !important;
+}
+.sidebar-section-title {
+    color: var(--mono-text-ghost) !important;
+}
+.sidebar-item {
+    color: var(--mono-text-dim) !important;
+}
+.sidebar-item:hover {
+    background: rgba(255,255,255,0.04) !important;
+    color: var(--mono-offwhite) !important;
+}
+.sidebar-item.active {
+    background: rgba(255,255,255,0.06) !important;
+    color: var(--mono-white) !important;
+    border-color: var(--mono-border) !important;
+}
+.sidebar-badge {
+    background: rgba(255,255,255,0.08) !important;
+    color: var(--mono-text-mid) !important;
+    border-color: var(--mono-border) !important;
+}
+.sidebar-badge-pro {
+    background: rgba(196,181,253,0.1) !important;
+    color: var(--accent-purple) !important;
+    border-color: rgba(196,181,253,0.2) !important;
+}
+#hubUserBadge {
+    color: var(--mono-text-dim) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   TOP BAR (mobile) — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.hub-topbar {
+    background: rgba(17,17,19,0.92) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.topbar-title {
+    color: var(--mono-white) !important;
+    font-weight: 300 !important;
+    letter-spacing: 3px !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PAGE HEADER — Monochromatic + Aesthetic
+   ═══════════════════════════════════════════════════════════════════ */
+.page-header {
+    background: linear-gradient(175deg,
+        rgba(255,255,255,0.022) 0%,
+        rgba(255,255,255,0.005) 55%,
+        transparent 100%) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+/* Remove green/blue ambient hazes */
+.page-header::before {
+    background: radial-gradient(ellipse at top left,
+        rgba(255,255,255,0.03) 0%, transparent 60%) !important;
+}
+.page-header::after {
+    background: radial-gradient(ellipse at top right,
+        rgba(255,255,255,0.02) 0%, transparent 60%) !important;
+}
+
+/* Live badge — monochromatic */
+.header-badge-live {
+    color: var(--mono-text-mid) !important;
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border) !important;
+}
+.pulse-dot {
+    background: var(--mono-text-mid) !important;
+    animation-name: pulseGrey !important;
+}
+@keyframes pulseGrey {
+    0%   { box-shadow: 0 0 0 0 rgba(161,161,170,0.45); }
+    70%  { box-shadow: 0 0 0 7px rgba(161,161,170,0); }
+    100% { box-shadow: 0 0 0 0 rgba(161,161,170,0); }
+}
+
+/* Aesthetic heading text */
+.header-content h2 {
+    background: linear-gradient(135deg, var(--mono-white) 0%, var(--mono-text-mid) 100%) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+    font-weight: 300 !important;
+    letter-spacing: 1px !important;
+}
+.header-content p {
+    color: var(--mono-text-dim) !important;
+    font-weight: 300 !important;
+    letter-spacing: 0.3px !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   STAT CARDS — Monochromatic with sparkling borders
+   ═══════════════════════════════════════════════════════════════════ */
+.stat-box {
+    background: var(--mono-bg-card) !important;
+    border-color: var(--mono-border) !important;
+    animation: borderSparkle var(--sparkle-speed) ease-in-out infinite !important;
+}
+.stat-box::after {
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(255,255,255,0.08) 30%,
+        rgba(255,255,255,0.14) 50%,
+        rgba(255,255,255,0.08) 70%,
+        transparent 100%) !important;
+    background-size: 200% 100% !important;
+    animation: topEdgeShimmer 6s linear infinite !important;
+}
+.stat-box::before {
+    background: rgba(255,255,255,0.08) !important;
+}
+.stat-box:hover {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border-hover) !important;
+    animation: borderSparkleHover var(--sparkle-speed) ease-in-out infinite !important;
+}
+#statTotal:hover::before,
+#statPending:hover::before,
+#statConfirmed:hover::before,
+#statResponse:hover::before {
+    background: rgba(255,255,255,0.3) !important;
+    box-shadow: none !important;
+}
+.stat-label {
+    color: var(--mono-text-dim) !important;
+}
+.stat-icon-wrapper {
+    background: rgba(255,255,255,0.04) !important;
+    color: var(--mono-text-dim) !important;
+}
+.stat-icon-amber,
+.stat-icon-emerald,
+.stat-icon-sky {
+    background: rgba(255, 255, 255, 0.05) !important;
+    color: var(--mono-text-mid) !important;
+}
+.stat-value {
+    color: var(--mono-white) !important;
+}
+.stat-value.text-warning,
+.stat-value.text-success,
+.stat-value.text-info,
+.stat-value.text-danger {
+    color: var(--mono-white) !important;
+}
+.stat-subtext {
+    color: var(--mono-text-ghost) !important;
+}
+
+/* Global text utility overrides — strict monochrome (no yellow, no red) */
+.text-success { color: var(--mono-white) !important; }
+.text-warning { color: var(--mono-text-mid) !important; }
+.text-danger  { color: var(--mono-text) !important; }
+.text-info    { color: var(--mono-text-mid) !important; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   BUTTONS — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.btn-primary {
+    background: linear-gradient(140deg, var(--mono-white) 0%, #c8c8cc 100%) !important;
+    color: var(--mono-bg) !important;
+    box-shadow: 0 2px 12px rgba(255,255,255,0.06) !important;
+    border: none !important;
+}
+.btn-primary:hover {
+    box-shadow: 0 4px 20px rgba(255,255,255,0.1) !important;
+}
+.btn-outline {
+    background: rgba(255,255,255,0.03) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.btn-outline:hover {
+    background: rgba(255,255,255,0.06) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+.btn-danger {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.btn-danger:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+.btn-success {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-white) !important;
+}
+.btn-success:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+.btn-chat {
+    background: rgba(255,255,255,0.08) !important;
+    color: var(--mono-white) !important;
+    border: 1px solid var(--mono-border) !important;
+}
+.btn-chat:hover {
+    background: rgba(255,255,255,0.14) !important;
+    color: var(--mono-white) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CONTROL BAR / FILTERS — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.control-bar {
+    background: linear-gradient(180deg, rgba(255,255,255,0.018) 0%, rgba(255,255,255,0.005) 100%) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.filter-section-title {
+    color: var(--mono-text-ghost) !important;
+}
+.filter-section-title::after {
+    background: linear-gradient(90deg, rgba(255,255,255,0.06) 0%, transparent 100%) !important;
+}
+
+/* Status tabs */
+.segment-tabs {
+    background: rgba(0,0,0,0.3) !important;
+    border-color: var(--mono-border) !important;
+}
+.segment-tabs .tab {
+    color: var(--mono-text-dim) !important;
+}
+.segment-tabs .tab:hover {
+    color: var(--mono-offwhite) !important;
+    background: rgba(255,255,255,0.04) !important;
+}
+.segment-tabs .tab.active {
+    background: rgba(255,255,255,0.08) !important;
+    color: var(--mono-white) !important;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.06) !important;
+}
+.segment-tabs .tab .tab-count {
+    background: rgba(255,255,255,0.07) !important;
+}
+.segment-tabs .tab.active .tab-count {
+    background: rgba(255,255,255,0.14) !important;
+}
+
+/* View toggle */
+.view-toggle-wrapper {
+    background: rgba(0,0,0,0.3) !important;
+    border-color: var(--mono-border) !important;
+}
+.view-toggle-btn {
+    color: var(--mono-text-dim) !important;
+}
+.view-toggle-btn:hover {
+    color: var(--mono-offwhite) !important;
+    background: rgba(255,255,255,0.04) !important;
+}
+.view-toggle-btn.active {
+    background: rgba(255,255,255,0.08) !important;
+    color: var(--mono-white) !important;
+}
+
+/* Search box */
+.search-box input {
+    background: rgba(0,0,0,0.3) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text) !important;
+}
+.search-box input:focus {
+    border-color: rgba(255,255,255,0.18) !important;
+    background: rgba(0,0,0,0.45) !important;
+}
+.search-box input::placeholder {
+    color: var(--mono-text-ghost) !important;
+}
+.search-box svg {
+    stroke: var(--mono-text-dim) !important;
+}
+
+/* Date inputs */
+.date-filter-container {
+    background: rgba(0,0,0,0.25) !important;
+    border-color: var(--mono-border) !important;
+}
+.date-filter input {
+    background: rgba(0,0,0,0.3) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.date-separator {
+    color: var(--mono-text-ghost) !important;
+}
+
+/* Quick date buttons */
+.quick-date-btn {
+    background: rgba(255,255,255,0.03) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-dim) !important;
+}
+.quick-date-btn:hover {
+    background: rgba(255,255,255,0.06) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-offwhite) !important;
+}
+.quick-date-btn.active {
+    background: rgba(255,255,255,0.08) !important;
+    border-color: rgba(255,255,255,0.2) !important;
+    color: var(--mono-white) !important;
+}
+
+/* Filter dropdowns */
+.filter-dropdown select {
+    background: rgba(255,255,255,0.03) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.filter-dropdown select option {
+    background: var(--mono-bg-surface) !important;
+    color: var(--mono-text) !important;
+}
+.filter-dropdown::after {
+    color: var(--mono-text-dim) !important;
+}
+
+/* Order ID filter */
+.order-id-filter {
+    background: rgba(0,0,0,0.25) !important;
+    border-color: var(--mono-border) !important;
+}
+.order-id-input {
+    background: rgba(255,255,255,0.02) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text) !important;
+}
+.order-id-input::placeholder {
+    color: var(--mono-text-ghost) !important;
+}
+.order-id-separator {
+    color: var(--mono-text-ghost) !important;
+}
+.btn-apply-small {
+    background: rgba(255,255,255,0.06) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.btn-apply-small:hover {
+    background: rgba(255,255,255,0.1) !important;
+    color: var(--mono-white) !important;
+}
+
+/* Clear filters */
+.clear-filters-btn {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-dim) !important;
+}
+.clear-filters-btn:hover {
+    background: rgba(255,255,255,0.08) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-text) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SHOPPER CARDS — Monochromatic with sparkling borders
+   ═══════════════════════════════════════════════════════════════════ */
+.shopper-card, .order-card {
+    background: var(--mono-bg-card) !important;
+    border-color: var(--mono-border) !important;
+    animation: borderSparkle var(--sparkle-speed) ease-in-out infinite,
+               staggeredFadeIn 0.4s ease both !important;
+    animation-delay: calc(var(--index, 0) * 0.02s) !important;
+}
+.shopper-card:hover, .order-card:hover {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border-hover) !important;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.3) !important;
+}
+
+/* Status left borders — monochromatic shades */
+.shopper-card.has-message      { border-left-color: rgba(255, 255, 255, 0.45) !important; }
+.shopper-card.status-confirmed { border-left-color: rgba(255, 255, 255, 0.75) !important; }
+.shopper-card.status-shipped   { border-left-color: rgba(255, 255, 255, 0.50) !important; }
+.shopper-card.status-cancelled { border-left-color: rgba(255, 255, 255, 0.20) !important; }
+.shopper-card.status-edit_details { border-left-color: rgba(255, 255, 255, 0.35) !important; }
+
+/* Selected card */
+.shopper-card.selected {
+    border-color: rgba(255,255,255,0.2) !important;
+    background: rgba(255,255,255,0.04) !important;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.15) !important;
+}
+.card-select-checkbox {
+    border-color: var(--mono-border-hover) !important;
+    background: rgba(0,0,0,0.3) !important;
+}
+.card-select-checkbox:hover {
+    border-color: var(--mono-text-mid) !important;
+}
+.card-select-checkbox.checked {
+    background: var(--mono-white) !important;
+    border-color: var(--mono-white) !important;
+}
+.card-select-checkbox.checked::after {
+    color: var(--mono-bg) !important;
+}
+
+/* Row elements */
+.row-order-info .order-id-small {
+    color: var(--mono-white) !important;
+}
+.row-order-info .timestamp-row {
+    color: var(--mono-text-dim) !important;
+}
+.row-customer .customer-name-big {
+    color: var(--mono-white) !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.5px !important;
+}
+.row-customer .customer-meta {
+    color: var(--mono-text-dim) !important;
+}
+.row-products {
+    color: var(--mono-text-mid) !important;
+}
+.row-location {
+    color: var(--mono-text-dim) !important;
+}
+.row-price .price-big {
+    color: var(--mono-white) !important;
+}
+.row-price .pay-method-badge {
+    color: var(--mono-text-dim) !important;
+}
+
+/* Action icon buttons */
+.action-icon-btn {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+    background: transparent !important;
+}
+.action-icon-btn:hover {
+    background: var(--mono-white) !important;
+    color: var(--mono-bg) !important;
+    border-color: var(--mono-white) !important;
+}
+.btn-call-icon {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-white) !important;
+    background: transparent !important;
+}
+.btn-call-icon:hover {
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: var(--mono-white) !important;
+    border-color: var(--mono-border-hover) !important;
+}
+
+/* Status pills (mini) */
+.status-pill-mini {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-dim) !important;
+}
+.status-pill-mini:hover {
+    background: rgba(255,255,255,0.06) !important;
+    color: var(--mono-white) !important;
+    border-color: var(--mono-border-hover) !important;
+}
+.status-pill-mini.active {
+    background: var(--mono-white) !important;
+    color: var(--mono-bg) !important;
+    border-color: var(--mono-white) !important;
+}
+
+/* Message indicator — grey */
+.msg-indicator {
+    background: var(--mono-text-mid) !important;
+    box-shadow: 0 0 5px rgba(161,161,170,0.3) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   STATUS BADGES — Monochromatic (No yellow, No red)
+   ═══════════════════════════════════════════════════════════════════ */
+.badge-status.confirmed {
+    background: rgba(255, 255, 255, 0.08) !important;
+    color: var(--mono-white) !important;
+    border: 1px solid rgba(255, 255, 255, 0.18) !important;
+}
+.badge-status.shipped {
+    background: rgba(255, 255, 255, 0.05) !important;
+    color: #dedee4 !important;
+    border: 1px solid rgba(255, 255, 255, 0.14) !important;
+}
+.badge-status.cancelled {
+    background: rgba(255, 255, 255, 0.03) !important;
+    color: #94949f !important;
+    border: 1px solid rgba(255, 255, 255, 0.09) !important;
+}
+.badge-status.edit_details {
+    background: rgba(255, 255, 255, 0.05) !important;
+    color: #d4d4dc !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+}
+.badge-status.pending {
+    background: rgba(255, 255, 255, 0.025) !important;
+    color: var(--mono-text-dim) !important;
+    border: 1px solid var(--mono-border) !important;
+}
+.badge-shopify {
+    background: var(--mono-white) !important;
+    color: var(--mono-bg) !important;
+    border-color: var(--mono-white) !important;
+}
+.badge-delivery {
+    background: transparent !important;
+    color: var(--mono-text-mid) !important;
+    border-color: var(--mono-border) !important;
+}
+
+/* RTO chips — monochromatic (no yellow, no red) */
+.rto-high {
+    background: rgba(255, 255, 255, 0.06) !important;
+    color: var(--mono-white) !important;
+    border-color: rgba(255, 255, 255, 0.16) !important;
+}
+.rto-medium {
+    background: rgba(255, 255, 255, 0.035) !important;
+    color: var(--mono-text-mid) !important;
+    border-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CARD VIEW — Monochromatic polish
+   ═══════════════════════════════════════════════════════════════════ */
+.cards-view .shopper-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%) !important;
+    border-color: var(--mono-border) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
+}
+.cards-view .shopper-card:hover {
+    background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.02) 100%) !important;
+    border-color: var(--mono-border-hover) !important;
+    box-shadow: 0 18px 44px rgba(0,0,0,0.45) !important;
+}
+.cards-view .order-id-small {
+    color: var(--mono-text-dim) !important;
+}
+.cards-view .timestamp-row {
+    color: var(--mono-text-ghost) !important;
+}
+
+/* Card sections */
+.card-section {
+    background: rgba(0,0,0,0.25) !important;
+    border-color: var(--mono-border) !important;
+}
+.section-label {
+    color: var(--mono-text-dim) !important;
+}
+.product-list-simple {
+    color: var(--mono-text-mid) !important;
+}
+.product-list-simple .product-size {
+    color: var(--mono-text-dim) !important;
+}
+.address-text {
+    color: var(--mono-text-mid) !important;
+}
+.state-badge {
+    background: rgba(255,255,255,0.05) !important;
+    color: var(--mono-text-dim) !important;
+    border-color: var(--mono-border) !important;
+}
+
+/* Card action buttons */
+.action-btn {
+    color: var(--mono-text-mid) !important;
+    border-color: var(--mono-border) !important;
+    background: rgba(255,255,255,0.02) !important;
+}
+.action-btn:hover {
+    background: var(--mono-white) !important;
+    color: var(--mono-bg) !important;
+    border-color: var(--mono-white) !important;
+}
+.btn-call {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-white) !important;
+    background: rgba(255, 255, 255, 0.04) !important;
+}
+.btn-call:hover {
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: var(--mono-white) !important;
+    border-color: var(--mono-border-hover) !important;
+}
+/* Card view .btn-chat override */
+.cards-view .btn-chat,
+.card-actions-grid .btn-chat {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+    background: rgba(255,255,255,0.02) !important;
+}
+.cards-view .btn-chat:hover,
+.card-actions-grid .btn-chat:hover {
+    background: var(--mono-white) !important;
+    color: var(--mono-bg) !important;
+}
+
+/* Status pills (card view) */
+.status-pill {
+    background: rgba(255,255,255,0.02) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-dim) !important;
+}
+.status-pill:hover {
+    background: rgba(255,255,255,0.06) !important;
+    color: var(--mono-white) !important;
+    border-color: var(--mono-border-hover) !important;
+}
+.status-pill.active {
+    background: var(--mono-white) !important;
+    color: var(--mono-bg) !important;
+    border-color: var(--mono-white) !important;
+    box-shadow: 0 0 10px rgba(255,255,255,0.1) !important;
+}
+
+/* Customer message preview — monochromatic */
+.customer-message-preview {
+    background: rgba(255,255,255,0.03) !important;
+    border-color: var(--mono-border) !important;
+}
+.customer-message-preview .msg-label {
+    color: var(--mono-text-dim) !important;
+}
+.customer-message-preview .msg-label::before {
+    background: var(--mono-text-dim) !important;
+}
+.customer-message-preview .msg-content {
+    color: var(--mono-offwhite) !important;
+}
+.customer-message-preview .msg-time {
+    color: var(--mono-text-dim) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BULK ACTIONS BAR — Monochromatic
+   ════════════════════════════════════════════�.awb-chip.status-cancelled {
+    color: var(--mono-text-dim) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    border-color: var(--mono-border) !important;
+}
+.ship-icon-btn {
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-text-mid) !important;
+}
+.awb-chip-mini {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+
+/* Ship modal */
+.ship-modal-content {
+    background: var(--mono-bg-surface) !important;
+    border-color: var(--mono-border-hover) !important;
+}
+.ship-modal-header {
+    border-bottom-color: var(--mono-border) !important;
+}
+.ship-modal-header .ship-order-label {
+    color: var(--mono-white) !important;
+}
+.ship-step-tab {
+    color: var(--mono-text-dim) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.ship-step-tab.active {
+    color: var(--mono-white) !important;
+    border-bottom-color: var(--mono-white) !important;
+}
+.ship-step-tab.done {
+    color: var(--mono-text-mid) !important;
+    border-bottom-color: var(--mono-text-dim) !important;
+}
+.ship-section-title {
+    color: var(--mono-text-dim) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.ship-items-summary {
+    background: rgba(255,255,255,0.02) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.ship-footer {
+    border-top-color: var(--mono-border) !important;
+}
+.ship-pay-badge.cod {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.ship-pay-badge.prepaid {
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-color: rgba(255, 255, 255, 0.16) !important;
+    color: var(--mono-white) !important;
+}
+.ship-carrier-card {
+    background: rgba(255,255,255,0.02) !important;
+    border-color: var(--mono-border) !important;
+}
+.ship-carrier-card:hover {
+    border-color: var(--mono-border-hover) !important;
+}
+.ship-carrier-card.selected {
+    border-color: var(--mono-white) !important;
+    background: rgba(255,255,255,0.04) !important;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.2) !important;
+}
+.ship-carrier-card .carrier-sub {
+    color: var(--mono-text-dim) !important;
+}
+.ship-error-box {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+.ship-ok-box {
+    background: rgba(255, 255, 255, 0.06) !important;
+    border-color: rgba(255, 255, 255, 0.18) !important;
+    color: var(--mono-white) !important;
+}
+.ship-validation-errors {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+}
+.form-group input:focus, .form-group textarea:focus {
+    border-color: rgba(255,255,255,0.2) !important;
+}
+
+/* Customer message in edit modal */
+.customer-message-box {
+    background: rgba(255,255,255,0.03) !important;
+    border-color: var(--mono-border) !important;
+}
+.customer-message-box .msg-header span {
+    color: var(--mono-text-dim) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SHIPPING MODULE — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.ship-btn {
+    background: rgba(255,255,255,0.03) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-text-mid) !important;
+}
+.ship-btn:hover {
+    background: rgba(255,255,255,0.06) !important;
+    border-color: rgba(255,255,255,0.25) !important;
+    color: var(--mono-white) !important;
+}
+.awb-chip {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.awb-chip:hover {
+    background: rgba(255,255,255,0.08) !important;
+}
+.awb-chip.status-cancelled {
+    color: var(--accent-red) !important;
+    background: rgba(248,113,113,0.05) !important;
+    border-color: rgba(248,113,113,0.15) !important;
+}
+.ship-icon-btn {
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-text-mid) !important;
+}
+.awb-chip-mini {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+
+/* Ship modal */
+.ship-modal-content {
+    background: var(--mono-bg-surface) !important;
+    border-color: var(--mono-border-hover) !important;
+}
+.ship-modal-header {
+    border-bottom-color: var(--mono-border) !important;
+}
+.ship-modal-header .ship-order-label {
+    color: var(--mono-white) !important;
+}
+.ship-step-tab {
+    color: var(--mono-text-dim) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.ship-step-tab.active {
+    color: var(--mono-white) !important;
+    border-bottom-color: var(--mono-white) !important;
+}
+.ship-step-tab.done {
+    color: var(--mono-text-mid) !important;
+    border-bottom-color: var(--mono-text-dim) !important;
+}
+.ship-section-title {
+    color: var(--mono-text-dim) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.ship-items-summary {
+    background: rgba(255,255,255,0.02) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.ship-footer {
+    border-top-color: var(--mono-border) !important;
+}
+.ship-pay-badge.cod {
+    background: rgba(212,165,116,0.06) !important;
+    border-color: rgba(212,165,116,0.2) !important;
+    color: var(--accent-amber) !important;
+}
+.ship-pay-badge.prepaid {
+    background: rgba(94,234,212,0.06) !important;
+    border-color: rgba(94,234,212,0.2) !important;
+    color: var(--accent-green) !important;
+}
+.ship-carrier-card {
+    background: rgba(255,255,255,0.02) !important;
+    border-color: var(--mono-border) !important;
+}
+.ship-carrier-card:hover {
+    border-color: var(--mono-border-hover) !important;
+}
+.ship-carrier-card.selected {
+    border-color: var(--mono-white) !important;
+    background: rgba(255,255,255,0.04) !important;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.2) !important;
+}
+.ship-carrier-card .carrier-sub {
+    color: var(--mono-text-dim) !important;
+}
+.ship-error-box {
+    background: rgba(248,113,113,0.05) !important;
+    border-color: rgba(248,113,113,0.2) !important;
+    color: var(--accent-red) !important;
+}
+.ship-ok-box {
+    background: rgba(94,234,212,0.04) !important;
+    border-color: rgba(94,234,212,0.2) !important;
+    color: var(--accent-green) !important;
+}
+.ship-validation-errors {
+    background: rgba(248,113,113,0.04) !important;
+    border-color: rgba(248,113,113,0.2) !important;
+    color: var(--accent-red) !important;
+}
+
+/* Courier table */
+.courier-table th {
+    color: var(--mono-text-dim) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.courier-table td {
+    border-bottom-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.courier-table tr.courier-row:hover {
+    background: rgba(255,255,255,0.03) !important;
+}
+.courier-table tr.courier-row.selected {
+    background: rgba(255,255,255,0.05) !important;
+}
+.courier-table tr.courier-row.selected td:first-child {
+    color: var(--mono-white) !important;
+}
+.courier-radio {
+    border-color: var(--mono-text-dim) !important;
+}
+tr.selected .courier-radio {
+    border-color: var(--mono-white) !important;
+    background: radial-gradient(circle, var(--mono-white) 40%, transparent 45%) !important;
+}
+.courier-rec-badge {
+    background: rgba(255,255,255,0.06) !important;
+    color: var(--mono-text-mid) !important;
+}
+
+/* Ship AWB success */
+.ship-awb-display {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+.ship-awb-copy {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.ship-awb-copy:hover {
+    background: rgba(255,255,255,0.06) !important;
+}
+.ship-notify-row {
+    background: rgba(255,255,255,0.02) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.ship-notify-row input[type='checkbox'] {
+    accent-color: var(--mono-white) !important;
+}
+
+/* Bulk ship progress */
+.bg-bulk-ship-bar {
+    background: linear-gradient(135deg, rgba(17,17,19,0.97), rgba(24,24,27,0.97)) !important;
+    border-color: var(--mono-border) !important;
+}
+.bg-bulk-ship-label {
+    color: var(--mono-white) !important;
+}
+.bg-bulk-ship-progress-track {
+    background: rgba(255,255,255,0.06) !important;
+}
+.bg-bulk-ship-progress-fill {
+    background: linear-gradient(90deg, var(--mono-text-mid), var(--mono-white)) !important;
+}
+.bg-bulk-ship-count {
+    color: var(--mono-text-dim) !important;
+}
+.bg-bulk-ship-btn {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-white) !important;
+}
+.bg-bulk-ship-bar.paused .bg-bulk-ship-progress-fill {
+    background: linear-gradient(90deg, var(--accent-amber), var(--accent-red)) !important;
+}
+.bg-bulk-ship-bar.paused .bg-bulk-ship-label {
+    color: var(--accent-amber) !important;
+}
+
+/* Bulk ship lines */
+.bulk-ship-line {
+    border-bottom-color: var(--mono-border) !important;
+}
+.bulk-ship-line .bs-order {
+    color: var(--mono-text) !important;
+}
+.bulk-ship-line .bs-result.ok  { color: var(--accent-green) !important; }
+.bulk-ship-line .bs-result.err { color: var(--accent-red) !important; }
+.bulk-ship-line .bs-result.run { color: var(--accent-amber) !important; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   LIVE CHAT — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.chat-sidebar {
+    background: var(--mono-bg-surface) !important;
+    border-right-color: var(--mono-border) !important;
+}
+.chat-sidebar h3 {
+    color: var(--mono-white) !important;
+    font-weight: 300 !important;
+}
+.chat-customer-info {
+    background: rgba(255,255,255,0.03) !important;
+}
+.chat-customer-info .info-label {
+    color: var(--mono-text-dim) !important;
+}
+.chat-customer-info .info-value {
+    color: var(--mono-white) !important;
+}
+.chat-main {
+    background: var(--mono-bg) !important;
+}
+.chat-header {
+    background: rgba(255,255,255,0.02) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.chat-messages {
+    background: var(--mono-bg) !important;
+}
+.chat-message.customer .msg-bubble {
+    background: rgba(255,255,255,0.05) !important;
+    color: var(--mono-offwhite) !important;
+}
+.chat-message.agent .msg-bubble {
+    background: rgba(255,255,255,0.08) !important;
+    color: var(--mono-offwhite) !important;
+}
+.chat-date-separator span {
+    background: rgba(255,255,255,0.04) !important;
+    color: var(--mono-text-dim) !important;
+}
+.chat-input-area {
+    background: rgba(255,255,255,0.02) !important;
+    border-top-color: var(--mono-border) !important;
+}
+.chat-input-area textarea {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text) !important;
+}
+.chat-message.unread-message .msg-bubble {
+    border-left-color: var(--mono-text-mid) !important;
+    background: rgba(255,255,255,0.06) !important;
+}
+.unread-dot {
+    background: var(--mono-text-mid) !important;
+}
+.msg-status-read {
+    color: var(--accent-blue) !important;
+}
+.msg-status-failed {
+    color: var(--accent-red) !important;
+}
+.chat-empty-state {
+    color: var(--mono-text-dim) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   ANALYTICS VIEW — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+#analyticsView {
+    background: var(--mono-bg) !important;
+}
+.analytics-header {
+    border-bottom-color: var(--mono-border) !important;
+}
+.analytics-card {
+    background: var(--mono-bg-card) !important;
+    border-color: var(--mono-border) !important;
+}
+.analytics-card-title {
+    color: var(--mono-text-mid) !important;
+    font-weight: 300 !important;
+    letter-spacing: 1px !important;
+}
+
+/* Analytics stat cards — monochromatic */
+.analytics-stat-card {
+    background: var(--mono-bg-card) !important;
+    border-color: var(--mono-border) !important;
+    animation: borderSparkle var(--sparkle-speed) ease-in-out infinite !important;
+}
+.analytics-stat-card .stat-icon {
+    color: var(--mono-text-dim) !important;
+}
+.analytics-stat-card .stat-number {
+    color: var(--mono-white) !important;
+}
+.analytics-stat-card .stat-label {
+    color: var(--mono-text-dim) !important;
+}
+.analytics-stat-card .stat-percent {
+    color: var(--mono-text-dim) !important;
+}
+
+/* Accent tints for analytics cards — still mostly grey */
+.analytics-stat-card.confirmed .stat-icon { color: var(--accent-green) !important; }
+.analytics-stat-card.shipped .stat-icon   { color: var(--accent-blue) !important; }
+.analytics-stat-card.pending .stat-icon   { color: var(--accent-amber) !important; }
+.analytics-stat-card.cancelled .stat-icon { color: var(--accent-red) !important; }
+.analytics-stat-card.edits .stat-icon     { color: var(--accent-purple) !important; }
+
+/* Circular chart progress — muted */
+.circular-chart-bg {
+    stroke: rgba(255,255,255,0.06) !important;
+}
+.circular-chart-progress.confirmed { stroke: var(--accent-green) !important; }
+.circular-chart-progress.shipped   { stroke: var(--accent-blue) !important; }
+.circular-chart-progress.pending   { stroke: var(--accent-amber) !important; }
+.circular-chart-progress.cancelled { stroke: var(--accent-red) !important; }
+.circular-chart-progress.edits     { stroke: var(--accent-purple) !important; }
+
+.circular-chart-value {
+    color: var(--mono-white) !important;
+}
+.circular-chart-label {
+    color: var(--mono-text-dim) !important;
+}
+
+/* Analytics quick filter buttons */
+.quick-filter-btn {
+    background: rgba(255,255,255,0.03) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-dim) !important;
+}
+.quick-filter-btn:hover {
+    background: rgba(255,255,255,0.06) !important;
+    color: var(--mono-offwhite) !important;
+}
+.quick-filter-btn.active {
+    background: rgba(255,255,255,0.08) !important;
+    border-color: rgba(255,255,255,0.2) !important;
+    color: var(--mono-white) !important;
+}
+
+/* Analytics table */
+.analytics-table th {
+    color: var(--mono-text-dim) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.analytics-table td {
+    color: var(--mono-text-mid) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   FOLLOW-UP VIEW — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+#followUpView {
+    background: var(--mono-bg) !important;
+}
+.fu-orb-1 {
+    background: radial-gradient(circle, rgba(255,255,255,0.015) 0%, transparent 70%) !important;
+}
+.fu-orb-2 {
+    background: radial-gradient(circle, rgba(255,255,255,0.02) 0%, transparent 70%) !important;
+}
+.fu-orb-3 {
+    background: radial-gradient(circle, rgba(255,255,255,0.015) 0%, transparent 70%) !important;
+}
+.follow-up-header {
+    background: rgba(17,17,19,0.85) !important;
+    border-bottom-color: var(--mono-border) !important;
+}
+.fu-eyebrow {
+    color: var(--mono-text-dim) !important;
+}
+.fu-title {
+    color: var(--mono-white) !important;
+    font-weight: 300 !important;
+}
+.fu-live-pill {
+    color: var(--mono-text-mid) !important;
+    background: rgba(255,255,255,0.04) !important;
+    border-color: var(--mono-border) !important;
+}
+.fu-pulse-dot {
+    background: var(--mono-text-mid) !important;
+}
+.fu-hero-headline {
+    color: var(--mono-white) !important;
+    font-weight: 300 !important;
+}
+.fu-gradient-word {
+    background: linear-gradient(135deg, var(--mono-white) 0%, var(--mono-text-mid) 100%) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+}
+.fu-hero-sub {
+    color: var(--mono-text-dim) !important;
+}
+.fu-kpi-pod {
+    border-color: var(--mono-border) !important;
+}
+.fu-kpi-val {
+    color: var(--mono-white) !important;
+}
+.fu-kpi-lbl {
+    color: var(--mono-text-dim) !important;
+}
+.fu-kpi-icon-blue  { color: var(--accent-blue) !important; background: rgba(125,211,252,0.06) !important; }
+.fu-kpi-icon-green { color: var(--accent-green) !important; background: rgba(94,234,212,0.06) !important; }
+.fu-kpi-icon-amber { color: var(--accent-amber) !important; background: rgba(212,165,116,0.06) !important; }
+.fu-kpi-icon-violet { color: var(--accent-purple) !important; background: rgba(196,181,253,0.06) !important; }
+.fu-kpi-green  { color: var(--accent-green) !important; }
+.fu-kpi-amber  { color: var(--accent-amber) !important; }
+.fu-kpi-violet { color: var(--accent-purple) !important; }
+.fu-kpi-divider {
+    background: var(--mono-border) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   ORDER EDITOR — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.oe-label {
+    color: var(--mono-text-mid) !important;
+}
+.oe-sync-btn {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-dim) !important;
+}
+.oe-sync-btn:hover {
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+.oe-row {
+    border-color: var(--mono-border) !important;
+    background: rgba(255,255,255,0.01) !important;
+}
+.oe-summary {
+    border-color: var(--mono-border) !important;
+    background: rgba(255,255,255,0.01) !important;
+}
+.oe-summary-row {
+    color: var(--mono-text-mid) !important;
+}
+.oe-summary-row.oe-total-row {
+    border-top-color: var(--mono-border) !important;
+    color: var(--mono-white) !important;
+}
+.oe-stock-in {
+    color: var(--accent-green) !important;
+    background: rgba(94,234,212,0.06) !important;
+    border-color: rgba(94,234,212,0.15) !important;
+}
+.oe-stock-low {
+    color: var(--accent-amber) !important;
+    background: rgba(212,165,116,0.06) !important;
+    border-color: rgba(212,165,116,0.15) !important;
+}
+.oe-stock-out {
+    color: var(--accent-red) !important;
+    background: rgba(248,113,113,0.06) !important;
+    border-color: rgba(248,113,113,0.15) !important;
+}
+.oe-pay-btn {
+    color: var(--mono-text-dim) !important;
+}
+.oe-pay-btn.active.cod {
+    background: rgba(212,165,116,0.1) !important;
+    color: var(--accent-amber) !important;
+}
+.oe-pay-btn.active.prepaid {
+    background: rgba(94,234,212,0.1) !important;
+    color: var(--accent-green) !important;
+}
+.oe-pay-note {
+    color: var(--mono-text-dim) !important;
+}
+.oe-pay-note.warn {
+    color: var(--accent-amber) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SHIPMENT STATUS PILLS — Muted accents
+   ═══════════════════════════════════════════════════════════════════ */
+.shipment-status-pill.awb_assigned,
+.shipment-status-pill.created {
+    background: rgba(125,211,252,0.08) !important;
+    color: var(--accent-blue) !important;
+    border-color: rgba(125,211,252,0.2) !important;
+}
+.shipment-status-pill.pickup_scheduled,
+.shipment-status-pill.in_transit {
+    background: rgba(212,165,116,0.08) !important;
+    color: var(--accent-amber) !important;
+    border-color: rgba(212,165,116,0.2) !important;
+}
+.shipment-status-pill.out_for_delivery {
+    background: rgba(94,234,212,0.08) !important;
+    color: var(--accent-green) !important;
+    border-color: rgba(94,234,212,0.2) !important;
+}
+.shipment-status-pill.delivered {
+    background: rgba(94,234,212,0.08) !important;
+    color: var(--accent-green) !important;
+    border-color: rgba(94,234,212,0.2) !important;
+}
+.shipment-status-pill.cancelled,
+.shipment-status-pill.failed {
+    background: rgba(248,113,113,0.08) !important;
+    color: var(--accent-red) !important;
+    border-color: rgba(248,113,113,0.2) !important;
+}
+.shipment-status-pill.rto {
+    background: rgba(196,181,253,0.08) !important;
+    color: var(--accent-purple) !important;
+    border-color: rgba(196,181,253,0.2) !important;
+}
+
+/* Tracking timeline */
+.tracking-event .dot {
+    background: var(--mono-text-mid) !important;
+}
+.tracking-event .evt-activity {
+    color: var(--mono-text-mid) !important;
+}
+.tracking-event .evt-meta {
+    color: var(--mono-text-dim) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   EXPORT MODAL — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.export-modal-content {
+    background: var(--mono-bg-surface) !important;
+    border-color: var(--mono-border-hover) !important;
+}
+.export-modal-content h3 {
+    color: var(--mono-white) !important;
+    font-weight: 300 !important;
+    letter-spacing: 3px !important;
+}
+.export-option-group label {
+    color: var(--mono-text-dim) !important;
+}
+.export-option-group select,
+.export-option-group input {
+    background: rgba(255,255,255,0.03) !important;
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PAGINATION — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.page-info {
+    color: var(--mono-text-dim) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   TOAST / SPINNER — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.ship-toast {
+    background: var(--mono-bg-surface) !important;
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-text) !important;
+}
+.ship-toast.error {
+    border-color: rgba(248,113,113,0.3) !important;
+}
+.spinner {
+    border-color: var(--mono-border) !important;
+    border-top-color: var(--mono-white) !important;
+}
+.table-loading {
+    color: var(--mono-text-dim) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   MISC OVERRIDES — Monochromatic
+   ═══════════════════════════════════════════════════════════════════ */
+.customer-email {
+    color: var(--mono-text-dim) !important;
+}
+.customer-meta-row .order-id-small,
+.customer-meta-row .timestamp-row {
+    color: var(--mono-text-dim) !important;
+}
+.customer-meta-row .timestamp-row:not(:empty)::before {
+    color: var(--mono-text-ghost) !important;
+}
+.btn-text-edit {
+    color: var(--mono-text-mid) !important;
+}
+.btn-text-edit:hover {
+    background: rgba(255,255,255,0.06) !important;
+    color: var(--mono-white) !important;
+}
+.addr-sync-btn {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-dim) !important;
+}
+.addr-sync-btn:hover {
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+.btn-remove-item {
+    border-color: rgba(248,113,113,0.2) !important;
+    color: var(--accent-red) !important;
+}
+.btn-add-item {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-dim) !important;
+}
+.btn-add-item:hover {
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+
+/* Synced / Cancel badges */
+.badge-synced {
+    background: rgba(94,234,212,0.08) !important;
+    color: var(--accent-green) !important;
+    border-color: rgba(94,234,212,0.2) !important;
+}
+.badge-cancel-reason {
+    background: rgba(255,255,255,0.03) !important;
+    color: var(--mono-text-mid) !important;
+    border-color: var(--mono-border) !important;
+}
+
+/* Cancel reason chips */
+.cr-chip {
+    border-color: var(--mono-border) !important;
+    background: rgba(255,255,255,0.03) !important;
+    color: var(--mono-text-mid) !important;
+}
+.cr-chip:hover {
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+.cr-chip.selected {
+    background: rgba(248,113,113,0.08) !important;
+    border-color: rgba(248,113,113,0.25) !important;
+    color: var(--accent-red) !important;
+}
+.cr-reason-text {
+    border-color: var(--mono-border) !important;
+    background: rgba(255,255,255,0.02) !important;
+    color: var(--mono-text) !important;
+}
+.cr-reason-text:focus {
+    border-color: var(--mono-border-hover) !important;
+}
+
+/* Shipments drawer */
+.shipments-drawer-content {
+    background: var(--mono-bg-surface) !important;
+    border-left-color: var(--mono-border) !important;
+}
+.shipments-drawer-header {
+    border-bottom-color: var(--mono-border) !important;
+}
+.shipment-entry {
+    background: rgba(255,255,255,0.02) !important;
+    border-color: var(--mono-border) !important;
+}
+.shipment-meta b {
+    color: var(--mono-offwhite) !important;
+}
+.shipment-entry-actions button,
+.shipment-entry-actions a {
+    border-color: var(--mono-border) !important;
+    color: var(--mono-text-mid) !important;
+}
+.shipment-entry-actions button:hover,
+.shipment-entry-actions a:hover {
+    border-color: var(--mono-border-hover) !important;
+    color: var(--mono-white) !important;
+}
+.shipment-entry-actions .danger {
+    border-color: rgba(248,113,113,0.2) !important;
+    color: var(--accent-red) !important;
+}
+.tracking-timeline {
+    border-top-color: var(--mono-border) !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,0.14);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   AESTHETIC TYPOGRAPHY — Refined letter spacing & weights
+   Applied globally to headings for a more premium monochrome feel
+   ═══════════════════════════════════════════════════════════════════ */
+h1, h2, h3, h4 {
+    font-weight: 300 !important;
+    letter-spacing: 0.5px;
+}
+.sidebar-brand h1,
+.topbar-title,
+#loginView h1 {
+    font-weight: 200 !important;
+    letter-spacing: 6px !important;
+}

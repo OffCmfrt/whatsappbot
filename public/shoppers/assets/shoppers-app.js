@@ -4717,62 +4717,138 @@ async function loadFollowUpCampaigns() {
 
 function renderCampaigns(campaigns) {
     const grid = document.getElementById('campaignsGrid');
-    
+
     if (!campaigns || campaigns.length === 0) {
         grid.innerHTML = `
-            <div style="grid-column: 1 / -1; text-align: center; padding: 4rem; background: rgba(255,255,255,0.03); border-radius: 12px; border: 1px dashed rgba(255,255,255,0.1);">
-                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity: 0.3; margin-bottom: 1rem;">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                </svg>
-                <h3 style="margin: 0 0 0.5rem 0; color: rgba(255,255,255,0.7);">No Campaigns Yet</h3>
-                <p style="margin: 0 0 1.5rem 0; color: rgba(255,255,255,0.5); font-size: 0.9rem;">Create your first follow-up campaign to engage pending customers</p>
-                <button class="btn btn-primary" onclick="openCampaignWizard()" style="background: #ffa502; color: #000; border-color: #ffa502;">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
-                        <line x1="12" y1="5" x2="12" y2="19"/>
-                        <line x1="5" y1="12" x2="19" y2="12"/>
+            <div class="fu-empty-state">
+                <div class="fu-empty-icon">
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                     </svg>
-                    Create Campaign
+                </div>
+                <h3 class="fu-empty-title">No Campaigns Yet</h3>
+                <p class="fu-empty-desc">Create your first follow-up campaign to engage pending customers via WhatsApp.</p>
+                <button class="fu-empty-btn" onclick="openCampaignWizard()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    Create First Campaign
                 </button>
-            </div>
-        `;
+            </div>`;
+        _fuUpdateKpis([]);
         return;
     }
-    
-    grid.innerHTML = campaigns.map(campaign => `
+
+    grid.innerHTML = campaigns.map(campaign => {
+        const total     = campaign.total_recipients || 0;
+        const responded = campaign.responded_count  || 0;
+        const failed    = campaign.failed_count     || 0;
+        const sent      = campaign.sent_count       || (responded + failed);
+        const pct       = total > 0 ? Math.round((sent / total) * 100) : 0;
+
+        const statusIconMap = {
+            running:   `<svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>`,
+            paused:    `<svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`,
+            draft:     `<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="9" stroke-dasharray="4 3"/></svg>`,
+            completed: `<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>`
+        };
+        const statusIcon = statusIconMap[campaign.status] || '';
+
+        let primaryBtn = '';
+        if (campaign.status === 'running') {
+            primaryBtn = `<button class="campaign-btn campaign-btn-outline" onclick="pauseCampaign(${campaign.id})">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                Pause
+            </button>`;
+        } else if (campaign.status === 'paused') {
+            primaryBtn = `<button class="campaign-btn campaign-btn-primary" onclick="resumeCampaign(${campaign.id})">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Resume
+            </button>`;
+        } else if (campaign.status === 'draft') {
+            primaryBtn = `<button class="campaign-btn campaign-btn-primary" onclick="sendCampaignNow(${campaign.id})">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Send Now
+            </button>`;
+        }
+
+        return `
         <div class="campaign-card ${campaign.status}">
+            <!-- Card shimmer line rendered by CSS ::after -->
+
+            <!-- Header Row -->
             <div class="campaign-header">
                 <h3 class="campaign-name">${escapeHtml(campaign.name)}</h3>
-                <span class="campaign-status ${campaign.status}">${campaign.status}</span>
+                <span class="campaign-status ${campaign.status}">
+                    ${statusIcon}
+                    ${campaign.status}
+                </span>
             </div>
-            <div style="font-size: 0.8rem; color: rgba(255,255,255,0.5); margin-bottom: 1rem;">
+
+            <!-- Meta Row -->
+            <div class="campaign-meta">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
                 Created ${formatDate(campaign.created_at)}
             </div>
+
+            <!-- Stats Pod -->
             <div class="campaign-stats">
                 <div class="campaign-stat">
-                    <div class="campaign-stat-value">${campaign.total_recipients || 0}</div>
-                    <div class="campaign-stat-label">Total</div>
+                    <div class="campaign-stat-value">${total}</div>
+                    <div class="campaign-stat-label">
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                        Total
+                    </div>
                 </div>
                 <div class="campaign-stat">
-                    <div class="campaign-stat-value" style="color: #2ed573;">${campaign.responded_count || 0}</div>
-                    <div class="campaign-stat-label">Responded</div>
+                    <div class="campaign-stat-value campaign-stat-responded">${responded}</div>
+                    <div class="campaign-stat-label">
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                        Responded
+                    </div>
                 </div>
                 <div class="campaign-stat">
-                    <div class="campaign-stat-value" style="color: #ff4757;">${campaign.failed_count || 0}</div>
-                    <div class="campaign-stat-label">Failed</div>
+                    <div class="campaign-stat-value campaign-stat-failed">${failed}</div>
+                    <div class="campaign-stat-label">
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                        Failed
+                    </div>
                 </div>
             </div>
+
+            <!-- Progress Bar -->
+            <div class="campaign-progress-wrap">
+                <div class="campaign-progress-bar">
+                    <div class="campaign-progress-fill" style="width: ${pct}%"></div>
+                </div>
+                <span class="campaign-progress-pct">${pct}% sent</span>
+            </div>
+
+            <!-- Action Buttons -->
             <div class="campaign-actions">
-                ${campaign.status === 'running' ? `
-                    <button class="campaign-btn campaign-btn-outline" onclick="pauseCampaign(${campaign.id})">Pause</button>
-                ` : campaign.status === 'paused' ? `
-                    <button class="campaign-btn campaign-btn-primary" onclick="resumeCampaign(${campaign.id})">Resume</button>
-                ` : campaign.status === 'draft' ? `
-                    <button class="campaign-btn campaign-btn-primary" onclick="sendCampaignNow(${campaign.id})">Send Now</button>
-                ` : ''}
-                <button class="campaign-btn campaign-btn-outline" onclick="viewCampaignDetails(${campaign.id})">Details</button>
+                ${primaryBtn}
+                <button class="campaign-btn campaign-btn-outline" onclick="viewCampaignDetails(${campaign.id})">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    Details
+                </button>
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
+
+    _fuUpdateKpis(campaigns);
+}
+
+function _fuUpdateKpis(campaigns) {
+    const total      = campaigns.length;
+    const active     = campaigns.filter(c => c.status === 'running').length;
+    const drafts     = campaigns.filter(c => c.status === 'draft').length;
+    const recipients = campaigns.reduce((s, c) => s + (c.total_recipients || 0), 0);
+
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('fuKpiTotal',      total      || '0');
+    set('fuKpiActive',     active     || '0');
+    set('fuKpiDraft',      drafts     || '0');
+    set('fuKpiRecipients', recipients > 999 ? (recipients/1000).toFixed(1)+'k' : recipients || '0');
 }
 
 function openCampaignWizard() {
