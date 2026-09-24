@@ -8028,39 +8028,54 @@ function renderCustomerContext(data) {
     // ── Returns & Exchanges ──
     const returns = data.returns || [];
     const exchanges = data.exchanges || [];
+    _currentCtxReturns = returns;
+    _currentCtxExchanges = exchanges;
     const totalRE = returns.length + exchanges.length;
     document.getElementById('ctxReturnsCount').textContent = totalRE;
     if (totalRE > 0) {
         returnsSection.style.display = 'block';
         let html = '';
-        returns.forEach(r => {
+        returns.forEach((r, idx) => {
             const date = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             const srcLabel = r.source === 'portal' ? 'Portal' : 'Local';
-            html += `<div class="ctx-return-card">
+            const reqId = r.request_id || r.return_id || '';
+            const idDisplay = reqId ? `#${String(reqId).replace(/^REQ-?/i, '')}` : `#${String(r.order_id || r.order_number || '').slice(-6)}`;
+            html += `<div class="ctx-return-card clickable" onclick="openReturnExchangeModal('return', ${idx})" title="Click to view full return details">
                 <div class="ctx-return-top">
                     <span class="ctx-return-type type-return">RETURN</span>
                     <span class="ctx-return-status ${getStatusClass(r.status)}">${(r.status || 'unknown').toUpperCase()}</span>
                 </div>
                 <div class="ctx-order-meta">
-                    <span>#${String(r.order_id || r.order_number || '').slice(-6)}</span>
+                    <span style="font-weight: 700; color: #fff;">${idDisplay}</span>
                     <span>${date}</span>
                     <span class="ctx-source-tag">${srcLabel}</span>
                 </div>
                 ${r.reason ? `<div class="ctx-return-reason">${escapeHtml(r.reason)}</div>` : ''}
+                <div class="ctx-card-hint">
+                    <span>View details</span>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+                </div>
             </div>`;
         });
-        exchanges.forEach(e => {
+        exchanges.forEach((e, idx) => {
             const date = e.created_at ? new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             const srcLabel = e.source === 'portal' ? 'Portal' : 'Local';
-            html += `<div class="ctx-return-card">
+            const reqId = e.request_id || e.exchange_id || '';
+            const idDisplay = reqId ? `#${String(reqId).replace(/^REQ-?/i, '')}` : `#${String(e.order_id || e.order_number || '').slice(-6)}`;
+            html += `<div class="ctx-return-card clickable" onclick="openReturnExchangeModal('exchange', ${idx})" title="Click to view full exchange details">
                 <div class="ctx-return-top">
                     <span class="ctx-return-type type-exchange">EXCHANGE</span>
                     <span class="ctx-return-status ${getStatusClass(e.status)}">${(e.status || 'unknown').toUpperCase()}</span>
                 </div>
                 <div class="ctx-order-meta">
-                    <span>#${String(e.order_id || e.order_number || '').slice(-6)}</span>
+                    <span style="font-weight: 700; color: #fff;">${idDisplay}</span>
                     <span>${date}</span>
                     <span class="ctx-source-tag">${srcLabel}</span>
+                </div>
+                ${e.reason ? `<div class="ctx-return-reason">${escapeHtml(e.reason)}</div>` : ''}
+                <div class="ctx-card-hint">
+                    <span>View details</span>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
                 </div>
             </div>`;
         });
@@ -8104,4 +8119,338 @@ function getStatusClass(status) {
     if (['pending', 'initiated', 'pickup_pending'].includes(s)) return 'ctx-status-warning';
     return 'ctx-status-neutral';
 }
+
+// ── Exchange & Return Details Modal Controller ──
+let _currentCtxReturns = [];
+let _currentCtxExchanges = [];
+let _activeReturnExchangeData = null;
+
+function safeParseItemsList(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'object') return [raw];
+    if (typeof raw === 'string') {
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) return parsed;
+            if (typeof parsed === 'object') return [parsed];
+        } catch (e) {
+            return [{ title: raw, name: raw, quantity: 1 }];
+        }
+    }
+    return [];
+}
+
+function openReturnExchangeModal(type, index) {
+    const isExchange = type === 'exchange';
+    const item = isExchange ? _currentCtxExchanges[index] : _currentCtxReturns[index];
+    if (!item) return;
+
+    _activeReturnExchangeData = { ...item, _type: type };
+
+    const modal = document.getElementById('returnExchangeDetailModal');
+    if (!modal) return;
+
+    const typeBadge = document.getElementById('reModalTypeBadge');
+    const titleEl = document.getElementById('reModalTitle');
+    const statusBadge = document.getElementById('reModalStatusBadge');
+    const sourceBadge = document.getElementById('reModalSourceBadge');
+    const subtitleEl = document.getElementById('reModalSubtitle');
+    const bodyEl = document.getElementById('reModalBody');
+
+    // Header setup
+    const typeLabel = isExchange ? 'EXCHANGE' : 'RETURN';
+    if (typeBadge) {
+        typeBadge.className = `re-type-badge ${isExchange ? 'type-exchange' : 'type-return'}`;
+        typeBadge.textContent = typeLabel;
+    }
+
+    if (titleEl) {
+        titleEl.textContent = isExchange ? 'Exchange Request Details' : 'Return Request Details';
+    }
+
+    const statusStr = (item.status || 'pending').toUpperCase();
+    if (statusBadge) {
+        statusBadge.className = `re-status-badge ${getStatusClass(item.status)}`;
+        statusBadge.textContent = statusStr;
+    }
+
+    const isPortal = item.source === 'portal';
+    if (sourceBadge) {
+        sourceBadge.className = 're-source-badge';
+        sourceBadge.textContent = isPortal ? 'Shopify Portal' : 'Store Admin';
+    }
+
+    const orderNum = item.order_number || item.order_id || 'N/A';
+    const reqId = item.request_id || (isExchange ? item.exchange_id : item.return_id) || 'N/A';
+    if (subtitleEl) {
+        subtitleEl.textContent = `Order #${orderNum} • ID: ${reqId}`;
+    }
+
+    // Dates
+    const createdDate = item.created_at 
+        ? new Date(item.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : 'N/A';
+    const updatedDate = item.updated_at 
+        ? new Date(item.updated_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : null;
+
+    // Body content construction
+    let bodyHtml = `
+        <div class="re-meta-grid">
+            <div class="re-meta-card">
+                <span class="re-meta-label">Order Number</span>
+                <span class="re-meta-value">#${escapeHtml(String(orderNum))}</span>
+            </div>
+            <div class="re-meta-card">
+                <span class="re-meta-label">Request ID</span>
+                <span class="re-meta-value">${escapeHtml(String(reqId))}</span>
+            </div>
+            <div class="re-meta-card">
+                <span class="re-meta-label">Date Submitted</span>
+                <span class="re-meta-value">${createdDate}</span>
+            </div>
+            <div class="re-meta-card">
+                <span class="re-meta-label">Status</span>
+                <span class="re-meta-value ${getStatusClass(item.status)}">${statusStr}</span>
+            </div>
+            <div class="re-meta-card">
+                <span class="re-meta-label">Source</span>
+                <span class="re-meta-value">${isPortal ? 'Shopify Portal' : 'Store Admin'}</span>
+            </div>
+            ${updatedDate ? `
+            <div class="re-meta-card">
+                <span class="re-meta-label">Last Updated</span>
+                <span class="re-meta-value">${updatedDate}</span>
+            </div>
+            ` : `
+            <div class="re-meta-card">
+                <span class="re-meta-label">Type</span>
+                <span class="re-meta-value" style="color: ${isExchange ? '#53bdeb' : '#f0a860'};">${typeLabel}</span>
+            </div>
+            `}
+        </div>
+    `;
+
+    // Reason Banner
+    const reasonText = item.reason || (Array.isArray(item.items) && item.items[0]?.reason) || '';
+    if (reasonText) {
+        bodyHtml += `
+            <div class="re-reason-card">
+                <span class="re-reason-label">Customer Reason</span>
+                <div class="re-reason-text">"${escapeHtml(reasonText)}"</div>
+            </div>
+        `;
+    }
+
+    // Items Section
+    if (isExchange) {
+        bodyHtml += `<div class="re-section-title">Exchange Products</div>`;
+
+        if (isPortal) {
+            const items = safeParseItemsList(item.items);
+            if (items.length === 0) {
+                bodyHtml += `<div style="color: rgba(255,255,255,0.4); font-size: 0.82rem; padding: 0.5rem 0;">No item breakdown available.</div>`;
+            } else {
+                items.forEach(it => {
+                    const originalName = it.name || it.title || 'Original Product';
+                    const replacementName = it.replacementProductTitle || it.name || it.title || 'Replacement Product';
+                    const replacementVariant = it.replacementVariant || it.variant || '';
+                    const origSku = it.sku || '';
+                    const repSku = it.replacementSku || it.sku || '';
+
+                    bodyHtml += `
+                        <div class="re-exchange-card">
+                            <div class="re-exchange-flow">
+                                <div class="re-exchange-col">
+                                    <span class="re-exchange-tag old">Returning</span>
+                                    <div class="re-item-name">${escapeHtml(originalName)}</div>
+                                    <div class="re-item-meta">
+                                        ${origSku ? `<span class="re-pill">${escapeHtml(origSku)}</span>` : ''}
+                                        <span>Qty: ${it.quantity || 1}</span>
+                                        ${it.paidPrice ? `<span>₹${Number(it.paidPrice).toLocaleString('en-IN')}</span>` : ''}
+                                    </div>
+                                </div>
+                                <div class="re-exchange-arrow">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+                                </div>
+                                <div class="re-exchange-col">
+                                    <span class="re-exchange-tag new">Replacement</span>
+                                    <div class="re-item-name">${escapeHtml(replacementName)}</div>
+                                    <div class="re-item-meta">
+                                        ${replacementVariant ? `<span class="re-pill" style="color: #25d366; border-color: rgba(37,211,102,0.3);">${escapeHtml(replacementVariant)}</span>` : ''}
+                                        ${repSku && repSku !== origSku ? `<span class="re-pill">${escapeHtml(repSku)}</span>` : ''}
+                                        <span>Qty: ${it.quantity || 1}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+        } else {
+            const oldItems = safeParseItemsList(item.old_items);
+            const newItems = safeParseItemsList(item.new_items);
+
+            bodyHtml += `
+                <div class="re-exchange-card">
+                    <div class="re-exchange-flow">
+                        <div class="re-exchange-col">
+                            <span class="re-exchange-tag old">Returning</span>
+                            ${oldItems.length > 0 ? oldItems.map(it => `
+                                <div class="re-item-name">${escapeHtml(it.name || it.title || 'Item')}</div>
+                                <div class="re-item-meta">
+                                    ${it.sku ? `<span class="re-pill">${escapeHtml(it.sku)}</span>` : ''}
+                                    ${it.variant || it.size ? `<span class="re-pill">${escapeHtml(it.variant || it.size)}</span>` : ''}
+                                    <span>Qty: ${it.quantity || 1}</span>
+                                </div>
+                            `).join('') : '<div style="color: #888; font-size: 0.78rem;">Original item</div>'}
+                        </div>
+                        <div class="re-exchange-arrow">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+                        </div>
+                        <div class="re-exchange-col">
+                            <span class="re-exchange-tag new">Replacement</span>
+                            ${newItems.length > 0 ? newItems.map(it => `
+                                <div class="re-item-name">${escapeHtml(it.name || it.title || 'Replacement Item')}</div>
+                                <div class="re-item-meta">
+                                    ${it.sku ? `<span class="re-pill">${escapeHtml(it.sku)}</span>` : ''}
+                                    ${it.variant || it.size ? `<span class="re-pill" style="color:#25d366; border-color: rgba(37,211,102,0.3);">${escapeHtml(it.variant || it.size)}</span>` : ''}
+                                    <span>Qty: ${it.quantity || 1}</span>
+                                </div>
+                            `).join('') : '<div style="color: #888; font-size: 0.78rem;">Replacement item</div>'}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        if (item.price_difference !== undefined && item.price_difference !== null) {
+            const diffNum = Number(item.price_difference);
+            const diffLabel = diffNum > 0 ? `+₹${diffNum.toLocaleString('en-IN')}` : (diffNum < 0 ? `-₹${Math.abs(diffNum).toLocaleString('en-IN')}` : '₹0 (Even)');
+            bodyHtml += `
+                <div class="re-financial-box">
+                    <span class="re-financial-label">Price Difference / Balance:</span>
+                    <span class="re-financial-val" style="color: ${diffNum > 0 ? '#ff6b7a' : (diffNum < 0 ? '#25d366' : '#53bdeb')};">${diffLabel}</span>
+                </div>
+            `;
+        }
+    } else {
+        bodyHtml += `<div class="re-section-title">Return Items</div>`;
+        const items = safeParseItemsList(item.items);
+        if (items.length === 0) {
+            bodyHtml += `<div style="color: rgba(255,255,255,0.4); font-size: 0.82rem; padding: 0.5rem 0;">No individual item details specified.</div>`;
+        } else {
+            items.forEach(it => {
+                const name = it.name || it.title || 'Product';
+                const sku = it.sku || '';
+                const variant = it.variant || it.size || '';
+                const qty = it.quantity || 1;
+                const price = it.paidPrice || it.price;
+                const itemReason = it.reason || '';
+
+                bodyHtml += `
+                    <div class="re-item-card">
+                        <div class="re-item-info">
+                            <div class="re-item-name">${escapeHtml(name)}</div>
+                            <div class="re-item-meta">
+                                ${sku ? `<span class="re-pill">${escapeHtml(sku)}</span>` : ''}
+                                ${variant ? `<span class="re-pill">${escapeHtml(variant)}</span>` : ''}
+                                <span>Qty: ${qty}</span>
+                                ${itemReason ? `<span style="color: #f0a860;">Reason: ${escapeHtml(itemReason)}</span>` : ''}
+                            </div>
+                        </div>
+                        ${price ? `<div class="re-item-price">₹${Number(price).toLocaleString('en-IN')}</div>` : ''}
+                    </div>
+                `;
+            });
+        }
+
+        if (item.refund_amount || item.refund_status) {
+            const amountStr = item.refund_amount ? `₹${Number(item.refund_amount).toLocaleString('en-IN')}` : 'Pending Calculation';
+            const refundStatus = item.refund_status ? String(item.refund_status).toUpperCase() : 'PENDING';
+            bodyHtml += `
+                <div class="re-financial-box">
+                    <div>
+                        <div class="re-financial-label">Refund Amount</div>
+                        <div style="font-size: 0.72rem; color: rgba(255,255,255,0.5);">Status: ${escapeHtml(refundStatus)}</div>
+                    </div>
+                    <div class="re-financial-val">${amountStr}</div>
+                </div>
+            `;
+        }
+    }
+
+    if (bodyEl) bodyEl.innerHTML = bodyHtml;
+    modal.style.display = 'flex';
+}
+
+function closeReturnExchangeModal() {
+    const modal = document.getElementById('returnExchangeDetailModal');
+    if (modal) modal.style.display = 'none';
+    _activeReturnExchangeData = null;
+}
+
+function copyReturnExchangeSummary() {
+    if (!_activeReturnExchangeData) return;
+    const it = _activeReturnExchangeData;
+    const isExchange = it._type === 'exchange';
+    const orderNum = it.order_number || it.order_id || 'N/A';
+    const reqId = it.request_id || (isExchange ? it.exchange_id : it.return_id) || 'N/A';
+    const status = (it.status || 'pending').toUpperCase();
+
+    const summary = [
+        `*${isExchange ? 'Exchange' : 'Return'} Request Summary*`,
+        `━━━━━━━━━━━━━━━━━━`,
+        `📦 Order: #${orderNum}`,
+        `🆔 Request ID: ${reqId}`,
+        `📊 Status: ${status}`,
+        it.reason ? `📝 Reason: ${it.reason}` : null,
+        `━━━━━━━━━━━━━━━━━━`
+    ].filter(Boolean).join('\n');
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(summary).then(() => {
+            const btn = document.getElementById('reCopyBtn');
+            if (btn) {
+                const orig = btn.innerHTML;
+                btn.innerHTML = `<span>Copied!</span>`;
+                setTimeout(() => { btn.innerHTML = orig; }, 2000);
+            }
+        });
+    }
+}
+
+function insertReturnExchangeToChat() {
+    if (!_activeReturnExchangeData) return;
+    const it = _activeReturnExchangeData;
+    const isExchange = it._type === 'exchange';
+    const orderNum = it.order_number || it.order_id || 'N/A';
+    const status = (it.status || 'pending').toUpperCase();
+
+    const input = document.getElementById('chatInput');
+    if (input) {
+        const msg = `Hi! Regarding your ${isExchange ? 'exchange' : 'return'} request for Order #${orderNum} (Status: ${status}): `;
+        input.value = msg;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        closeReturnExchangeModal();
+    }
+}
+
+// Global modal overlay click & ESC key listener for return/exchange modal
+document.addEventListener('click', (e) => {
+    const modal = document.getElementById('returnExchangeDetailModal');
+    if (modal && e.target === modal) {
+        closeReturnExchangeModal();
+    }
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const modal = document.getElementById('returnExchangeDetailModal');
+        if (modal && modal.style.display === 'flex') {
+            closeReturnExchangeModal();
+        }
+    }
+});
 
