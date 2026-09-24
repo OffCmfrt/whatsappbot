@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark">
     <title>OffComfrt — Support Command Center</title>
-    <link rel="stylesheet" href="/dashboard/css/style.css?v=27">
+    <link rel="stylesheet" href="/dashboard/css/style.css?v=28">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -666,14 +666,72 @@
                 <!-- ===================== SETTINGS PAGE ===================== -->
                 <div id="settingsPage" class="page-section">
                     <div class="settings-grid">
-                        <!-- Support Portals -->
-                        <div class="settings-card">
+                        <!-- Portal Management -->
+                        <div class="settings-card" style="grid-column: 1 / -1">
                             <div class="settings-card-header">
-                                <h3>Support Portals</h3>
-                                <button class="btn btn-primary btn-sm" id="openCreatePortalBtn">+ New Portal</button>
+                                <h3>Portal Management</h3>
+                                <div style="display:flex;gap:8px;align-items:center">
+                                    <button class="btn btn-secondary btn-sm" id="rebalancePortalsBtn" title="Rebalance tickets across portals">Rebalance</button>
+                                    <button class="btn btn-primary btn-sm" id="openCreatePortalBtn">+ New Portal</button>
+                                </div>
                             </div>
-                            <div id="portalsList" class="portals-list">
-                                <div class="loading">Loading portals...</div>
+
+                            <!-- Summary Bar -->
+                            <div class="pm-summary-bar" id="portalSummaryBar">
+                                <div class="pm-stat-chip"><span class="pm-stat-val" id="pmTotalPortals">0</span><span class="pm-stat-lbl">Total Portals</span></div>
+                                <div class="pm-stat-chip"><span class="pm-stat-val" id="pmTotalTickets">0</span><span class="pm-stat-lbl">Open Tickets</span></div>
+                                <div class="pm-stat-chip"><span class="pm-stat-val" id="pmActiveNow">—</span><span class="pm-stat-lbl">Active Shift</span></div>
+                            </div>
+
+                            <!-- Shift Sections -->
+                            <div class="pm-shift-section" id="pmMorningShift">
+                                <div class="pm-shift-header">
+                                    <div class="pm-shift-title">
+                                        <span class="pm-shift-icon">☀</span>
+                                        <span>Morning Shift</span>
+                                        <span class="pm-shift-time">9:00 AM – 5:00 PM IST</span>
+                                    </div>
+                                    <div class="pm-shift-actions">
+                                        <button class="btn btn-secondary btn-xs" onclick="openSplitModal('morning')" title="Split this shift's portals">Split</button>
+                                        <button class="btn btn-secondary btn-xs" onclick="openTransferModal('morning')" title="Transfer tickets from this shift">Transfer</button>
+                                    </div>
+                                </div>
+                                <div class="pm-portal-grid" id="pmMorningPortals">
+                                    <p class="text-muted text-small">Loading...</p>
+                                </div>
+                            </div>
+
+                            <div class="pm-shift-section" id="pmEveningShift">
+                                <div class="pm-shift-header">
+                                    <div class="pm-shift-title">
+                                        <span class="pm-shift-icon">🌙</span>
+                                        <span>Evening Shift</span>
+                                        <span class="pm-shift-time">5:00 PM – 9:00 PM IST</span>
+                                    </div>
+                                    <div class="pm-shift-actions">
+                                        <button class="btn btn-secondary btn-xs" onclick="openSplitModal('evening')" title="Split this shift's portals">Split</button>
+                                        <button class="btn btn-secondary btn-xs" onclick="openTransferModal('evening')" title="Transfer tickets from this shift">Transfer</button>
+                                    </div>
+                                </div>
+                                <div class="pm-portal-grid" id="pmEveningPortals">
+                                    <p class="text-muted text-small">Loading...</p>
+                                </div>
+                            </div>
+
+                            <div class="pm-shift-section" id="pmOtherPortals">
+                                <div class="pm-shift-header">
+                                    <div class="pm-shift-title">
+                                        <span class="pm-shift-icon">⚙</span>
+                                        <span>Manual &amp; Auto Portals</span>
+                                        <span class="pm-shift-time">No shift schedule</span>
+                                    </div>
+                                    <div class="pm-shift-actions">
+                                        <button class="btn btn-secondary btn-xs" onclick="openTransferModal('other')" title="Transfer tickets">Transfer</button>
+                                    </div>
+                                </div>
+                                <div class="pm-portal-grid" id="pmOtherGrid">
+                                    <p class="text-muted text-small">Loading...</p>
+                                </div>
                             </div>
                         </div>
                         <!-- Auto Distribute -->
@@ -750,6 +808,92 @@
             <div class="modal-footer">
                 <button class="btn btn-secondary" data-action="closeModal" data-modal="createPortalModal">Cancel</button>
                 <button class="btn btn-primary" id="savePortalBtn">Save Portal</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Split Portal Modal -->
+    <div id="splitPortalModal" class="modal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3 class="modal-title">Split Portal</h3>
+                <button class="modal-close" data-action="closeModal" data-modal="splitPortalModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted text-small mb-3">Split a portal's tickets evenly across multiple new portals.</p>
+                <div class="form-group">
+                    <label>Source Portal</label>
+                    <select id="splitSourcePortal" class="full-width-select"><option value="">Select portal...</option></select>
+                </div>
+                <div class="form-group">
+                    <label>Split Into (count)</label>
+                    <input type="number" id="splitCount" value="2" min="2" max="10">
+                </div>
+                <div class="form-group">
+                    <label>Name Prefix</label>
+                    <input type="text" id="splitNamePrefix" placeholder="e.g. Morning Shift">
+                </div>
+                <div class="form-group">
+                    <label><input type="checkbox" id="splitKeepSource"> Keep source portal after split</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-action="closeModal" data-modal="splitPortalModal">Cancel</button>
+                <button class="btn btn-primary" id="confirmSplitBtn">Split</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transfer Tickets Modal -->
+    <div id="transferPortalModal" class="modal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3 class="modal-title">Transfer Tickets</h3>
+                <button class="modal-close" data-action="closeModal" data-modal="transferPortalModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted text-small mb-3">Move tickets from one portal to another.</p>
+                <div class="form-group">
+                    <label>From Portal</label>
+                    <select id="transferFromPortal" class="full-width-select"><option value="">Select source...</option></select>
+                </div>
+                <div class="form-group">
+                    <label>To Portal</label>
+                    <select id="transferToPortal" class="full-width-select"><option value="">Select destination...</option></select>
+                </div>
+                <div class="form-group">
+                    <label>Count (leave empty for all)</label>
+                    <input type="number" id="transferCount" placeholder="All tickets" min="1">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-action="closeModal" data-modal="transferPortalModal">Cancel</button>
+                <button class="btn btn-primary" id="confirmTransferBtn">Transfer</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Merge Portals Modal -->
+    <div id="mergePortalModal" class="modal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3 class="modal-title">Merge Portals</h3>
+                <button class="modal-close" data-action="closeModal" data-modal="mergePortalModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted text-small mb-3">Merge tickets from one portal into another. The source portal will be deleted.</p>
+                <div class="form-group">
+                    <label>Source Portal (will be deleted)</label>
+                    <select id="mergeSourcePortal" class="full-width-select"><option value="">Select source...</option></select>
+                </div>
+                <div class="form-group">
+                    <label>Destination Portal (keeps all tickets)</label>
+                    <select id="mergeDestPortal" class="full-width-select"><option value="">Select destination...</option></select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-action="closeModal" data-modal="mergePortalModal">Cancel</button>
+                <button class="btn btn-danger" id="confirmMergeBtn">Merge &amp; Delete Source</button>
             </div>
         </div>
     </div>
@@ -976,7 +1120,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/dashboard/js/main.js?v=28" defer></script>
+    <script src="/dashboard/js/main.js?v=29" defer></script>
     <script src="/dashboard/js/comments.js?v=1" defer></script>
     <script src="/dashboard/js/ai-copilot.js?v=2" defer></script>
 </body>

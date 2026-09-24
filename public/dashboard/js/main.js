@@ -75,6 +75,10 @@ function setupEventListeners() {
     document.getElementById('openAutoDistributeBtn')?.addEventListener('click', openAutoDistributeModal);
     document.getElementById('configureUrgentBtn')?.addEventListener('click', openUrgentKeywordsModal);
     document.getElementById('savePortalBtn')?.addEventListener('click', savePortal);
+    document.getElementById('rebalancePortalsBtn')?.addEventListener('click', rebalancePortals);
+    document.getElementById('confirmSplitBtn')?.addEventListener('click', confirmSplitPortal);
+    document.getElementById('confirmTransferBtn')?.addEventListener('click', confirmTransferPortal);
+    document.getElementById('confirmMergeBtn')?.addEventListener('click', confirmMergePortal);
     document.getElementById('saveKeywordsBtn')?.addEventListener('click', saveUrgentKeywords);
     document.getElementById('addKeywordBtn')?.addEventListener('click', addKeyword);
     document.getElementById('newKeywordInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') addKeyword(); });
@@ -523,45 +527,138 @@ async function confirmAssignPortal() {
 }
 
 // ===================================
-// Portals (Settings)
+// Portals — Premium Shift-Based Management
 // ===================================
 async function loadPortals() {
     try {
         const data = await apiFetch('/support-portals');
         if (data?.success) {
             portalsCache = data.portals || [];
-            renderPortalsList();
+            renderPortalManagement();
             populatePortalFilters();
         }
     } catch { /* silent */ }
 }
 
-function renderPortalsList() {
-    const container = document.getElementById('portalsList');
+function classifyPortal(p) {
+    if (p.type === 'time_based' && p.config) {
+        const start = p.config.time_start || p.shift_start || '';
+        const end = p.config.time_end || p.shift_end || '';
+        if (start >= '09:00' && end <= '17:00') return 'morning';
+        if (start >= '17:00' && end <= '21:00') return 'evening';
+        return 'other';
+    }
+    return 'other';
+}
+
+function renderPortalManagement() {
+    const morning = portalsCache.filter(p => classifyPortal(p) === 'morning');
+    const evening = portalsCache.filter(p => classifyPortal(p) === 'evening');
+    const other = portalsCache.filter(p => classifyPortal(p) === 'other');
+
+    // Summary bar
+    const totalOpen = portalsCache.reduce((s, p) => s + (Number(p.assigned_count) || 0), 0);
+    document.getElementById('pmTotalPortals').textContent = portalsCache.length;
+    document.getElementById('pmTotalTickets').textContent = totalOpen;
+    const now = new Date();
+    const istH = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours();
+    const activeShift = (istH >= 9 && istH < 17) ? 'Morning' : (istH >= 17 && istH < 21) ? 'Evening' : 'Off-hours';
+    document.getElementById('pmActiveNow').textContent = activeShift;
+
+    renderShiftGrid('pmMorningPortals', morning, 'morning');
+    renderShiftGrid('pmEveningPortals', evening, 'evening');
+    renderShiftGrid('pmOtherGrid', other, 'other');
+
+    // Highlight active shift
+    document.getElementById('pmMorningShift').classList.toggle('pm-shift-active', activeShift === 'Morning');
+    document.getElementById('pmEveningShift').classList.toggle('pm-shift-active', activeShift === 'Evening');
+}
+
+function renderShiftGrid(containerId, portals, shift) {
+    const container = document.getElementById(containerId);
     if (!container) return;
-    if (!portalsCache.length) { container.innerHTML = '<p class="text-muted text-small">No portals configured</p>'; return; }
-    container.innerHTML = portalsCache.map(p => `
-        <div class="portal-item">
-            <div style="min-width:0">
-                <div class="portal-item-name">${esc(p.name)}</div>
-                <div class="portal-item-type">${p.type}${p.config?.time_start ? ` · ${p.config.time_start}–${p.config.time_end}` : ''}</div>
-                ${p.url ? `
-                <div class="portal-item-link" id="plink-${p.id}">
-                    <a class="portal-link-url" href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(p.url)}">${esc(p.url)}</a>
-                    <button class="btn btn-secondary btn-sm portal-pw-btn portal-link-copy" onclick="copyPortalLink(${p.id})" title="Copy portal link">📋</button>
-                </div>` : ''}
-                <div class="portal-item-password" id="pw-${p.id}">
-                    <span class="portal-pw-masked">••••••••</span>
-                    <button class="btn btn-secondary btn-sm portal-pw-btn" onclick="revealPortalPassword(${p.id})" title="Show password">👁</button>
-                    <button class="btn btn-secondary btn-sm portal-pw-btn" onclick="copyPortalPassword(${p.id})" title="Copy password" style="margin-left:4px">📋</button>
+    if (!portals.length) {
+        container.innerHTML = `<div class="pm-empty-shift">
+            <span class="pm-empty-icon">${shift === 'other' ? '⚙' : shift === 'morning' ? '☀' : '🌙'}</span>
+            <span>No portals in this ${shift === 'other' ? 'group' : 'shift'}</span>
+            <button class="btn btn-secondary btn-xs" onclick="openPortalModal(null, '${shift}')">+ Add Portal</button>
+        </div>`;
+        return;
+    }
+    container.innerHTML = portals.map(p => {
+        const openCount = Number(p.assigned_count) || 0;
+        const totalCount = Number(p.ticket_count) || 0;
+        const isActive = isPortalCurrentlyActive(p);
+        const typeLabel = p.type === 'time_based' ? 'TIME-BASED' : p.type === 'auto' ? 'AUTO' : 'MANUAL';
+        const timeRange = p.config?.time_start ? `${p.config.time_start} – ${p.config.time_end}` : '';
+        return `<div class="pm-card ${isActive ? 'pm-card-active' : ''}">
+            <div class="pm-card-header">
+                <div class="pm-card-title-row">
+                    <span class="pm-card-name">${esc(p.name)}</span>
+                    ${isActive ? '<span class="pm-live-dot" title="Currently active"></span>' : ''}
+                </div>
+                <span class="pm-card-type-badge">${typeLabel}</span>
+            </div>
+            ${timeRange ? `<div class="pm-card-time">${timeRange} IST</div>` : ''}
+            <div class="pm-card-stats">
+                <div class="pm-card-stat">
+                    <span class="pm-card-stat-val">${openCount}</span>
+                    <span class="pm-card-stat-lbl">Open</span>
+                </div>
+                <div class="pm-card-stat">
+                    <span class="pm-card-stat-val">${totalCount}</span>
+                    <span class="pm-card-stat-lbl">Total</span>
                 </div>
             </div>
-            <div style="display:flex;gap:6px">
-                <button class="btn btn-secondary btn-sm" onclick="openPortalModal(${p.id})">Edit</button>
-                <button class="btn btn-danger btn-sm" onclick="deletePortal(${p.id})">Delete</button>
+            <div class="pm-card-meta">
+                <div class="pm-card-pw" id="pw-${p.id}">
+                    <span class="portal-pw-masked">••••••••</span>
+                    <button class="pm-icon-btn" onclick="revealPortalPassword(${p.id})" title="Show password">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                    <button class="pm-icon-btn" onclick="copyPortalPassword(${p.id})" title="Copy password">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                </div>
+                ${p.url ? `<div class="pm-card-link" id="plink-${p.id}">
+                    <a href="${esc(p.url)}" target="_blank" rel="noopener" class="pm-link-text" title="${esc(p.url)}">${esc(p.slug)}</a>
+                    <button class="pm-icon-btn" onclick="copyPortalLink(${p.id})" title="Copy link">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                    </button>
+                </div>` : ''}
             </div>
-        </div>
-    `).join('');
+            <div class="pm-card-actions">
+                <button class="pm-action-btn" onclick="openPortalModal(${p.id})" title="Edit portal">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Edit
+                </button>
+                <button class="pm-action-btn" onclick="openSplitModalForPortal(${p.id})" title="Split into multiple portals">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="2" x2="12" y2="22"/><polyline points="4 10 12 2 20 10"/></svg>
+                    Split
+                </button>
+                <button class="pm-action-btn" onclick="openMergeModalForPortal(${p.id})" title="Merge into another portal">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M16 3l5 5-5 5"/><line x1="21" y1="8" x2="9" y2="8"/></svg>
+                    Merge
+                </button>
+                <button class="pm-action-btn pm-action-danger" onclick="deletePortal(${p.id})" title="Delete portal">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    Delete
+                </button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function isPortalCurrentlyActive(p) {
+    if (p.type !== 'time_based' || !p.config?.time_start) return false;
+    const now = new Date();
+    const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const mins = ist.getHours() * 60 + ist.getMinutes();
+    const [sh, sm] = (p.config.time_start || '').split(':').map(Number);
+    const [eh, em] = (p.config.time_end || '').split(':').map(Number);
+    const start = sh * 60 + sm, end = eh * 60 + em;
+    if (start <= end) return mins >= start && mins < end;
+    return mins >= start || mins < end; // overnight
 }
 
 function populatePortalFilters() {
@@ -573,7 +670,7 @@ function populatePortalFilters() {
     filter.value = current;
 }
 
-function openPortalModal(id) {
+function openPortalModal(id, presetShift) {
     const modal = document.getElementById('createPortalModal');
     document.getElementById('portalModalTitle').textContent = id ? 'Edit Portal' : 'Create Support Portal';
     document.getElementById('editPortalId').value = id || '';
@@ -591,7 +688,20 @@ function openPortalModal(id) {
         }
     } else {
         document.getElementById('portalForm').reset();
-        document.getElementById('timeBasedConfig').style.display = 'none';
+        // Pre-fill shift times based on which section the + button was in
+        if (presetShift === 'morning') {
+            document.getElementById('portalType').value = 'time_based';
+            document.getElementById('portalShiftStart').value = '09:00';
+            document.getElementById('portalShiftEnd').value = '17:00';
+            document.getElementById('timeBasedConfig').style.display = 'block';
+        } else if (presetShift === 'evening') {
+            document.getElementById('portalType').value = 'time_based';
+            document.getElementById('portalShiftStart').value = '17:00';
+            document.getElementById('portalShiftEnd').value = '21:00';
+            document.getElementById('timeBasedConfig').style.display = 'block';
+        } else {
+            document.getElementById('timeBasedConfig').style.display = 'none';
+        }
     }
     modal.classList.add('active');
 }
@@ -625,41 +735,36 @@ async function savePortal() {
 
 async function revealPortalPassword(id) {
     const container = document.getElementById(`pw-${id}`);
-    const btn = container.querySelector('.portal-pw-btn');
+    if (!container) return;
+    const mask = container.querySelector('.portal-pw-masked');
     try {
         const data = await apiFetch(`/support-portals/${id}/password`);
         if (data?.success && data.password) {
-            container.querySelector('.portal-pw-masked').textContent = data.password;
-            container.querySelector('.portal-pw-masked').classList.add('revealed');
-            btn.onclick = () => hidePortalPassword(id);
-            btn.title = 'Hide password';
-            btn.textContent = '🙈';
+            mask.textContent = data.password;
+            mask.classList.add('revealed');
         } else {
-            container.querySelector('.portal-pw-masked').textContent = data?.message || 'Not available';
+            mask.textContent = data?.message || 'N/A';
         }
     } catch {
-        container.querySelector('.portal-pw-masked').textContent = 'Failed to load';
+        mask.textContent = 'Failed';
     }
+    // Auto-hide after 4s
+    clearTimeout(container._hideTimer);
+    container._hideTimer = setTimeout(() => hidePortalPassword(id), 4000);
 }
 
 function hidePortalPassword(id) {
     const container = document.getElementById(`pw-${id}`);
+    if (!container) return;
     container.querySelector('.portal-pw-masked').textContent = '••••••••';
     container.querySelector('.portal-pw-masked').classList.remove('revealed');
-    const btn = container.querySelector('.portal-pw-btn');
-    btn.onclick = () => revealPortalPassword(id);
-    btn.title = 'Show password';
-    btn.textContent = '👁';
 }
 
 async function copyPortalPassword(id) {
     const data = await apiFetch(`/support-portals/${id}/password`);
     if (data?.success && data.password) {
         await navigator.clipboard.writeText(data.password);
-        const btn = document.querySelector(`#pw-${id} .portal-pw-btn:last-child`);
-        const orig = btn.textContent;
-        btn.textContent = '✓';
-        setTimeout(() => btn.textContent = orig, 1500);
+        flashCopied();
     }
 }
 
@@ -667,17 +772,134 @@ async function copyPortalLink(id) {
     const p = portalsCache.find(x => x.id === id);
     if (!p?.url) return;
     await navigator.clipboard.writeText(p.url);
-    const btn = document.querySelector(`#plink-${id} .portal-link-copy`);
-    if (!btn) return;
-    const orig = btn.textContent;
-    btn.textContent = '✓';
-    setTimeout(() => btn.textContent = orig, 1500);
+    flashCopied();
+}
+
+function flashCopied() {
+    const el = document.createElement('div');
+    el.className = 'pm-toast';
+    el.textContent = 'Copied to clipboard';
+    document.body.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('pm-toast-show'));
+    setTimeout(() => { el.classList.remove('pm-toast-show'); setTimeout(() => el.remove(), 300); }, 1800);
 }
 
 async function deletePortal(id) {
-    if (!confirm('Delete this portal?')) return;
+    if (!confirm('Delete this portal? Its tickets will be unassigned.')) return;
     await apiFetch(`/support-portals/${id}`, { method: 'DELETE' });
     loadPortals();
+}
+
+// --- Split ---
+function openSplitModal(shift) {
+    const sel = document.getElementById('splitSourcePortal');
+    const group = shift === 'morning' ? portalsCache.filter(p => classifyPortal(p) === 'morning')
+        : shift === 'evening' ? portalsCache.filter(p => classifyPortal(p) === 'evening')
+        : portalsCache;
+    sel.innerHTML = '<option value="">Select portal...</option>' +
+        group.map(p => `<option value="${p.id}">${esc(p.name)} (${p.assigned_count || 0} open)</option>`).join('');
+    document.getElementById('splitNamePrefix').value = '';
+    document.getElementById('splitCount').value = 2;
+    document.getElementById('splitKeepSource').checked = false;
+    document.getElementById('splitPortalModal').classList.add('active');
+}
+
+function openSplitModalForPortal(id) {
+    const sel = document.getElementById('splitSourcePortal');
+    sel.innerHTML = '<option value="">Select portal...</option>' +
+        portalsCache.map(p => `<option value="${p.id}" ${p.id === id ? 'selected' : ''}>${esc(p.name)} (${p.assigned_count || 0} open)</option>`).join('');
+    const p = portalsCache.find(x => x.id === id);
+    document.getElementById('splitNamePrefix').value = p?.name || '';
+    document.getElementById('splitCount').value = 2;
+    document.getElementById('splitKeepSource').checked = false;
+    document.getElementById('splitPortalModal').classList.add('active');
+}
+
+async function confirmSplitPortal() {
+    const sourceId = document.getElementById('splitSourcePortal').value;
+    if (!sourceId) return alert('Select a source portal');
+    const body = {
+        count: parseInt(document.getElementById('splitCount').value) || 2,
+        namePrefix: document.getElementById('splitNamePrefix').value.trim() || undefined,
+        keepSource: document.getElementById('splitKeepSource').checked
+    };
+    const data = await apiFetch(`/support-portals/${sourceId}/split`, { method: 'POST', body });
+    if (data?.success) {
+        document.getElementById('splitPortalModal').classList.remove('active');
+        loadPortals();
+    } else {
+        alert(data?.error || 'Split failed');
+    }
+}
+
+// --- Transfer ---
+function openTransferModal(shift) {
+    const group = shift === 'morning' ? portalsCache.filter(p => classifyPortal(p) === 'morning')
+        : shift === 'evening' ? portalsCache.filter(p => classifyPortal(p) === 'evening')
+        : portalsCache;
+    const opts = group.map(p => `<option value="${p.id}">${esc(p.name)} (${p.assigned_count || 0})</option>`).join('');
+    const allOpts = portalsCache.map(p => `<option value="${p.id}">${esc(p.name)} (${p.assigned_count || 0})</option>`).join('');
+    document.getElementById('transferFromPortal').innerHTML = '<option value="">Select source...</option>' + (shift === 'other' ? allOpts : opts);
+    document.getElementById('transferToPortal').innerHTML = '<option value="">Select destination...</option>' + allOpts;
+    document.getElementById('transferCount').value = '';
+    document.getElementById('transferPortalModal').classList.add('active');
+}
+
+async function confirmTransferPortal() {
+    const from = document.getElementById('transferFromPortal').value;
+    const to = document.getElementById('transferToPortal').value;
+    if (!from || !to) return alert('Select both source and destination');
+    if (from === to) return alert('Source and destination must differ');
+    const count = document.getElementById('transferCount').value;
+    const body = { fromPortalId: from, toPortalId: to };
+    if (count) body.count = parseInt(count);
+    const data = await apiFetch('/support-portals/transfer', { method: 'POST', body });
+    if (data?.success) {
+        document.getElementById('transferPortalModal').classList.remove('active');
+        loadPortals();
+    } else {
+        alert(data?.error || 'Transfer failed');
+    }
+}
+
+// --- Merge ---
+function openMergeModalForPortal(id) {
+    const sel = document.getElementById('mergeSourcePortal');
+    const dest = document.getElementById('mergeDestPortal');
+    sel.innerHTML = '<option value="">Select source...</option>' +
+        portalsCache.map(p => `<option value="${p.id}" ${p.id === id ? 'selected' : ''}>${esc(p.name)} (${p.assigned_count || 0} open)</option>`).join('');
+    dest.innerHTML = '<option value="">Select destination...</option>' +
+        portalsCache.filter(p => p.id !== id).map(p => `<option value="${p.id}">${esc(p.name)} (${p.assigned_count || 0} open)</option>`).join('');
+    document.getElementById('mergePortalModal').classList.add('active');
+}
+
+async function confirmMergePortal() {
+    const sourceId = document.getElementById('mergeSourcePortal').value;
+    const destId = document.getElementById('mergeDestPortal').value;
+    if (!sourceId || !destId) return alert('Select both portals');
+    if (sourceId === destId) return alert('Must be different portals');
+    // Transfer all tickets then delete source
+    const tData = await apiFetch('/support-portals/transfer', { method: 'POST', body: { fromPortalId: sourceId, toPortalId: destId } });
+    if (!tData?.success) return alert(tData?.error || 'Merge failed');
+    const dData = await apiFetch(`/support-portals/${sourceId}`, { method: 'DELETE' });
+    if (dData?.success) {
+        document.getElementById('mergePortalModal').classList.remove('active');
+        loadPortals();
+    } else {
+        alert('Tickets transferred but source deletion failed');
+        loadPortals();
+    }
+}
+
+// --- Rebalance ---
+async function rebalancePortals() {
+    if (!confirm('Rebalance open tickets across all auto-distribute portals?')) return;
+    const data = await apiFetch('/support-portals/rebalance', { method: 'POST', body: {} });
+    if (data?.success) {
+        loadPortals();
+    } else {
+        alert(data?.error || 'Rebalance failed');
+    }
 }
 
 // ===================================
