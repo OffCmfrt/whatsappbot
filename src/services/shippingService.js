@@ -655,7 +655,7 @@ async function listBatches({ limit = 25, offset = 0 } = {}) {
     };
 }
 
-async function generateBatchManifest(batchId) {
+async function generateBatchManifest(batchId, format = '4x6') {
     const batch = await dbAdapter.query('SELECT * FROM shipment_batches WHERE id = ? LIMIT 1', [batchId]);
     if (!batch[0]) return { error: 'Batch not found', status: 404 };
 
@@ -677,28 +677,181 @@ async function generateBatchManifest(batchId) {
     `, [batchId]);
 
     // ── Barcode helper (Code-128 via bwip-js) ──────────────────────
-    async function renderBarcode(text) {
+    async function renderBarcode(text, opts = {}) {
         if (!text) return null;
         try {
             return await bwipjs.toBuffer({
                 bcid: 'code128', text: String(text),
-                scale: 2, height: 12, includetext: true,
-                textxalign: 'center', textsize: 9
+                scale: 2, height: opts.height || 10, includetext: false,
+                textxalign: 'center'
             });
         } catch (_) { return null; }
     }
 
-    // ── Build PDF (clean white, print-friendly) ─────────────────────
+    const batchData = batch[0];
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const is4x6 = format !== 'a4';
+
+    // ── 4x6 Thermal Print Layout (288 x 432 pt, 100% black, high contrast) ──
+    if (is4x6) {
+        const doc = new PDFDocument({ size: [288, 432], margin: 10, bufferPages: true });
+        const chunks = [];
+        doc.on('data', c => chunks.push(c));
+
+        const PW = 288 - 20; // 268 pt usable width
+        const MAX_Y = 432 - 18; // bottom cutoff leaving room for page number
+
+        // Page 1 Header
+        doc.fontSize(11).font('Helvetica-Bold').fillColor('#000000')
+           .text('SHIPPING MANIFEST', 10, 10, { width: PW, align: 'center' });
+        doc.moveTo(10, 24).lineTo(10 + PW, 24).strokeColor('#000000').lineWidth(0.8).stroke();
+
+        const batchLabel = batchData.custom_name ? `${batchData.custom_name} (${batchData.batch_number})` : batchData.batch_number;
+        const carrierName = (batchData.carrier || 'Multi-Carrier').toUpperCase();
+
+        doc.fontSize(7.5).font('Helvetica-Bold').fillColor('#000000')
+           .text(`Batch: ${batchLabel}`, 10, 27, { width: PW * 0.58, lineBreak: false });
+        doc.fontSize(7.5).font('Helvetica-Bold').fillColor('#000000')
+           .text(`Carrier: ${carrierName}`, 10 + PW * 0.58, 27, { width: PW * 0.42, align: 'right', lineBreak: false });
+
+        doc.fontSize(6.5).font('Helvetica').fillColor('#000000')
+           .text(`Date: ${dateStr}`, 10, 38, { width: PW * 0.58 });
+        doc.fontSize(6.5).font('Helvetica-Bold').fillColor('#000000')
+           .text(`Total Orders: ${shipments.length}`, 10 + PW * 0.58, 38, { width: PW * 0.42, align: 'right' });
+
+        doc.moveTo(10, 48).lineTo(10 + PW, 48).strokeColor('#000000').lineWidth(0.5).stroke();
+
+        let y = 52;
+        let currentPage = 1;
+
+        function drawThermalMiniHeader(pg) {
+            doc.fontSize(7).font('Helvetica-Bold').fillColor('#000000')
+               .text(`MANIFEST: ${batchData.batch_number}  |  ${carrierName}`, 10, 10, { width: PW * 0.7, lineBreak: false });
+            doc.fontSize(7).font('Helvetica').fillColor('#000000')
+               .text(`Page ${pg}`, 10 + PW * 0.7, 10, { width: PW * 0.3, align: 'right' });
+            doc.moveTo(10, 20).lineTo(10 + PW, 20).strokeColor('#000000').lineWidth(0.5).stroke();
+            return 24;
+        }
+
+        const CARD_H = 68;
+        let totalCod = 0;
+        let totalFreight = 0;
+
+        for (let i = 0; i < shipments.length; i++) {
+            const s = shipments[i];
+            if (y + CARD_H > MAX_Y) {
+                doc.addPage();
+                currentPage++;
+                y = drawThermalMiniHeader(currentPage);
+            }
+
+            // Card outline
+            doc.rect(10, y, PW, CARD_H).strokeColor('#000000').lineWidth(0.5).stroke();
+
+            // Header line of card: #1 · Order #52699   |   COD ₹1,298
+            const payLabel = (s.payment_mode || '').toUpperCase();
+            const amt = s.payment_mode === 'COD' ? (s.cod_amount || 0) : (s.order_total || 0);
+            const payText = `${payLabel} Rs.${Number(amt).toLocaleString('en-IN')}`;
+
+            doc.fontSize(7.5).font('Helvetica-Bold').fillColor('#000000')
+               .text(`#${i + 1} · Order #${s.order_id || ''}`, 13, y + 2, { width: PW - 85, lineBreak: false });
+            doc.fontSize(7.5).font('Helvetica-Bold').fillColor('#000000')
+               .text(payText, 10 + PW - 80, y + 2, { width: 77, align: 'right', lineBreak: false });
+
+            doc.moveTo(10, y + 14).lineTo(10 + PW, y + 14).strokeColor('#000000').lineWidth(0.3).stroke();
+
+            // Barcode on left (x=13, width=135, height=21)
+            if (s.awb) {
+                const bcBuf = await renderBarcode(s.awb, { height: 9 });
+                if (bcBuf) {
+                    try { doc.image(bcBuf, 13, y + 16, { fit: [135, 21] }); }
+                    catch (_) { doc.fontSize(7).font('Helvetica-Bold').fillColor('#000000').text(s.awb, 13, y + 22, { width: 135, align: 'center' }); }
+                }
+                doc.fontSize(6.5).font('Helvetica-Bold').fillColor('#000000')
+                   .text(`AWB: ${s.awb}`, 13, y + 39, { width: 135, align: 'center', lineBreak: false });
+            } else {
+                doc.fontSize(7).font('Helvetica').fillColor('#000000')
+                   .text('No AWB assigned', 13, y + 26, { width: 135, align: 'center' });
+            }
+
+            // Customer details on right (x=153, width=PW-146 = 122)
+            const destParts = [s.customer_city, s.customer_state, s.customer_pincode].filter(Boolean).join(', ');
+            doc.fontSize(7).font('Helvetica-Bold').fillColor('#000000')
+               .text(s.customer_name || 'Customer', 153, y + 16, { width: 122, lineBreak: false });
+            doc.fontSize(6).font('Helvetica').fillColor('#000000')
+               .text(s.customer_phone ? `Ph: ${s.customer_phone}` : '', 153, y + 26, { width: 122, lineBreak: false });
+            doc.fontSize(6).font('Helvetica').fillColor('#000000')
+               .text(destParts || '-', 153, y + 36, { width: 122, height: 16, ellipsis: true });
+
+            // Product items summary
+            let productLine = '';
+            try {
+                const items = JSON.parse(s.items_json || '[]');
+                productLine = items.map(it => {
+                    const sz = extractItemSize(it) || '';
+                    const title = it.title || it.name || 'Product';
+                    const qty = it.quantity || 1;
+                    return sz ? `${title}(${sz})x${qty}` : `${title}x${qty}`;
+                }).join(' | ');
+            } catch (_) {}
+
+            doc.moveTo(10, y + 53).lineTo(10 + PW, y + 53).strokeColor('#000000').lineWidth(0.3).stroke();
+            doc.fontSize(5.5).font('Helvetica').fillColor('#000000')
+               .text(`Items: ${productLine || '1 Item'}`, 13, y + 55, { width: PW - 6, lineBreak: false, ellipsis: true });
+
+            totalCod += (s.payment_mode === 'COD') ? (s.cod_amount || 0) : 0;
+            totalFreight += (s.freight_charge || 0);
+            y += CARD_H + 4;
+        }
+
+        // Courier handover signoff box
+        const SIG_H = 46;
+        if (y + SIG_H > MAX_Y) {
+            doc.addPage();
+            currentPage++;
+            y = drawThermalMiniHeader(currentPage);
+        }
+
+        doc.rect(10, y, PW, SIG_H).strokeColor('#000000').lineWidth(0.5).stroke();
+        doc.fontSize(6.5).font('Helvetica-Bold').fillColor('#000000')
+           .text('COURIER HANDOVER ACKNOWLEDGEMENT', 13, y + 4, { width: PW - 6, align: 'center' });
+        doc.fontSize(6).font('Helvetica').fillColor('#000000')
+           .text(`Total Packets: ${shipments.length}   |   COD to Collect: Rs.${totalCod}   |   Freight: Rs.${totalFreight}`, 13, y + 14, { width: PW - 6 });
+        doc.fontSize(6).font('Helvetica').fillColor('#000000')
+           .text('Courier Associate Name: _________________  Sign: ___________________', 13, y + 24, { width: PW - 6 });
+        doc.fontSize(6).font('Helvetica').fillColor('#000000')
+           .text('Pickup Date & Time: _______________________________________________', 13, y + 34, { width: PW - 6 });
+
+        // Page numbering
+        const range = doc.bufferedPageRange();
+        for (let pg = range.start; pg < range.start + range.count; pg++) {
+            doc.switchToPage(pg);
+            doc.fontSize(6).font('Helvetica').fillColor('#000000')
+               .text(`Page ${pg + 1} of ${range.count}`, 10, 422, { width: PW, align: 'center' });
+        }
+
+        doc.end();
+        const pdfBuffer = await new Promise(resolve => {
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+        });
+
+        return {
+            data: {
+                batchNumber: batchData.batch_number,
+                pdfBuffer,
+                shipmentCount: shipments.length
+            }
+        };
+    }
+
+    // ── A4 Legacy Layout (fallback when format === 'a4') ───────────────
     const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
     const chunks = [];
     doc.on('data', c => chunks.push(c));
 
     const PW = 595.28 - 80;
-    const batchData = batch[0];
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
-    // ── Header ──────────────────────────────────────────────────────
     doc.fontSize(18).font('Helvetica-Bold').fillColor('#000')
        .text('SHIPPING MANIFEST', 40, 40, { width: PW, align: 'center' });
     doc.moveTo(40, 62).lineTo(40 + PW, 62).strokeColor('#ccc').lineWidth(0.5).stroke();
@@ -707,7 +860,6 @@ async function generateBatchManifest(batchId) {
              40, 68, { width: PW, align: 'center' });
     doc.moveTo(40, 84).lineTo(40 + PW, 84).strokeColor('#ccc').lineWidth(0.5).stroke();
 
-    // ── Column layout ───────────────────────────────────────────────
     const COL = {
         sr:    { x: 40,      w: 25  },
         awb:   { x: 65,      w: 100 },
@@ -722,7 +874,6 @@ async function generateBatchManifest(batchId) {
     const PAGE_BOT = 842 - 50;
     let y = 92;
 
-    // ── Table header (reusable) ─────────────────────────────────────
     function drawTableHeader() {
         doc.rect(40, y, PW, HDR_H).fillColor('#f0f0f0').stroke();
         doc.fontSize(7).font('Helvetica-Bold').fillColor('#333');
@@ -737,23 +888,19 @@ async function generateBatchManifest(batchId) {
     }
     drawTableHeader();
 
-    // ── Shipment rows ───────────────────────────────────────────────
     let totalCod = 0, totalFreight = 0;
     for (let i = 0; i < shipments.length; i++) {
         const s = shipments[i];
         if (y + ROW_H > PAGE_BOT) { doc.addPage(); y = 40; drawTableHeader(); }
 
-        // Alternating row background
         if (i % 2 === 1) doc.rect(40, y, PW, ROW_H).fillColor('#fafafa');
         doc.rect(40, y, PW, ROW_H).strokeColor('#ddd').lineWidth(0.3).stroke();
 
         const textY = y + 5;
 
-        // # (serial)
         doc.fontSize(7).font('Helvetica').fillColor('#666')
            .text(String(i + 1), COL.sr.x + 3, textY, { width: COL.sr.w - 6 });
 
-        // AWB + barcode
         if (s.awb) {
             const bcBuf = await renderBarcode(s.awb);
             if (bcBuf) {
@@ -764,30 +911,24 @@ async function generateBatchManifest(batchId) {
             }
         }
 
-        // Order ID
         doc.fontSize(7).fillColor('#222')
            .text(String(s.order_id || ''), COL.order.x + 3, textY, { width: COL.order.w - 6 });
 
-        // Customer name + phone
         doc.fontSize(7).fillColor('#333')
            .text(`${s.customer_name || '-'}\n${s.customer_phone || ''}`, COL.cust.x + 3, textY, { width: COL.cust.w - 6, lineBreak: false, height: ROW_H - 10 });
 
-        // Destination
         const destParts = [s.customer_city, s.customer_state, s.customer_pincode].filter(Boolean);
         doc.fontSize(7).fillColor('#333')
            .text(destParts.join(', ') || '-', COL.dest.x + 3, textY, { width: COL.dest.w - 6, lineBreak: false, height: ROW_H - 10 });
 
-        // Payment mode
         const payLabel = (s.payment_mode || '').toUpperCase();
         doc.fontSize(7).fillColor(payLabel === 'COD' ? '#c0392b' : '#27ae60')
            .text(payLabel || '-', COL.pay.x + 3, textY, { width: COL.pay.w - 6 });
 
-        // Amount
         const amt = s.payment_mode === 'COD' ? (s.cod_amount || 0) : (s.order_total || 0);
         doc.fontSize(7).font('Helvetica-Bold').fillColor('#000')
            .text(`Rs.${amt}`, COL.amt.x + 3, textY, { width: COL.amt.w - 6 });
 
-        // Product line at bottom of row
         let productLine = '';
         try {
             const items = JSON.parse(s.items_json || '[]');
@@ -808,7 +949,6 @@ async function generateBatchManifest(batchId) {
         y += ROW_H;
     }
 
-    // ── Footer summary ──────────────────────────────────────────────
     y += 8;
     doc.moveTo(40, y).lineTo(40 + PW, y).strokeColor('#999').lineWidth(0.5).stroke();
     y += 6;
@@ -816,7 +956,6 @@ async function generateBatchManifest(batchId) {
        .text(`Total: ${shipments.length} shipments   |   COD Collectible: Rs.${totalCod}   |   Freight: Rs.${totalFreight}`,
              40, y, { width: PW, align: 'center' });
 
-    // Page numbers
     const range = doc.bufferedPageRange();
     for (let pg = range.start; pg < range.start + range.count; pg++) {
         doc.switchToPage(pg);
@@ -833,6 +972,61 @@ async function generateBatchManifest(batchId) {
         data: {
             batchNumber: batchData.batch_number,
             pdfBuffer,
+            shipmentCount: shipments.length
+        }
+    };
+}
+
+async function generateBatchManifestCsv(batchId) {
+    const batch = await dbAdapter.query('SELECT * FROM shipment_batches WHERE id = ? LIMIT 1', [batchId]);
+    if (!batch[0]) return { error: 'Batch not found', status: 404 };
+
+    const shipments = await dbAdapter.query(`
+        SELECT s.order_id, s.awb, s.courier_name, s.status, s.freight_charge,
+               s.payment_mode, s.cod_amount, s.weight_grams,
+               COALESCE(ss.name, '') AS customer_name,
+               COALESCE(ss.phone, '') AS customer_phone,
+               COALESCE(ss.address, '') AS customer_address,
+               COALESCE(ss.city, '') AS customer_city,
+               COALESCE(ss.province, '') AS customer_state,
+               COALESCE(ss.zip, '') AS customer_pincode,
+               COALESCE(ss.order_total, 0) AS order_total,
+               COALESCE(ss.items_json, '[]') AS items_json
+        FROM shipments s
+        LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
+        WHERE s.batch_id = ? AND s.status NOT IN ('failed')
+        ORDER BY s.id ASC
+    `, [batchId]);
+
+    const headers = ['Sr', 'Order ID', 'AWB', 'Courier', 'Customer Name', 'Phone', 'City', 'State', 'Pincode', 'Payment Mode', 'Amount', 'Items'];
+    const rows = [headers.join(',')];
+    shipments.forEach((s, i) => {
+        const amt = s.payment_mode === 'COD' ? (s.cod_amount || 0) : (s.order_total || 0);
+        let itemsSummary = '';
+        try {
+            const items = JSON.parse(s.items_json || '[]');
+            itemsSummary = items.map(it => `${it.title || it.name || 'Product'} x ${it.quantity || 1}`).join(' | ');
+        } catch (_) {}
+        const esc = v => `"${String(v || '').replace(/"/g, '""')}"`;
+        rows.push([
+            i + 1,
+            esc(s.order_id),
+            esc(s.awb),
+            esc(s.courier_name),
+            esc(s.customer_name),
+            esc(s.customer_phone),
+            esc(s.customer_city),
+            esc(s.customer_state),
+            esc(s.customer_pincode),
+            esc(s.payment_mode),
+            amt,
+            esc(itemsSummary)
+        ].join(','));
+    });
+    return {
+        data: {
+            batchNumber: batch[0].batch_number,
+            csvContent: rows.join('\r\n'),
             shipmentCount: shipments.length
         }
     };
@@ -1111,6 +1305,7 @@ module.exports = {
     getBatch,
     listBatches,
     generateBatchManifest,
+    generateBatchManifestCsv,
     getBatchLabels,
     buildBatchLabelsZip
 };

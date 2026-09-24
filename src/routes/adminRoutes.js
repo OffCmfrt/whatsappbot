@@ -5815,15 +5815,27 @@ router.get('/shipping/batches/:id', verifyToken, async (req, res) => {
     }
 });
 
-// Download batch manifest as CSV
+// Download batch manifest (4x6 thermal PDF default, ?format=a4 for A4, ?format=csv for CSV)
 router.get('/shipping/batches/:id/manifest', verifyToken, async (req, res) => {
     try {
-        const result = await shippingService.generateBatchManifest(req.params.id);
+        const format = (req.query.format || '4x6').toLowerCase();
+        if (format === 'csv') {
+            const result = await shippingService.generateBatchManifestCsv(req.params.id);
+            if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
+
+            const { batchNumber, csvContent, shipmentCount } = result.data;
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', `attachment; filename="${batchNumber}_manifest_${shipmentCount}_orders.csv"`);
+            return res.send(csvContent);
+        }
+
+        const result = await shippingService.generateBatchManifest(req.params.id, format);
         if (result.error) return res.status(result.status || 500).json({ success: false, error: result.error });
 
         const { batchNumber, pdfBuffer, shipmentCount } = result.data;
+        const suffix = format === 'a4' ? 'a4' : '4x6';
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${batchNumber}_manifest_${shipmentCount}_orders.pdf"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${batchNumber}_manifest_${shipmentCount}_orders_${suffix}.pdf"`);
         res.send(pdfBuffer);
     } catch (error) {
         console.error('Batch manifest error:', error);
