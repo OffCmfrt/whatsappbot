@@ -379,6 +379,7 @@ class ShopifyService {
             const catalog = rawProducts.map(p => ({
                 id: p.id,
                 title: p.title,
+                handle: p.handle || null,
                 image: p.image?.src || null,
                 created_at: p.created_at || null,
                 variants: (p.variants || []).map(v => {

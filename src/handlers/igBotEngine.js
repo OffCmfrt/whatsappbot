@@ -1333,18 +1333,26 @@ They'll review and reply right here within 24-48 hours.`
         }
 
         if (!productName) {
-            // No product identified — ask for clarification
-            await instagramService.sendMessage(
-                igUserId,
-                'Which product are you asking about? Please share the product name or a keyword.'
-            );
+            // No product identified — check if there's an attachment context
+            const hasAttachment = context.lastAttachment?.url;
+            if (hasAttachment) {
+                await instagramService.sendMessage(
+                    igUserId,
+                    `I can see the ${context.lastAttachment.type || 'image'} you shared. Could you tell me the product name so I can look it up?`
+                );
+            } else {
+                await instagramService.sendMessage(
+                    igUserId,
+                    'Which product are you asking about? Please share the product name or a keyword.'
+                );
+            }
             return;
         }
 
         // Search Shopify catalog
-        const product = await this._searchProducts(productName);
+        const searchResult = await this._searchProducts(productName);
 
-        if (!product) {
+        if (!searchResult) {
             // Product not found — ask for clarification
             await instagramService.sendMessage(
                 igUserId,
@@ -1353,12 +1361,35 @@ They'll review and reply right here within 24-48 hours.`
             return;
         }
 
+        // Handle ambiguous results — ask for clarification
+        if (searchResult.type === 'ambiguous') {
+            const candidates = searchResult.candidates;
+            const options = candidates.map((p, i) => `${i + 1}. ${p.title}`).join('\n');
+            await instagramService.sendQuickReplies(
+                igUserId,
+                `I found multiple products matching "${productName}". Which one?\n\n${options}`,
+                candidates.slice(0, 3).map((p, i) => ({
+                    title: p.title.length > 20 ? p.title.substring(0, 18) + '…' : p.title,
+                    payload: `product_pick_${p.id}`
+                }))
+            );
+            // Store candidates so the next message can pick one
+            context.pendingProductCandidates = candidates.map(p => ({ id: p.id, name: p.title }));
+            await instagramService.setBotState(igUserId, STATES.IDLE, context);
+            return;
+        }
+
+        // Single confident match
+        const product = searchResult.product;
+
         // Store product context for follow-up questions
         context.lastProduct = {
             id: product.id,
             name: product.title,
             handle: product.handle || null
         };
+        // Clear any pending candidates
+        delete context.pendingProductCandidates;
         await instagramService.setBotState(igUserId, STATES.IDLE, context);
 
         // Format and send the product answer
@@ -1373,14 +1404,23 @@ They'll review and reply right here within 24-48 hours.`
         const lastProduct = context.lastProduct;
 
         // Search for the product again using the stored name
-        const product = await this._searchProducts(lastProduct.name);
-        if (!product) {
+        const searchResult = await this._searchProducts(lastProduct.name);
+        if (!searchResult || searchResult.type !== 'match') {
             await instagramService.sendMessage(
                 igUserId,
                 `I lost track of that product — could you tell me the name again?`
             );
             return;
         }
+
+        const product = searchResult.product;
+        // Refresh product context (handle may have been updated)
+        context.lastProduct = {
+            id: product.id,
+            name: product.title,
+            handle: product.handle || lastProduct.handle || null
+        };
+        await instagramService.setBotState(igUserId, STATES.IDLE, context);
 
         await this._sendProductAnswer(igUserId, product, result, message);
     }
@@ -1402,7 +1442,21 @@ They'll review and reply right here within 24-48 hours.`
             if (prices.length > 0) {
                 const minPrice = Math.min(...prices);
                 const maxPrice = Math.max(...prices);
-                if (minPrice === maxPrice) {
+
+                // Compare-at / MRP — show sale price when available
+                const compareAtPrices = variants
+                    .map(v => v.compare_at_price)
+                    .filter(p => p !== null && p > 0);
+                const maxCompareAt = compareAtPrices.length > 0 ? Math.max(...compareAtPrices) : null;
+
+                if (maxCompareAt && maxCompareAt > minPrice) {
+                    // On sale — show both MRP and sale price
+                    if (minPrice === maxPrice) {
+                        msg += `\nPrice: Rs.${minPrice} (MRP: Rs.${maxCompareAt})`;
+                    } else {
+                        msg += `\nPrice: Rs.${minPrice} – Rs.${maxPrice} (MRP up to Rs.${maxCompareAt})`;
+                    }
+                } else if (minPrice === maxPrice) {
                     msg += `\nPrice: Rs.${minPrice}`;
                 } else {
                     msg += `\nPrice: Rs.${minPrice} – Rs.${maxPrice}`;
@@ -1420,6 +1474,17 @@ They'll review and reply right here within 24-48 hours.`
             }
         }
 
+        // Colour — extract from variant titles if present
+        if (/colour|color/.test(text)) {
+            const colours = variants
+                .map(v => v.title)
+                .filter(t => t && t.length > 0 && t !== 'Default Title');
+            if (colours.length > 0) {
+                const unique = [...new Set(colours)];
+                msg += `\nAvailable options: ${unique.join(', ')}`;
+            }
+        }
+
         // Availability / stock
         const totalStock = variants.reduce((sum, v) => sum + (v.inventory || 0), 0);
         if (totalStock > 0) {
@@ -1431,6 +1496,11 @@ They'll review and reply right here within 24-48 hours.`
         // Product link — only if we have a verified handle
         if (product.handle) {
             msg += `\n\nView: offcomfrt.in/products/${product.handle}`;
+        }
+
+        // Product image
+        if (product.image) {
+            msg += `\n\nImage: ${product.image}`;
         }
 
         await instagramService.sendQuickReplies(
@@ -1456,7 +1526,14 @@ They'll review and reply right here within 24-48 hours.`
         let cleaned = message
             .replace(/\b(how much|what is|what's|price of|cost of|rate of|tell me about|about|send|share|give)\b/gi, '')
             .replace(/\?(.*)/g, '')
-            .replace(/\b(this|that|it|the|a|an|is|are|do|does|can|you|your|me|my)\b/gi, '')
+            .replace(/\b(this|that|it|the|a|an|is|are|do|does|can|you|your|me|my|in|of|on|at|to|for|with|which|what|how)\b/gi, '')
+            .trim();
+
+        // Strip intent-only keywords — these signal WHAT the user wants to know,
+        // not WHICH product. Without this, "price" → searches Shopify for "price".
+        cleaned = cleaned
+            .replace(/\b(price|cost|rate|mrp|charges|link|stock|available|availability|colour|color|size|sizes|details|info|information|enquiry|question|product|products)\b/gi, '')
+            .replace(/[?,.!]/g, '')
             .trim();
 
         // If nothing meaningful left after stripping, try context
@@ -1470,7 +1547,13 @@ They'll review and reply right here within 24-48 hours.`
     /**
      * Search the Shopify product catalog for a product matching the query.
      * Uses the cached catalog (10-min TTL) — no extra API calls per message.
-     * Returns the best match or null.
+     *
+     * Returns:
+     *   { type: 'match', product }       — single confident match
+     *   { type: 'ambiguous', candidates } — multiple plausible matches (≤4)
+     *   null                              — no match at all
+     *
+     * Match priority: exact title → title contains → word overlap → fuzzy (Levenshtein).
      */
     async _searchProducts(query) {
         try {
@@ -1484,40 +1567,112 @@ They'll review and reply right here within 24-48 hours.`
             const exact = catalog.find(p =>
                 p.title.toLowerCase() === q
             );
-            if (exact) return exact;
+            if (exact) return { type: 'match', product: exact };
 
             // 2. Title contains the query
-            const contains = catalog.find(p =>
+            const contains = catalog.filter(p =>
                 p.title.toLowerCase().includes(q)
             );
-            if (contains) return contains;
+            if (contains.length === 1) return { type: 'match', product: contains[0] };
+            if (contains.length > 1) {
+                // Multiple "contains" matches — check if one is clearly dominant
+                // (e.g., "Henley" matches "Henley Tee" and "Acid Wash Henley" equally)
+                const scored = contains.map(p => {
+                    const title = p.title.toLowerCase();
+                    let score = 0;
+                    if (title === q) score += 100;
+                    else if (title.startsWith(q)) score += 50;
+                    else score += 10;
+                    return { product: p, score };
+                }).sort((a, b) => b.score - a.score);
 
-            // 3. Any word in the query matches a word in the title
-            const queryWords = q.split(/\s+/).filter(w => w.length >= 3);
-            if (queryWords.length === 0) return null;
-
-            let bestMatch = null;
-            let bestScore = 0;
-
-            for (const product of catalog) {
-                const titleWords = product.title.toLowerCase().split(/\s+/);
-                let score = 0;
-                for (const qw of queryWords) {
-                    for (const tw of titleWords) {
-                        if (tw.includes(qw)) score++;
-                    }
+                if (scored[0].score > scored[1].score * 1.5) {
+                    return { type: 'match', product: scored[0].product };
                 }
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestMatch = product;
+                return { type: 'ambiguous', candidates: scored.slice(0, 4).map(s => s.product) };
+            }
+
+            // 3. Any word in the query matches words in the title
+            const queryWords = q.split(/\s+/).filter(w => w.length >= 3);
+            if (queryWords.length > 0) {
+                const scored = [];
+                for (const product of catalog) {
+                    const titleWords = product.title.toLowerCase().split(/\s+/);
+                    let score = 0;
+                    for (const qw of queryWords) {
+                        for (const tw of titleWords) {
+                            if (tw === qw) score += 3;       // exact word match
+                            else if (tw.includes(qw)) score += 2; // contains
+                            else if (qw.length >= 4 && this._levenshtein(qw, tw) <= 2) score += 1.5; // fuzzy
+                        }
+                    }
+                    if (score > 0) scored.push({ product, score });
+                }
+                scored.sort((a, b) => b.score - a.score);
+
+                if (scored.length > 0 && scored[0].score >= 3) {
+                    // Check for ambiguity: if top 2+ products have similar scores
+                    const topScore = scored[0].score;
+                    const close = scored.filter(s => s.score >= topScore * 0.7);
+                    if (close.length > 1 && close[0].score < close[1].score * 1.3) {
+                        return { type: 'ambiguous', candidates: close.slice(0, 4).map(s => s.product) };
+                    }
+                    return { type: 'match', product: scored[0].product };
+                }
+
+                // 4. Fuzzy fallback — Levenshtein on full title vs query
+                if (q.length >= 3) {
+                    let bestFuzzy = null;
+                    let bestDist = Infinity;
+                    for (const product of catalog) {
+                        const title = product.title.toLowerCase();
+                        // Compare query against each word in the title
+                        const titleWords = title.split(/\s+/);
+                        for (const tw of titleWords) {
+                            if (tw.length < 3) continue;
+                            const dist = this._levenshtein(q, tw);
+                            if (dist < bestDist && dist <= 2) {
+                                bestDist = dist;
+                                bestFuzzy = product;
+                            }
+                        }
+                    }
+                    if (bestFuzzy) return { type: 'match', product: bestFuzzy };
                 }
             }
 
-            return bestScore > 0 ? bestMatch : null;
+            return null;
         } catch (error) {
             console.error('[IG BOT] Product search error:', error.message);
             return null;
         }
+    }
+
+    /**
+     * Levenshtein distance between two strings.
+     * Used for fuzzy product name matching (typos like "henely" → "henley").
+     */
+    _levenshtein(a, b) {
+        const m = a.length, n = b.length;
+        if (m === 0) return n;
+        if (n === 0) return m;
+        const d = Array.from({ length: m + 1 }, (_, i) => {
+            const row = new Array(n + 1);
+            row[0] = i;
+            return row;
+        });
+        for (let j = 0; j <= n; j++) d[0][j] = j;
+        for (let i = 1; i <= m; i++) {
+            for (let j = 1; j <= n; j++) {
+                const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+                d[i][j] = Math.min(
+                    d[i - 1][j] + 1,
+                    d[i][j - 1] + 1,
+                    d[i - 1][j - 1] + cost
+                );
+            }
+        }
+        return d[m][n];
     }
 
     // ─── Helpers ────────────────────────────────────────────────
