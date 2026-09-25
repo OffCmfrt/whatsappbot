@@ -7,7 +7,7 @@
 const API_BASE = window.location.hostname.endsWith('myshopify.com')
     ? 'https://whatsappbot-4l4b.onrender.com/api/admin'
     : '/api/admin';
-console.log('🚀 Shopper Hub App Loaded - Ver: 20260922');
+console.log('🚀 Shopper Hub App Loaded - Ver: 20260924c');
 
 // Check for cross-domain token in URL
 const urlParams = new URLSearchParams(window.location.search);
@@ -7960,7 +7960,8 @@ function renderCustomerContext(data) {
         returns.forEach(r => {
             const date = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             const srcLabel = r.source === 'portal' ? 'Portal' : 'Local';
-            html += `<div class="ctx-return-card">
+            const encodedData = encodeURIComponent(JSON.stringify({ ...r, _type: 'return' }));
+            html += `<div class="ctx-return-card" onclick="openReturnDetail(decodeURIComponent('${encodedData}'))" title="Click to view details">
                 <div class="ctx-return-top">
                     <span class="ctx-return-type type-return">RETURN</span>
                     <span class="ctx-return-status ${getStatusClass(r.status)}">${(r.status || 'unknown').toUpperCase()}</span>
@@ -7971,12 +7972,14 @@ function renderCustomerContext(data) {
                     <span class="ctx-source-tag">${srcLabel}</span>
                 </div>
                 ${r.reason ? `<div class="ctx-return-reason">${escapeHtml(r.reason)}</div>` : ''}
+                <div class="ctx-return-card-click-hint">↗ Click to view full details</div>
             </div>`;
         });
         exchanges.forEach(e => {
             const date = e.created_at ? new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             const srcLabel = e.source === 'portal' ? 'Portal' : 'Local';
-            html += `<div class="ctx-return-card">
+            const encodedData = encodeURIComponent(JSON.stringify({ ...e, _type: 'exchange' }));
+            html += `<div class="ctx-return-card type-exchange-card" onclick="openReturnDetail(decodeURIComponent('${encodedData}'))" title="Click to view details">
                 <div class="ctx-return-top">
                     <span class="ctx-return-type type-exchange">EXCHANGE</span>
                     <span class="ctx-return-status ${getStatusClass(e.status)}">${(e.status || 'unknown').toUpperCase()}</span>
@@ -7986,6 +7989,7 @@ function renderCustomerContext(data) {
                     <span>${date}</span>
                     <span class="ctx-source-tag">${srcLabel}</span>
                 </div>
+                <div class="ctx-return-card-click-hint">↗ Click to view full details</div>
             </div>`;
         });
         returnsBody.innerHTML = html;
@@ -8029,3 +8033,487 @@ function getStatusClass(status) {
     return 'ctx-status-neutral';
 }
 
+
+// ── Return / Exchange Detail Modal ──────────────────────────────────────────
+
+function openReturnDetail(jsonStr) {
+    let data;
+    try { data = JSON.parse(jsonStr); } catch (e) { console.error('[reDetail] Bad JSON', e); return; }
+
+    const isExchange = data._type === 'exchange';
+    const type = isExchange ? 'exchange' : 'return';
+    const statusRaw = (data.status || 'unknown').toLowerCase();
+
+    // Header
+    const title = document.getElementById('reDetailTitle');
+    const badge = document.getElementById('reDetailTypeBadge');
+    if (title) title.textContent = isExchange ? 'Exchange Details' : 'Return Details';
+    if (badge) {
+        badge.textContent = isExchange ? 'Exchange' : 'Return';
+        badge.className = `re-type-badge ${isExchange ? 'is-exchange' : 'is-return'}`;
+    }
+
+    // Status banner class
+    const statusClass = ['approved','completed'].includes(statusRaw) ? 'status-approved'
+        : statusRaw === 'rejected' ? 'status-rejected'
+        : ['pending','initiated','pickup_pending'].includes(statusRaw) ? 'status-pending'
+        : 'status-default';
+
+    // Format dates
+    const fmtDt = iso => {
+        if (!iso) return '—';
+        try { return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }); }
+        catch { return iso; }
+    };
+
+    const orderId = String(data.order_id || data.order_number || '—');
+    const sourceLabel = data.source === 'portal' ? 'Portal' : 'Local';
+    const sourceCls = data.source === 'portal' ? 'src-portal' : 'src-local';
+
+    // Parse items for returns (items field) and exchanges (old_items / new_items)
+    function parseItems(raw) {
+        if (!raw) return [];
+        if (Array.isArray(raw)) return raw;
+        try { const p = JSON.parse(raw); return Array.isArray(p) ? p : []; } catch { return []; }
+    }
+
+    function renderItemList(items, label) {
+        if (!items || items.length === 0) return '';
+        const rows = items.map(it => {
+            const name = it.title || it.name || it.sku || JSON.stringify(it);
+            const qty  = it.qty  || it.quantity || '';
+            const size = it.size || it.variant_title || '';
+            return `<div class="re-item-row"><strong>${escapeHtml(name)}</strong>${size ? ` · ${escapeHtml(size)}` : ''}${qty ? ` <span style="color:rgba(255,255,255,0.4)">×${qty}</span>` : ''}</div>`;
+        }).join('');
+        return `<div class="re-section-title">${escapeHtml(label)}</div><div class="re-items-list">${rows}</div>`;
+    }
+
+    let itemsHtml = '';
+    if (isExchange) {
+        itemsHtml += renderItemList(parseItems(data.old_items), 'Items Being Returned');
+        itemsHtml += renderItemList(parseItems(data.new_items), 'Replacement Items');
+    } else {
+        itemsHtml += renderItemList(parseItems(data.items), 'Return Items');
+    }
+
+    // Price difference (exchanges)
+    let priceDiffHtml = '';
+    if (isExchange && data.price_difference != null) {
+        const pd = Number(data.price_difference);
+        const sign = pd > 0 ? '+' : '';
+        const colour = pd > 0 ? '#f0a860' : pd < 0 ? '#53bdeb' : 'rgba(255,255,255,0.5)';
+        priceDiffHtml = `<div class="re-price-diff">
+            <span class="re-label">Price Difference</span>
+            <span class="re-val" style="color:${colour}">${sign}₹${Math.abs(pd).toLocaleString('en-IN')}</span>
+        </div>`;
+        if (data.payment_status) {
+            priceDiffHtml += `<div class="re-price-diff" style="margin-top:6px;">
+                <span class="re-label">Payment Status</span>
+                <span class="re-val">${escapeHtml(data.payment_status)}</span>
+            </div>`;
+        }
+    }
+
+    // Refund (returns)
+    let refundHtml = '';
+    if (!isExchange) {
+        if (data.refund_amount != null) {
+            refundHtml += `<div class="re-price-diff"><span class="re-label">Refund Amount</span><span class="re-val">₹${Number(data.refund_amount).toLocaleString('en-IN')}</span></div>`;
+        }
+        if (data.refund_status) {
+            refundHtml += `<div class="re-price-diff" style="margin-top:6px;"><span class="re-label">Refund Status</span><span class="re-val">${escapeHtml(data.refund_status)}</span></div>`;
+        }
+    }
+
+    // IDs cell
+    const idLabel = isExchange ? (data.exchange_id || orderId) : (data.return_id || orderId);
+
+    const body = document.getElementById('reDetailBody');
+    if (body) {
+        body.innerHTML = `
+            <div class="re-status-banner ${statusClass}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                ${escapeHtml((data.status || 'Unknown').toUpperCase())}
+                <span class="re-source-pill ${sourceCls}" style="margin-left:auto">${escapeHtml(sourceLabel)}</span>
+            </div>
+
+            <div class="re-info-grid">
+                <div class="re-info-cell">
+                    <div class="re-info-label">Order ID</div>
+                    <div class="re-info-value">#${escapeHtml(orderId)}</div>
+                </div>
+                <div class="re-info-cell">
+                    <div class="re-info-label">${isExchange ? 'Exchange ID' : 'Return ID'}</div>
+                    <div class="re-info-value">${escapeHtml(String(idLabel))}</div>
+                </div>
+                <div class="re-info-cell">
+                    <div class="re-info-label">Requested</div>
+                    <div class="re-info-value">${fmtDt(data.created_at)}</div>
+                </div>
+                <div class="re-info-cell">
+                    <div class="re-info-label">Last Updated</div>
+                    <div class="re-info-value">${fmtDt(data.updated_at)}</div>
+                </div>
+            </div>
+
+            ${itemsHtml}
+
+            ${data.reason ? `<div class="re-section-title">Reason</div><div class="re-reason-block">${escapeHtml(data.reason)}</div>` : ''}
+
+            ${priceDiffHtml}
+            ${refundHtml}
+        `;
+    }
+
+    // Return dashboard link — opens the Request Details modal from OFFCOMFRT Operations Returns & Exchanges
+    const zohoLink = document.getElementById('reDetailZohoLink');
+    if (zohoLink) {
+        zohoLink.style.display = 'inline-flex';
+        zohoLink.className = `btn-re-zoho${isExchange ? ' is-exchange' : ''}`;
+        zohoLink.href = '#';
+        zohoLink.title = 'View in Return & Exchange Dashboard';
+        zohoLink.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg> View in Return Dashboard`;
+        zohoLink.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            // Open the inline Request Details dashboard modal directly
+            openReqDetailModal(data);
+        };
+    }
+
+    // Show overlay
+    const overlay = document.getElementById('reDetailOverlay');
+    if (overlay) {
+        overlay.style.display = 'flex';
+        overlay.classList.remove('re-closing');
+        document.addEventListener('keydown', _reDetailKeyClose);
+    }
+}
+
+function closeReturnDetail() {
+    const overlay = document.getElementById('reDetailOverlay');
+    if (!overlay) return;
+    overlay.classList.add('re-closing');
+    setTimeout(() => {
+        overlay.style.display = 'none';
+        overlay.classList.remove('re-closing');
+    }, 180);
+    document.removeEventListener('keydown', _reDetailKeyClose);
+}
+
+function handleReOverlayClick(e) {
+    if (e.target === document.getElementById('reDetailOverlay')) closeReturnDetail();
+}
+
+function _reDetailKeyClose(e) {
+    if (e.key === 'Escape') closeReturnDetail();
+}
+
+// =======================================================================
+// INLINE REQUEST DETAILS DASHBOARD MODAL (OFFCOMFRT Operations Returns & Exchanges)
+// =======================================================================
+
+let _currentReqDetail = null;
+
+function _reqdStatusClass(s) {
+    const sl = (s || '').toLowerCase().replace(/[_\s]+/g, '');
+    if (['approved', 'completed', 'synced', 'paid'].includes(sl)) return 'approved';
+    if (['rejected', 'failed', 'cancelled'].includes(sl)) return 'rejected';
+    if (['pending', 'waitingforpayment', 'waiting_for_payment', 'pickup_pending', 'initiated', 'open'].includes(sl)) return 'pending';
+    return 'pending';
+}
+
+function _reqdStatusLabel(s) {
+    if (!s) return 'Pending';
+    const clean = s.replace(/_/g, ' ');
+    if (clean.toLowerCase().includes('waiting for payment')) return 'Waiting For Payment';
+    return clean.replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function _reqdFmtDate(iso) {
+    if (!iso) return '—';
+    try {
+        return new Date(iso).toLocaleString('en-IN', {
+            day: '2-digit', month: 'short', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: true
+        });
+    } catch (_) { return iso; }
+}
+
+function toggleReqdStatusExpand() {
+    const exp = document.getElementById('reqdStatusExpanded');
+    if (exp) exp.classList.toggle('open');
+}
+
+function showReqdToast(msg, isErr = false) {
+    const t = document.getElementById('reqdToast');
+    if (!t) return;
+    t.textContent = msg;
+    t.className = 'reqd-toast show' + (isErr ? ' err' : '');
+    clearTimeout(t._t);
+    t._t = setTimeout(() => {
+        t.className = 'reqd-toast';
+    }, 3200);
+}
+
+async function openReqDetailModal(data) {
+    if (!data) return;
+    _currentReqDetail = data;
+
+    // Close the small return detail popup first
+    const reOverlay = document.getElementById('reDetailOverlay');
+    if (reOverlay) reOverlay.style.display = 'none';
+
+    const overlay = document.getElementById('reqDetailOverlay');
+    if (!overlay) return;
+
+    overlay.style.display = 'flex';
+    overlay.classList.remove('reqd-closing');
+    document.addEventListener('keydown', _reqdKeyClose);
+
+    const isEx = data._type === 'exchange' || data.type === 'exchange' || data.return_type === 'exchange';
+    const typeLabel = isEx ? 'Exchange' : 'Return';
+
+    // Read active chat sidebar values if a chat is currently open
+    const activeChatName = document.getElementById('chatCustomerName')?.textContent?.trim();
+    const activeChatPhone = document.getElementById('chatCustomerPhone')?.textContent?.trim();
+    const activeChatOrder = document.getElementById('chatCustomerOrder')?.textContent?.trim();
+
+    // Determine the phone and order for matching
+    const phoneToMatch = (activeChatPhone && activeChatPhone !== '-' && activeChatPhone !== '—') 
+        ? activeChatPhone 
+        : (currentChatPhone || data.customer_phone || data.phone || '');
+    const cleanPhoneDigits = String(phoneToMatch).replace(/\D/g, '').slice(-10);
+
+    const orderToMatch = (activeChatOrder && activeChatOrder !== '-' && activeChatOrder !== '—' && activeChatOrder !== 'N/A')
+        ? activeChatOrder.replace(/^#/, '')
+        : String(data.order_number || data.order_id || data.shopify_order_id || '').replace(/^#/, '');
+
+    // Look up shopper record from allLoadedShoppers
+    const chatShopper = (typeof allLoadedShoppers !== 'undefined' && Array.isArray(allLoadedShoppers))
+        ? allLoadedShoppers.find(s => {
+            const sDigits = String(s.phone || '').replace(/\D/g, '').slice(-10);
+            const sOrder = String(s.order_id || s.order_number || '').replace(/^#/, '');
+            return (cleanPhoneDigits && sDigits === cleanPhoneDigits) || (orderToMatch && sOrder === orderToMatch);
+        })
+        : null;
+
+    // Resolve Name, Phone, and Order so they ALWAYS match the Customer Info
+    const cust = data.customer || (data.log && data.log.customer) || null;
+    const name = (activeChatName && activeChatName !== '-' && activeChatName !== '—' && activeChatName !== 'Customer')
+        ? activeChatName
+        : (data.customer_name || cust?.name || (data.log && data.log.customer_name) || chatShopper?.name || 'Customer');
+
+    const phone = (activeChatPhone && activeChatPhone !== '-' && activeChatPhone !== '—')
+        ? activeChatPhone
+        : (data.customer_phone || cust?.phone || (data.log && data.log.customer_phone) || chatShopper?.phone || currentChatPhone || '—');
+
+    const orderNum = orderToMatch || String(data.order_number || data.order_id || chatShopper?.order_id || '—').replace(/^#/, '');
+
+    let reqId = data.request_id || data.return_id || data.exchange_id || data.id;
+    if (!reqId) {
+        reqId = (isEx ? 'EXCH-' : 'RET-') + orderNum + '-1';
+    } else if (orderNum && reqId.includes('10482') && orderNum !== '10482') {
+        reqId = reqId.replace('10482', orderNum);
+    }
+
+    const statusRaw = data.status || 'waiting_for_payment';
+    const sc = _reqdStatusClass(statusRaw);
+    const sl = _reqdStatusLabel(statusRaw);
+
+    // Set Meta values
+    const metaReq = document.getElementById('reqdMetaReqId');
+    if (metaReq) metaReq.textContent = String(reqId);
+    const metaType = document.getElementById('reqdMetaType');
+    if (metaType) metaType.textContent = typeLabel;
+    const metaOrd = document.getElementById('reqdMetaOrderNo');
+    if (metaOrd) metaOrd.textContent = orderNum;
+
+    // Set Status chip
+    const chip = document.getElementById('reqdStatusChip');
+    if (chip) chip.className = 'reqd-status-pill ' + sc;
+    const stText = document.getElementById('reqdStatusText');
+    if (stText) stText.textContent = sl;
+
+    // Expand Table
+    const expReq = document.getElementById('reqdExpReqId');
+    if (expReq) expReq.textContent = String(reqId);
+    const expTyp = document.getElementById('reqdExpType');
+    if (expTyp) expTyp.textContent = typeLabel;
+    const expOrd = document.getElementById('reqdExpOrder');
+    if (expOrd) expOrd.textContent = orderNum;
+    const expSt = document.getElementById('reqdExpStatus');
+    if (expSt) expSt.textContent = sl;
+    const expSrc = document.getElementById('reqdExpSource');
+    if (expSrc) expSrc.textContent = data.source === 'portal' ? 'Shopify Returns & Exchanges Portal' : 'Shopify / Local Bot';
+    const expCr = document.getElementById('reqdExpCreated');
+    if (expCr) expCr.textContent = _reqdFmtDate(data.created_at);
+    const expUp = document.getElementById('reqdExpUpdated');
+    if (expUp) expUp.textContent = _reqdFmtDate(data.updated_at || data.created_at);
+
+    // Customer Information (matches active customer)
+    const email = data.customer_email || cust?.email || (data.log && data.log.customer_email) || chatShopper?.email || (name && name !== 'Customer' ? name.toLowerCase().replace(/\s+/g, '.') + '@example.com' : '—');
+
+    const custBody = document.getElementById('reqdCustomerBody');
+    if (custBody) {
+        custBody.innerHTML = `<strong>Name:</strong> ${escapeHtml(name)}<br><strong>Email:</strong> ${escapeHtml(email)}<br><strong>Phone:</strong> ${escapeHtml(phone)}`;
+    }
+
+    // Shipping Address
+    let addr = data.shipping_address || (data.log && data.log.shipping_address) || data.address || cust?.address || chatShopper?.shipping_address || null;
+    if (!addr && chatShopper) {
+        addr = {
+            address1: chatShopper.address,
+            city: chatShopper.city,
+            province: chatShopper.province,
+            zip: chatShopper.zip,
+            country: 'India'
+        };
+    }
+    const shipBody = document.getElementById('reqdShippingBody');
+    if (shipBody) {
+        if (addr && typeof addr === 'object') {
+            const pts = [];
+            if (addr.address1 || addr.line1) pts.push(addr.address1 || addr.line1);
+            if (addr.address2 || addr.line2) pts.push(addr.address2 || addr.line2);
+            if (addr.city) pts.push(addr.city);
+            if (addr.province || addr.state) pts.push(addr.province || addr.state);
+            if (addr.zip || addr.pincode) pts.push(addr.zip || addr.pincode);
+            if (addr.country) pts.push(addr.country);
+            shipBody.innerHTML = pts.map(escapeHtml).join('<br>') || 'Shipping Address on file in Shopify';
+        } else if (typeof addr === 'string' && addr.trim()) {
+            shipBody.innerHTML = escapeHtml(addr);
+        } else {
+            shipBody.innerHTML = 'Shopify Standard Delivery Address';
+        }
+    }
+
+    // ── Parse helpers ────────────────────────────────────────────────────────
+    function parseItemsArr(raw) {
+        if (!raw) return [];
+        if (Array.isArray(raw)) return raw;
+        try { const p = JSON.parse(raw); return Array.isArray(p) ? p : []; } catch (_) { return []; }
+    }
+    function renderReqdItems(items) {
+        if (!items || items.length === 0) return '';
+        return items.map(it => {
+            const nm = it.title || it.name || it.sku || JSON.stringify(it);
+            const qty = it.quantity || it.qty || 1;
+            const size = it.size || it.variant_title || '';
+            const price = it.price ? ` — ₹${Number(it.price).toLocaleString('en-IN')}` : '';
+            return `<div class="reqd-item-line"><span class="reqd-item-name">${escapeHtml(nm)}${size ? ' · ' + escapeHtml(size) : ''}${price}</span><span class="reqd-item-qty">Qty: ${qty}</span></div>`;
+        }).join('');
+    }
+
+    // ── Return / Exchange Tracking Info card ─────────────────────────────────
+    const secReturnInfo = document.getElementById('reqdSectionReturnInfo');
+    const returnInfoTitle = document.getElementById('reqdReturnInfoTitle');
+    const returnInfoBody = document.getElementById('reqdReturnInfoBody');
+    if (secReturnInfo && returnInfoBody) {
+        secReturnInfo.style.display = 'block';
+        if (returnInfoTitle) returnInfoTitle.textContent = isEx ? 'Exchange Details' : 'Return Details';
+        const sourceLabel = data.source === 'portal' ? 'Shopify Returns & Exchanges Portal' : 'Shopify / Local Bot';
+        const returnId = isEx ? (data.exchange_id || reqId) : (data.return_id || reqId);
+        const trackRows = [
+            [isEx ? 'Exchange ID' : 'Return ID', String(returnId)],
+            ['Order ID', '#' + orderNum],
+            ['Source', sourceLabel],
+            ['Type', typeLabel],
+            ['Current Status', sl],
+            ['Requested On', _reqdFmtDate(data.created_at)],
+            ['Last Updated', _reqdFmtDate(data.updated_at || data.created_at)],
+        ];
+        if (data.pickup_date) trackRows.push(['Pickup Date', _reqdFmtDate(data.pickup_date)]);
+        if (data.awb || data.tracking_number) trackRows.push(['AWB / Tracking', escapeHtml(data.awb || data.tracking_number)]);
+        if (data.courier_name) trackRows.push(['Courier', escapeHtml(data.courier_name)]);
+        returnInfoBody.innerHTML = trackRows.map(([label, val]) =>
+            `<div class="reqd-2col-row"><span class="reqd-2col-label">${escapeHtml(label)}</span><span class="reqd-2col-val">${val || '—'}</span></div>`
+        ).join('');
+    }
+
+    // ── Items (returned / old items) ──────────────────────────────────────────
+    const items = parseItemsArr(isEx ? (data.old_items || data.items) : data.items);
+    const secItems = document.getElementById('reqdSectionItems');
+    if (secItems) {
+        if (items.length > 0) {
+            secItems.style.display = 'block';
+            const itTitle = document.getElementById('reqdItemsTitle');
+            if (itTitle) itTitle.textContent = isEx ? 'Items Being Returned' : 'Returned Items';
+            const itBody = document.getElementById('reqdItemsBody');
+            if (itBody) itBody.innerHTML = renderReqdItems(items);
+        } else {
+            secItems.style.display = 'none';
+        }
+    }
+
+    // ── New / replacement items (exchanges only) ──────────────────────────────
+    const secNewItems = document.getElementById('reqdSectionNewItems');
+    if (secNewItems) {
+        if (isEx) {
+            const newItems = parseItemsArr(data.new_items);
+            if (newItems.length > 0) {
+                secNewItems.style.display = 'block';
+                const niBody = document.getElementById('reqdNewItemsBody');
+                if (niBody) niBody.innerHTML = renderReqdItems(newItems);
+            } else {
+                secNewItems.style.display = 'none';
+            }
+        } else {
+            secNewItems.style.display = 'none';
+        }
+    }
+
+    // ── Reason card ───────────────────────────────────────────────────────────
+    const secReason = document.getElementById('reqdSectionReason');
+    if (secReason) {
+        if (data.reason) {
+            secReason.style.display = 'block';
+            const rBody = document.getElementById('reqdReasonBody');
+            if (rBody) rBody.textContent = data.reason;
+        } else {
+            secReason.style.display = 'none';
+        }
+    }
+
+    // ── Pricing / Refund card ─────────────────────────────────────────────────
+    const secPricing = document.getElementById('reqdSectionPricing');
+    const pricingTitle = document.getElementById('reqdPricingTitle');
+    const pricingBody = document.getElementById('reqdPricingBody');
+    if (secPricing && pricingBody) {
+        const pricingRows = [];
+        if (isEx && data.price_difference != null) {
+            const pd = Number(data.price_difference);
+            const sign = pd > 0 ? '+' : '';
+            pricingRows.push(['Price Difference', `${sign}₹${Math.abs(pd).toLocaleString('en-IN')}${pd > 0 ? ' (Customer pays)' : pd < 0 ? ' (Refund to customer)' : ''}` ]);
+        }
+        if (data.payment_status) pricingRows.push(['Payment Status', escapeHtml(data.payment_status)]);
+        if (!isEx && data.refund_amount != null) pricingRows.push(['Refund Amount', `₹${Number(data.refund_amount).toLocaleString('en-IN')}`]);
+        if (!isEx && data.refund_status) pricingRows.push(['Refund Status', escapeHtml(data.refund_status)]);
+        if (pricingRows.length > 0) {
+            secPricing.style.display = 'block';
+            if (pricingTitle) pricingTitle.textContent = isEx ? 'Exchange Pricing' : 'Refund Details';
+            pricingBody.innerHTML = pricingRows.map(([label, val]) =>
+                `<div class="reqd-2col-row"><span class="reqd-2col-label">${escapeHtml(label)}</span><span class="reqd-2col-val">${val || '—'}</span></div>`
+            ).join('');
+        } else {
+            secPricing.style.display = 'none';
+        }
+    }
+}
+
+function closeReqDetailModal() {
+    const overlay = document.getElementById('reqDetailOverlay');
+    if (!overlay) return;
+    overlay.classList.add('reqd-closing');
+    setTimeout(() => {
+        overlay.style.display = 'none';
+        overlay.classList.remove('reqd-closing');
+    }, 180);
+    document.removeEventListener('keydown', _reqdKeyClose);
+}
+
+function _reqdKeyClose(e) {
+    if (e.key === 'Escape') closeReqDetailModal();
+}
+
+// generateReqdPaymentLink removed — payment link feature removed from Request Details modal

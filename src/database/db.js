@@ -177,6 +177,10 @@ class DatabaseAdapter {
 
 // Test database connection
 async function testConnection() {
+  if (!process.env.SUPABASE_DB_URL || process.env.SUPABASE_DB_URL.includes('[project-ref]')) {
+    console.warn('⚠️ SUPABASE_DB_URL is not configured (or contains placeholder).');
+    return false;
+  }
   try {
     await pool.query('SELECT 1');
     console.log('✅ Supabase PostgreSQL connection successful');
