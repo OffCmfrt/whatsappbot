@@ -7908,7 +7908,18 @@ function renderCustomerContext(data) {
             const date = o.created_at ? new Date(o.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             const statusClass = getStatusClass(o.status);
             const items = safeParseItems(o.items_json);
-            const itemsPreview = items.length > 0 ? items.map(i => i.title || i.name || '').filter(Boolean).slice(0, 2).join(', ') : '';
+            const itemsPreview = items.length > 0 ? items.map(i => {
+                const name = i.title || i.name || '';
+                let size = i.size || i.variant_size || i.product_size || '';
+                if (!size && i.variant_title) {
+                    const sizeMatch = i.variant_title.match(/Size:\s*(\w+)/i) || i.variant_title.match(/\b(S|M|L|XL|XXS|XS|XXL|XXXL|Free Size|One Size)\b/i);
+                    if (sizeMatch) size = sizeMatch[1];
+                }
+                const qty = i.quantity || 1;
+                const sizePart = size ? ` (Size: ${size})` : '';
+                const qtyPart = qty > 1 ? ` x${qty}` : '';
+                return `${name}${sizePart}${qtyPart}`;
+            }).filter(Boolean).slice(0, 3).join(', ') : '';
             return `<div class="ctx-order-card">
                 <div class="ctx-order-top">
                     <span class="ctx-order-id" title="${o.order_id}">#${String(o.order_id).slice(-6)}</span>
