@@ -145,6 +145,7 @@ const INTENTS = {
         keywords: [
             ['material', 3], ['fabric', 3.5], ['quality', 2],
             ['color available', 4.5], ['colour available', 4.5],
+            ['colour', 2.5], ['color', 2.5], ['colours', 2.5], ['colors', 2.5],
             ['product details', 5], ['product info', 4.5],
             ['product question', 5], ['product enquiry', 5],
             ['care instructions', 5], ['wash', 1.5], ['cotton', 2.5],
