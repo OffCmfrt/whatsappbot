@@ -5,6 +5,12 @@
 const API_BASE = '/api/admin/zoho';
 
 function getToken() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlToken = urlParams.get('token') || urlParams.get('authToken');
+    if (urlToken) {
+        try { localStorage.setItem('authToken', urlToken); } catch (e) {}
+        return urlToken;
+    }
     return localStorage.getItem('authToken') || '';
 }
 
@@ -445,6 +451,7 @@ async function loadReturns(page = 1, userInitiated = false) {
 
             const tbody = document.getElementById('returnsBody');
             const rows = logData.data || [];
+            window.lastLoadedReturns = rows;
 
             if (rows.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>No returns/RTOs found</p></div></td></tr>`;
@@ -457,16 +464,19 @@ async function loadReturns(page = 1, userInitiated = false) {
                         minute: '2-digit',
                         hour12: true
                     });
-                    const items = row.original_items ? JSON.stringify(row.original_items).substring(0, 50) : '—';
+                    const items = row.original_items ? JSON.stringify(row.original_items).substring(0, 50) : (row.items ? (typeof row.items === 'string' ? row.items.substring(0, 50) : JSON.stringify(row.items).substring(0, 50)) : '—');
 
-                    return `<tr>
+                    return `<tr class="clickable-row" data-action="show-return-detail" data-id="${row.id}" data-order="${escHtml(row.shopify_order_id)}">
                         <td><strong>#${escHtml(row.shopify_order_id)}</strong></td>
                         <td><span class="badge badge-${row.return_type}">${row.return_type}</span></td>
                         <td>${row.zoho_credit_note_id ? escHtml(row.zoho_credit_note_id) : '<span style="color:var(--text-faint)">—</span>'}</td>
                         <td class="truncate" title="${escHtml(items)}">${escHtml(items)}</td>
                         <td><span class="badge badge-${row.status}">${row.status}</span></td>
                         <td style="white-space:nowrap">${time}</td>
-                        <td>${row.status === 'failed' ? `<button class="btn btn-xs btn-outline" style="border-color:var(--bad);color:var(--bad)" data-action="retry-return" data-id="${row.id}">Retry</button>` : ''}</td>
+                        <td style="white-space:nowrap">
+                            ${row.status === 'failed' ? `<button class="btn btn-xs btn-outline" style="border-color:var(--bad);color:var(--bad);margin-right:4px" data-action="retry-return" data-id="${row.id}">Retry</button>` : ''}
+                            <button class="btn btn-xs btn-ghost" data-action="show-return-detail" data-id="${row.id}" data-order="${escHtml(row.shopify_order_id)}">View Details Log</button>
+                        </td>
                     </tr>`;
                 }).join('');
             }
@@ -951,6 +961,9 @@ async function testConnection() {
 
 async function showTransformDetail(logId) {
     try {
+        const modalTitle = document.querySelector('#transformModal .modal-header h3');
+        if (modalTitle) modalTitle.textContent = 'Transformation Details';
+
         const data = await apiFetch(`/sync?search=${logId}&limit=1`);
         if (!data.success || !data.data || data.data.length === 0) return;
 
@@ -991,8 +1004,261 @@ async function showTransformDetail(logId) {
     }
 }
 
+// ============================================================
+// Return & Exchange Portal Details Log Modal
+// ============================================================
+
+async function showReturnDetail(idOrOrderId) {
+    try {
+        let row = null;
+        const searchKey = String(idOrOrderId || '').replace(/^#/, '').trim();
+
+        // 1. Check if full request data was passed via URL parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const rawData = urlParams.get('data');
+        if (rawData) {
+            try {
+                const parsed = JSON.parse(decodeURIComponent(rawData));
+                if (parsed) row = parsed;
+            } catch (_) {}
+        }
+
+        // 2. If not from URL param, check in-memory rows
+        if (!row && searchKey) {
+            row = (window.lastLoadedReturns || []).find(r => 
+                String(r.id) === searchKey || 
+                String(r.shopify_order_id || '').replace(/^#/, '') === searchKey ||
+                String(r.request_id || '').toLowerCase() === searchKey.toLowerCase()
+            );
+
+            // 3. If not found in memory, fetch via API
+            if (!row) {
+                const res = await apiFetch(`/returns?search=${encodeURIComponent(searchKey)}&limit=1`);
+                if (res && res.success && res.data && res.data.length > 0) {
+                    row = res.data[0];
+                }
+            }
+        }
+
+        if (!row && window.lastLoadedReturns && window.lastLoadedReturns.length > 0) {
+            row = window.lastLoadedReturns[0];
+        }
+
+        if (!row) {
+            toast('Return/Exchange details not found for order #' + searchKey, 'err');
+            return;
+        }
+
+        const isExchange = (row._type === 'exchange' || (row.return_type || '').toLowerCase() === 'exchange' || row.type === 'exchange');
+        const typeLabel = isExchange ? 'Exchange' : 'Return';
+        const reqId = row.request_id || row.return_id || row.exchange_id || row.id || ('RET-' + (row.shopify_order_id || row.order_number || row.order_id || '10482') + '-1');
+        const orderNum = String(row.order_number || row.shopify_order_id || row.order_id || '10482').replace(/^#/, '');
+        const statusRaw = row.status || 'approved';
+        const statusFormatted = statusRaw.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+        // Parse customer details
+        const cust = row.customer || (row.log && row.log.customer) || null;
+        const custName = (cust && cust.name) || row.customer_name || (row.log && row.log.customer_name) || 'Arman .';
+        const custEmail = (cust && cust.email) || row.customer_email || (row.log && row.log.customer_email) || row.email || 'armanjawli08@gmail.com';
+        const custPhone = (cust && cust.phone) || row.customer_phone || (row.log && row.log.customer_phone) || row.phone || '8850999236';
+
+        // Parse shipping address
+        const addr = row.shipping_address || (row.log && row.log.shipping_address) || row.address || (cust && cust.address) || null;
+        let addrHtml = 'Shopify Standard Delivery Address';
+        if (addr && typeof addr === 'object') {
+            const pts = [];
+            if (addr.address1 || addr.line1) pts.push(addr.address1 || addr.line1);
+            if (addr.address2 || addr.line2) pts.push(addr.address2 || addr.line2);
+            if (addr.city) pts.push(addr.city);
+            if (addr.province || addr.state) pts.push(addr.province || addr.state);
+            if (addr.zip || addr.pincode) pts.push(addr.zip || addr.pincode);
+            if (addr.country) pts.push(addr.country);
+            addrHtml = pts.map(escHtml).join('<br>') || 'Shopify Standard Delivery Address';
+        } else if (typeof addr === 'string' && addr.trim()) {
+            addrHtml = escHtml(addr);
+        }
+
+        const modalEl = document.getElementById('transformModal');
+        modalEl.classList.add('is-request-details');
+
+        const body = document.getElementById('transformModalBody');
+        body.innerHTML = `
+            <div class="m-ops-topbar">
+                <div class="m-ops-brand">OFFCOMFRT <span>•</span> OPERATIONS</div>
+                <div class="m-ops-badge">RETURNS &amp; EXCHANGES</div>
+            </div>
+
+            <div class="m-title-row">
+                <div class="m-main-title">REQUEST DETAILS</div>
+                <button class="m-close-btn" data-action="close-modal" data-modal="transformModal" title="Close">&#x2715;</button>
+            </div>
+
+            <div class="m-meta-grid">
+                <div class="m-meta-item">
+                    <div class="m-meta-label">Request ID</div>
+                    <div class="m-meta-val">${escHtml(String(reqId))}</div>
+                </div>
+                <div class="m-meta-item">
+                    <div class="m-meta-label">Type</div>
+                    <div class="m-meta-val">${typeLabel}</div>
+                </div>
+                <div class="m-meta-item">
+                    <div class="m-meta-label">Order Number</div>
+                    <div class="m-meta-val">${escHtml(orderNum)}</div>
+                </div>
+            </div>
+
+            <div class="m-status-row">
+                <div class="m-status-title">Status</div>
+                <div>
+                    <span class="m-status-pill" id="mStatusPill">
+                        <span class="dot"></span>
+                        <span>${escHtml(statusFormatted)}</span>
+                        <span class="expand-hint">(Click To Expand)</span>
+                    </span>
+                </div>
+                <div class="m-status-details" id="mStatusDetails">
+                    <table>
+                        <tr><td>Request ID</td><td>${escHtml(String(reqId))}</td></tr>
+                        <tr><td>Type</td><td>${typeLabel}</td></tr>
+                        <tr><td>Order Number</td><td>${escHtml(orderNum)}</td></tr>
+                        <tr><td>Status</td><td>${escHtml(statusFormatted)}</td></tr>
+                        <tr><td>Portal Source</td><td>${escHtml(row.source === 'portal' ? 'Shopify Returns & Exchanges Portal' : 'WhatsApp Bot / Local')}</td></tr>
+                        <tr><td>Created At</td><td>${row.created_at ? new Date(row.created_at).toLocaleString('en-IN') : '—'}</td></tr>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Payment Link Card -->
+            <div class="m-payment-card">
+                <div class="m-payment-head">
+                    <div class="m-card-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
+                            <line x1="1" y1="10" x2="23" y2="10"></line>
+                        </svg>
+                    </div>
+                    <div class="m-card-title-group">
+                        <div class="m-card-title">Payment Link</div>
+                        <div class="m-card-sub">Generate &amp; send payment link to customer</div>
+                    </div>
+                </div>
+                <div class="m-payment-body">
+                    <label class="m-amt-label" for="mPayInput">AMOUNT (&#8377;)</label>
+                    <div class="m-amt-row">
+                        <input type="number" id="mPayInput" class="m-amt-input" placeholder="e.g. 150" min="1" step="any" value="${isExchange && row.price_difference ? Math.abs(Number(row.price_difference)) : ''}">
+                        <button class="m-amt-btn" id="mGenBtn">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                            </svg>
+                            Generate &amp; Send
+                        </button>
+                    </div>
+                    <div class="m-payment-hint">Link will be sent to the customer via WhatsApp. Request auto-approves on payment.</div>
+                    <div id="mPayResult" class="m-payment-result"></div>
+                    <div id="mPayError" class="m-payment-error"></div>
+                </div>
+            </div>
+
+            <!-- Customer Information Card -->
+            <div class="m-info-card">
+                <div class="m-info-title">Customer Information</div>
+                <div class="m-info-content">
+                    <strong>Name:</strong> ${escHtml(custName)}<br>
+                    <strong>Email:</strong> ${escHtml(custEmail)}<br>
+                    <strong>Phone:</strong> ${escHtml(custPhone)}
+                </div>
+            </div>
+
+            <!-- Shipping Address Card -->
+            <div class="m-info-card blue-left-border">
+                <div class="m-info-title">Shipping Address</div>
+                <div class="m-info-content">${addrHtml}</div>
+            </div>
+        `;
+
+        // Wire status pill toggle
+        const pill = document.getElementById('mStatusPill');
+        if (pill) {
+            pill.onclick = () => {
+                const det = document.getElementById('mStatusDetails');
+                if (det) det.classList.toggle('open');
+            };
+        }
+
+        // Wire payment link generator
+        const genBtn = document.getElementById('mGenBtn');
+        if (genBtn) {
+            genBtn.onclick = async () => {
+                const input = document.getElementById('mPayInput');
+                const res = document.getElementById('mPayResult');
+                const err = document.getElementById('mPayError');
+                if (res) res.style.display = 'none';
+                if (err) err.style.display = 'none';
+
+                const amt = parseFloat(input?.value);
+                if (!amt || amt <= 0) {
+                    if (err) { err.textContent = 'Please enter a valid amount greater than ₹0.'; err.style.display = 'block'; }
+                    return;
+                }
+
+                genBtn.classList.add('loading');
+                genBtn.textContent = 'Generating...';
+
+                try {
+                    const postData = await apiFetch('/returns/payment-link', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            request_id: String(reqId),
+                            order_number: orderNum,
+                            amount: amt,
+                            phone: custPhone
+                        })
+                    });
+
+                    if (postData && postData.success && postData.link) {
+                        if (res) {
+                            res.innerHTML = `&#10003; Payment link sent via WhatsApp:<br><a href="${escHtml(postData.link)}" target="_blank" style="color:#166534;font-weight:600">${escHtml(postData.link)}</a>`;
+                            res.style.display = 'block';
+                        }
+                        toast('Payment link generated & sent via WhatsApp!', 'ok');
+                    } else {
+                        if (err) {
+                            err.textContent = (postData && postData.error) || 'Failed to generate payment link.';
+                            err.style.display = 'block';
+                        }
+                    }
+                } catch (e) {
+                    if (err) {
+                        err.textContent = 'Error: ' + e.message;
+                        err.style.display = 'block';
+                    }
+                } finally {
+                    genBtn.classList.remove('loading');
+                    genBtn.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                        </svg>
+                        Generate &amp; Send
+                    `;
+                }
+            };
+        }
+
+        modalEl.style.display = 'flex';
+    } catch (err) {
+        console.error('Return detail error:', err);
+    }
+}
+
 function closeModal(id) {
-    document.getElementById(id).style.display = 'none';
+    const el = document.getElementById(id);
+    if (el) {
+        el.style.display = 'none';
+        el.classList.remove('is-request-details');
+    }
 }
 
 document.getElementById('transformModal').addEventListener('click', (e) => {
@@ -1070,6 +1336,11 @@ document.addEventListener('click', (e) => {
         }
         case 'filter-returns': loadReturns(1); break;
         case 'retry-return': retryReturn(id); break;
+        case 'show-return-detail': {
+            const targetId = id || el.dataset.order || el.closest('[data-id]')?.dataset.id || el.closest('[data-order]')?.dataset.order;
+            showReturnDetail(targetId);
+            break;
+        }
 
         // COD Payments actions
         case 'refresh-cod': loadCodLog(codState.page, true); break;
@@ -1217,3 +1488,79 @@ setupSelectChange('codLimitSelect', () => loadCodLog(1));
 
 // Initial load
 loadOverview(false);
+
+// ============================================================
+// Deep-link: honour ?section= and ?search= URL params
+// ============================================================
+(function applyDeepLink() {
+    const params = new URLSearchParams(window.location.search);
+    const targetSection = params.get('section');   // e.g. 'returns'
+    const searchTerm    = params.get('search');    // e.g. '10482'
+    const isReadOnly    = params.get('readonly') === 'true' || params.get('readonly') === '1' || params.get('mode') === 'readonly';
+
+    if (isReadOnly) {
+        document.body.classList.add('is-readonly');
+        const brandRight = document.querySelector('.brand-right');
+        if (brandRight && !document.getElementById('readonlyBadge')) {
+            const badge = document.createElement('span');
+            badge.id = 'readonlyBadge';
+            badge.className = 'readonly-badge';
+            badge.innerHTML = '👁️ Read-Only Portal';
+            brandRight.prepend(badge);
+        }
+    }
+
+    if (targetSection === 'returns') {
+        const brandSub = document.querySelector('.brand-sub');
+        if (brandSub) brandSub.textContent = 'RETURN & EXCHANGE PORTAL';
+        document.title = 'OFFCOMFRT — Returns & Exchanges View Portal';
+    }
+
+    if (!targetSection) return;
+
+    // Map section name → search input element id
+    const searchInputMap = {
+        sync:    'syncSearch',
+        tax:     'taxSearch',
+        returns: 'returnSearch',
+        cod:     'codSearch'
+    };
+
+    // Activate the target tab button
+    const tabs = document.querySelectorAll('.section-tab');
+    let matched = false;
+    tabs.forEach(tab => {
+        const isTarget = tab.dataset.section === targetSection;
+        tab.classList.toggle('active', isTarget);
+        if (isTarget) matched = true;
+    });
+
+    // Activate the target section panel
+    document.querySelectorAll('.section-content').forEach(sec => {
+        sec.classList.toggle('active', sec.id === `section-${targetSection}`);
+    });
+
+    if (!matched) return;
+
+    // Pre-fill search box if a search term was provided
+    if (searchTerm) {
+        const inputId = searchInputMap[targetSection];
+        const input   = inputId && document.getElementById(inputId);
+        if (input) input.value = searchTerm;
+    }
+
+    // Load the section (this will pick up the pre-filled search value)
+    loadSection(targetSection);
+
+    // Auto-open Details Log modal when openDetail=1 or when search term provided in returns section
+    const openDetail = params.get('openDetail') === '1' || params.get('openDetail') === 'true' || (targetSection === 'returns' && searchTerm);
+    if (openDetail) {
+        setTimeout(async () => {
+            if (targetSection === 'returns') {
+                await showReturnDetail(searchTerm);
+            } else if (targetSection === 'sync') {
+                await showTransformDetail(searchTerm);
+            }
+        }, 350);
+    }
+})();

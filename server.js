@@ -522,6 +522,9 @@ function handleButtonResponse(buttonId) {
     return buttonMap[buttonId] || buttonId;
 }
 
+// Favicon handler
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({
@@ -581,32 +584,34 @@ async function startServer() {
             }
         }
 
-        // Initialize database tables
-        console.log('🔄 Initializing database...');
-        await initializeDatabase();
+        if (dbConnected) {
+            // Initialize database tables
+            console.log('🔄 Initializing database...');
+            await initializeDatabase();
 
-        // One-time repair: shoppers stuck in 'edit_details' even though their order
-        // was already shipped (late "Edit Details" clicks flipped them out of the
-        // shipped bucket). Restore them to 'confirmed' so they show as shipped again.
-        // The shop_edit / follow-up handlers now guard against this going forward.
-        try {
-            const { dbAdapter } = require('./src/database/db');
-            const repair = await dbAdapter.run(
-                `UPDATE store_shoppers s
-                 SET status = 'confirmed', updated_at = ?
-                 WHERE s.status = 'edit_details'
-                   AND EXISTS (
-                       SELECT 1 FROM orders o
-                       WHERE o.order_id = s.order_id
-                         AND (o.awb IS NOT NULL OR o.status = 'shipped')
-                   )`,
-                [new Date().toISOString()]
-            );
-            if (repair.changes > 0) {
-                console.log(`🔧 Repaired ${repair.changes} shipped order(s) stuck in edit_details → restored to confirmed/shipped`);
+            // One-time repair: shoppers stuck in 'edit_details' even though their order
+            // was already shipped (late "Edit Details" clicks flipped them out of the
+            // shipped bucket). Restore them to 'confirmed' so they show as shipped again.
+            // The shop_edit / follow-up handlers now guard against this going forward.
+            try {
+                const { dbAdapter } = require('./src/database/db');
+                const repair = await dbAdapter.run(
+                    `UPDATE store_shoppers s
+                     SET status = 'confirmed', updated_at = ?
+                     WHERE s.status = 'edit_details'
+                       AND EXISTS (
+                           SELECT 1 FROM orders o
+                           WHERE o.order_id = s.order_id
+                             AND (o.awb IS NOT NULL OR o.status = 'shipped')
+                       )`,
+                    [new Date().toISOString()]
+                );
+                if (repair.changes > 0) {
+                    console.log(`🔧 Repaired ${repair.changes} shipped order(s) stuck in edit_details → restored to confirmed/shipped`);
+                }
+            } catch (err) {
+                console.warn('⚠️ edit_details shipped-repair skipped (non-critical):', err.message);
             }
-        } catch (err) {
-            console.warn('⚠️ edit_details shipped-repair skipped (non-critical):', err.message);
         }
 
         // Cache statistics logging — disabled in production to avoid unnecessary allocations
@@ -614,53 +619,57 @@ async function startServer() {
             startCacheStatsLogging(5 * 60 * 1000);
         }
 
-        // Warm up cache with frequently accessed data (optimized - skip slow message count)
-        console.log('🔥 Warming up cache...');
-        try {
-            const Customer = require('./src/models/Customer');
-            const Order = require('./src/models/Order');
-            
-            // Pre-load fast counts only (skip message count - too slow on large tables)
-            await Promise.all([
-                Customer.getCount(),
-                Order.getCount()
-            ]);
-            console.log('✅ Cache warmed up successfully');
-        } catch (error) {
-            console.warn('⚠️ Cache warm-up failed (non-critical):', error.message);
-        }
-
-        // Start Cron Jobs
-        abandonedCartCron.init();
-        reengagementCron.init();
-        shipmentSyncCron.init();
-
-        // Keep the Inventory Control Tower's 3-min snapshot cache perpetually
-        // warm so the hub view opens instantly; without this the first open
-        // after a deploy pays for the full reconciliation pass.
-        const warmInventoryTower = async () => {
+        if (dbConnected) {
+            // Warm up cache with frequently accessed data (optimized - skip slow message count)
+            console.log('🔥 Warming up cache...');
             try {
-                const jwt = require('jsonwebtoken');
-                const { adminCredentialFingerprint } = require('./src/middleware/auth');
-                const token = jwt.sign(
-                    { username: 'cache-warm', role: 'admin', credFp: adminCredentialFingerprint() },
-                    process.env.JWT_SECRET,
-                    { expiresIn: '60s' }
-                );
-                const port = process.env.PORT || 3000;
-                const res = await fetch(`http://localhost:${port}/api/admin/inventory?window=90`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                // Drain the response body so the socket can be reused / reaped
-                await res.arrayBuffer().catch(() => {});
-                console.log('✅ Inventory tower cache warmed');
+                const Customer = require('./src/models/Customer');
+                const Order = require('./src/models/Order');
+                
+                // Pre-load fast counts only (skip message count - too slow on large tables)
+                await Promise.all([
+                    Customer.getCount(),
+                    Order.getCount()
+                ]);
+                console.log('✅ Cache warmed up successfully');
             } catch (error) {
-                console.warn('⚠️ Inventory tower warm-up failed (non-critical):', error.message);
+                console.warn('⚠️ Cache warm-up failed (non-critical):', error.message);
             }
-        };
-        setTimeout(warmInventoryTower, 8000);
-        setInterval(warmInventoryTower, 150000); // refresh before the 3-min TTL lapses
+
+            // Start Cron Jobs
+            abandonedCartCron.init();
+            reengagementCron.init();
+            shipmentSyncCron.init();
+
+            // Keep the Inventory Control Tower's 3-min snapshot cache perpetually
+            // warm so the hub view opens instantly; without this the first open
+            // after a deploy pays for the full reconciliation pass.
+            const warmInventoryTower = async () => {
+                try {
+                    const jwt = require('jsonwebtoken');
+                    const { adminCredentialFingerprint } = require('./src/middleware/auth');
+                    const token = jwt.sign(
+                        { username: 'cache-warm', role: 'admin', credFp: adminCredentialFingerprint() },
+                        process.env.JWT_SECRET,
+                        { expiresIn: '60s' }
+                    );
+                    const port = process.env.PORT || 3000;
+                    const res = await fetch(`http://localhost:${port}/api/admin/inventory?window=90`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    // Drain the response body so the socket can be reused / reaped
+                    await res.arrayBuffer().catch(() => {});
+                    console.log('✅ Inventory tower cache warmed');
+                } catch (error) {
+                    console.warn('⚠️ Inventory tower warm-up failed (non-critical):', error.message);
+                }
+            };
+            setTimeout(warmInventoryTower, 8000);
+            setInterval(warmInventoryTower, 150000); // refresh before the 3-min TTL lapses
+        } else {
+            console.log('ℹ️ Local development mode: Database offline (cron jobs and DB warming skipped)');
+        }
 
         // ── Unified memory watchdog ─────────────────────────────────────
         // One adaptive 120s timer replaces the previous stack of overlapping

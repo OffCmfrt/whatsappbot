@@ -1833,9 +1833,153 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/shoppers/assets/shoppers-app.js?build=20260923a"></script>
+    <script src="/shoppers/assets/shoppers-app.js?build=20260924c"></script>
     <script src="/shoppers/assets/shoppers-inventory-tower.js?v=1788900001"></script>
     <script src="/shoppers/assets/shoppers-stock-room.js?v=1789010000"></script>
     <script src="/shoppers/assets/shoppers-ai-copilot-pro.js?v=1788900000"></script>
+
+    <!-- Return / Exchange Detail Modal (rendered by openReturnDetail() in shoppers-app.js) -->
+    <div id="reDetailOverlay" class="re-detail-overlay" style="display:none;" onclick="handleReOverlayClick(event)" role="dialog" aria-modal="true" aria-labelledby="reDetailTitle">
+        <div class="re-detail-modal" onclick="event.stopPropagation()">
+            <div class="re-modal-header">
+                <div class="re-modal-title">
+                    <h3 id="reDetailTitle">Details</h3>
+                    <span id="reDetailTypeBadge" class="re-type-badge"></span>
+                </div>
+                <button class="re-modal-close" onclick="closeReturnDetail()" title="Close">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="re-modal-body" id="reDetailBody">
+                <!-- populated by openReturnDetail() -->
+            </div>
+            <div class="re-modal-footer" id="reDetailFooter">
+                <button class="btn-re-close" onclick="closeReturnDetail()">Close</button>
+                <a id="reDetailZohoLink" class="btn-re-zoho" href="/dashboard/zoho-dashboard.html" target="_blank" style="display:none;">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                    View in Returns Dashboard
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Request Details Dashboard Modal (inline version of return-request.html) -->
+    <div id="reqDetailOverlay" class="reqd-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="reqDetailPanelTitle">
+        <div class="reqd-backdrop" onclick="closeReqDetailModal()"></div>
+        <div class="reqd-panel" onclick="event.stopPropagation()">
+            <!-- Operations Top Bar -->
+            <div class="reqd-ops-topbar">
+                <div class="reqd-ops-brand">
+                    OFFCOMFRT <span class="reqd-dot">&bull;</span> Operations
+                </div>
+                <div class="reqd-ops-badge">Returns &amp; Exchanges</div>
+            </div>
+
+            <!-- Modal Card -->
+            <div class="reqd-modal-card">
+                <!-- Header -->
+                <div class="reqd-card-header">
+                    <div class="reqd-card-title" id="reqDetailPanelTitle">REQUEST DETAILS</div>
+                    <button class="reqd-close-btn" onclick="closeReqDetailModal()" title="Close" aria-label="Close">&#x2715;</button>
+                </div>
+
+                <!-- Loading State -->
+                <div id="reqdStateLoading" class="reqd-state-box" style="display:none">
+                    <div class="reqd-spinner"></div>
+                    <div class="reqd-state-text">Loading request details...</div>
+                </div>
+
+                <!-- Main Content -->
+                <div id="reqdStateContent">
+                    <!-- 3-Col Meta Grid -->
+                    <div class="reqd-meta-grid">
+                        <div class="reqd-meta-item">
+                            <div class="reqd-meta-label">Request ID</div>
+                            <div class="reqd-meta-val" id="reqdMetaReqId">—</div>
+                        </div>
+                        <div class="reqd-meta-item">
+                            <div class="reqd-meta-label">Type</div>
+                            <div class="reqd-meta-val" id="reqdMetaType">Return</div>
+                        </div>
+                        <div class="reqd-meta-item">
+                            <div class="reqd-meta-label">Order Number</div>
+                            <div class="reqd-meta-val" id="reqdMetaOrderNo">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Status Row -->
+                    <div class="reqd-status-section">
+                        <div class="reqd-status-title">Status</div>
+                        <div>
+                            <span class="reqd-status-pill" id="reqdStatusChip" onclick="toggleReqdStatusExpand()">
+                                <span class="reqd-pill-dot"></span>
+                                <span id="reqdStatusText">Pending</span>
+                                <span class="reqd-expand-hint">(Click To Expand)</span>
+                            </span>
+                        </div>
+                        <div class="reqd-status-details" id="reqdStatusExpanded">
+                            <table>
+                                <tr><td>Request ID</td><td id="reqdExpReqId">—</td></tr>
+                                <tr><td>Type</td><td id="reqdExpType">Return</td></tr>
+                                <tr><td>Order Number</td><td id="reqdExpOrder">—</td></tr>
+                                <tr><td>Current Status</td><td id="reqdExpStatus">—</td></tr>
+                                <tr><td>Source</td><td id="reqdExpSource">—</td></tr>
+                                <tr><td>Created At</td><td id="reqdExpCreated">—</td></tr>
+                                <tr><td>Last Updated</td><td id="reqdExpUpdated">—</td></tr>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="reqd-cards-wrap">
+                        <!-- Customer Information Card -->
+                        <div class="reqd-grey-card" id="reqdSectionCustomer">
+                            <div class="reqd-info-header">Customer Information</div>
+                            <div class="reqd-info-content" id="reqdCustomerBody">—</div>
+                        </div>
+
+                        <!-- Shipping Address Card -->
+                        <div class="reqd-grey-card reqd-blue-border" id="reqdSectionShipping">
+                            <div class="reqd-info-header">Shipping Address</div>
+                            <div class="reqd-info-content" id="reqdShippingBody">—</div>
+                        </div>
+
+                        <!-- Return / Exchange Info Card -->
+                        <div class="reqd-grey-card reqd-teal-border" id="reqdSectionReturnInfo" style="display:none">
+                            <div class="reqd-info-header" id="reqdReturnInfoTitle">Return Details</div>
+                            <div class="reqd-info-grid-2col" id="reqdReturnInfoBody"></div>
+                        </div>
+
+                        <!-- Items Card -->
+                        <div class="reqd-grey-card" id="reqdSectionItems" style="display:none">
+                            <div class="reqd-info-header" id="reqdItemsTitle">Returned Items</div>
+                            <div class="reqd-items-rows" id="reqdItemsBody"></div>
+                        </div>
+
+                        <!-- New Items Card (for exchanges) -->
+                        <div class="reqd-grey-card reqd-green-border" id="reqdSectionNewItems" style="display:none">
+                            <div class="reqd-info-header">Replacement Items</div>
+                            <div class="reqd-items-rows" id="reqdNewItemsBody"></div>
+                        </div>
+
+                        <!-- Reason Card -->
+                        <div class="reqd-grey-card" id="reqdSectionReason" style="display:none">
+                            <div class="reqd-info-header">Customer Reason</div>
+                            <div class="reqd-info-content" id="reqdReasonBody"></div>
+                        </div>
+
+                        <!-- Price / Refund Card -->
+                        <div class="reqd-grey-card reqd-amber-border" id="reqdSectionPricing" style="display:none">
+                            <div class="reqd-info-header" id="reqdPricingTitle">Pricing Details</div>
+                            <div class="reqd-info-content" id="reqdPricingBody"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast for Request Details Modal -->
+    <div id="reqdToast" class="reqd-toast"></div>
 </body>
+
 </html>
