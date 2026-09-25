@@ -937,7 +937,11 @@ function renderDetailsPanel(data) {
     } else {
         returns.forEach(r => {
             const typeClass = (r.type || 'return').toLowerCase();
-            html += `<div class="detail-return-card">
+            const requestId = r.request_id || r.requestId || '';
+            const returnsDashboardUrl = requestId 
+                ? `https://exchange-return-tracking.onrender.com/admin#requestId=${encodeURIComponent(requestId)}`
+                : 'https://exchange-return-tracking.onrender.com/admin';
+            html += `<div class="detail-return-card" data-returns-url="${escapeHtml(returnsDashboardUrl)}">
                 <div class="drc-top">
                     <span class="drc-type ${typeClass}">${escapeHtml(r.type || 'return')}</span>
                     <span class="drc-status">${escapeHtml(r.status || 'unknown')}</span>
@@ -967,6 +971,14 @@ function renderDetailsPanel(data) {
         header.addEventListener('click', () => {
             const docBody = header.nextElementSibling;
             if (docBody) docBody.classList.toggle('collapsed');
+        });
+    });
+
+    // Attach return/exchange card click to open returns dashboard
+    body.querySelectorAll('.detail-return-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const url = card.dataset.returnsUrl || 'https://exchange-return-tracking.onrender.com/admin';
+            window.open(url, '_blank');
         });
     });
 }
