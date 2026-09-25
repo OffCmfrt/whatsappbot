@@ -5817,6 +5817,11 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
             border: 1px solid rgba(240,168,96,0.1);
             border-radius: 8px;
             margin-bottom: 5px;
+            transition: all 0.15s ease;
+        }
+        .ctx-return-card:hover {
+            background: rgba(240,168,96,0.08);
+            border-color: rgba(240,168,96,0.3);
         }
         .ctx-return-top {
             display: flex; align-items: center; justify-content: space-between;

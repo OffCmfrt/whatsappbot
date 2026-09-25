@@ -7960,7 +7960,7 @@ function renderCustomerContext(data) {
         }).join('');
     }
 
-    // ── Returns & Exchanges ──
+    // ─ Returns & Exchanges ──
     const returns = data.returns || [];
     const exchanges = data.exchanges || [];
     const totalRE = returns.length + exchanges.length;
@@ -7971,7 +7971,11 @@ function renderCustomerContext(data) {
         returns.forEach(r => {
             const date = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             const srcLabel = r.source === 'portal' ? 'Portal' : 'Local';
-            html += `<div class="ctx-return-card">
+            const requestId = r.request_id || '';
+            const returnsUrl = requestId 
+                ? `https://exchange-return-tracking.onrender.com/admin#requestId=${encodeURIComponent(requestId)}`
+                : 'https://exchange-return-tracking.onrender.com/admin';
+            html += `<div class="ctx-return-card" data-returns-url="${escapeHtml(returnsUrl)}" title="${requestId ? 'Click to view details' : ''}">
                 <div class="ctx-return-top">
                     <span class="ctx-return-type type-return">RETURN</span>
                     <span class="ctx-return-status ${getStatusClass(r.status)}">${(r.status || 'unknown').toUpperCase()}</span>
@@ -7987,7 +7991,11 @@ function renderCustomerContext(data) {
         exchanges.forEach(e => {
             const date = e.created_at ? new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             const srcLabel = e.source === 'portal' ? 'Portal' : 'Local';
-            html += `<div class="ctx-return-card">
+            const requestId = e.request_id || '';
+            const returnsUrl = requestId 
+                ? `https://exchange-return-tracking.onrender.com/admin#requestId=${encodeURIComponent(requestId)}`
+                : 'https://exchange-return-tracking.onrender.com/admin';
+            html += `<div class="ctx-return-card" data-returns-url="${escapeHtml(returnsUrl)}" title="${requestId ? 'Click to view details' : ''}">
                 <div class="ctx-return-top">
                     <span class="ctx-return-type type-exchange">EXCHANGE</span>
                     <span class="ctx-return-status ${getStatusClass(e.status)}">${(e.status || 'unknown').toUpperCase()}</span>
@@ -8000,6 +8008,15 @@ function renderCustomerContext(data) {
             </div>`;
         });
         returnsBody.innerHTML = html;
+
+        // Attach click handlers to open returns dashboard
+        returnsBody.querySelectorAll('.ctx-return-card').forEach(card => {
+            card.style.cursor = 'pointer';
+            card.addEventListener('click', () => {
+                const url = card.dataset.returnsUrl || 'https://exchange-return-tracking.onrender.com/admin';
+                window.open(url, '_blank');
+            });
+        });
     }
 }
 
