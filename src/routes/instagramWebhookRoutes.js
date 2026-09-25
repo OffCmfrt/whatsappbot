@@ -280,6 +280,17 @@ async function handleAttachment(senderId, message, timestamp) {
 
     console.log(`📸 [IG DM] Attachment from ${senderId}: ${attachments.length} item(s)`);
 
+    // Extract attachment URL (Meta provides payload.url for media attachments)
+    let attachmentUrl = null;
+    let attachmentType = null;
+    for (const att of attachments) {
+        if (att.payload?.url) {
+            attachmentUrl = att.payload.url;
+            attachmentType = att.type || 'image';
+            break;
+        }
+    }
+
     // Update 24h window
     await instagramService.updateMessagingWindow(senderId);
 
@@ -301,13 +312,15 @@ async function handleAttachment(senderId, message, timestamp) {
         return;
     }
 
-    // For non-escalated: ask user to describe their issue
+    // For non-escalated: pass attachment info to bot engine
     try {
         const botEngine = require('../handlers/igBotEngine');
         await botEngine.processMessage(senderId, `[attachment: ${attachmentDesc}]`, {
             messageId,
             timestamp,
-            isAttachment: true
+            isAttachment: true,
+            attachmentUrl,
+            attachmentType
         });
     } catch (err) {
         if (err.code === 'MODULE_NOT_FOUND') {

@@ -146,8 +146,13 @@ const INTENTS = {
             ['material', 3], ['fabric', 3.5], ['quality', 2],
             ['color available', 4.5], ['colour available', 4.5],
             ['product details', 5], ['product info', 4.5],
+            ['product question', 5], ['product enquiry', 5],
             ['care instructions', 5], ['wash', 1.5], ['cotton', 2.5],
-            ['oversized', 2.5], ['fit', 1.5], ['unisex', 3]
+            ['oversized', 2.5], ['fit', 1.5], ['unisex', 3],
+            ['price', 3], ['cost', 3], ['how much', 5],
+            ['rate', 2.5], ['mrp', 3.5], ['charges', 2.5],
+            ['send link', 4.5], ['product link', 5], ['link', 1.5],
+            ['available in', 3], ['in stock', 3.5], ['stock', 2]
         ],
         description: 'Product detail question'
     },

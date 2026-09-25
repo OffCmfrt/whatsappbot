@@ -23,6 +23,7 @@
 const instagramService = require('../services/instagramService');
 const smartEngine = require('../services/igSmartEngine');
 const shiprocketService = require('../services/shiprocketService');
+const shopifyService = require('../services/shopifyService');
 const { dbAdapter } = require('../database/db');
 
 const STATES = smartEngine.STATES;
@@ -158,6 +159,35 @@ class IGBotEngine {
                 entities: result.entities,
                 summaryEntry: cleanMessage.substring(0, 120)
             });
+
+            // ── 2b. Attachment context ─────────────────────────────
+            // Store attachment URL for potential product resolution.
+            // If the message is ONLY an attachment (no text question),
+            // prompt the user to tell us what they want to know.
+            if (options.isAttachment && options.attachmentUrl) {
+                context.lastAttachment = {
+                    url: options.attachmentUrl,
+                    type: options.attachmentType || 'image'
+                };
+
+                // If the message is just the attachment descriptor with no real question
+                if (cleanMessage.startsWith('[attachment:') && !options.quickReplyPayload) {
+                    // If we already have product context, acknowledge the new media
+                    if (context.lastProduct) {
+                        await instagramService.sendMessage(
+                            igUserId,
+                            `Got the ${options.attachmentType || 'image'}. What would you like to know about ${context.lastProduct.name}? (e.g., price, size, availability)`
+                        );
+                    } else {
+                        await instagramService.sendMessage(
+                            igUserId,
+                            `Got the ${options.attachmentType || 'image'}. What would you like to know? You can ask about price, size, or availability — or share the product name.`
+                        );
+                    }
+                    await instagramService.setBotState(igUserId, STATES.IDLE, context);
+                    return;
+                }
+            }
 
             // ── 3. WAITING_FOR_CUSTOMER: team owes this customer a reply ──
             if (currentState === STATES.WAITING_FOR_CUSTOMER) {
@@ -424,7 +454,7 @@ class IGBotEngine {
 
             case 'product_question':
             case 'size_question':
-                return await this._sendFAQ(igUserId, 'product_info');
+                return await this._handleProductQuestion(igUserId, message, result, context);
 
             case 'delivery_issue':
             case 'damaged_product':
@@ -1283,6 +1313,210 @@ They'll review and reply right here within 24-48 hours.`
             return false;
         } catch (e) {
             return false;
+        }
+    }
+
+    // ─── Product Lookup (Shopify catalog) ───────────────────────
+
+    /**
+     * Handle product/size questions by searching the Shopify catalog.
+     * Uses product context for follow-ups (e.g., "size?" after "price?").
+     * Never invents product, price, stock, or URL — Shopify is the source of truth.
+     */
+    async _handleProductQuestion(igUserId, message, result, context) {
+        // Extract product name from the message
+        const productName = this._extractProductName(message, context);
+
+        // If we have a product context from a previous message, use it for follow-ups
+        if (!productName && context.lastProduct) {
+            return await this._handleFollowUpQuestion(igUserId, message, result, context);
+        }
+
+        if (!productName) {
+            // No product identified — ask for clarification
+            await instagramService.sendMessage(
+                igUserId,
+                'Which product are you asking about? Please share the product name or a keyword.'
+            );
+            return;
+        }
+
+        // Search Shopify catalog
+        const product = await this._searchProducts(productName);
+
+        if (!product) {
+            // Product not found — ask for clarification
+            await instagramService.sendMessage(
+                igUserId,
+                `I couldn't find a product matching "${productName}".\n\nCould you share the exact product name? You can also check our website for the full catalog.`
+            );
+            return;
+        }
+
+        // Store product context for follow-up questions
+        context.lastProduct = {
+            id: product.id,
+            name: product.title,
+            handle: product.handle || null
+        };
+        await instagramService.setBotState(igUserId, STATES.IDLE, context);
+
+        // Format and send the product answer
+        await this._sendProductAnswer(igUserId, product, result, message);
+    }
+
+    /**
+     * Handle follow-up questions about a previously identified product.
+     * E.g., "size?" or "available in M?" after "price of Henley".
+     */
+    async _handleFollowUpQuestion(igUserId, message, result, context) {
+        const lastProduct = context.lastProduct;
+
+        // Search for the product again using the stored name
+        const product = await this._searchProducts(lastProduct.name);
+        if (!product) {
+            await instagramService.sendMessage(
+                igUserId,
+                `I lost track of that product — could you tell me the name again?`
+            );
+            return;
+        }
+
+        await this._sendProductAnswer(igUserId, product, result, message);
+    }
+
+    /**
+     * Format and send a product answer from Shopify catalog data.
+     * Only shows verified information — never invents data.
+     */
+    async _sendProductAnswer(igUserId, product, result, message) {
+        const text = (message || '').toLowerCase();
+        const entities = result?.entities || {};
+
+        let msg = `${product.title}`;
+
+        // Price — always from Shopify, never invented
+        const variants = product.variants || [];
+        if (variants.length > 0) {
+            const prices = variants.map(v => v.price).filter(p => p > 0);
+            if (prices.length > 0) {
+                const minPrice = Math.min(...prices);
+                const maxPrice = Math.max(...prices);
+                if (minPrice === maxPrice) {
+                    msg += `\nPrice: Rs.${minPrice}`;
+                } else {
+                    msg += `\nPrice: Rs.${minPrice} – Rs.${maxPrice}`;
+                }
+            }
+        }
+
+        // Size question — show available sizes from variants
+        if (result?.intent === 'size_question' || entities.size || /size|which size|available in/.test(text)) {
+            const sizes = variants
+                .map(v => v.title)
+                .filter(t => t && t.length > 0 && t !== 'Default Title');
+            if (sizes.length > 0) {
+                msg += `\nAvailable sizes: ${sizes.join(', ')}`;
+            }
+        }
+
+        // Availability / stock
+        const totalStock = variants.reduce((sum, v) => sum + (v.inventory || 0), 0);
+        if (totalStock > 0) {
+            msg += `\nIn stock`;
+        } else {
+            msg += `\nCurrently out of stock`;
+        }
+
+        // Product link — only if we have a verified handle
+        if (product.handle) {
+            msg += `\n\nView: offcomfrt.in/products/${product.handle}`;
+        }
+
+        await instagramService.sendQuickReplies(
+            igUserId,
+            msg,
+            [
+                { title: 'Size?', payload: 'size_question' },
+                { title: 'Available?', payload: 'stock_check' },
+                { title: 'Send link', payload: 'product_link' }
+            ]
+        );
+    }
+
+    /**
+     * Extract a product name from the customer message.
+     * Strips question words and price-related keywords to isolate
+     * the product reference.
+     */
+    _extractProductName(message, context) {
+        if (!message) return null;
+
+        // Strip common question patterns to get the product name
+        let cleaned = message
+            .replace(/\b(how much|what is|what's|price of|cost of|rate of|tell me about|about|send|share|give)\b/gi, '')
+            .replace(/\?(.*)/g, '')
+            .replace(/\b(this|that|it|the|a|an|is|are|do|does|can|you|your|me|my)\b/gi, '')
+            .trim();
+
+        // If nothing meaningful left after stripping, try context
+        if (cleaned.length < 2 && context?.lastProduct) {
+            return context.lastProduct.name;
+        }
+
+        return cleaned.length >= 2 ? cleaned : null;
+    }
+
+    /**
+     * Search the Shopify product catalog for a product matching the query.
+     * Uses the cached catalog (10-min TTL) — no extra API calls per message.
+     * Returns the best match or null.
+     */
+    async _searchProducts(query) {
+        try {
+            const catalog = await shopifyService.getProductCatalog();
+            if (!catalog || catalog.length === 0) return null;
+
+            const q = query.toLowerCase().trim();
+            if (!q) return null;
+
+            // 1. Exact title match (highest priority)
+            const exact = catalog.find(p =>
+                p.title.toLowerCase() === q
+            );
+            if (exact) return exact;
+
+            // 2. Title contains the query
+            const contains = catalog.find(p =>
+                p.title.toLowerCase().includes(q)
+            );
+            if (contains) return contains;
+
+            // 3. Any word in the query matches a word in the title
+            const queryWords = q.split(/\s+/).filter(w => w.length >= 3);
+            if (queryWords.length === 0) return null;
+
+            let bestMatch = null;
+            let bestScore = 0;
+
+            for (const product of catalog) {
+                const titleWords = product.title.toLowerCase().split(/\s+/);
+                let score = 0;
+                for (const qw of queryWords) {
+                    for (const tw of titleWords) {
+                        if (tw.includes(qw)) score++;
+                    }
+                }
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = product;
+                }
+            }
+
+            return bestScore > 0 ? bestMatch : null;
+        } catch (error) {
+            console.error('[IG BOT] Product search error:', error.message);
+            return null;
         }
     }
 
