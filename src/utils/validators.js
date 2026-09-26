@@ -141,6 +141,59 @@ function parseCommand(message) {
     return commandMap[cleaned] || null;
 }
 
+// Normalize phone number to consistent format: +91XXXXXXXXXX
+// This ensures all phone lookups and inserts use the same format
+function normalizePhone(phone) {
+    if (!phone) return null;
+    
+    // Remove all non-digit characters (spaces, +, -, etc.)
+    const cleaned = phone.replace(/\D/g, '');
+    
+    // Handle different formats
+    if (cleaned.length === 10) {
+        // 10-digit Indian number: 8309302779 -> +918309302779
+        return `+91${cleaned}`;
+    } else if (cleaned.length === 11 && cleaned.startsWith('0')) {
+        // 11-digit with leading 0 (trunk prefix): 08309302779 -> +918309302779
+        return `+91${cleaned.substring(1)}`;
+    } else if (cleaned.length === 12 && cleaned.startsWith('91')) {
+        // Already has country code: 918309302779 -> +918309302779
+        return `+${cleaned}`;
+    } else if (cleaned.length === 13 && cleaned.startsWith('91')) {
+        // Already formatted: 918309302779X (shouldn't happen, but handle it)
+        return `+${cleaned.substring(0, 12)}`;
+    }
+    
+    // Fallback: return as-is with + prefix if it looks valid
+    return cleaned.length >= 10 ? `+${cleaned}` : null;
+}
+
+// Get all phone variations for database queries
+// This helps match records regardless of how they were stored
+function getPhoneVariations(phone) {
+    if (!phone) return [];
+    
+    const cleaned = phone.replace(/\D/g, '');
+    let base10 = '';
+    
+    // Extract the 10-digit base number
+    if (cleaned.length === 10) {
+        base10 = cleaned;
+    } else if (cleaned.length === 12 && cleaned.startsWith('91')) {
+        base10 = cleaned.substring(2);
+    } else {
+        return [phone];
+    }
+    
+    // Return all possible formats
+    return [
+        base10,                    // 8309302779
+        `+91${base10}`,            // +918309302779
+        `91${base10}`,             // 918309302779
+        `+${base10}`,              // +8309302779 (edge case)
+    ];
+}
+
 module.exports = {
     isValidOrderId,
     isValidAWB,
@@ -150,5 +203,7 @@ module.exports = {
     extractPhoneNumber,
     sanitizeInput,
     isCommand,
-    parseCommand
+    parseCommand,
+    normalizePhone,
+    getPhoneVariations
 };

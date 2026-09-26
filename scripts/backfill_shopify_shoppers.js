@@ -112,10 +112,12 @@ function normalizePhone(order) {
         order.billing_address?.phone || order.shipping_address?.phone;
     if (!phone) return null;
 
-    const digits = String(phone).replace(/\D/g, '');
-    if (digits.length === 10) return `91${digits}`;
-    if (digits.length === 11 && digits.startsWith('0')) return `91${digits.slice(1)}`;
-    return digits || null;
+    // CRITICAL: Trim whitespace and remove all non-digit characters
+    const digits = String(phone).trim().replace(/\D/g, '');
+    if (digits.length === 10) return `+91${digits}`;
+    if (digits.length === 11 && digits.startsWith('0')) return `+91${digits.slice(1)}`;
+    if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
+    return digits.length >= 10 ? `+${digits}` : null;
 }
 
 function refundedAmount(order) {

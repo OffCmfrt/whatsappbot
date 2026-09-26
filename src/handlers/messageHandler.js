@@ -3,7 +3,7 @@ const followUpService = require('../services/followUpService');
 const LanguageService = require('../services/languageService');
 const Customer = require('../models/Customer');
 const { dbAdapter } = require('../database/db');
-const { sanitizeInput } = require('../utils/validators');
+const { sanitizeInput, normalizePhone, getPhoneVariations } = require('../utils/validators');
 const { getPortalIdForNewTicket } = require('../utils/portalAssignment');
 
 const autoSupportAgent = require('../services/ai/autoSupportAgent');
@@ -41,17 +41,21 @@ class MessageHandler {
     // their original automation, and the 48h conversation lock is still honored.
     async processMessage(phone, message, senderName = null) {
         try {
+            // CRITICAL: Normalize phone to consistent format (+91XXXXXXXXXX)
+            // This ensures all DB lookups and inserts match correctly
+            const normalizedPhone = normalizePhone(phone) || phone;
+            
             // Sanitize input
             const cleanMessage = sanitizeInput(message);
 
             if (!cleanMessage) return;
 
-            // Ensure customer exists in database
-            const customer = await Customer.getOrCreate(phone, senderName);
+            // Ensure customer exists in database (use normalized phone)
+            const customer = await Customer.getOrCreate(normalizedPhone, senderName);
 
             // Log incoming message for analytics/support
-            console.log(`📥 [${phone}] ${senderName || 'User'}: "${cleanMessage}"`);
-            await this.logMessage(phone, cleanMessage, 'incoming');
+            console.log(`📥 [${normalizedPhone}] ${senderName || 'User'}: "${cleanMessage}"`);
+            await this.logMessage(normalizedPhone, cleanMessage, 'incoming');
 
             // Identify shopper template-button clicks (these keep their existing flow)
             const buttonCommandMap = {
@@ -68,24 +72,26 @@ class MessageHandler {
 
             // Check if customer has an active conversation lock (48-hour quiet period)
             // This prevents bot automation after order confirmation template is sent
+            // Use phone variations since store_shoppers may have different formats
+            const phoneVariations = getPhoneVariations(normalizedPhone);
             const activeLock = await dbAdapter.query(
-                'SELECT id, order_id, conversation_lock_until FROM store_shoppers WHERE phone = ? AND conversation_lock_until > NOW() ORDER BY created_at DESC LIMIT 1',
-                [phone]
+                'SELECT id, order_id, conversation_lock_until FROM store_shoppers WHERE phone = ANY(?) AND conversation_lock_until > NOW() ORDER BY created_at DESC LIMIT 1',
+                [phoneVariations]
             );
 
             if (activeLock && activeLock.length > 0) {
                 if (!buttonCommand) {
-                    console.log(`[QUIET PERIOD] Blocking automated response for ${phone} (locked until ${activeLock[0].conversation_lock_until})`);
+                    console.log(`[QUIET PERIOD] Blocking automated response for ${normalizedPhone} (locked until ${activeLock[0].conversation_lock_until})`);
                     return;
                 }
-                console.log(`[QUIET PERIOD] Allowing button click: ${cleanMessage} for ${phone}`);
+                console.log(`[QUIET PERIOD] Allowing button click: ${cleanMessage} for ${normalizedPhone}`);
             }
 
             // Get conversation state — still needed so the edit-details capture
             // (set by the shop_edit case) can collect the customer's free-text edit.
             const convRows = await dbAdapter.query(
                 'SELECT state FROM conversations WHERE customer_phone = ? ORDER BY updated_at DESC LIMIT 1',
-                [phone]
+                [normalizedPhone]
             );
             const convState = convRows?.[0]?.state || null;
 
@@ -95,7 +101,7 @@ class MessageHandler {
                 try {
                     const convContextRows = await dbAdapter.query(
                         'SELECT context FROM conversations WHERE customer_phone = ? ORDER BY updated_at DESC LIMIT 1',
-                        [phone]
+                        [normalizedPhone]
                     );
                     let targetOrderId = null;
                     try {
@@ -103,12 +109,14 @@ class MessageHandler {
                         targetOrderId = context.order_id;
                     } catch (e) {}
 
+                    // Use phone variations for store_shoppers lookup
                     const shopperRows = await dbAdapter.query(
-                        'SELECT response_count, customer_message FROM store_shoppers WHERE phone = ? AND order_id = ?',
-                        [phone, targetOrderId]
+                        'SELECT response_count, customer_message, phone FROM store_shoppers WHERE phone = ANY(?) AND order_id = ?',
+                        [phoneVariations, targetOrderId]
                     );
                     const currentCount = shopperRows?.[0]?.response_count || 0;
                     const existingMessage = shopperRows?.[0]?.customer_message || '';
+                    const actualPhone = shopperRows?.[0]?.phone || normalizedPhone;
                     const updatedMessage = existingMessage
                         ? `${existingMessage}\n---\n${cleanMessage}`
                         : cleanMessage;
@@ -119,20 +127,20 @@ class MessageHandler {
                              last_response_at = ?,
                              response_count = ?
                          WHERE phone = ? AND order_id = ?`,
-                        [updatedMessage, now, currentCount + 1, phone, targetOrderId]
+                        [updatedMessage, now, currentCount + 1, actualPhone, targetOrderId]
                     );
-                    console.log(`[EDIT] Captured edit request from ${phone} for order ${targetOrderId}: ${cleanMessage.substring(0, 50)}...`);
+                    console.log(`[EDIT] Captured edit request from ${normalizedPhone} for order ${targetOrderId}: ${cleanMessage.substring(0, 50)}...`);
                 } catch (dbErr) {
                     console.error('[EDIT] Failed to save edit request:', dbErr.message);
                 }
 
                 await dbAdapter.query(
                     'UPDATE conversations SET state = NULL WHERE customer_phone = ?',
-                    [phone]
+                    [normalizedPhone]
                 );
 
                 await whatsappService.sendMessage(
-                    phone,
+                    normalizedPhone,
                     `📝 *Edit Request Received*\n\n▫️ *Thank you!*\n▫️ Your request has been saved:\n"${cleanMessage.substring(0, 100)}${cleanMessage.length > 100 ? '...' : ''}"\n\n▫️ Our team will review and update your order.`
                 );
                 return;
@@ -145,24 +153,24 @@ class MessageHandler {
                 const portalId = await getPortalIdForNewTicket();
                 await dbAdapter.query(
                     'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, portal_id, is_read) VALUES (?, ?, ?, ?, ?, false)',
-                    [ticketNumber, phone, name, cleanMessage, portalId]
+                    [ticketNumber, normalizedPhone, name, cleanMessage, portalId]
                 );
                 await dbAdapter.query(
                     'UPDATE conversations SET state = NULL WHERE customer_phone = ?',
-                    [phone]
+                    [normalizedPhone]
                 );
                 await whatsappService.sendMessage(
-                    phone,
+                    normalizedPhone,
                     `⚫ *OFFCOMFRT — SUPPORT*\n\n▫️ *Thank you, ${name}.*\n▫️ Your query has been received.\n▫️ Ticket Number: *${ticketNumber}*\n\n▫️ Our team will respond within *24 hours*.`
                 );
-                console.log(`[TICKET] Created new ticket ${ticketNumber} for ${phone}`);
+                console.log(`[TICKET] Created new ticket ${ticketNumber} for ${normalizedPhone}`);
                 return;
             }
 
             // Route the shopper button clicks to their existing handlers
             if (buttonCommand) {
                 const lang = customer.preferred_language || 'en';
-                await this.handleCommand(phone, buttonCommand, senderName, lang);
+                await this.handleCommand(normalizedPhone, buttonCommand, senderName, lang);
                 return;
             }
 
@@ -175,14 +183,14 @@ class MessageHandler {
                 const recentRows = await dbAdapter.query(
                     `SELECT message_content, message_type FROM messages
                      WHERE customer_phone LIKE ? ORDER BY id DESC LIMIT 6`,
-                    [`%${phone.slice(-10)}`]
+                    [`%${normalizedPhone.slice(-10)}`]
                 );
                 recentMessages = (recentRows || []).reverse().map(r =>
                     `${r.message_type === 'incoming' ? 'Customer' : 'Agent'}: ${String(r.message_content || '').substring(0, 150)}`
                 );
             } catch (e) { /* non-critical */ }
 
-            const autoResult = await autoSupportAgent.processCustomerMessage(phone, cleanMessage, name, { recentMessages });
+            const autoResult = await autoSupportAgent.processCustomerMessage(normalizedPhone, cleanMessage, name, { recentMessages });
 
             const aiSuggestion = (autoResult && autoResult.reply) ? autoResult.reply : null;
             const scenarioTag = (autoResult && autoResult.scenario) ? autoResult.scenario : 'general';
@@ -190,13 +198,13 @@ class MessageHandler {
             const aiSentiment = (autoResult && autoResult.sentiment) ? autoResult.sentiment : null;
 
             if (aiSuggestion) {
-                console.log(`💡 [AI DASHBOARD SUGGESTION] Generated for ${phone} (Scenario: ${scenarioTag}, Confidence: ${aiConfidence}, Sentiment: ${aiSentiment}). Routing to Admin Dashboard.`);
+                console.log(`💡 [AI DASHBOARD SUGGESTION] Generated for ${normalizedPhone} (Scenario: ${scenarioTag}, Confidence: ${aiConfidence}, Sentiment: ${aiSentiment}). Routing to Admin Dashboard.`);
             }
 
             // Create or update Support Ticket for Admin Dashboard (DO NOT send to customer directly)
             const existingTicket = await dbAdapter.query(
                 'SELECT id, ticket_number FROM support_tickets WHERE customer_phone = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
-                [phone, 'open']
+                [normalizedPhone, 'open']
             );
 
             if (existingTicket && existingTicket.length > 0) {
@@ -219,7 +227,7 @@ class MessageHandler {
                      WHERE id = ?`,
                     [appendContent, aiSentiment, aiConfidence, scenarioTag, ticketId]
                 );
-                console.log(`[DASHBOARD TICKET] Appended message & AI suggestion to open ticket ${existingNumber} for ${phone}`);
+                console.log(`[DASHBOARD TICKET] Appended message & AI suggestion to open ticket ${existingNumber} for ${normalizedPhone}`);
             } else {
                 // Create brand new ticket for Admin Dashboard with customer message + AI suggested reply
                 const ticketNumber = await generateUniqueTicketNumber();
@@ -231,13 +239,13 @@ class MessageHandler {
                 await dbAdapter.query(
                     `INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, portal_id, is_read, sentiment, ai_confidence, ai_scenario)
                      VALUES (?, ?, ?, ?, ?, false, ?, ?, ?)`,
-                    [ticketNumber, phone, name, ticketMessage, portalId, aiSentiment, aiConfidence, scenarioTag]
+                    [ticketNumber, normalizedPhone, name, ticketMessage, portalId, aiSentiment, aiConfidence, scenarioTag]
                 );
-                console.log(`[DASHBOARD TICKET] Created ticket ${ticketNumber} for ${phone} with AI suggestion ready for Admin review.`);
+                console.log(`[DASHBOARD TICKET] Created ticket ${ticketNumber} for ${normalizedPhone} with AI suggestion ready for Admin review.`);
             }
 
         } catch (error) {
-            console.error(`❌ [${phone}] Error processing message:`, error.message);
+            console.error(`❌ [${normalizedPhone}] Error processing message:`, error.message);
             if (error.response?.data) console.error('Meta API Error Details:', JSON.stringify(error.response.data, null, 2));
 
             // Best-effort fallback notification
