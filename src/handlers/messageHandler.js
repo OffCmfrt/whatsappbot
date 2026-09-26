@@ -763,15 +763,17 @@ class MessageHandler {
      * @returns {Promise<{id: string, order_id: string}|null>}
      */
     async resolveShopperForButtonClick(phone, status = null) {
+        // Use phone variations to match any format in store_shoppers
+        const phoneVariations = getPhoneVariations(phone);
         const statusClause = status ? 'AND s.status = ?' : '';
-        const params = status ? [phone, status] : [phone];
+        const params = status ? [phoneVariations, status] : [phoneVariations];
         try {
             const rows = await dbAdapter.query(
                 `SELECT s.id, s.order_id, c.sent_at AS confirmation_sent_at
                  FROM store_shoppers s
                  LEFT JOIN shopper_confirmations c
                         ON c.phone = s.phone AND c.order_id = s.order_id
-                 WHERE s.phone = ? ${statusClause}
+                 WHERE s.phone = ANY(?) ${statusClause}
                  ORDER BY c.sent_at DESC NULLS LAST, s.created_at DESC
                  LIMIT 1`,
                 params
@@ -782,7 +784,7 @@ class MessageHandler {
             // shopper_confirmations may be missing — fall back to legacy lookup
             console.warn('[BUTTON] Confirmation-aware lookup failed, falling back:', err.message);
             const fallbackRows = await dbAdapter.query(
-                `SELECT id, order_id FROM store_shoppers WHERE phone = ? ${status ? "AND status = ?" : ''} ORDER BY created_at DESC LIMIT 1`,
+                `SELECT id, order_id FROM store_shoppers WHERE phone = ANY(?) ${status ? "AND status = ?" : ''} ORDER BY created_at DESC LIMIT 1`,
                 params
             );
             return fallbackRows?.[0] || null;

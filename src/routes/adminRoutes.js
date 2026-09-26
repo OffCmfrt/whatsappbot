@@ -14,6 +14,7 @@ const cloudinaryService = require('../services/cloudinaryService');
 const igCommentService = require('../services/igCommentService');
 const { toIST, formatDateForExport, fromISTtoUTC } = require('../utils/timezone');
 const { invalidateCache: clearAllCaches, caches, getCacheStats, getCached, setCache } = require('../utils/cache');
+const { getPhoneVariations } = require('../utils/validators');
 
 // In-memory store for last known portal passwords (so admin can view them)
 const portalPasswords = new Map();
@@ -335,11 +336,22 @@ router.get('/customers/:phone/details', verifyToken, async (req, res) => {
         const { phone } = req.params;
         let customerData = null;
 
-        const customers = await dbAdapter.select('customers', { phone }, { limit: 1 });
+        // Use phone variations to match any format
+        const phoneVariations = getPhoneVariations(phone);
+        const customers = await dbAdapter.query(
+            'SELECT * FROM customers WHERE phone = ANY(?) LIMIT 1',
+            [phoneVariations]
+        );
         if (!customers || customers.length === 0) return res.status(404).json({ error: 'Customer not found' });
 
-        const orders = await dbAdapter.query('SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC LIMIT 10', [phone]);
-        const msgs = await dbAdapter.query('SELECT COUNT(*) as count FROM messages WHERE customer_phone = ?', [phone]);
+        const orders = await dbAdapter.query(
+            'SELECT * FROM orders WHERE customer_phone = ANY(?) ORDER BY created_at DESC LIMIT 10',
+            [phoneVariations]
+        );
+        const msgs = await dbAdapter.query(
+            'SELECT COUNT(*) as count FROM messages WHERE customer_phone = ANY(?)',
+            [phoneVariations]
+        );
 
         customerData = {
             ...customers[0],
@@ -362,10 +374,13 @@ router.get('/customers/:phone/all-orders', verifyToken, async (req, res) => {
         
         console.log(`[ALL ORDERS] Fetching all-time orders from database for: ${phone}`);
         
+        // Use phone variations to match any format
+        const phoneVariations = getPhoneVariations(phone);
+        
         // Capped at 50 most recent orders to bound DB egress (chat sidebar use)
         const orders = await dbAdapter.query(
-            'SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC LIMIT 50',
-            [phone]
+            'SELECT * FROM orders WHERE customer_phone = ANY(?) ORDER BY created_at DESC LIMIT 50',
+            [phoneVariations]
         );
         
         console.log(`[ALL ORDERS] Found ${(orders || []).length} orders for ${phone}`);
@@ -3225,12 +3240,10 @@ router.get('/chat/:phone', verifyToken, async (req, res) => {
         const { phone } = req.params;
         const { limit = 200 } = req.query;
         
-        // Normalize phone number
-        const cleanPhone = phone.replace(/\D/g, '');
+        // Use phone variations to match any format
+        const phoneVariations = getPhoneVariations(phone);
         
         // Get ALL messages from messages table (incoming + all outgoing types)
-        const phoneVariations = [cleanPhone, `+${cleanPhone}`, `91${cleanPhone}`, `+91${cleanPhone}`];
-        
         const messages = await dbAdapter.query(
             `SELECT 
                 m.id,
@@ -3248,10 +3261,10 @@ router.get('/chat/:phone', verifyToken, async (req, res) => {
                 END as is_read
             FROM messages m
             LEFT JOIN message_reads mr ON m.id = mr.message_id
-            WHERE m.customer_phone IN (?, ?, ?, ?)
+            WHERE m.customer_phone = ANY(?)
             ORDER BY m.created_at ASC 
             LIMIT ?`,
-            [...phoneVariations, parseInt(limit)]
+            [phoneVariations, parseInt(limit)]
         );
         
         // Ensure all created_at values are proper ISO strings for frontend IST conversion
@@ -3266,14 +3279,14 @@ router.get('/chat/:phone', verifyToken, async (req, res) => {
                 name, phone, email, order_id, status,
                 customer_message, last_response_at, response_count
             FROM store_shoppers 
-            WHERE phone IN (?, ?, ?, ?)
+            WHERE phone = ANY(?)
             ORDER BY created_at DESC LIMIT 1`,
-            [cleanPhone, `+${cleanPhone}`, `91${cleanPhone}`, `+91${cleanPhone}`]
+            [phoneVariations]
         );
         
         res.json({
             success: true,
-            phone: cleanPhone,
+            phone: phone,
             customer: customerInfo[0] || null,
             messages: formattedMessages
         });
