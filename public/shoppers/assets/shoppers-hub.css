@@ -5991,8 +5991,11 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 16px;
     padding: 1.75rem;
-    width: 480px;
+    width: 600px;
     max-width: 92vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-sizing: border-box;
     box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(83,189,235,0.1);
 }
 .sb-label-dl-header {
@@ -6026,6 +6029,34 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
     line-height: 1.5;
 }
 .sb-label-dl-section { margin-bottom: 1.25rem; }
+.sb-label-dl-field { font-size: 0.75rem; color: #bdc9d8; }
+.sb-label-dl-field select {
+    display: block;
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.65rem;
+    background: #131c2d;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    color: #fff;
+    font: inherit;
+}
+.sb-label-dl-preview, .sb-label-dl-error {
+    padding: 0.85rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+.sb-label-dl-preview { background: rgba(83,189,235,0.08); color: #b9e4f8; }
+.sb-label-dl-error { background: rgba(239,100,100,0.12); color: #ffc5c5; white-space: pre-wrap; max-height: 220px; overflow-y: auto; }
+.sb-label-dl-panel button:disabled, .sb-label-dl-panel select:disabled { opacity: 0.45; cursor: not-allowed; }
+.sb-label-dl-panel :focus-visible { outline: 2px solid #53bdeb; outline-offset: 3px; }
+@media (max-width: 480px) {
+    .sb-label-dl-panel { padding: 1rem; }
+    .sb-label-dl-options.sb-label-dl-section { grid-template-columns: 1fr; }
+}
 .sb-label-dl-label {
     display: block;
     font-size: 0.7rem;

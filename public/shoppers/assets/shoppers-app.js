@@ -7536,12 +7536,27 @@ function downloadBatchLabels(batchId) {
     overlay.id = 'sbLabelDownloadDialog';
     overlay.className = 'sb-label-dl-overlay';
     overlay.innerHTML = `
-        <div class="sb-label-dl-panel">
+        <div class="sb-label-dl-panel" role="dialog" aria-modal="true" aria-labelledby="sbLabelDlTitle">
             <div class="sb-label-dl-header">
-                <h3>Download Labels</h3>
+                <h3 id="sbLabelDlTitle">Download Labels</h3>
                 <button class="sb-label-dl-close" id="sbLabelDlClose">&times;</button>
             </div>
-            <p class="sb-label-dl-desc">Choose how to organise and sort the label PDFs inside the ZIP.</p>
+            <p class="sb-label-dl-desc">Print-ready carrier labels, validated before download. Expired links are refreshed automatically. Original page sizes and barcodes are preserved.</p>
+
+            <div class="sb-label-dl-section">
+                <label class="sb-label-dl-label">Download format</label>
+                <div class="sb-label-dl-options" id="sbLabelOutputOpts">
+                    <button class="sb-label-dl-opt active" data-output="merged">
+                        <span>One PDF per folder</span><small>Recommended · ZIP with a combined multipage PDF in each group</small>
+                    </button>
+                    <button class="sb-label-dl-opt" data-output="pdf">
+                        <span>One PDF for the batch</span><small>All labels in one multipage PDF · no ZIP or folders</small>
+                    </button>
+                    <button class="sb-label-dl-opt" data-output="individual">
+                        <span>Separate label PDFs</span><small>ZIP with one PDF per shipment, organized into folders</small>
+                    </button>
+                </div>
+            </div>
 
             <div class="sb-label-dl-section">
                 <label class="sb-label-dl-label">Sort order</label>
@@ -7549,7 +7564,7 @@ function downloadBatchLabels(batchId) {
                     <button class="sb-label-dl-opt active" data-sort="sku">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                         <span>By SKU</span>
-                        <small>Group same products together</small>
+                        <small>Natural SKU and size order</small>
                     </button>
                     <button class="sb-label-dl-opt" data-sort="awb">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M4 9h16"/><path d="M9 4v16"/></svg>
@@ -7575,15 +7590,33 @@ function downloadBatchLabels(batchId) {
                     <button class="sb-label-dl-opt active" data-format="by_sku">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                         <span>Grouped by SKU</span>
-                        <small>Labels in SKU-named folders</small>
+                        <small>One folder per SKU or multi-item SKU combination</small>
                     </button>
                     <button class="sb-label-dl-opt" data-format="flat">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-                        <span>Flat list</span>
-                        <small>All labels in one folder</small>
+                        <span>No subfolders</span>
+                        <small>All labels at the root of the ZIP</small>
+                    </button>
+                    <button class="sb-label-dl-opt" data-format="by_product">
+                        <span>Grouped by product</span><small>Combine sizes of the same product</small>
+                    </button>
+                    <button class="sb-label-dl-opt" data-format="by_carrier">
+                        <span>Grouped by carrier</span><small>Separate Delhivery, Ekart, and Shiprocket</small>
                     </button>
                 </div>
             </div>
+
+            <div class="sb-label-dl-options sb-label-dl-section">
+                <label class="sb-label-dl-field">Sort direction
+                    <select id="sbLabelDirection"><option value="asc">Ascending (A–Z / 1–9)</option><option value="desc">Descending (Z–A / 9–1)</option></select>
+                </label>
+                <label class="sb-label-dl-field">If a label cannot be retrieved
+                    <select id="sbLabelFailure"><option value="abort">Require all labels (recommended)</option><option value="skip">Partial ZIP + failure report</option></select>
+                </label>
+            </div>
+            <div class="sb-label-dl-preview" id="sbLabelDlPreview" aria-live="polite"></div>
+            <p class="sb-label-dl-desc">ZIP downloads include an order/SKU index with PDF filenames and page numbers. Multi-item shipments appear only once. Print at actual size (100%).</p>
+            <div class="sb-label-dl-error" id="sbLabelDlError" role="alert" hidden></div>
 
             <div class="sb-label-dl-actions">
                 <button class="sb-action-btn" id="sbLabelDlCancel">Cancel</button>
@@ -7599,12 +7632,42 @@ function downloadBatchLabels(batchId) {
     // Wire up sort option buttons
     let selectedSort = 'sku';
     let selectedFormat = 'by_sku';
+    let selectedOutput = 'merged';
+    let downloading = false;
+    const confirmBtn = overlay.querySelector('#sbLabelDlConfirm');
+    const failureSelect = overlay.querySelector('#sbLabelFailure');
+    const errorBox = overlay.querySelector('#sbLabelDlError');
+    const updatePreview = () => {
+        const isPdf = selectedOutput === 'pdf';
+        overlay.querySelectorAll('#sbLabelFormatOpts button').forEach(btn => { btn.disabled = isPdf || downloading; });
+        failureSelect.disabled = isPdf || downloading;
+        if (isPdf) failureSelect.value = 'abort';
+        const group = { by_sku: 'SKU', by_product: 'product', by_carrier: 'carrier', flat: 'batch' }[selectedFormat];
+        const description = isPdf ? 'One combined PDF for the entire batch.' : selectedOutput === 'merged'
+            ? `ZIP → ${group} ${selectedFormat === 'flat' ? 'root' : 'folders'} → one combined multipage PDF per group.`
+            : `ZIP → ${group} ${selectedFormat === 'flat' ? 'root' : 'folders'} → separate shipment PDFs.`;
+        overlay.querySelector('#sbLabelDlPreview').textContent = `${description} Sorted by ${selectedSort.replace('_', ' ')} (${overlay.querySelector('#sbLabelDirection').value}).`;
+        if (!downloading) confirmBtn.textContent = isPdf ? 'Download PDF' : 'Download ZIP';
+        overlay.querySelectorAll('.sb-label-dl-opt').forEach(btn => {
+            btn.setAttribute('aria-pressed', String(btn.classList.contains('active')));
+        });
+    };
+    overlay.querySelectorAll('#sbLabelOutputOpts .sb-label-dl-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+            overlay.querySelectorAll('#sbLabelOutputOpts .sb-label-dl-opt').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedOutput = btn.dataset.output;
+            updatePreview();
+        });
+    });
+    overlay.querySelector('#sbLabelDirection').addEventListener('change', updatePreview);
 
     overlay.querySelectorAll('#sbLabelSortOpts .sb-label-dl-opt').forEach(btn => {
         btn.addEventListener('click', () => {
             overlay.querySelectorAll('#sbLabelSortOpts .sb-label-dl-opt').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             selectedSort = btn.dataset.sort;
+            updatePreview();
         });
     });
     overlay.querySelectorAll('#sbLabelFormatOpts .sb-label-dl-opt').forEach(btn => {
@@ -7612,47 +7675,76 @@ function downloadBatchLabels(batchId) {
             overlay.querySelectorAll('#sbLabelFormatOpts .sb-label-dl-opt').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             selectedFormat = btn.dataset.format;
+            updatePreview();
         });
     });
 
     // Close handlers
-    const closeDialog = () => overlay.remove();
+    const closeDialog = () => { if (!downloading) overlay.remove(); };
+    updatePreview();
     overlay.querySelector('#sbLabelDlClose').addEventListener('click', closeDialog);
     overlay.querySelector('#sbLabelDlCancel').addEventListener('click', closeDialog);
     overlay.addEventListener('click', e => { if (e.target === overlay) closeDialog(); });
 
     // Confirm download
     overlay.querySelector('#sbLabelDlConfirm').addEventListener('click', async () => {
-        const confirmBtn = overlay.querySelector('#sbLabelDlConfirm');
-        confirmBtn.disabled = true;
-        confirmBtn.innerHTML = `<div class="spinner" style="width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite;display:inline-block;vertical-align:middle;margin-right:6px;"></div> Building ZIP...`;
-
-        const url = `/api/admin/shipping/batches/${batchId}/labels/download?sortBy=${selectedSort}&format=${selectedFormat}`;
+        if (downloading) return;
+        downloading = true;
+        errorBox.hidden = true;
+        errorBox.textContent = '';
+        overlay.querySelectorAll('button, select').forEach(control => { control.disabled = true; });
+        confirmBtn.textContent = 'Retrieving and validating labels…';
+        const params = new URLSearchParams({
+            sortBy: selectedSort, format: selectedFormat, output: selectedOutput,
+            direction: overlay.querySelector('#sbLabelDirection').value, onFailure: failureSelect.value
+        });
+        const url = `/api/admin/shipping/batches/${batchId}/labels/download?${params}`;
 
         try {
             const res = await fetch(url, { headers: { 'Authorization': `Bearer ${authToken}` } });
             if (!res.ok) {
                 const errBody = await res.json().catch(() => ({}));
+                const details = (errBody.failures || []).map(f => `Order ${f.orderId || 'unknown'} / AWB ${f.awb || 'missing'}: ${f.error}`).join('\n');
+                errorBox.textContent = [errBody.error || 'Download failed', details].filter(Boolean).join('\n\n');
                 throw new Error(errBody.error || 'Download failed');
             }
             const blob = await res.blob();
+            const signature = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
+            const validSignature = selectedOutput === 'pdf'
+                ? String.fromCharCode(...signature) === '%PDF-'
+                : signature[0] === 0x50 && signature[1] === 0x4b && signature[2] === 3 && signature[3] === 4;
+            if (!blob.size || !validSignature) throw new Error('Server returned an empty or invalid download. Please retry.');
             const blobUrl = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = blobUrl;
             // Extract filename from Content-Disposition or use fallback
             const disposition = res.headers.get('Content-Disposition') || '';
             const fnMatch = disposition.match(/filename="?([^"]+)"?/);
-            link.download = fnMatch ? fnMatch[1] : `batch_${batchId}_labels.zip`;
+            link.download = fnMatch ? fnMatch[1] : `batch_${batchId}_labels.${selectedOutput === 'pdf' ? 'pdf' : 'zip'}`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            URL.revokeObjectURL(blobUrl);
-            closeDialog();
-            showShipToast(`Labels downloaded (${selectedSort === 'sku' ? 'grouped by SKU' : 'sorted by ' + selectedSort})`);
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+            const count = Number(res.headers.get('X-Label-Count')) || 0;
+            const missing = Number(res.headers.get('X-Label-Missing-Count')) || 0;
+            const pages = Number(res.headers.get('X-Label-Page-Count')) || 0;
+            downloading = false;
+            if (missing) {
+                errorBox.textContent = `PARTIAL DOWNLOAD: ${count} labels downloaded; ${missing} labels are missing. Review _failed_labels.csv in the ZIP before printing or dispatching. You can retry this download here.`;
+                errorBox.hidden = false;
+                showShipToast(`${missing} labels missing — check the failure report in the ZIP`, true);
+            } else {
+                closeDialog();
+                showShipToast(`${count} labels downloaded across ${pages} PDF pages`);
+            }
         } catch (err) {
-            showShipToast(`Label download failed: ${err.message}`, true);
-            confirmBtn.disabled = false;
-            confirmBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download ZIP`;
+            if (!errorBox.textContent) errorBox.textContent = err.message;
+            errorBox.hidden = false;
+            showShipToast('Label download failed — see the details in the dialog', true);
+        } finally {
+            downloading = false;
+            overlay.querySelectorAll('button, select').forEach(control => { control.disabled = false; });
+            updatePreview();
         }
     });
 }

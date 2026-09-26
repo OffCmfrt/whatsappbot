@@ -5842,24 +5842,30 @@ router.get('/shipping/batches/:id/labels', verifyToken, async (req, res) => {
     }
 });
 
-// Download all labels as a ZIP file, sorted/grouped by the chosen strategy
-// Query params: sortBy = sku | awb | order_id | product
-//               format  = flat | by_sku  (by_sku creates sub-folders per SKU)
+// Download validated carrier labels: merged PDFs per folder, individual PDFs, or one batch PDF.
+// format: flat | by_sku | by_product | by_carrier; output: merged | individual | pdf.
+// sortBy: sku | awb | order_id | product; direction: asc | desc; onFailure: abort | skip.
 router.get('/shipping/batches/:id/labels/download', verifyToken, async (req, res) => {
     try {
-        const { sortBy = 'sku', format = 'by_sku' } = req.query;
-        const result = await shippingService.buildBatchLabelsZip(req.params.id, { sortBy, format });
+        const { sortBy, format, output, direction, onFailure } = req.query;
+        const result = await shippingService.buildBatchLabelsZip(req.params.id, { sortBy, format, output, direction, onFailure });
 
         if (result.error) {
-            return res.status(result.status || 500).json({ success: false, error: result.error });
+            return res.status(result.status || 500).json({
+                success: false, error: result.error, failures: result.failures || []
+            });
         }
 
-        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Type', result.contentType);
         res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
-        res.send(result.zipBuffer);
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('X-Label-Count', String(result.labelCount));
+        res.setHeader('X-Label-Missing-Count', String(result.missingCount));
+        res.setHeader('X-Label-Page-Count', String(result.pageCount));
+        res.send(result.pdfBuffer || result.zipBuffer);
     } catch (error) {
         console.error('Batch label download error:', error);
-        res.status(500).json({ success: false, error: 'Failed to build label ZIP' });
+        res.status(500).json({ success: false, error: 'Failed to build label download' });
     }
 });
 

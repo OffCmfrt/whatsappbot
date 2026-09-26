@@ -14,6 +14,7 @@ const { dbAdapter } = require('../database/db');
 const { caches } = require('../utils/cache');
 const { extractItemSize, extractItemColour } = require('../utils/orderItems');
 const PDFDocument = require('pdfkit');
+const { PDFDocument: LabelPDFDocument } = require('pdf-lib');
 const bwipjs = require('bwip-js');
 const axios = require('axios');
 const { getConfiguredCarriers, getAdapter } = require('./carriers');
@@ -414,21 +415,23 @@ async function schedulePickup(shipmentId, pickupDate) {
     return { data: result.data };
 }
 
-async function generateLabel(shipmentId) {
+async function generateLabel(shipmentId, { forceRefresh = false } = {}) {
     const loaded = await loadShipmentAndAdapter(shipmentId);
     if (loaded.error) return loaded;
     const { shipment, adapter } = loaded;
 
     // Reuse a previously generated label
-    if (shipment.label_url) return { data: { labelUrl: shipment.label_url, cached: true } };
+    if (shipment.label_url && !forceRefresh) return { data: { labelUrl: shipment.label_url, cached: true } };
 
     const result = await adapter.generateLabel(shipment);
     if (!result.success) return { error: result.error, status: 502, raw: result.raw };
 
-    await dbAdapter.update('shipments', {
-        label_url: result.data.labelUrl,
-        updated_at: new Date().toISOString()
-    }, { id: shipment.id });
+    if (result.data.labelUrl) {
+        await dbAdapter.update('shipments', {
+            label_url: result.data.labelUrl,
+            updated_at: new Date().toISOString()
+        }, { id: shipment.id });
+    }
 
     return { data: result.data };
 }
@@ -838,10 +841,10 @@ async function generateBatchManifest(batchId) {
     };
 }
 
-async function getBatchLabels(batchId) {
+async function getBatchLabels(batchId, { generateMissing = true } = {}) {
     // Fetch ALL shipments (including those without stored label_url)
     const shipments = await dbAdapter.query(`
-        SELECT s.id, s.order_id, s.awb, s.label_url, s.courier_name, s.manifest_url,
+        SELECT s.id, s.order_id, s.awb, s.label_url, s.carrier, s.courier_name, s.manifest_url,
                COALESCE(ss.items_json, '[]') AS items_json
         FROM shipments s
         LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
@@ -849,48 +852,36 @@ async function getBatchLabels(batchId) {
         ORDER BY s.id ASC
     `, [batchId]);
 
-    // Generate labels on-the-fly for shipments without stored label_url
-    // Each carrier call gets a 15s timeout so a slow API never blocks the whole batch
-    for (const s of shipments) {
-        if (!s.label_url && s.awb) {
+    if (generateMissing) {
+        await mapLabelsLimited(shipments, async s => {
+            if (s.label_url || !s.awb) return;
             try {
-                const result = await Promise.race([
-                    generateLabel(s.id),
-                    new Promise((_, rej) => setTimeout(() => rej(new Error('Label generation timeout')), 15000))
-                ]);
-                if (result.data?.labelUrl) {
-                    s.label_url = result.data.labelUrl;
-                    // Persist so subsequent requests are instant
-                    await dbAdapter.update('shipments', {
-                        label_url: result.data.labelUrl,
-                        updated_at: new Date().toISOString()
-                    }, { id: s.id });
-                } else if (result.data?.labelBuffer) {
-                    // Carrier returned a raw PDF buffer (e.g. Ekart without Cloudinary)
-                    s._labelBuffer = result.data.labelBuffer;
-                }
+                const result = await withLabelTimeout(generateLabel(s.id));
+                if (result.error) throw new Error(result.error);
+                s.label_url = result.data?.labelUrl || null;
+                s._labelBuffer = result.data?.labelBuffer || null;
             } catch (err) {
-                console.warn(`Label generation failed for shipment ${s.id}: ${err.message}`);
+                s.label_error = err.message;
             }
-        }
+        });
     }
 
     // Enrich each label with parsed SKU / product info
-    const labels = shipments.filter(s => s.label_url || s._labelBuffer).map(s => {
+    const labels = shipments.map(s => {
         let skus = [];
         let productSummary = '';
         try {
-            const items = JSON.parse(s.items_json || '[]');
+            const items = Array.isArray(s.items_json) ? s.items_json : JSON.parse(s.items_json || '[]');
             skus = items.map(item => {
                 const size = extractItemSize(item) || '';
                 const title = item.title || item.name || 'Product';
                 const sku = item.sku || item.variant_sku || '';
-                return { title, size, sku };
+                return { title, size, sku, quantity: Number(item.quantity) || 1 };
             });
             productSummary = skus.map(s => {
                 const parts = [s.title];
                 if (s.size) parts.push(s.size);
-                return parts.join(' ');
+                return `${parts.join(' ')} x${s.quantity}`;
             }).join('; ');
         } catch (_) {}
 
@@ -905,192 +896,208 @@ async function getBatchLabels(batchId) {
             awb: s.awb,
             label_url: s.label_url,
             label_buffer: s._labelBuffer || null,
+            label_error: s.label_error || null,
+            carrier: s.carrier,
             courier_name: s.courier_name,
             manifest_url: s.manifest_url,
             skus,
             product_summary: productSummary,
-            primary_sku: primarySku
+            primary_sku: primarySku,
+            sku_group: [...new Set(skus.map(item => item.sku || `${item.title}-${item.size || 'unspecified'}`))].sort().join(' + ') || 'unknown',
+            product_group: [...new Set(skus.map(item => item.title))].sort().join(' + ') || 'unknown'
         };
     });
 
     return { data: { labels } };
 }
 
-// Build a ZIP file containing all labels for a batch, sorted/grouped by the
-// chosen strategy.  Always returns a ZIP — shipments without carrier labels
-// get a generated info-sheet PDF so the download never fails.
-async function buildBatchLabelsZip(batchId, { sortBy = 'sku', format = 'flat' } = {}) {
-    const { ZipArchive } = require('archiver');
-    const { PassThrough } = require('stream');
-
-    // Fetch batch
+// Validate every carrier PDF before packaging; never substitute a non-shipping info sheet.
+async function buildBatchLabelsZip(batchId, {
+    sortBy = 'sku', format = 'by_sku', output = 'merged', direction = 'asc', onFailure = 'abort'
+} = {}) {
+    if (!['sku', 'awb', 'order_id', 'product'].includes(sortBy) ||
+        !['flat', 'by_sku', 'by_product', 'by_carrier'].includes(format) ||
+        !['merged', 'individual', 'pdf'].includes(output) ||
+        !['asc', 'desc'].includes(direction) || !['abort', 'skip'].includes(onFailure)) {
+        return { error: 'Invalid label download options', status: 400 };
+    }
+    if (output === 'pdf' && onFailure === 'skip') {
+        return { error: 'Partial downloads require a ZIP so missing labels can be reported', status: 400 };
+    }
     const batchRows = await dbAdapter.query('SELECT * FROM shipment_batches WHERE id = ? LIMIT 1', [batchId]);
     if (!batchRows[0]) return { error: 'Batch not found', status: 404 };
     const batch = batchRows[0];
+    const { data: { labels } } = await getBatchLabels(batchId, { generateMissing: false });
+    if (!labels.length) return { error: 'No active shipments found in this batch', status: 404 };
 
-    // Get labels (now generates on-the-fly for missing ones)
-    const { data: { labels } } = await getBatchLabels(batchId);
+    const sortKey = { sku: 'sku_group', awb: 'awb', order_id: 'order_id', product: 'product_summary' }[sortBy];
+    const compare = (a, b) => String(a || '').localeCompare(String(b || ''), 'en', { numeric: true });
+    labels.sort((a, b) => (direction === 'desc' ? -1 : 1) *
+        (compare(a[sortKey], b[sortKey]) || compare(a.order_id, b.order_id) || compare(a.id, b.id)));
 
-    // If still empty (all carrier API calls failed), fetch raw shipment data
-    // so we can at least produce info-sheet PDFs
-    let allLabels = labels || [];
-    if (allLabels.length === 0) {
-        const rawShipments = await dbAdapter.query(`
-            SELECT s.id, s.order_id, s.awb, s.courier_name, s.status,
-                   COALESCE(ss.items_json, '[]') AS items_json
-            FROM shipments s
-            LEFT JOIN store_shoppers ss ON ss.id = s.shopper_id
-            WHERE s.batch_id = ? AND s.status NOT IN ('failed', 'cancelled')
-            ORDER BY s.id ASC
-        `, [batchId]);
-
-        allLabels = rawShipments.map(s => {
-            let productSummary = '', primarySku = 'unknown';
-            try {
-                const items = JSON.parse(s.items_json || '[]');
-                productSummary = items.map(it => {
-                    const sz = extractItemSize(it) || '';
-                    const t = it.title || it.name || 'Product';
-                    return sz ? `${t} (${sz})` : t;
-                }).join('; ');
-                const firstSku = items[0]?.sku || items[0]?.variant_sku || '';
-                primarySku = firstSku || items[0]?.title || 'unknown';
-            } catch (_) {}
-            return {
-                id: s.id, order_id: s.order_id, awb: s.awb,
-                label_url: null, courier_name: s.courier_name,
-                product_summary: productSummary, primary_sku: primarySku
-            };
-        });
-    }
-
-    if (allLabels.length === 0) return { error: 'No shipments found in this batch', status: 404 };
-
-    // Sort
-    const sorted = [...allLabels];
-    switch (sortBy) {
-        case 'sku': sorted.sort((a, b) => (a.primary_sku || '').localeCompare(b.primary_sku || '')); break;
-        case 'awb': sorted.sort((a, b) => (a.awb || '').localeCompare(b.awb || '')); break;
-        case 'order_id': sorted.sort((a, b) => (a.order_id || '').localeCompare(b.order_id || '')); break;
-        case 'product': sorted.sort((a, b) => (a.product_summary || '').localeCompare(b.product_summary || '')); break;
-    }
-
-    // Helper: generate a simple info-sheet PDF for shipments without carrier labels
-    function buildInfoSheetPdf(label) {
-        const doc = new PDFDocument({ size: [283.46, 425.20], margin: 14 }); // ~100x150mm label
-        const chunks = [];
-        doc.on('data', c => chunks.push(c));
-        doc.fontSize(10).font('Helvetica-Bold').fillColor('#000')
-           .text(label.awb || 'NO AWB', { align: 'center' });
-        doc.moveDown(0.5);
-        doc.fontSize(8).font('Helvetica').fillColor('#333')
-           .text(`Order: ${label.order_id || '-'}`);
-        doc.text(`Courier: ${label.courier_name || '-'}`);
-        if (label.product_summary) {
-            doc.moveDown(0.3);
-            doc.fontSize(7).text(`Items: ${label.product_summary}`);
-        }
-        doc.moveDown(0.5);
-        doc.fontSize(7).fillColor('#999')
-           .text('(Carrier label could not be retrieved — please print from carrier panel)');
-        doc.end();
-        return new Promise(resolve => doc.on('end', () => resolve(Buffer.concat(chunks))));
-    }
-
-    // Create ZIP buffer
-    const zipBuffer = await new Promise(async (resolve, reject) => {
-        const output = new PassThrough();
-        const chunks = [];
-        const archive = new ZipArchive({ zlib: { level: 6 } });
-        archive.pipe(output);
-        output.on('data', chunk => chunks.push(chunk));
-        output.on('end', () => resolve(Buffer.concat(chunks)));
-        archive.on('error', reject);
-
-        let labelCount = 0, missingCount = 0;
-
-        for (const label of sorted) {
-            const safeOrder = (label.order_id || 'order').replace(/[^a-zA-Z0-9_-]/g, '_');
-            const safeAwb = (label.awb || 'noawb').replace(/[^a-zA-Z0-9_-]/g, '_');
-            const fileName = `${safeOrder}_${safeAwb}.pdf`;
-            const folder = format === 'by_sku'
-                ? `${(label.primary_sku || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 60)}/`
-                : '';
-
-            if (label.label_buffer) {
-                // Real carrier PDF buffer (e.g. Ekart without Cloudinary)
-                archive.append(label.label_buffer, { name: `${folder}${fileName}` });
-                labelCount++;
-            } else if (label.label_url) {
-                // Fetch label from carrier URL (Delhivery, Shiprocket)
-                archive.append(fetchLabelBuffer(label.label_url), { name: `${folder}${fileName}` });
-                labelCount++;
-            } else {
-                // Generate info-sheet PDF as last resort
-                const infoPdf = await buildInfoSheetPdf(label);
-                archive.append(infoPdf, { name: `${folder}${fileName}` });
-                missingCount++;
+    await mapLabelsLimited(labels, async label => {
+        try {
+            // Cached signed links can expire. Fetch fully before counting any label as successful.
+            if (label.label_buffer || label.label_url) {
+                try {
+                    label.pdf = await loadLabelPdf(label.label_buffer || await fetchLabelBuffer(label.label_url));
+                    return;
+                } catch (_) { /* Regenerate once through the carrier, bypassing the stored URL. */ }
             }
+            if (!label.awb) throw new Error('Shipment has no AWB');
+            const fresh = await withLabelTimeout(generateLabel(label.id, { forceRefresh: true }));
+            if (fresh.error) throw new Error(fresh.error);
+            const buffer = fresh.data?.labelBuffer || await fetchLabelBuffer(fresh.data?.labelUrl);
+            label.pdf = await loadLabelPdf(buffer);
+        } catch (err) {
+            // Avoid exposing signed URLs or credentials embedded in upstream error messages.
+            label.label_error = String(err.message || 'Carrier label unavailable')
+                .replace(/https?:\/\/\S+/gi, '[carrier URL]').slice(0, 300);
         }
-
-        // Label index CSV
-        const indexLines = ['Order ID,AWB,Courier,SKU,Products,Label Status'];
-        for (const label of sorted) {
-            indexLines.push([
-                label.order_id, label.awb || '', label.courier_name || '',
-                label.primary_sku || '', `"${(label.product_summary || '').replace(/"/g, '""')}"`,
-                label.label_url ? 'OK' : 'MISSING'
-            ].join(','));
-        }
-        archive.append(indexLines.join('\n'), { name: '_label_index.csv' });
-
-        // Summary note
-        archive.append(
-            `Labels downloaded: ${labelCount}\nMissing (info-sheets): ${missingCount}\nTotal: ${sorted.length}`,
-            { name: '_download_summary.txt' }
-        );
-
-        archive.finalize();
     });
 
-    const safeBatchNum = (batch.batch_number || `batch_${batchId}`).replace(/[^a-zA-Z0-9_-]/g, '_');
-    return {
-        zipBuffer,
-        fileName: `${safeBatchNum}_labels_${sortBy}.zip`,
-        labelCount: allLabels.length,
-        batchNumber: batch.batch_number
-    };
-}
-
-// Helper: fetch a label PDF from its URL and return as an async-readable stream
-function fetchLabelBuffer(labelUrl) {
-    const { PassThrough } = require('stream');
-    const pt = new PassThrough();
-
-    if (!labelUrl) {
-        pt.end(Buffer.alloc(0));
-        return pt;
+    const valid = labels.filter(label => label.pdf);
+    const failed = labels.filter(label => !label.pdf);
+    const failures = failed.map(label => ({
+        orderId: label.order_id, awb: label.awb, error: label.label_error
+    }));
+    if (!valid.length || (failed.length && onFailure === 'abort')) {
+        return {
+            error: `${failed.length} of ${labels.length} labels could not be retrieved. No file was downloaded. Retry or choose a partial ZIP with a failure report.`,
+            status: 502, failures, labelCount: valid.length, missingCount: failed.length
+        };
     }
 
-    axios.get(labelUrl, { responseType: 'stream', timeout: 30000 })
-        .then(res => {
-            res.data.pipe(pt);
-            res.data.on('error', (err) => {
-                console.warn(`Label stream error for ${labelUrl}: ${err.message}`);
-                pt.end();
-            });
-            res.data.on('end', () => {
-                // Ensure the stream closes cleanly when data is fully received
-                if (!pt.writableEnded) pt.end();
-            });
-        })
-        .catch((err) => {
-            // If the fetch fails, write an empty placeholder so the ZIP still completes
-            console.warn(`Label fetch failed for ${labelUrl}: ${err.message}`);
-            pt.end();
-        });
+    const safeName = value => String(value || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+    const safeBatchNum = safeName(batch.batch_number || `batch_${batchId}`);
+    const result = {
+        labelCount: valid.length, missingCount: failed.length, totalCount: labels.length,
+        pageCount: valid.reduce((count, label) => count + label.pdf.getPageCount(), 0),
+        batchNumber: batch.batch_number
+    };
+    const mergeLabels = async group => {
+        const pdf = await LabelPDFDocument.create();
+        for (const label of group) {
+            label.page_start = pdf.getPageCount() + 1;
+            const pages = await pdf.copyPages(label.pdf, label.pdf.getPageIndices());
+            pages.forEach(page => pdf.addPage(page));
+            label.page_end = pdf.getPageCount();
+        }
+        return Buffer.from(await pdf.save());
+    };
+    if (output === 'pdf') {
+        return { ...result, pdfBuffer: await mergeLabels(valid), contentType: 'application/pdf',
+            fileName: `${safeBatchNum}_labels_${sortBy}.pdf` };
+    }
 
-    return pt;
+    const groups = new Map();
+    const groupKey = { by_sku: 'sku_group', by_product: 'product_group', by_carrier: 'carrier' }[format];
+    for (const label of valid) {
+        const key = groupKey ? (label[groupKey] || 'unknown') : 'all';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(label);
+    }
+    const entries = [];
+    let groupIndex = 0;
+    for (const [key, group] of groups) {
+        // A unique prefix prevents different SKU names sanitizing to the same folder.
+        const folder = format === 'flat' ? '' : `${String(++groupIndex).padStart(3, '0')}_${safeName(key)}/`;
+        if (output === 'merged') {
+            const name = `${folder}labels_${group.length}_shipments.pdf`;
+            entries.push({ name, buffer: await mergeLabels(group) });
+            group.forEach(label => { label.pdf_file = name; });
+        } else {
+            for (const label of group) {
+                const name = `${folder}${String(labels.indexOf(label) + 1).padStart(4, '0')}_${safeName(label.order_id)}_${safeName(label.awb)}.pdf`;
+                entries.push({ name, buffer: Buffer.from(await label.pdf.save()) });
+                label.pdf_file = name;
+                label.page_start = 1;
+                label.page_end = label.pdf.getPageCount();
+            }
+        }
+    }
+    const csvCell = value => {
+        let text = String(value ?? '');
+        if (/^[=+@\-\t\r]/.test(text)) text = `'${text}`;
+        return `"${text.replace(/"/g, '""')}"`;
+    };
+    const indexLines = ['Order ID,AWB,Courier,SKU,Products,Label Status,PDF File,First Page,Last Page,Error'];
+    for (const label of labels) {
+        indexLines.push([
+            label.order_id, label.awb, label.courier_name, label.sku_group, label.product_summary,
+            label.pdf ? 'OK' : 'FAILED', label.pdf_file, label.page_start, label.page_end, label.label_error
+        ].map(csvCell).join(','));
+    }
+    entries.push({ name: '_label_index.csv', buffer: Buffer.from(indexLines.join('\r\n')) });
+    if (failed.length) {
+        const rows = ['Order ID,AWB,Error', ...failures.map(f => [f.orderId, f.awb, f.error].map(csvCell).join(','))];
+        entries.push({ name: '_failed_labels.csv', buffer: Buffer.from(rows.join('\r\n')) });
+    }
+    entries.push({ name: '_download_summary.txt', buffer: Buffer.from([
+        `Batch: ${batch.batch_number}`, `Labels downloaded: ${valid.length}`, `Missing labels: ${failed.length}`,
+        `Total shipments: ${labels.length}`, `PDF pages: ${result.pageCount}`,
+        `Output: ${output}; grouping: ${format}; sort: ${sortBy} ${direction}`,
+        'Original carrier page sizes and barcodes are preserved. Print at actual size (100%).',
+        'Multi-item shipments appear once, grouped by their complete SKU/product combination.',
+        failed.length ? 'PARTIAL DOWNLOAD: see _failed_labels.csv. Missing labels are NOT included as printable pages.' : 'All active shipment labels included.'
+    ].join('\n')) });
+
+    const { ZipArchive } = require('archiver');
+    const { PassThrough } = require('stream');
+    const zipBuffer = await new Promise((resolve, reject) => {
+        const stream = new PassThrough();
+        const chunks = [];
+        const archive = new ZipArchive({ zlib: { level: 6 } });
+        const fail = err => { archive.abort(); stream.destroy(); reject(err); };
+        stream.on('data', chunk => chunks.push(chunk));
+        stream.on('end', () => resolve(Buffer.concat(chunks)));
+        stream.on('error', fail);
+        archive.on('error', fail);
+        archive.on('warning', fail);
+        archive.pipe(stream);
+        for (const entry of entries) archive.append(entry.buffer, { name: entry.name });
+        archive.finalize().catch(fail);
+    });
+    return { ...result, zipBuffer, contentType: 'application/zip',
+        fileName: `${safeBatchNum}_labels_${sortBy}${failed.length ? '_PARTIAL' : ''}.zip` };
+}
+
+async function mapLabelsLimited(labels, worker) {
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, labels.length) }, async () => {
+        while (next < labels.length) await worker(labels[next++]);
+    }));
+}
+
+async function withLabelTimeout(promise) {
+    let timer;
+    try {
+        return await Promise.race([promise, new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Carrier label generation timed out')), 30000);
+        })]);
+    } finally { clearTimeout(timer); }
+}
+
+async function loadLabelPdf(buffer) {
+    if (!Buffer.isBuffer(buffer) || !buffer.subarray(0, 1024).includes(Buffer.from('%PDF-'))) {
+        throw new Error('Carrier returned an empty or non-PDF label');
+    }
+    try {
+        const pdf = await LabelPDFDocument.load(buffer, { throwOnInvalidObject: true });
+        if (!pdf.getPageCount() || !pdf.getPages().some(page => page.node.Contents())) {
+            throw new Error('No printable pages');
+        }
+        return pdf;
+    } catch (_) { throw new Error('Carrier returned an unreadable or empty PDF'); }
+}
+
+async function fetchLabelBuffer(labelUrl) {
+    if (!labelUrl) throw new Error('Carrier did not provide a label PDF');
+    const response = await axios.get(labelUrl, {
+        responseType: 'arraybuffer', timeout: 20000, maxContentLength: 10 * 1024 * 1024,
+        signal: AbortSignal.timeout(25000)
+    });
+    return Buffer.from(response.data);
 }
 
 module.exports = {

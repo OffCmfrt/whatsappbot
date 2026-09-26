@@ -348,15 +348,29 @@ class DelhiveryAdapter extends BaseCarrier {
             const response = await axios.get(`${this.baseURL}/api/p/packing_slip`, {
                 headers: this.authHeaders(),
                 params: { wbns: shipment.awb, pdf: 'true', pdf_size: '4R' },
+                responseType: 'arraybuffer',
+                maxContentLength: 10 * 1024 * 1024,
+                signal: AbortSignal.timeout(25000),
                 timeout: 20000
             });
 
-            const pkg = response.data?.packages?.[0];
-            const labelUrl = pkg?.pdf_download_link || pkg?.pdf_link;
-            if (!labelUrl) {
-                return this.fail('Delhivery did not return a label link (shipment may not be manifested yet)', response.data);
+            const buffer = Buffer.from(response.data);
+            if (buffer.subarray(0, 1024).includes(Buffer.from('%PDF-'))) {
+                return this.ok({ labelBuffer: buffer });
             }
-            return this.ok({ labelUrl }, response.data);
+            let data;
+            try { data = JSON.parse(buffer.toString('utf8')); }
+            catch (_) { return this.fail('Delhivery returned an empty or invalid packing slip response'); }
+            const packages = Array.isArray(data?.packages) ? data.packages : [];
+            const pkg = packages.find(item => String(item.wbn || item.waybill || '') === String(shipment.awb)) || packages[0];
+            const link = pkg?.pdf_download_link || pkg?.pdf_link || data?.pdf_download_link || data?.pdf_link;
+            if (!link || typeof link !== 'string') {
+                return this.fail('Delhivery did not return a label link (shipment may not be manifested yet)', data);
+            }
+            const url = new URL(link, this.baseURL);
+            if (url.protocol === 'http:') url.protocol = 'https:';
+            if (url.protocol !== 'https:') return this.fail('Delhivery returned an invalid label URL');
+            return this.ok({ labelUrl: url.href }, data);
         } catch (error) {
             return this.fail(`Delhivery label generation failed: ${this.describeAxiosError(error)}`, error.response?.data);
         }
