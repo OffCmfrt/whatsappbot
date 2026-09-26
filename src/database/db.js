@@ -242,6 +242,7 @@ async function initializeDatabase() {
 
     // Initialize Shipment Batches Table (bulk-ship batch tracking)
     await initializeShipmentBatchesTable();
+    await initializeExchangeDispatchTables();
     
     // Initialize Hub Operators Table (smart login: operator accounts + permissions)
     await initializeHubOperatorsTable();
@@ -928,6 +929,42 @@ async function initializeManualInventoryTables() {
   } catch (error) {
     console.error('❌ Failed to initialize manual inventory tables:', error.message);
   }
+}
+
+async function initializeExchangeDispatchTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS exchange_dispatch_batches (
+      id BIGSERIAL PRIMARY KEY,
+      batch_code VARCHAR(40) UNIQUE NOT NULL,
+      custom_name VARCHAR(200),
+      kind VARCHAR(12) NOT NULL CHECK (kind IN ('automatic', 'custom')),
+      auto_key TEXT UNIQUE,
+      created_by VARCHAR(100),
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS exchange_dispatches (
+      id BIGSERIAL PRIMARY KEY,
+      request_id VARCHAR(120) NOT NULL,
+      booking_key VARCHAR(64) UNIQUE NOT NULL,
+      identity VARCHAR(64) NOT NULL,
+      snapshot JSONB NOT NULL,
+      batch_id BIGINT REFERENCES exchange_dispatch_batches(id),
+      manual_group BOOLEAN NOT NULL DEFAULT FALSE,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      revision INTEGER NOT NULL DEFAULT 1,
+      label_state VARCHAR(12) NOT NULL DEFAULT 'unchecked',
+      label_error TEXT,
+      label_checked_at TIMESTAMPTZ,
+      seen_scan VARCHAR(40),
+      synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_exchange_dispatch_request ON exchange_dispatches(request_id);
+    CREATE INDEX IF NOT EXISTS idx_exchange_dispatch_batch ON exchange_dispatches(batch_id);
+    CREATE INDEX IF NOT EXISTS idx_exchange_dispatch_active ON exchange_dispatches(active, id DESC);
+  `);
 }
 
 async function initializePerformanceIndexes() {

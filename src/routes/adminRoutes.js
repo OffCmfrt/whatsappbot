@@ -83,6 +83,56 @@ router.post('/login', async (req, res) => {
 // page/function permissions embedded in their JWT (see ROUTE_PERMISSIONS).
 router.use(permissionGate);
 
+// Exchange dispatches are an isolated read-only carrier bridge, with local batch organization.
+const exchangeDispatchService = require('../services/exchangeDispatchService');
+const exchangeHandler = fn => async (req, res) => {
+    try { await fn(req, res); }
+    catch (err) {
+        if (!res.headersSent && !res.destroyed) res.status(err.status || 500).json({ success: false, error: err.status ? err.message : 'Exchange dispatch operation failed' });
+    }
+};
+router.get('/shipping/exchanges', requirePermission('shipped'), exchangeHandler(async (req, res) => {
+    res.json({ success: true, ...await exchangeDispatchService.list(req.query) });
+}));
+router.get('/shipping/exchanges/dispatches/:id', requirePermission('shipped'), exchangeHandler(async (req, res) => {
+    res.json({ success: true, dispatch: await exchangeDispatchService.detail(req.params.id) });
+}));
+router.post('/shipping/exchanges/sync', requirePermission('shipped'), requirePermission('ship_orders'), exchangeHandler(async (req, res) => {
+    const source = await exchangeDispatchService.sync({ force: req.body?.force === true });
+    logOperatorActivity(req, 'exchange_sync', source.connected ? 'Exchange source refreshed' : 'Exchange source unavailable');
+    res.json({ success: true, source });
+}));
+router.post('/shipping/exchanges/batches/:action', requirePermission('shipped'), requirePermission('ship_orders'), exchangeHandler(async (req, res) => {
+    const result = await exchangeDispatchService.mutate(req.params.action, req.body || {}, req.admin.username || 'admin');
+    logOperatorActivity(req, 'exchange_batch', `${req.params.action}: ${result.batchId || 'split'}`);
+    res.json({ success: true, ...result });
+}));
+for (const format of ['labels', 'manifest']) {
+    router.post(`/shipping/exchanges/${format}/download`, requirePermission('shipped'), requirePermission('ship_orders'), exchangeHandler(async (req, res) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(Object.assign(new Error('Exchange export timed out; split the batch and retry'), { status: 504 })), 180000);
+        const stop = () => { if (!res.writableEnded) controller.abort(); };
+        res.on('close', stop);
+        try {
+            const result = await exchangeDispatchService[format === 'labels' ? 'download' : 'manifest'](req.body || {}, controller.signal);
+            controller.signal.throwIfAborted();
+            if (result.error) return res.status(result.status || 502).json({ success: false, ...result });
+            res.set({
+                'Content-Type': result.contentType,
+                'Content-Disposition': `attachment; filename="${result.fileName}"`,
+                'Cache-Control': 'no-store',
+                'X-Label-Count': String(result.labelCount || 0),
+                'X-Missing-Labels': String(result.missingCount || 0),
+                'X-Label-Warnings': String(result.warnings?.length || 0)
+            });
+            logOperatorActivity(req, 'exchange_export', `${format}: ${result.labelCount} generated; ${result.missingCount} missing`);
+            res.send(result.pdfBuffer || result.zipBuffer);
+        } catch (error) {
+            throw controller.signal.aborted ? controller.signal.reason : error;
+        } finally { clearTimeout(timer); res.off('close', stop); }
+    }));
+}
+
 // Get dashboard statistics
 router.get('/stats', verifyToken, async (req, res) => {
     try {

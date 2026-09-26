@@ -14,7 +14,7 @@ const { dbAdapter } = require('../database/db');
 const { caches } = require('../utils/cache');
 const { extractItemSize, extractItemColour } = require('../utils/orderItems');
 const PDFDocument = require('pdfkit');
-const { PDFDocument: LabelPDFDocument } = require('pdf-lib');
+const labelExports = require('./labelExportService');
 const bwipjs = require('bwip-js');
 const axios = require('axios');
 const { getConfiguredCarriers, getAdapter } = require('./carriers');
@@ -956,110 +956,9 @@ async function buildBatchLabelsZip(batchId, {
         }
     });
 
-    const valid = labels.filter(label => label.pdf);
-    const failed = labels.filter(label => !label.pdf);
-    const failures = failed.map(label => ({
-        orderId: label.order_id, awb: label.awb, error: label.label_error
-    }));
-    if (!valid.length || (failed.length && onFailure === 'abort')) {
-        return {
-            error: `${failed.length} of ${labels.length} labels could not be retrieved. No file was downloaded. Retry or choose a partial ZIP with a failure report.`,
-            status: 502, failures, labelCount: valid.length, missingCount: failed.length
-        };
-    }
-
-    const safeName = value => String(value || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
-    const safeBatchNum = safeName(batch.batch_number || `batch_${batchId}`);
-    const result = {
-        labelCount: valid.length, missingCount: failed.length, totalCount: labels.length,
-        pageCount: valid.reduce((count, label) => count + label.pdf.getPageCount(), 0),
-        batchNumber: batch.batch_number
-    };
-    const mergeLabels = async group => {
-        const pdf = await LabelPDFDocument.create();
-        for (const label of group) {
-            label.page_start = pdf.getPageCount() + 1;
-            const pages = await pdf.copyPages(label.pdf, label.pdf.getPageIndices());
-            pages.forEach(page => pdf.addPage(page));
-            label.page_end = pdf.getPageCount();
-        }
-        return Buffer.from(await pdf.save());
-    };
-    if (output === 'pdf') {
-        return { ...result, pdfBuffer: await mergeLabels(valid), contentType: 'application/pdf',
-            fileName: `${safeBatchNum}_labels_${sortBy}.pdf` };
-    }
-
-    const groups = new Map();
-    const groupKey = { by_sku: 'sku_group', by_product: 'product_group', by_carrier: 'carrier' }[format];
-    for (const label of valid) {
-        const key = groupKey ? (label[groupKey] || 'unknown') : 'all';
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(label);
-    }
-    const entries = [];
-    let groupIndex = 0;
-    for (const [key, group] of groups) {
-        // A unique prefix prevents different SKU names sanitizing to the same folder.
-        const folder = format === 'flat' ? '' : `${String(++groupIndex).padStart(3, '0')}_${safeName(key)}/`;
-        if (output === 'merged') {
-            const name = `${folder}labels_${group.length}_shipments.pdf`;
-            entries.push({ name, buffer: await mergeLabels(group) });
-            group.forEach(label => { label.pdf_file = name; });
-        } else {
-            for (const label of group) {
-                const name = `${folder}${String(labels.indexOf(label) + 1).padStart(4, '0')}_${safeName(label.order_id)}_${safeName(label.awb)}.pdf`;
-                entries.push({ name, buffer: Buffer.from(await label.pdf.save()) });
-                label.pdf_file = name;
-                label.page_start = 1;
-                label.page_end = label.pdf.getPageCount();
-            }
-        }
-    }
-    const csvCell = value => {
-        let text = String(value ?? '');
-        if (/^[=+@\-\t\r]/.test(text)) text = `'${text}`;
-        return `"${text.replace(/"/g, '""')}"`;
-    };
-    const indexLines = ['Order ID,AWB,Courier,SKU,Products,Label Status,PDF File,First Page,Last Page,Error'];
-    for (const label of labels) {
-        indexLines.push([
-            label.order_id, label.awb, label.courier_name, label.sku_group, label.product_summary,
-            label.pdf ? 'OK' : 'FAILED', label.pdf_file, label.page_start, label.page_end, label.label_error
-        ].map(csvCell).join(','));
-    }
-    entries.push({ name: '_label_index.csv', buffer: Buffer.from(indexLines.join('\r\n')) });
-    if (failed.length) {
-        const rows = ['Order ID,AWB,Error', ...failures.map(f => [f.orderId, f.awb, f.error].map(csvCell).join(','))];
-        entries.push({ name: '_failed_labels.csv', buffer: Buffer.from(rows.join('\r\n')) });
-    }
-    entries.push({ name: '_download_summary.txt', buffer: Buffer.from([
-        `Batch: ${batch.batch_number}`, `Labels downloaded: ${valid.length}`, `Missing labels: ${failed.length}`,
-        `Total shipments: ${labels.length}`, `PDF pages: ${result.pageCount}`,
-        `Output: ${output}; grouping: ${format}; sort: ${sortBy} ${direction}`,
-        'Original carrier page sizes and barcodes are preserved. Print at actual size (100%).',
-        'Multi-item shipments appear once, grouped by their complete SKU/product combination.',
-        failed.length ? 'PARTIAL DOWNLOAD: see _failed_labels.csv. Missing labels are NOT included as printable pages.' : 'All active shipment labels included.'
-    ].join('\n')) });
-
-    const { ZipArchive } = require('archiver');
-    const { PassThrough } = require('stream');
-    const zipBuffer = await new Promise((resolve, reject) => {
-        const stream = new PassThrough();
-        const chunks = [];
-        const archive = new ZipArchive({ zlib: { level: 6 } });
-        const fail = err => { archive.abort(); stream.destroy(); reject(err); };
-        stream.on('data', chunk => chunks.push(chunk));
-        stream.on('end', () => resolve(Buffer.concat(chunks)));
-        stream.on('error', fail);
-        archive.on('error', fail);
-        archive.on('warning', fail);
-        archive.pipe(stream);
-        for (const entry of entries) archive.append(entry.buffer, { name: entry.name });
-        archive.finalize().catch(fail);
+    return labelExports.packageLabels(labels, batch.batch_number || `batch_${batchId}`, {
+        sortBy, format, output, direction, onFailure, pageSize: 'original'
     });
-    return { ...result, zipBuffer, contentType: 'application/zip',
-        fileName: `${safeBatchNum}_labels_${sortBy}${failed.length ? '_PARTIAL' : ''}.zip` };
 }
 
 async function mapLabelsLimited(labels, worker) {
@@ -1079,16 +978,7 @@ async function withLabelTimeout(promise) {
 }
 
 async function loadLabelPdf(buffer) {
-    if (!Buffer.isBuffer(buffer) || !buffer.subarray(0, 1024).includes(Buffer.from('%PDF-'))) {
-        throw new Error('Carrier returned an empty or non-PDF label');
-    }
-    try {
-        const pdf = await LabelPDFDocument.load(buffer, { throwOnInvalidObject: true });
-        if (!pdf.getPageCount() || !pdf.getPages().some(page => page.node.Contents())) {
-            throw new Error('No printable pages');
-        }
-        return pdf;
-    } catch (_) { throw new Error('Carrier returned an unreadable or empty PDF'); }
+    return labelExports.loadLabelPdf(buffer);
 }
 
 async function fetchLabelBuffer(labelUrl) {

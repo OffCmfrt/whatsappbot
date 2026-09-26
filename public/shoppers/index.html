@@ -6,7 +6,7 @@
     <title>Shopper Management | OFFCOMFRT</title>
     <!-- Google Fonts: Outfit, Inter, Archivo Narrow -->
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Inter:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?build=20260926a">
+        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?build=20260926-exchanges1">
 </head>
 <body class="dark-theme">
     <!-- Login View -->
@@ -1086,6 +1086,7 @@
                     </svg>
                     Batches
                 </button>
+                <button id="soExchangeBtn" class="btn btn-batches" title="Exchange dispatches from the returns dashboard">Exchange Dispatches</button>
                 <button id="soNewShipBtn" class="btn btn-primary" title="Create a forward shipment for any order by its Order ID">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
                         <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -1832,8 +1833,36 @@
         <footer id="ictFooter" class="ict-footer"></footer>
     </div>
 
+    <!-- Exchange dispatches stay separate from normal-order shipping. -->
+    <section id="exchangeDispatchesView" class="xd-workspace" hidden aria-label="Exchange Dispatches">
+        <header class="xd-header">
+            <div class="xd-heading"><button class="btn btn-outline" data-xd="close">Back</button><div><span class="xd-eyebrow">RETURNS DASHBOARD / OUTBOUND</span><h2>Exchange Dispatches</h2><p>Replacement shipments, organized for your packing desk.</p></div></div>
+            <div class="xd-header-actions"><span class="xd-thermal">4 × 6 in · Thermal</span><button class="btn btn-primary xd-manage" data-xd="sync">Refresh Source</button></div>
+        </header>
+        <div class="xd-main">
+            <div id="xdSource" class="xd-source" role="status">Checking returns connection…</div>
+            <div id="xdStats" class="xd-stats"></div>
+            <div class="xd-toolbar"><nav class="xd-tabs" aria-label="Exchange views"><button data-xd="dispatches" class="active">Dispatches</button><button data-xd="batches">Batches</button></nav><span id="xdScope"></span><button data-xd="clearScope" class="xd-link" hidden>Clear batch filter</button></div>
+            <form id="xdFilters" class="xd-filters" role="search">
+                <label class="xd-search">Search<input name="q" type="search" placeholder="Request, order, AWB, customer, replacement SKU…" maxlength="150"></label>
+                <label>From<input name="from" type="date"></label><label>Through<input name="to" type="date"></label>
+                <button type="button" data-xd="allDates">All Dates</button>
+                <label>Carrier<select name="carrier"><option value="">All carriers</option><option value="delhivery">Delhivery</option><option value="ekart">Ekart</option><option value="shiprocket">Shiprocket</option></select></label>
+                <label>Status<select name="status"><option value="">All statuses</option><option>scheduled</option><option>pickup_pending</option><option>pickup_booked</option><option>in_transit</option><option>out_for_delivery</option><option>delivered</option><option>failed</option><option>cancelled</option></select></label>
+                <label>Batch type<select name="kind"><option value="">All batches</option><option value="automatic">Automatic</option><option value="custom">Custom</option></select></label>
+                <label>Label check<select name="label"><option value="">Any label state</option><option value="unchecked">Unchecked</option><option value="ready">Last check successful</option><option value="failed">Last check failed</option></select></label>
+                <label class="xd-check"><input name="history" type="checkbox" value="true"> Include superseded</label>
+            </form>
+            <div class="xd-selection"><label><input id="xdSelectPage" type="checkbox"> Select Page</label><span id="xdSelected">0 dispatches selected</span><button data-xd="clear" class="xd-link">Clear selection</button><div class="xd-selection-actions xd-manage"><button data-xd="create">Create Batch</button><button data-xd="merge">Merge Selected Batches</button><button data-xd="manifest">Packing Manifest</button><button data-xd="download" class="xd-primary">Download Labels</button></div></div>
+            <p class="xd-hint">Select dispatches, then switch to Batches to move them into a group. Labels use outgoing replacement items only. Unknown dispatch dates appear under All Dates.</p>
+            <div id="xdError" class="xd-error" role="alert" hidden></div>
+            <div id="xdContent" class="xd-content" aria-live="polite"></div>
+            <footer class="xd-footer"><span id="xdPageInfo"></span><button data-xd="previous">Previous</button><button data-xd="next">Next</button></footer>
+        </div>
+    </section>
+
     <!-- Scripts -->
-    <script src="/shoppers/assets/shoppers-app.js?build=20260926a"></script>
+    <script src="/shoppers/assets/shoppers-app.js?build=20260926-exchanges1"></script>
     <script src="/shoppers/assets/shoppers-inventory-tower.js?v=1788900001"></script>
     <script src="/shoppers/assets/shoppers-stock-room.js?v=1789010000"></script>
     <script src="/shoppers/assets/shoppers-ai-copilot-pro.js?v=1788900000"></script>

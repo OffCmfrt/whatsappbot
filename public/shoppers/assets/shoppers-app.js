@@ -78,6 +78,7 @@ function applyRolePermissions() {
         followUpBtn: 'follow_up',
         multiOrdersBtn: 'multi_orders',
         shippedOrdersBtn: 'shipped',
+        soExchangeBtn: 'shipped',
         analyticsBtn: 'analytics',
         inventoryBtn: 'inventory',
         exportBtn: 'export'
@@ -8133,6 +8134,223 @@ function toggleCtxSection(bodyId) {
     const chevron = section?.querySelector('.ctx-chevron');
     if (chevron) chevron.style.transform = isCollapsed ? 'rotate(0deg)' : 'rotate(180deg)';
 }
+
+// Exchange dispatch desk: local grouping only; booking remains in the returns dashboard.
+(() => {
+    const root = document.getElementById('exchangeDispatchesView');
+    if (!root) return;
+    const $ = id => document.getElementById(id);
+    const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const date = value => value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Dispatch date unknown';
+    const form = $('xdFilters');
+    const state = { view: 'dispatches', page: 1, total: 0, rows: [], selected: new Map(), batches: new Map(), batchId: '', scope: '', request: 0 };
+    const managed = () => hubHasPerm('ship_orders');
+    const printable = r => r.active !== false && !['cancelled', 'canceled', 'failed', 'rto', 'rto_delivered'].includes(String(r.status).toLowerCase()) && !['cancelled', 'canceled', 'rejected', 'failed'].includes(String(r.request_status).toLowerCase());
+    const selectable = r => state.view === 'batches' || printable(r);
+    const request = async (path = '', method = 'GET', body) => {
+        const result = await apiCall(`/shipping/exchanges${path}`, method, body);
+        if (!result?.success) throw new Error(result?.error || 'Exchange dispatch request could not be completed');
+        return result;
+    };
+    function showError(message) { $('xdError').textContent = message || ''; $('xdError').hidden = !message; }
+    function sourceStatus(source) {
+        $('xdSource').classList.toggle('stale', source?.connected !== true);
+        $('xdSource').textContent = source?.connected === true
+            ? `Connected to returns dashboard · Last synchronized ${date(source.lastSync)}`
+            : `${source?.error || 'Source has not been synchronized in this server session.'}${source?.lastSync ? ` · Showing saved data from ${date(source.lastSync)}` : ' Saved rows, if any, may be stale.'}`;
+    }
+    function selectionState() {
+        $('xdSelected').textContent = `${state.selected.size} dispatches · ${state.batches.size} batches selected`;
+        const selected = state.view === 'batches' ? state.batches : state.selected;
+        const eligible = state.rows.filter(selectable);
+        const count = eligible.filter(r => selected.has(String(r.id))).length;
+        $('xdSelectPage').checked = eligible.length > 0 && count === eligible.length;
+        $('xdSelectPage').indeterminate = count > 0 && count < eligible.length;
+        $('xdSelectPage').disabled = !eligible.length;
+        for (const action of ['create', 'manifest', 'download']) root.querySelector(`[data-xd="${action}"]`).disabled = !state.selected.size;
+        root.querySelector('[data-xd="merge"]').disabled = state.batches.size < 2;
+    }
+    const buttons = (row, batch) => {
+        const ref = `data-id="${esc(row.id)}"`;
+        if (batch) return `<button data-xd="openBatch" ${ref}>View dispatches</button>${managed() ? `<button data-xd="batchDownload" ${ref}>Labels · 4 × 6</button><button data-xd="batchManifest" ${ref}>Manifest</button><button data-xd="rename" ${ref}>Rename</button><button data-xd="split" ${ref}>Split</button><button data-xd="move" ${ref}>Move selection here</button>` : ''}`;
+        return `<button data-xd="detail" ${ref}>Details</button>${managed() ? `<button data-xd="singleDownload" ${ref} ${printable(row) ? '' : 'disabled'}>Label</button>` : ''}`;
+    };
+    function render() {
+        const selected = state.view === 'batches' ? state.batches : state.selected;
+        $('xdContent').classList.toggle('xd-batch-grid', state.view === 'batches');
+        $('xdContent').innerHTML = state.rows.length ? state.rows.map(r => {
+            const ref = `data-id="${esc(r.id)}"`;
+            const checkbox = `<input type="checkbox" data-xd-select="${esc(r.id)}" aria-label="Select ${esc(state.view === 'batches' ? r.batch_code : r.order_id)}" ${selected.has(String(r.id)) ? 'checked' : ''} ${selectable(r) ? '' : 'disabled'}>`;
+            if (state.view === 'batches') return `<article class="xd-batch ${selected.has(String(r.id)) ? 'selected' : ''}"><div class="xd-batch-top">${checkbox}<span class="xd-tag">${esc(r.kind)}</span><code>${esc(r.batch_code)}</code></div><h3>${esc(r.custom_name || r.batch_code)}</h3><div class="xd-batch-count">${r.dispatch_count}<small>matching dispatches</small></div><p>Created by ${esc(r.created_by)} · ${date(r.created_at)}</p><div class="xd-row-actions">${buttons(r, true)}</div><small>Batch downloads include the whole active batch, not just filtered matches.</small></article>`;
+            const products = (r.items || []).map(i => `<div class="xd-product"><strong>${esc(i.title)}</strong><span class="xd-size">${esc(i.size)}</span><span>×${Number(i.quantity) || 1}</span><small>${esc(i.sku || i.variant || 'SKU unspecified')}</small></div>`).join('');
+            return `<article class="xd-row ${selected.has(String(r.id)) ? 'selected' : ''}"><div class="xd-row-order">${checkbox}<div><button class="xd-link" data-xd="detail" ${ref}>${esc(r.order_id)}</button><code>${esc(r.request_id)}</code><small>${esc(r.customer_name)}</small></div></div><div class="xd-products">${products || 'Replacement details unavailable'}</div><div><span class="xd-tag">${esc(r.carrier || 'Unknown carrier')}</span><code>${esc(r.awb || 'Awaiting AWB')}</code><small>${esc(r.status)}${r.active ? '' : ' · Superseded'}</small></div><div><span class="xd-label-state ${r.label_state === 'failed' ? 'failed' : ''}">${esc(r.label_state === 'ready' ? 'Label checked' : r.label_state === 'failed' ? 'Label check failed' : 'Label unchecked')}</span><small>${date(r.dispatched_at)}</small><small>${esc(r.custom_name || r.batch_code)}</small><div class="xd-row-actions">${buttons(r, false)}</div></div></article>`;
+        }).join('') : '<div class="xd-empty"><h3>No matching exchange dispatches</h3><p>Try All Dates for older bookings or unknown dispatch dates. Refresh Source to retrieve current outbound shipments.</p></div>';
+        $('xdPageInfo').textContent = `${state.total} matching ${state.view} · Page ${state.page} of ${Math.max(1, Math.ceil(state.total / 25))}`;
+        root.querySelector('[data-xd="previous"]').disabled = state.page <= 1;
+        root.querySelector('[data-xd="next"]').disabled = state.page * 25 >= state.total;
+        root.querySelectorAll('.xd-tabs button').forEach(b => b.classList.toggle('active', b.dataset.xd === state.view));
+        $('xdScope').textContent = state.scope;
+        root.querySelector('[data-xd="clearScope"]').hidden = !state.batchId;
+        selectionState();
+    }
+    async function load() {
+        const serial = ++state.request;
+        const params = new URLSearchParams(new FormData(form));
+        params.set('view', state.view); params.set('page', state.page);
+        if (state.batchId) params.set('batchId', state.batchId);
+        $('xdContent').setAttribute('aria-busy', 'true');
+        try {
+            const result = await request(`?${params}`);
+            if (serial !== state.request) return;
+            state.rows = result.rows; state.total = result.total;
+            sourceStatus(result.source);
+            $('xdStats').innerHTML = [['total', 'Dispatches'], ['awaiting_awb', 'Awaiting AWB'], ['scheduled', 'Scheduled'], ['in_transit', 'In transit'], ['delivered', 'Delivered'], ['attention', 'Needs attention']].map(([key, title]) => `<div><span>${title}</span><strong>${Number(result.stats[key]) || 0}</strong></div>`).join('');
+            render(); showError('');
+        } catch (err) { if (serial === state.request) showError(err.message); }
+        finally { if (serial === state.request) $('xdContent').removeAttribute('aria-busy'); }
+    }
+    async function sync(force) {
+        const button = root.querySelector('[data-xd="sync"]');
+        if (!hubRequirePerm('ship_orders', 'synchronize exchange dispatches')) return;
+        button.disabled = true; button.textContent = 'Synchronizing…';
+        try { const result = await request('/sync', 'POST', { force }); sourceStatus(result.source); await load(); }
+        catch (err) { showError(err.message); }
+        finally { button.disabled = false; button.textContent = 'Refresh Source'; }
+    }
+    function modal(title, html) {
+        const dialog = document.createElement('dialog');
+        dialog.className = 'xd-dialog';
+        dialog.setAttribute('aria-label', title);
+        dialog.innerHTML = `<header><h3>${esc(title)}</h3><button class="xd-modal-close" aria-label="Close">×</button></header><div class="xd-dialog-body">${html}</div>`;
+        document.body.appendChild(dialog);
+        dialog.querySelector('.xd-modal-close').onclick = () => dialog.close();
+        dialog.addEventListener('close', () => dialog.remove(), { once: true });
+        dialog.showModal();
+        return dialog;
+    }
+    async function mutate(action, body) {
+        if (!hubRequirePerm('ship_orders', 'manage exchange batches')) return;
+        await request(`/batches/${action}`, 'POST', body);
+        state.selected.clear(); state.batches.clear(); await load();
+    }
+    function editBatch(action, row) {
+        if (!managed()) return;
+        if ((action === 'create' && !state.selected.size) || (action === 'merge' && state.batches.size < 2)) return showError('Select dispatches to create a batch, or at least two batches to merge.');
+        const isSplit = action === 'split';
+        const dialog = modal(isSplit ? 'Split into smaller batches' : `${action[0].toUpperCase() + action.slice(1)} batch`, `<label>${isSplit ? 'Dispatches per batch (1–100)' : 'Batch name'}<input id="xdEditValue" ${isSplit ? 'type="number" min="1" max="100" value="50"' : `maxlength="200" value="${esc(row?.custom_name || '')}"`} required></label><p class="xd-hint">This only changes grouping in Shoppers Hub. It does not create or cancel shipments.</p><p class="xd-error" hidden></p><button class="xd-primary xd-save">Save</button>`);
+        dialog.querySelector('.xd-save').onclick = async event => {
+            event.target.disabled = true;
+            const body = { name: dialog.querySelector('input').value, selection: [...state.selected.values()], batches: [...state.batches.values()], batchId: row?.id, revision: row?.revision };
+            if (isSplit) body.size = Number(dialog.querySelector('input').value);
+            try { await mutate(action, body); dialog.close(); }
+            catch (err) { const error = dialog.querySelector('.xd-error'); error.hidden = false; error.textContent = err.message; event.target.disabled = false; }
+        };
+    }
+    async function downloadFile(body, kind, dialog) {
+        const controller = new AbortController();
+        const cancel = () => controller.abort();
+        dialog.addEventListener('close', cancel, { once: true });
+        const button = dialog.querySelector('.xd-start');
+        button.disabled = true; button.textContent = 'Validating and preparing…';
+        const error = dialog.querySelector('.xd-error'); error.hidden = true;
+        try {
+            const response = await fetch(`${API_BASE}/shipping/exchanges/${kind}/download`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal });
+            if (response.status === 401) {
+                localStorage.removeItem('authToken'); localStorage.removeItem('hubIdentity');
+                alert('Session expired — please log in again.'); window.location.reload(); return;
+            }
+            if (!response.ok) {
+                const result = await response.json();
+                throw new Error(`${result.error || 'Download failed'}${result.failures?.length ? '\n' + result.failures.map(f => `${f.orderId} / ${f.awb || 'No AWB'}: ${f.error}`).join('\n') : ''}`);
+            }
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url; link.download = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || 'exchange-labels.zip';
+            document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+            const warnings = Number(response.headers.get('X-Label-Warnings') || 0);
+            dialog.querySelector('.xd-download-status').textContent = kind === 'manifest'
+                ? `A4 packing manifest generated · ${response.headers.get('X-Label-Count')} dispatches. This is not a carrier label.`
+                : `Download generated · ${response.headers.get('X-Label-Count')} labels · ${response.headers.get('X-Missing-Labels')} missing.${warnings ? ` ${warnings} page-size warnings: test barcode readability before bulk printing.` : ''} Print labels at actual size (100%).`;
+            await load();
+        } catch (err) { if (!controller.signal.aborted) { error.hidden = false; error.textContent = err.message; } }
+        finally { dialog.removeEventListener('close', cancel); button.disabled = false; button.textContent = 'Download'; }
+    }
+    function downloadDialog(target, kind = 'labels') {
+        if (!managed()) return;
+        if (!target.batchId && !target.selection?.length) return showError('Select at least one dispatch first.');
+        const dialog = modal(kind === 'labels' ? 'Download exchange labels' : 'Download packing manifest', `<p class="xd-hint">${kind === 'labels' ? 'Real carrier PDFs · Every page is 4 × 6 inches · Outgoing replacements only' : 'A4 internal packing document; this is not a carrier label.'}</p>${target.batchId ? '<p class="xd-hint">Downloads the entire active batch. Maximum 100 dispatches per download.</p>' : ''}<div class="xd-download-options" ${kind === 'manifest' ? 'hidden' : ''}>
+            <label>Output<select name="output"><option value="merged">ZIP · one combined PDF per group</option><option value="pdf">One combined PDF</option><option value="individual">ZIP · individual label PDFs</option></select></label>
+            <label>Group by<select name="format"><option value="by_sku">SKU / variant combination</option><option value="by_product">Product</option><option value="by_size">Size</option><option value="by_carrier">Carrier</option><option value="flat">No folders</option></select></label>
+            <label>Sort by<select name="sortBy"><option value="sku">SKU</option><option value="product">Product</option><option value="size">Size</option><option value="awb">AWB</option><option value="order_id">Order number</option><option value="date">Dispatch date</option></select></label>
+            <label>Direction<select name="direction"><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+            <label>Missing labels<select name="onFailure"><option value="abort">Stop download and report failures</option><option value="skip">Partial ZIP with failure report</option></select></label></div><p class="xd-hint">Multi-item shipments print once. Unknown or changed bookings cannot be printed. Closing this dialog cancels preparation.</p><p class="xd-error" hidden></p><p class="xd-download-status" role="status"></p><button class="xd-primary xd-start">Download</button>`);
+        const output = dialog.querySelector('[name="output"]');
+        output.onchange = () => {
+            const pdf = output.value === 'pdf';
+            dialog.querySelector('[name="format"]').disabled = pdf;
+            const failure = dialog.querySelector('[name="onFailure"]'); failure.disabled = pdf; if (pdf) failure.value = 'abort';
+        };
+        dialog.querySelector('.xd-start').onclick = () => {
+            const options = Object.fromEntries([...dialog.querySelectorAll('select')].map(s => [s.name, s.value]));
+            downloadFile({ ...target, options }, kind, dialog);
+        };
+    }
+    async function detail(row) {
+        const { dispatch: r } = await request(`/dispatches/${row.id}`);
+        const items = entries => (entries || []).map(i => `<li>${esc(i.title)} · ${esc(i.size || i.variant)} · ${esc(i.sku || 'SKU unspecified')} ×${Number(i.quantity) || 1}</li>`).join('');
+        const dialog = modal(`${r.order_id} · Exchange details`, `<div class="xd-detail-grid"><section><h4>Outgoing replacement items</h4><ul>${items(r.items)}</ul></section><section><h4>Returned items — do not pack</h4><ul>${items(r.original_items)}</ul></section></div><p>${esc(r.customer_name)} · ${esc(r.customer_phone)}</p><p>${esc(Object.values(r.destination || {}).filter(Boolean).join(', '))}</p><dl><dt>Request / Forward AWB</dt><dd>${esc(r.request_id)} / ${esc(r.awb || 'Awaiting AWB')}</dd><dt>Carrier / Shipment reference</dt><dd>${esc(r.carrier)} / ${esc(r.carrier_shipment_id || 'Not supplied')}</dd><dt>Dispatch booking</dt><dd>${date(r.dispatched_at)} · ${esc(r.date_source)}</dd><dt>Source last refreshed</dt><dd>${date(r.synced_at)}</dd><dt>Forward status</dt><dd>${esc(r.status)}${r.active ? '' : ' · Superseded'}</dd><dt>Label status</dt><dd>${esc(r.label_state)} ${esc(r.label_error || '')}</dd></dl>${managed() && printable(r) ? '<button class="xd-primary xd-detail-download">Download Label</button>' : ''}`);
+        dialog.querySelector('.xd-detail-download')?.addEventListener('click', () => { dialog.close(); downloadDialog({ selection: [{ id: r.id, revision: r.revision }] }); });
+    }
+    root.addEventListener('click', async event => {
+        const button = event.target.closest('[data-xd]'); if (!button) return;
+        const action = button.dataset.xd;
+        const row = state.rows.find(r => String(r.id) === button.dataset.id);
+        try {
+            if (action === 'close') { root.hidden = true; return; }
+            if (action === 'sync') return sync(true);
+            if (['dispatches', 'batches'].includes(action)) { state.view = action; state.page = 1; state.batchId = ''; state.scope = ''; return load(); }
+            if (action === 'previous' || action === 'next') { state.page += action === 'next' ? 1 : -1; return load(); }
+            if (action === 'allDates') { form.elements.from.value = ''; form.elements.to.value = ''; state.page = 1; return load(); }
+            if (action === 'clearScope') { state.batchId = ''; state.scope = ''; state.page = 1; return load(); }
+            if (action === 'clear') { state.selected.clear(); state.batches.clear(); return render(); }
+            if (action === 'openBatch') { state.batchId = row.id; state.scope = row.custom_name || row.batch_code; state.view = 'dispatches'; state.page = 1; return load(); }
+            if (['create', 'merge', 'rename', 'split'].includes(action)) return editBatch(action, row);
+            if (action === 'move') { if (!state.selected.size) return showError('Select dispatches first, then choose their destination batch.'); if (confirm(`Move ${state.selected.size} selected dispatches into ${row.custom_name || row.batch_code}?`)) await mutate('move', { batchId: row.id, revision: row.revision, selection: [...state.selected.values()] }); }
+            if (action === 'detail') return await detail(row);
+            if (['download', 'manifest', 'singleDownload', 'batchDownload', 'batchManifest'].includes(action)) {
+                const target = action.startsWith('batch') ? { batchId: row.id, revision: row.revision } : { selection: action === 'singleDownload' ? [{ id: row.id, revision: row.revision }] : [...state.selected.values()] };
+                downloadDialog(target, action.toLowerCase().includes('manifest') ? 'manifest' : 'labels');
+            }
+        } catch (err) { showError(err.message); }
+    });
+    root.addEventListener('change', event => {
+        const selected = state.view === 'batches' ? state.batches : state.selected;
+        const add = row => {
+            if (!row || !selectable(row)) return;
+            if (selected.size >= 100 && !selected.has(String(row.id))) { showError('Select at most 100 records at a time.'); return; }
+            selected.set(String(row.id), { id: row.id, revision: row.revision });
+        };
+        if (event.target.dataset.xdSelect) {
+            const row = state.rows.find(r => String(r.id) === event.target.dataset.xdSelect);
+            if (event.target.checked) add(row); else selected.delete(String(row.id));
+            render();
+        } else if (event.target.id === 'xdSelectPage') {
+            state.rows.forEach(r => event.target.checked ? add(r) : selected.delete(String(r.id))); render();
+        }
+    });
+    let timer;
+    form.addEventListener('submit', event => event.preventDefault());
+    form.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { state.page = 1; load(); }, 300); });
+    $('soExchangeBtn')?.addEventListener('click', async () => {
+        if (!hubRequirePerm('shipped', 'view exchange dispatches')) return;
+        root.hidden = false;
+        root.querySelectorAll('.xd-manage').forEach(el => { el.hidden = !managed(); });
+        await load(); if (managed()) await sync(false);
+    });
+    const thirtyDaysAgo = new Date(Date.now() - 29 * 86400000);
+    form.elements.from.value = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(thirtyDaysAgo);
+})();
 
 // Helpers
 function safeParseItems(json) {
