@@ -136,6 +136,52 @@ async function prepareAndCreateCreditNote({ shopifyOrder, orderId, returnItems, 
     creditNotePayload.customer_id = fullInvoice?.customer_id || originalInvoice.customer_id || customerId;
     creditNotePayload.invoice_id = originalInvoice.invoice_id;
 
+    // For RTOs where ALL items are returned, include shipping in the credit
+    // note so the invoice balances to zero. Without this, the shipping charge
+    // remains as an outstanding balance on the invoice.
+    if (returnType === 'rto' && fullInvoice?.line_items?.length > 0) {
+        const invoiceItemLines = fullInvoice.line_items.filter(l =>
+            !l.name.toLowerCase().includes('shipping') &&
+            !l.description?.toLowerCase().includes('shipping')
+        );
+        const shippingLine = fullInvoice.line_items.find(l =>
+            l.name.toLowerCase().includes('shipping') ||
+            l.description?.toLowerCase().includes('shipping')
+        );
+
+        // Check if all invoice items are being returned
+        const totalInvoiceQty = invoiceItemLines.reduce((sum, l) => sum + parseFloat(l.quantity || 0), 0);
+        const totalReturnQty = returnItems.reduce((sum, l) => sum + parseInt(l.quantity || 1), 0);
+
+        if (shippingLine && totalReturnQty >= totalInvoiceQty && totalInvoiceQty > 0) {
+            // All items returned — add shipping to credit note
+            const shippingCreditLine = {
+                name: shippingLine.name,
+                description: 'RTO Shipping Charge Reversal',
+                quantity: parseFloat(shippingLine.quantity || 1),
+                rate: parseFloat(shippingLine.rate || 0),
+                discount: parseFloat(shippingLine.discount || 0)
+            };
+
+            // Preserve tax treatment from original shipping line
+            if (shippingLine.taxes) {
+                for (const t of shippingLine.taxes) {
+                    const name = String(t.tax_name || '').toUpperCase();
+                    const rate = parseFloat(t.rate || 0);
+                    if (name.includes('IGST')) shippingCreditLine.igst_rate = rate;
+                    else if (name.includes('CGST')) shippingCreditLine.cgst_rate = rate;
+                    else if (name.includes('SGST')) shippingCreditLine.sgst_rate = rate;
+                }
+            } else if (shippingLine.tax_percentage) {
+                const taxPct = parseFloat(shippingLine.tax_percentage || 0);
+                shippingCreditLine.tax_percentage = taxPct;
+            }
+
+            creditNotePayload.line_items.push(shippingCreditLine);
+            console.log(`📦 Zoho RTO: all items returned, added shipping (₹${shippingCreditLine.rate.toFixed(2)}) to credit note`);
+        }
+    }
+
     // Books rejects a credit note whose total would exceed the invoice total
     // ("credit notes balance isn't negative") — i.e. part of this invoice was
     // already credited earlier. Cap the lines at the remaining creditable
