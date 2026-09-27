@@ -217,7 +217,7 @@ class IGBotEngine {
             // Known quick-reply payloads from product answer buttons that
             // classify() cannot route on its own (stock_check, product_link).
             if (options.isQuickReply && context.lastProduct) {
-                const knownPayloads = ['stock_check', 'product_link'];
+                const knownPayloads = ['stock_check', 'product_link', 'size_question'];
                 if (knownPayloads.includes(cleanMessage)) {
                     const qrResult = {
                         intent: 'product_question',
@@ -1340,6 +1340,48 @@ They'll review and reply right here within 24-48 hours.`
         const faqMatch = await this._tryFAQMatch(message, igUserId);
         if (faqMatch) return;
 
+        // ── Catalog-aware fallback: bare product names ──
+        // When the user types just a product name (e.g. "henley", "waffle"),
+        // classify() returns unknown because there are no intent keywords.
+        // Before showing generic quick replies, try matching against the
+        // Shopify catalog. If a product is found, show full details.
+        const extractedName = this._extractProductName(message, context);
+        if (extractedName) {
+            const searchResult = await this._searchProducts(extractedName);
+            if (searchResult) {
+                if (searchResult.type === 'match') {
+                    const product = searchResult.product;
+                    context.lastProduct = {
+                        id: product.id,
+                        name: product.title,
+                        handle: product.handle || null
+                    };
+                    delete context.pendingProductCandidates;
+                    await instagramService.setBotState(igUserId, STATES.IDLE, context);
+                    await this._sendProductAnswer(igUserId, product,
+                        { intent: 'product_question', entities: {} }, product.title);
+                    console.log(`[IG BOT] _handleUnknown: resolved "${extractedName}" → ${product.title}`);
+                    return;
+                }
+                if (searchResult.type === 'ambiguous') {
+                    const candidates = searchResult.candidates;
+                    const options = candidates.map((p, i) => `${i + 1}. ${p.title}`).join('\n');
+                    await instagramService.sendQuickReplies(
+                        igUserId,
+                        `I found multiple products matching "${extractedName}". Which one?\n\n${options}`,
+                        candidates.slice(0, 3).map((p, i) => ({
+                            title: p.title.length > 20 ? p.title.substring(0, 18) + '…' : p.title,
+                            payload: `product_pick_${p.id}`
+                        }))
+                    );
+                    context.pendingProductCandidates = candidates.map(p => ({ id: p.id, name: p.title }));
+                    await instagramService.setBotState(igUserId, STATES.IDLE, context);
+                    console.log(`[IG BOT] _handleUnknown: ambiguous "${extractedName}" → ${candidates.length} candidates`);
+                    return;
+                }
+            }
+        }
+
         // Targeted clarification from the smart engine
         // (never a bare "I don't understand")
         const clarification = smartEngine.getClarificationQuestion(context);
@@ -1528,8 +1570,8 @@ They'll review and reply right here within 24-48 hours.`
             }
         }
 
-        // Size question — show available sizes from variants
-        if (result?.intent === 'size_question' || entities.size || /size|which size|available in/.test(text)) {
+        // Size — show for size questions OR general product enquiries
+        if (result?.intent === 'size_question' || result?.intent === 'product_question' || entities.size || /size|which size|available in/.test(text)) {
             const sizes = variants
                 .map(v => v.title)
                 .filter(t => t && t.length > 0 && t !== 'Default Title');
@@ -1538,8 +1580,8 @@ They'll review and reply right here within 24-48 hours.`
             }
         }
 
-        // Colour — extract from variant titles if present
-        if (/colour|color/.test(text)) {
+        // Colour/variants — show for colour questions OR general product enquiries
+        if (result?.intent === 'product_question' || /colour|color/.test(text)) {
             const colours = variants
                 .map(v => v.title)
                 .filter(t => t && t.length > 0 && t !== 'Default Title');
