@@ -414,10 +414,10 @@ class IGBotEngine {
                 // clearly NOT creator info — bypass the forced classification and let
                 // normal intent scoring handle it.
                 const productSignals = /\b(price|cost|how much|colour|color|size|link|stock|available|order|track|tracking|return|exchange|refund|damaged|wrong|delivery|product|henley|waffle|polo|shirt|tee)\b/i;
-                if (productSignals.test(cleanMessage)) {
+                if (productSignals.test(message)) {
                     // Re-classify WITHOUT the creator state forcing provide_creator_info
                     const freshContext = { ...context, state: STATES.IDLE };
-                    const freshResult = smartEngine.classify(cleanMessage, freshContext);
+                    const freshResult = smartEngine.classify(message, freshContext);
                     if (this._isNewIntent(freshResult) && freshResult.intent !== 'provide_creator_info') {
                         if (freshResult.isIntentSwitch) await this._acknowledgeSwitch(igUserId);
                         await this._routeIntent(igUserId, message, freshResult, context);
