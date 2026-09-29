@@ -793,6 +793,103 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
 }
 
 /**
+ * Handle a return notification from the external returns server.
+ * Called when a return request is approved/completed on the returns portal.
+ * Creates a credit note in Zoho mirroring the original invoice.
+ */
+async function handleReturnsServerReturn(orderId, returnItems) {
+    const rawOrderId = String(orderId || '').replace(/^#/, '');
+    const resolvedOrderId = await resolveOrderNumber(rawOrderId);
+
+    if (!resolvedOrderId) {
+        return { success: false, error: 'No order identifier' };
+    }
+
+    // Idempotency: one credit note per order for returns-server returns
+    const dup = await dbAdapter.query(
+        `SELECT id FROM zoho_returns WHERE shopify_order_id = ? AND return_type = 'return_portal' AND status IN ('pending', 'synced')`,
+        [resolvedOrderId]
+    );
+    if (dup.length > 0) {
+        console.log(`✅ Zoho return (portal): order #${resolvedOrderId} already processed, skipping duplicate`);
+        return { success: true, alreadyProcessed: true, logId: dup[0].id };
+    }
+
+    // Parse items if they come as JSON string
+    let items = returnItems;
+    if (typeof items === 'string') {
+        try { items = JSON.parse(items); } catch (e) { items = []; }
+    }
+
+    const parsedItems = (items || []).map(i => ({
+        title: i.title || i.name || '',
+        sku: i.sku || '',
+        quantity: parseInt(i.quantity || 1),
+        price: parseFloat(i.paidPrice || i.price || 0)
+    }));
+
+    if (parsedItems.length === 0) {
+        return { success: false, error: 'No return items provided' };
+    }
+
+    // Look up the original Shopify order from the sync log
+    const syncLog = await dbAdapter.query(
+        'SELECT original_payload FROM zoho_sync_log WHERE shopify_order_id = ? ORDER BY created_at DESC LIMIT 1',
+        [resolvedOrderId]
+    );
+
+    let shopifyOrder = null;
+    if (syncLog.length > 0) {
+        shopifyOrder = typeof syncLog[0].original_payload === 'string'
+            ? JSON.parse(syncLog[0].original_payload)
+            : syncLog[0].original_payload;
+    }
+    if (!shopifyOrder) {
+        shopifyOrder = { order_number: resolvedOrderId, id: resolvedOrderId, line_items: parsedItems };
+    }
+
+    // Log the return
+    const logResult = await dbAdapter.run(
+        `INSERT INTO zoho_returns (shopify_order_id, shopify_return_id, return_type, original_items, corrected_items, status)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [resolvedOrderId, 'portal-return', 'return_portal', JSON.stringify(parsedItems), JSON.stringify(parsedItems), 'pending']
+    );
+
+    try {
+        const reference = creditNoteReference(resolvedOrderId, 'return_portal');
+        const result = await prepareAndCreateCreditNote({
+            shopifyOrder,
+            orderId: resolvedOrderId,
+            returnItems: parsedItems,
+            returnType: 'return',
+            reference,
+            extraNotes: 'Return processed via returns portal'
+        });
+
+        await dbAdapter.run(
+            `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, updated_at = NOW() WHERE id = ?`,
+            ['synced', result.creditNoteId || null, logResult.lastInsertRowid]
+        );
+
+        console.log(`✅ Zoho return (portal): order #${resolvedOrderId} → credit note ${result.creditNoteId || 'created'}`);
+        return {
+            success: true,
+            logId: logResult.lastInsertRowid,
+            creditNoteId: result.creditNoteId
+        };
+
+    } catch (err) {
+        await dbAdapter.run(
+            `UPDATE zoho_returns SET status = ?, error_message = ?, updated_at = NOW() WHERE id = ?`,
+            ['failed', err.message, logResult.lastInsertRowid]
+        );
+
+        console.error(`❌ Zoho return (portal) failed for order #${resolvedOrderId}: ${err.message}`);
+        return { success: false, error: err.message, logId: logResult.lastInsertRowid };
+    }
+}
+
+/**
  * RTO by order ID — looks up the original Shopify payload from the sync log.
  * Used by the shipment status cron (no carrier webhook needed).
  */
@@ -914,6 +1011,7 @@ module.exports = {
     handleRTO,
     handleRTOByOrderId,
     handleExchange,
+    handleReturnsServerReturn,
     retryReturn,
     getReturnStats,
     getReturnLog

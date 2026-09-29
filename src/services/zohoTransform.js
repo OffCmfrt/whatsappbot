@@ -576,6 +576,7 @@ function creditNoteReference(orderId, returnType, refundId = '') {
     const o = String(orderId || '').replace(/^#/, '');
     if (returnType === 'rto') return `RTO-${o}`;
     if (returnType === 'exchange') return `EXCH-${o}`;
+    if (returnType === 'return_portal') return `RETP-${o}`;
     return refundId ? `RET-${o}-${refundId}` : `RET-${o}`;
 }
 

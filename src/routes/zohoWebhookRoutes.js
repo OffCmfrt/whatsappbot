@@ -356,6 +356,29 @@ router.post('/exchange', requireInternalToken, async (req, res) => {
 });
 
 // ============================================================
+// RETURN INTAKE — pure returns from the external returns server
+// Body: { order_id, return_items: [{title,sku,quantity,price}] }
+// Creates a credit note in Zoho mirroring the original invoice.
+// ============================================================
+
+router.post('/return', requireInternalToken, async (req, res) => {
+    res.status(200).json({ received: true });
+
+    try {
+        const { order_id, return_items } = req.body || {};
+        if (!order_id) {
+            console.warn('⚠️ Zoho return webhook: missing order_id');
+            return;
+        }
+        console.log(`🔁 Zoho webhook: return for order #${order_id}`);
+
+        await zohoReturnService.handleReturnsServerReturn(order_id, return_items || []);
+    } catch (err) {
+        console.error('❌ Zoho return webhook error:', err.message);
+    }
+});
+
+// ============================================================
 // MANUAL SYNC — trigger sync for a specific order (dashboard)
 // ============================================================
 
