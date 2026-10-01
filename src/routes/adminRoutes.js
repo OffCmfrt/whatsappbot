@@ -2234,9 +2234,52 @@ router.get('/customer-context/:phone', verifyToken, async (req, res) => {
                 order_number: req.order_number,
                 type: req.type,
                 status: req.status,
+                reason: req.reason || null,
                 items: req.items || [],
                 created_at: req.created_at
             });
+        }
+
+        // 4b) Targeted per-order lookup via the returns server's ai-data search.
+        // The global pipeline list above is capped at 1000 rows (newest first),
+        // so a specific customer's request can be truncated out of it entirely.
+        // The per-order search always finds that customer's own records.
+        const seenRsIds = new Set([...portalReturns, ...portalExchanges].map(r => r.request_id));
+        const lookupOrderIds = ordersRows.slice(0, 8).map(r => normOrderId(r.order_id)).filter(Boolean);
+        if (lookupOrderIds.length && process.env.RETURNS_SERVER_URL) {
+            try {
+                const axios = require('axios');
+                const rsBase = process.env.RETURNS_SERVER_URL.replace(/\/$/, '');
+                const rsToken = process.env.WHATSAPP_INTERNAL_TOKEN || '';
+                const lookups = await Promise.all(lookupOrderIds.map(id =>
+                    axios.get(`${rsBase}/api/internal/ai-data`, {
+                        params: { resource: 'requests', query: id, limit: 10 },
+                        headers: { 'x-internal-token': rsToken },
+                        timeout: 8000
+                    }).catch(() => null)
+                ));
+                for (const lk of lookups) {
+                    const reqs = Array.isArray(lk?.data?.requests) ? lk.data.requests : [];
+                    for (const r of reqs) {
+                        // ai-data returns camelCase; the pipeline returns snake_case
+                        const requestId = r.requestId || r.request_id;
+                        if (!requestId || seenRsIds.has(requestId)) continue;
+                        seenRsIds.add(requestId);
+                        const entry = {
+                            request_id: requestId,
+                            order_number: r.orderNumber || r.order_number,
+                            type: r.type,
+                            status: r.status,
+                            reason: r.reason || r.customerReason || null,
+                            items: r.items || [],
+                            created_at: r.createdAt || r.created_at
+                        };
+                        (entry.type === 'exchange' ? portalExchanges : portalReturns).push(entry);
+                    }
+                }
+            } catch (lkErr) {
+                console.warn('[customer-context] Targeted RNX lookup failed:', lkErr.message);
+            }
         }
 
         // 5) Compute RTO summary from orders
