@@ -16,6 +16,7 @@ const { dbAdapter } = require('../../database/db');
 // Graceful: returns [] when unconfigured or down — never blocks suggestions.
 async function fetchExternalRnx(orderIds) {
     const baseUrl = process.env.RETURNS_SERVER_URL;
+    console.log('[suggestReply] fetchExternalRnx: baseUrl=', baseUrl, 'orderIds=', orderIds);
     if (!baseUrl || !orderIds?.length) return [];
     try {
         const axios = require('axios');
@@ -27,12 +28,17 @@ async function fetchExternalRnx(orderIds) {
                     params: { resource: 'requests', query: String(id).replace(/^#/, ''), limit: 10 },
                     headers: { 'x-internal-token': token },
                     timeout: 8000
-                }).catch(() => ({ data: { requests: [] } }))
+                }).catch((err) => {
+                    console.log('[suggestReply] external RNX fetch failed for order', id, ':', err.message);
+                    return { data: { requests: [] } };
+                })
             )
         );
         const all = [];
-        for (const res of results) {
+        for (let i = 0; i < results.length; i++) {
+            const res = results[i];
             const reqs = Array.isArray(res.data?.requests) ? res.data.requests : [];
+            console.log('[suggestReply] external RNX response for order', orderIds[i], ':', reqs.length, 'requests');
             for (const r of reqs) {
                 all.push({
                     request_id: r.request_id || r.requestId || r.id || null,
@@ -55,15 +61,19 @@ async function fetchExternalRnx(orderIds) {
                 });
             }
         }
+        console.log('[suggestReply] external RNX total before dedup:', all.length);
         // Deduplicate by request_id
         const seen = new Set();
-        return all.filter(r => {
+        const deduped = all.filter(r => {
             const key = String(r.request_id || r.order_id || '');
             if (!key || seen.has(key)) return false;
             seen.add(key);
             return true;
         });
-    } catch {
+        console.log('[suggestReply] external RNX after dedup:', deduped.length);
+        return deduped;
+    } catch (err) {
+        console.log('[suggestReply] fetchExternalRnx error:', err.message);
         return [];
     }
 }
@@ -155,7 +165,11 @@ async function gatherContext(phone, ticketId) {
 
     // Fetch external returns/exchanges from Shopify portal server (graceful — [] on failure)
     const orderIds = orders.map(o => o.order_id).filter(Boolean);
+    console.log('[suggestReply] gatherContext: orderIds=', orderIds, 'local returns=', returns.length, 'local exchanges=', exchanges.length);
     const externalRnx = await fetchExternalRnx(orderIds);
+
+    const rnx = compactReturnsExchanges(returns, exchanges, externalRnx);
+    console.log('[suggestReply] gatherContext: final rnx count=', rnx.length, rnx.map(r => ({ t: r.t, oid: r.oid, st: r.st })));
 
     return {
         customer: customer[0] || { phone: digits },
@@ -167,7 +181,7 @@ async function gatherContext(phone, ticketId) {
         orders: orders.map(compactOrder),
         tickets: tickets.map(compactTicket),
         // Merged local + external returns+exchanges
-        rnx: compactReturnsExchanges(returns, exchanges, externalRnx),
+        rnx,
         // Carry forward AI classification for context-aware suggestions
         sentiment: tickets[0]?.sentiment || null,
         aiScenario: tickets[0]?.ai_scenario || null,
