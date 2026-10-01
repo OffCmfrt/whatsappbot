@@ -41,10 +41,19 @@ async function ensureBucket() {
 
     _bucketCheckPromise = (async () => {
         try {
-            await axios.get(`${SUPABASE_URL}/storage/v1/bucket/${STORAGE_BUCKET}`, {
+            const resp = await axios.get(`${SUPABASE_URL}/storage/v1/bucket/${STORAGE_BUCKET}`, {
                 headers: supabaseHeaders(),
                 timeout: 5000
             });
+            // Ensure bucket is public (might have been created as private)
+            if (!resp.data?.public) {
+                await axios.put(
+                    `${SUPABASE_URL}/storage/v1/bucket/${STORAGE_BUCKET}`,
+                    { public: true },
+                    { headers: supabaseHeaders(), timeout: 10000 }
+                );
+                console.log('[MEDIA] Updated bucket to public:', STORAGE_BUCKET);
+            }
             _bucketChecked = true;
         } catch (e) {
             if (e.response?.status === 404 || e.response?.status === 400) {
