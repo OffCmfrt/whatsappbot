@@ -12,6 +12,62 @@ const { findSimilarExamples } = require('./learning');
 const Settings = require('../../models/Settings');
 const { dbAdapter } = require('../../database/db');
 
+// Fetch returns/exchanges from the external Shopify portal server.
+// Graceful: returns [] when unconfigured or down — never blocks suggestions.
+async function fetchExternalRnx(orderIds) {
+    const baseUrl = process.env.RETURNS_SERVER_URL;
+    if (!baseUrl || !orderIds?.length) return [];
+    try {
+        const axios = require('axios');
+        const token = process.env.WHATSAPP_INTERNAL_TOKEN || '';
+        // Query each order ID against the external returns server
+        const results = await Promise.all(
+            orderIds.map(id =>
+                axios.get(`${baseUrl.replace(/\/$/, '')}/api/internal/ai-data`, {
+                    params: { resource: 'requests', query: String(id).replace(/^#/, ''), limit: 10 },
+                    headers: { 'x-internal-token': token },
+                    timeout: 8000
+                }).catch(() => ({ data: { requests: [] } }))
+            )
+        );
+        const all = [];
+        for (const res of results) {
+            const reqs = Array.isArray(res.data?.requests) ? res.data.requests : [];
+            for (const r of reqs) {
+                all.push({
+                    request_id: r.request_id || r.requestId || r.id || null,
+                    order_id: r.order_number || r.orderNumber || r.order_id || null,
+                    type: (r.type || 'return').toLowerCase() === 'exchange' ? 'E' : 'R',
+                    status: r.status || 'Pending',
+                    reason: r.reason || null,
+                    // External items may be an array of {name, size, qty} or a string
+                    items: Array.isArray(r.items)
+                        ? r.items.map(i => `${i.name || i.title || ''}${i.size ? ' - ' + i.size : ''}${i.quantity ? ' x' + i.quantity : ''}`).join(', ').trim()
+                        : String(r.items || ''),
+                    old_items: r.old_items || (Array.isArray(r.items) && r.type?.toLowerCase() === 'exchange'
+                        ? r.items.map(i => `${i.name || i.title || ''}${i.size ? ' - ' + i.size : ''}`).join(', ') : ''),
+                    new_items: r.new_items || '',
+                    refund_amount: r.refund_amount || r.refundAmount || null,
+                    refund_status: r.refund_status || r.refundStatus || null,
+                    price_difference: r.price_difference || r.priceDifference || null,
+                    payment_status: r.payment_status || r.paymentStatus || null,
+                    created_at: r.created_at || r.createdAt || null
+                });
+            }
+        }
+        // Deduplicate by request_id
+        const seen = new Set();
+        return all.filter(r => {
+            const key = String(r.request_id || r.order_id || '');
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    } catch {
+        return [];
+    }
+}
+
 // Suggestion cache + in-flight dedupe, keyed by phone+ticket. Entries are
 // validated against the latest message id, so a new customer message always
 // forces a fresh generation while repeat/prefetched requests return instantly
@@ -97,6 +153,10 @@ async function gatherContext(phone, ticketId) {
         )
     ]);
 
+    // Fetch external returns/exchanges from Shopify portal server (graceful — [] on failure)
+    const orderIds = orders.map(o => o.order_id).filter(Boolean);
+    const externalRnx = await fetchExternalRnx(orderIds);
+
     return {
         customer: customer[0] || { phone: digits },
         latestMsgId: messages[0]?.id || null,
@@ -106,8 +166,8 @@ async function gatherContext(phone, ticketId) {
         })),
         orders: orders.map(compactOrder),
         tickets: tickets.map(compactTicket),
-        // Merged returns+exchanges: single compact array, short keys, short dates
-        rnx: compactReturnsExchanges(returns, exchanges),
+        // Merged local + external returns+exchanges
+        rnx: compactReturnsExchanges(returns, exchanges, externalRnx),
         // Carry forward AI classification for context-aware suggestions
         sentiment: tickets[0]?.sentiment || null,
         aiScenario: tickets[0]?.ai_scenario || null,
@@ -161,8 +221,9 @@ function compactTicket(r) {
     return o;
 }
 
-// Merge returns + exchanges into one compact array with type discriminator.
+// Merge local + external returns + exchanges into one compact array with type discriminator.
 // Short keys, short dates, truncated item text — minimum tokens.
+// External records already have t='R' or t='E' from fetchExternalRnx().
 const RETURN_KEY_MAP = {
     return_id: 'rid', order_id: 'oid', reason: 'why', status: 'st',
     refund_amount: 'amt', refund_status: 'rs', created_at: 'at'
@@ -171,25 +232,60 @@ const EXCHANGE_KEY_MAP = {
     exchange_id: 'rid', order_id: 'oid', reason: 'why', status: 'st',
     price_difference: 'diff', payment_status: 'ps', created_at: 'at'
 };
-function compactReturnsExchanges(returns, exchanges) {
+function compactReturnsExchanges(returns, exchanges, externalRnx) {
     const items = [];
+    const seenIds = new Set();
+
+    // Local returns
     for (const r of (returns || []).slice(0, 3)) {
+        const key = String(r.return_id || r.order_id || '');
+        if (seenIds.has(key)) continue;
+        seenIds.add(key);
         const o = remapKeys(r, RETURN_KEY_MAP);
         if (o.at) o.at = shortDate(r.created_at);
         o.items = String(r.items || '').substring(0, 80);
-        o.t = 'R'; // type = return
+        o.t = 'R';
         items.push(o);
     }
+    // Local exchanges
     for (const r of (exchanges || []).slice(0, 3)) {
+        const key = String(r.exchange_id || r.order_id || '');
+        if (seenIds.has(key)) continue;
+        seenIds.add(key);
         const o = remapKeys(r, EXCHANGE_KEY_MAP);
         if (o.at) o.at = shortDate(r.created_at);
         o.old = String(r.old_items || '').substring(0, 50);
         o.new = String(r.new_items || '').substring(0, 50);
-        o.t = 'E'; // type = exchange
+        o.t = 'E';
         items.push(o);
     }
-    // Sort by date descending (most recent first), limit to 5 total
-    return items.sort((a, b) => (b.at || '').localeCompare(a.at || '')).slice(0, 5);
+    // External returns/exchanges (from Shopify portal server)
+    for (const r of (externalRnx || []).slice(0, 5)) {
+        const key = String(r.request_id || r.order_id || '');
+        if (seenIds.has(key)) continue; // skip if already have local record for same order
+        seenIds.add(key);
+        const o = {
+            rid: r.request_id || r.order_id || '',
+            oid: r.order_id || '',
+            why: String(r.reason || '').substring(0, 60),
+            st: r.status || '',
+            at: shortDate(r.created_at),
+            t: r.type || 'R'
+        };
+        if (o.t === 'R') {
+            o.items = String(r.items || '').substring(0, 80);
+            if (r.refund_amount != null) o.amt = r.refund_amount;
+            if (r.refund_status) o.rs = r.refund_status;
+        } else {
+            o.old = String(r.old_items || r.items || '').substring(0, 50);
+            o.new = String(r.new_items || '').substring(0, 50);
+            if (r.price_difference != null) o.diff = r.price_difference;
+            if (r.payment_status) o.ps = r.payment_status;
+        }
+        items.push(o);
+    }
+    // Sort by date descending (most recent first), limit to 6 total
+    return items.sort((a, b) => (b.at || '').localeCompare(a.at || '')).slice(0, 6);
 }
 
 /**

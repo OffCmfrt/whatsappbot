@@ -11,6 +11,10 @@
 
 const path = require('path');
 
+// Set env vars for external returns server mock
+process.env.RETURNS_SERVER_URL = 'http://mock-returns-server';
+process.env.WHATSAPP_INTERNAL_TOKEN = 'test-token';
+
 // ---------- require.cache mocking ----------
 function mockModule(modulePath, exportsObj) {
     const resolved = require.resolve(modulePath);
@@ -52,6 +56,35 @@ const mockDbAdapter = {
     async delete() { return { changes: 0 }; }
 };
 mockModule('./src/database/db', { dbAdapter: mockDbAdapter, initializeDatabase: async () => {} });
+
+// Mock axios for external returns server calls
+const mockAxios = {
+    async get(url, config) {
+        // Return mock external exchange for order #1234
+        if (url.includes('/api/internal/ai-data')) {
+            return {
+                data: {
+                    requests: [
+                        {
+                            request_id: 'REQ-EXT-001',
+                            order_number: '1234',
+                            type: 'exchange',
+                            status: 'pickup_booked',
+                            reason: 'Size change',
+                            old_items: 'Oversized Tee - M',
+                            new_items: 'Oversized Tee - XL',
+                            price_difference: 0,
+                            payment_status: 'completed',
+                            created_at: '2026-07-23T10:00:00Z'
+                        }
+                    ]
+                }
+            };
+        }
+        return { data: { requests: [] } };
+    }
+};
+mockModule('axios', mockAxios);
 
 // Mock Settings (always returns the default → copilot enabled, default limits)
 mockModule('./src/models/Settings', { get: async (key, def) => def, set: async () => {} });
@@ -227,11 +260,12 @@ function toolCall(id, name, args) {
     assert(prompt && typeof prompt === 'string', 'prompt was captured');
     const parsed = JSON.parse(prompt);
     assert(parsed.rnx && Array.isArray(parsed.rnx), 'rnx array present in prompt');
-    const exchange = parsed.rnx.find(r => r.t === 'E');
-    assert(exchange !== undefined, 'exchange record found in rnx with t=E');
-    assert(exchange.old && exchange.old.includes('M'), 'exchange old size = M');
-    assert(exchange.new && exchange.new.includes('XL'), 'exchange new size = XL');
-    assert(exchange.st === 'pickup_booked', 'exchange status = pickup_booked');
+    const exchanges = parsed.rnx.filter(r => r.t === 'E');
+    assert(exchanges.length >= 1, 'at least one exchange record in rnx (local + external merged)');
+    const anyExchange = exchanges[0];
+    assert(anyExchange.old && anyExchange.old.includes('M'), 'exchange old size = M');
+    assert(anyExchange.new && anyExchange.new.includes('XL'), 'exchange new size = XL');
+    assert(anyExchange.st === 'pickup_booked', 'exchange status = pickup_booked');
     const ret = parsed.rnx.find(r => r.t === 'R');
     assert(ret !== undefined, 'return record found in rnx with t=R');
     assert(parsed.ord && parsed.ord.length > 0, 'orders also present (ord)');
