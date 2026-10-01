@@ -7912,214 +7912,202 @@ window.renameBatch = renameBatch;
 })();
 
 // ── Customer Context (Orders / RTO / Returns & Exchanges) ──
-// Memory-smart cache: Map with TTL, survives across chat opens in same session.
+// LRU-bounded cache: max 20 entries, 5-min TTL. Prevents unbounded memory growth.
 const _ctxCache = new Map();
-const _CTX_TTL = 5 * 60 * 1000; // 5 min
+const _CTX_TTL = 5 * 60 * 1000;
+const _CTX_MAX = 20;
 
 function _ctxCacheGet(key) {
     const entry = _ctxCache.get(key);
     if (!entry) return null;
     if (Date.now() - entry.at > _CTX_TTL) { _ctxCache.delete(key); return null; }
+    _ctxCache.delete(key);
+    _ctxCache.set(key, entry);
     return entry.data;
 }
 function _ctxCacheSet(key, data) {
+    if (_ctxCache.size >= _CTX_MAX) {
+        _ctxCache.delete(_ctxCache.keys().next().value);
+    }
     _ctxCache.set(key, { data, at: Date.now() });
 }
 
+// Cached DOM references — resolved once, reused across renders.
+let _ctxDom = null;
+function _getCtxDom() {
+    if (_ctxDom) return _ctxDom;
+    _ctxDom = {
+        loading: document.getElementById('ctxLoading'),
+        error: document.getElementById('ctxError'),
+        ordersSection: document.getElementById('ctxOrdersSection'),
+        rtoSection: document.getElementById('ctxRtoSection'),
+        returnsSection: document.getElementById('ctxReturnsSection'),
+        ordersBody: document.getElementById('ctxOrders'),
+        rtoBody: document.getElementById('ctxRto'),
+        returnsBody: document.getElementById('ctxReturns'),
+        ordersCount: document.getElementById('ctxOrdersCount'),
+        rtoCount: document.getElementById('ctxRtoCount'),
+        returnsCount: document.getElementById('ctxReturnsCount'),
+        emailRow: document.getElementById('chatCustomerEmailRow'),
+        emailVal: document.getElementById('chatCustomerEmail'),
+        locationRow: document.getElementById('chatCustomerLocationRow'),
+        locationVal: document.getElementById('chatCustomerLocation'),
+        statsEl: document.getElementById('chatCustomerStats'),
+        statOrders: document.getElementById('chatStatOrders'),
+        statReturns: document.getElementById('chatStatReturns'),
+    };
+    return _ctxDom;
+}
+
 async function loadCustomerContext(phone) {
-    const loadingEl = document.getElementById('ctxLoading');
-    const errorEl = document.getElementById('ctxError');
-    const ordersSection = document.getElementById('ctxOrdersSection');
-    const rtoSection = document.getElementById('ctxRtoSection');
-    const returnsSection = document.getElementById('ctxReturnsSection');
-    const panelsContainer = document.getElementById('customerContextPanels');
+    const dom = _getCtxDom();
+    if (!dom.loading || !dom.error) return;
 
-    console.log('[customer-context] Starting for phone:', phone);
-    console.log('[customer-context] DOM elements:', {
-        loadingEl: !!loadingEl,
-        errorEl: !!errorEl,
-        ordersSection: !!ordersSection,
-        panelsContainer: !!panelsContainer
-    });
-
-    if (!loadingEl || !errorEl) {
-        console.error('[customer-context] CRITICAL: Panel elements not found in DOM');
-        return;
-    }
-
-    // Reset
-    errorEl.style.display = 'none';
-    errorEl.textContent = '';
-    ordersSection.style.display = 'none';
-    rtoSection.style.display = 'none';
-    returnsSection.style.display = 'none';
-    loadingEl.style.display = 'flex';
+    dom.error.style.display = 'none';
+    dom.error.textContent = '';
+    dom.ordersSection.style.display = 'none';
+    dom.rtoSection.style.display = 'none';
+    dom.returnsSection.style.display = 'none';
+    dom.loading.style.display = 'flex';
 
     const cacheKey = String(phone).replace(/\D/g, '').slice(-10);
     const cached = _ctxCacheGet(cacheKey);
     if (cached) {
-        console.log('[customer-context] Using cached data');
-        loadingEl.style.display = 'none';
-        renderCustomerContext(cached);
+        dom.loading.style.display = 'none';
+        renderCustomerContext(cached, dom);
         return;
     }
 
     try {
-        console.log('[customer-context] Fetching from API...');
         const data = await apiCall(`/customer-context/${encodeURIComponent(phone)}`);
-        console.log('[customer-context] API response:', data ? `success=${data.success}, orders=${data.orders?.length || 0}` : 'null/undefined');
-        
-        if (!data || !data.success) throw new Error(data?.error || `API returned ${JSON.stringify(data)}`);
+        if (!data || !data.success) throw new Error(data?.error || 'API returned no data');
         _ctxCacheSet(cacheKey, data);
-        loadingEl.style.display = 'none';
-        renderCustomerContext(data);
+        dom.loading.style.display = 'none';
+        renderCustomerContext(data, dom);
     } catch (err) {
-        loadingEl.style.display = 'none';
-        errorEl.style.display = 'block';
-        errorEl.textContent = `Could not load history: ${err.message}`;
-        console.error('[customer-context] fetch failed:', err);
+        dom.loading.style.display = 'none';
+        dom.error.style.display = 'block';
+        dom.error.textContent = `Could not load history: ${err.message}`;
     }
 }
 
-function renderCustomerContext(data) {
-    console.log('[customer-context] renderCustomerContext called with:', {
-        customer: data.customer,
-        orders: data.orders?.length || 0,
-        rto: data.rto?.length || 0,
-        returns: data.returns?.length || 0,
-        exchanges: data.exchanges?.length || 0
-    });
-    
-    // ── Populate Customer Info Card ──
+function renderCustomerContext(data, dom) {
+    dom = dom || _getCtxDom();
+
+    // ── Customer Info Card ──
     const customer = data.customer || {};
     if (customer.email) {
-        document.getElementById('chatCustomerEmailRow').style.display = 'flex';
-        document.getElementById('chatCustomerEmail').textContent = customer.email;
+        dom.emailRow.style.display = 'flex';
+        dom.emailVal.textContent = customer.email;
     }
     if (customer.city || customer.province) {
-        document.getElementById('chatCustomerLocationRow').style.display = 'flex';
-        const loc = [customer.city, customer.province].filter(Boolean).join(', ');
-        document.getElementById('chatCustomerLocation').textContent = loc;
+        dom.locationRow.style.display = 'flex';
+        dom.locationVal.textContent = [customer.city, customer.province].filter(Boolean).join(', ');
     }
 
-    // Stats row
     const returns = data.returns || [];
     const exchanges = data.exchanges || [];
     const totalRE = returns.length + exchanges.length;
-    const statsEl = document.getElementById('chatCustomerStats');
-    if (customer.totalOrders > 0 || totalRE > 0) {
-        statsEl.style.display = 'grid';
-        document.getElementById('chatStatOrders').textContent = customer.totalOrders || 0;
-        document.getElementById('chatStatReturns').textContent = totalRE;
-    }
-    
-    const ordersSection = document.getElementById('ctxOrdersSection');
-    const rtoSection = document.getElementById('ctxRtoSection');
-    const returnsSection = document.getElementById('ctxReturnsSection');
-    const ordersBody = document.getElementById('ctxOrders');
-    const rtoBody = document.getElementById('ctxRto');
-    const returnsBody = document.getElementById('ctxReturns');
 
-    // ── Orders (expandable cards) ──
+    if (customer.totalOrders > 0 || totalRE > 0) {
+        dom.statsEl.style.display = 'grid';
+        dom.statOrders.textContent = customer.totalOrders || 0;
+        dom.statReturns.textContent = totalRE;
+    }
+
+    // ── Orders (expandable, event-delegated toggle) ──
     const orders = data.orders || [];
-    document.getElementById('ctxOrdersCount').textContent = orders.length;
+    dom.ordersCount.textContent = orders.length;
     if (orders.length > 0) {
-        ordersSection.style.display = 'block';
-        ordersBody.innerHTML = orders.slice(0, 10).map((o, idx) => {
-            const date = o.created_at ? new Date(o.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+        dom.ordersSection.style.display = 'block';
+        let html = '';
+        const visibleOrders = orders.slice(0, 10);
+        for (let idx = 0; idx < visibleOrders.length; idx++) {
+            const o = visibleOrders[idx];
+            const dateStr = o.created_at
+                ? new Date(o.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                : '';
             const statusClass = getStatusClass(o.status);
             const items = safeParseItems(o.items_json);
-            const itemsPreview = items.length > 0 ? items.map(i => {
-                const name = i.title || i.name || '';
-                let size = i.size || i.variant_size || i.product_size || '';
-                if (!size && i.variant_title) {
-                    const sizeMatch = i.variant_title.match(/Size:\s*(\w+)/i) || i.variant_title.match(/\b(S|M|L|XL|XXS|XS|XXL|XXXL|Free Size|One Size)\b/i);
-                    if (sizeMatch) size = sizeMatch[1];
-                }
-                const qty = i.quantity || 1;
-                const sizePart = size ? ` (Size: ${size})` : '';
-                const qtyPart = qty > 1 ? ` x${qty}` : '';
-                return `${name}${sizePart}${qtyPart}`;
-            }).filter(Boolean).slice(0, 3).join(', ') : '';
 
-            // Build detailed items list for expanded view
-            let itemsDetailHtml = '';
+            // Preview line (collapsed view)
+            let itemsPreview = '';
             if (items.length > 0) {
-                itemsDetailHtml = items.map(item => {
-                    const name = escapeHtml(item.title || item.name || 'Item');
-                    const qty = item.quantity || 1;
-                    const price = item.price ? `₹${parseFloat(item.price).toFixed(2)}` : '';
-                    return `<div class="ctx-detail-row"><span class="ctx-detail-label">${name} ×${qty}</span><span class="ctx-detail-value">${price}</span></div>`;
-                }).join('');
+                const parts = [];
+                for (let i = 0; i < items.length && parts.length < 3; i++) {
+                    const it = items[i];
+                    const name = it.title || it.name || '';
+                    if (!name) continue;
+                    let size = it.size || it.variant_size || it.product_size || '';
+                    if (!size && it.variant_title) {
+                        const m = it.variant_title.match(/Size:\s*(\w+)/i) || it.variant_title.match(/\b(S|M|L|XL|XXS|XS|XXL|XXXL|Free Size|One Size)\b/i);
+                        if (m) size = m[1];
+                    }
+                    const qty = it.quantity || 1;
+                    parts.push(`${name}${size ? ` (Size: ${size})` : ''}${qty > 1 ? ` x${qty}` : ''}`);
+                }
+                itemsPreview = parts.join(', ');
             }
 
-            // First order expanded by default
-            const expandedClass = idx === 0 ? ' expanded' : '';
-            const rotatedClass = idx === 0 ? ' rotated' : '';
+            // Expanded detail rows
+            let detailsHtml = '';
+            if (o.delivery_type) detailsHtml += `<div class="ctx-detail-row"><span class="ctx-detail-label">Delivery</span><span class="ctx-detail-value">${escapeHtml(o.delivery_type)}</span></div>`;
+            if (items.length > 0) {
+                for (const it of items) {
+                    const n = escapeHtml(it.title || it.name || 'Item');
+                    const q = it.quantity || 1;
+                    const p = it.price ? `₹${parseFloat(it.price).toFixed(2)}` : '';
+                    detailsHtml += `<div class="ctx-detail-row"><span class="ctx-detail-label">${n} ×${q}</span><span class="ctx-detail-value">${p}</span></div>`;
+                }
+            }
+            if (o.address) detailsHtml += `<div class="ctx-detail-row"><span class="ctx-detail-label">Address</span><span class="ctx-detail-value" style="white-space:normal;max-width:180px;font-size:0.62rem;">${escapeHtml(o.address)}</span></div>`;
+            if (o.city) detailsHtml += `<div class="ctx-detail-row"><span class="ctx-detail-label">City</span><span class="ctx-detail-value">${escapeHtml(o.city)}${o.province ? ', ' + escapeHtml(o.province) : ''}</span></div>`;
+            if (o.awb) detailsHtml += `<div class="ctx-detail-row"><span class="ctx-detail-label">AWB</span><span class="ctx-detail-value">${escapeHtml(o.awb)}</span></div>`;
+            if (o.courier_name) detailsHtml += `<div class="ctx-detail-row"><span class="ctx-detail-label">Courier</span><span class="ctx-detail-value">${escapeHtml(o.courier_name)}</span></div>`;
+            if (o.tracking_url) detailsHtml += `<div class="ctx-detail-row"><span class="ctx-detail-label">Tracking</span><span class="ctx-detail-value"><a href="${escapeHtml(o.tracking_url)}" target="_blank">Track →</a></span></div>`;
+            if (o.delivered_at) {
+                const dStr = new Date(o.delivered_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+                detailsHtml += `<div class="ctx-detail-row"><span class="ctx-detail-label">Delivered</span><span class="ctx-detail-value">${dStr}</span></div>`;
+            }
 
-            return `<div class="ctx-order-card">
+            const expanded = idx === 0 ? ' expanded' : '';
+            const rotated = idx === 0 ? ' rotated' : '';
+
+            html += `<div class="ctx-order-card">
                 <div class="ctx-order-top" data-order-toggle>
                     <span class="ctx-order-id" title="${o.order_id}">#${String(o.order_id).slice(-6)}</span>
                     <div style="display:flex;align-items:center;gap:6px;">
                         <span class="ctx-status-pill ${statusClass}">${(o.status || 'unknown').toUpperCase()}</span>
-                        <svg class="ctx-order-toggle-icon${rotatedClass}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        <svg class="ctx-order-toggle-icon${rotated}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
                     </div>
                 </div>
                 ${itemsPreview ? `<div class="ctx-order-items">${escapeHtml(itemsPreview)}</div>` : ''}
                 <div class="ctx-order-meta">
-                    <span>${date}</span>
+                    <span>${dateStr}</span>
                     <span>${o.payment_method || ''}</span>
                     ${o.order_total ? `<span>₹${Number(o.order_total).toLocaleString('en-IN')}</span>` : ''}
                 </div>
-                <div class="ctx-order-details${expandedClass}">
-                    ${o.delivery_type ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Delivery</span><span class="ctx-detail-value">${escapeHtml(o.delivery_type)}</span></div>` : ''}
-                    ${itemsDetailHtml}
-                    ${o.address ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Address</span><span class="ctx-detail-value" style="white-space:normal;max-width:180px;font-size:0.62rem;">${escapeHtml(o.address)}</span></div>` : ''}
-                    ${o.city ? `<div class="ctx-detail-row"><span class="ctx-detail-label">City</span><span class="ctx-detail-value">${escapeHtml(o.city)}${o.province ? ', ' + escapeHtml(o.province) : ''}</span></div>` : ''}
-                    ${o.awb ? `<div class="ctx-detail-row"><span class="ctx-detail-label">AWB</span><span class="ctx-detail-value">${escapeHtml(o.awb)}</span></div>` : ''}
-                    ${o.courier_name ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Courier</span><span class="ctx-detail-value">${escapeHtml(o.courier_name)}</span></div>` : ''}
-                    ${o.tracking_url ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Tracking</span><span class="ctx-detail-value"><a href="${escapeHtml(o.tracking_url)}" target="_blank">Track →</a></span></div>` : ''}
-                    ${o.delivered_at ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Delivered</span><span class="ctx-detail-value">${new Date(o.delivered_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>` : ''}
-                </div>
+                <div class="ctx-order-details${expanded}">${detailsHtml}</div>
             </div>`;
-        }).join('');
-        if (orders.length > 10) {
-            ordersBody.innerHTML += `<div class="ctx-more-note">+${orders.length - 10} more orders</div>`;
         }
-
-        // Attach order card toggle handlers
-        ordersBody.querySelectorAll('[data-order-toggle]').forEach(header => {
-            header.addEventListener('click', () => {
-                const details = header.nextElementSibling?.nextElementSibling; // skip items + meta to get details div
-                // Actually the structure is: top -> items -> meta -> details
-                // Let's find the details div as the next sibling after meta
-                let el = header.nextElementSibling;
-                while (el && !el.classList.contains('ctx-order-details')) {
-                    el = el.nextElementSibling;
-                }
-                if (el) {
-                    el.classList.toggle('expanded');
-                    const icon = header.querySelector('.ctx-order-toggle-icon');
-                    if (icon) icon.classList.toggle('rotated');
-                }
-            });
-        });
+        if (orders.length > 10) html += `<div class="ctx-more-note">+${orders.length - 10} more orders</div>`;
+        dom.ordersBody.innerHTML = html;
     }
 
     // ── RTO ──
     const rto = data.rto || [];
-    document.getElementById('ctxRtoCount').textContent = rto.length;
+    dom.rtoCount.textContent = rto.length;
     if (rto.length > 0) {
-        rtoSection.style.display = 'block';
-        rtoBody.innerHTML = rto.map(r => {
-            const date = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+        dom.rtoSection.style.display = 'block';
+        dom.rtoBody.innerHTML = rto.map(r => {
+            const dateStr = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             return `<div class="ctx-rto-card">
                 <div class="ctx-rto-top">
                     <span class="ctx-order-id">#${String(r.order_id).slice(-6)}</span>
                     <span class="ctx-rto-badge">RTO</span>
                 </div>
                 <div class="ctx-order-meta">
-                    <span>${date}</span>
+                    <span>${dateStr}</span>
                     ${r.awb ? `<span>AWB: ${r.awb}</span>` : ''}
                     ${r.courier_name ? `<span>${r.courier_name}</span>` : ''}
                 </div>
@@ -8127,62 +8115,81 @@ function renderCustomerContext(data) {
         }).join('');
     }
 
-    // ─ Returns & Exchanges ──
-    document.getElementById('ctxReturnsCount').textContent = totalRE;
+    // ── Returns & Exchanges (event-delegated click) ──
+    dom.returnsCount.textContent = totalRE;
     if (totalRE > 0) {
-        returnsSection.style.display = 'block';
+        dom.returnsSection.style.display = 'block';
         let html = '';
-        returns.forEach(r => {
-            const date = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+        for (const r of returns) {
+            const dateStr = r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             const srcLabel = r.source === 'portal' ? 'Portal' : 'Local';
             const requestId = r.request_id || '';
-            const returnsUrl = requestId 
+            const returnsUrl = requestId
                 ? `https://exchange-return-tracking.onrender.com/admin#requestId=${encodeURIComponent(requestId)}`
                 : 'https://exchange-return-tracking.onrender.com/admin';
-            html += `<div class="ctx-return-card" data-returns-url="${escapeHtml(returnsUrl)}" title="${requestId ? 'Click to view details' : ''}">
+            html += `<div class="ctx-return-card" data-returns-url="${escapeHtml(returnsUrl)}">
                 <div class="ctx-return-top">
                     <span class="ctx-return-type type-return">RETURN</span>
                     <span class="ctx-return-status ${getStatusClass(r.status)}">${(r.status || 'unknown').toUpperCase()}</span>
                 </div>
                 <div class="ctx-order-meta">
                     <span>#${String(r.order_id || r.order_number || '').slice(-6)}</span>
-                    <span>${date}</span>
+                    <span>${dateStr}</span>
                     <span class="ctx-source-tag">${srcLabel}</span>
                 </div>
                 ${r.reason ? `<div class="ctx-return-reason">${escapeHtml(r.reason)}</div>` : ''}
             </div>`;
-        });
-        exchanges.forEach(e => {
-            const date = e.created_at ? new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+        }
+        for (const e of exchanges) {
+            const dateStr = e.created_at ? new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
             const srcLabel = e.source === 'portal' ? 'Portal' : 'Local';
             const requestId = e.request_id || '';
-            const returnsUrl = requestId 
+            const returnsUrl = requestId
                 ? `https://exchange-return-tracking.onrender.com/admin#requestId=${encodeURIComponent(requestId)}`
                 : 'https://exchange-return-tracking.onrender.com/admin';
-            html += `<div class="ctx-return-card" data-returns-url="${escapeHtml(returnsUrl)}" title="${requestId ? 'Click to view details' : ''}">
+            html += `<div class="ctx-return-card" data-returns-url="${escapeHtml(returnsUrl)}">
                 <div class="ctx-return-top">
                     <span class="ctx-return-type type-exchange">EXCHANGE</span>
                     <span class="ctx-return-status ${getStatusClass(e.status)}">${(e.status || 'unknown').toUpperCase()}</span>
                 </div>
                 <div class="ctx-order-meta">
                     <span>#${String(e.order_id || e.order_number || '').slice(-6)}</span>
-                    <span>${date}</span>
+                    <span>${dateStr}</span>
                     <span class="ctx-source-tag">${srcLabel}</span>
                 </div>
             </div>`;
-        });
-        returnsBody.innerHTML = html;
-
-        // Attach click handlers to open returns dashboard
-        returnsBody.querySelectorAll('.ctx-return-card').forEach(card => {
-            card.style.cursor = 'pointer';
-            card.addEventListener('click', () => {
-                const url = card.dataset.returnsUrl || 'https://exchange-return-tracking.onrender.com/admin';
-                window.open(url, '_blank');
-            });
-        });
+        }
+        dom.returnsBody.innerHTML = html;
     }
 }
+
+// ── Event Delegation: single listeners on parent containers ──
+// Attached once at init; handles all order toggles and return card clicks.
+(function _initCtxDelegation() {
+    const ordersBody = document.getElementById('ctxOrders');
+    if (ordersBody) {
+        ordersBody.addEventListener('click', (e) => {
+            const toggle = e.target.closest('[data-order-toggle]');
+            if (!toggle) return;
+            let el = toggle.nextElementSibling;
+            while (el && !el.classList.contains('ctx-order-details')) el = el.nextElementSibling;
+            if (el) {
+                el.classList.toggle('expanded');
+                const icon = toggle.querySelector('.ctx-order-toggle-icon');
+                if (icon) icon.classList.toggle('rotated');
+            }
+        });
+    }
+    const returnsBody = document.getElementById('ctxReturns');
+    if (returnsBody) {
+        returnsBody.addEventListener('click', (e) => {
+            const card = e.target.closest('.ctx-return-card');
+            if (!card) return;
+            const url = card.dataset.returnsUrl || 'https://exchange-return-tracking.onrender.com/admin';
+            window.open(url, '_blank');
+        });
+    }
+})();
 
 // Toggle collapsible section
 function toggleCtxSection(bodyId) {
