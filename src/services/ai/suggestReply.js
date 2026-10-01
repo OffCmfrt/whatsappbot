@@ -39,7 +39,7 @@ MANDATORY 4-STEP WORKFLOW PIPELINE:
    - Where's my order: Follow partner sequence strictly (Shiprocket → Delhivery → Ekart prepaid). Unresolved edit details → calling executive → COD holds, prepaid ships as-is after 24h.
    - Delayed/not received: If "Delivered", ask about neighbours/security; else request POD, wait 24h.
    - Refund: Original payment method refund (5-7 days) ONLY for damaged item, wrong product, prepaid cancelled at confirmation, or RTO without customer receipt. Store credit for all others. Never promise cash refund for size/preference returns. Check rnx[].rs and rnx[].amt for refund status.
-   - Size change: Pre-dispatch: Edit Details. Post-delivery: offcomfrt.in → Support → Return/Exchange portal. Check rnx[] where t=E for existing exchange requests.
+   - Size change / Exchange: ALWAYS check rnx[] for t=E first. If an exchange already exists for the relevant order, reference its current status (st) AND the actual item details — do NOT suggest initiating a new exchange. Use old/new fields to state the exact size change (e.g., "Your exchange from M to XL is pickup booked; once pickup is done, we'll dispatch the XL"). If no exchange exists, direct to offcomfrt.in → Support → Return/Exchange portal (post-delivery) or Edit Details (pre-dispatch).
    - Damaged/wrong item: Mandatory unboxing video for wrong product; photos for damage. Submitted via website portal only. Check rnx[] where t=R for existing claims.
    - Address change: Pre-ship: Edit Details. Post-ship: address cannot be changed on active shipment. For RTO: prepaid reships after RTO (or cancel in-transit for fresh order); COD dispatches fresh order immediately.
    - Payment/COD confusion: Discount not reapplied after edit converted to COD; customer pays cash at door, Offcomfrt refunds that amount separately. For exchange top-ups: check rnx[].ps (payment_status).
@@ -291,7 +291,7 @@ async function generateSuggestions({ actor, context, cacheKey }) {
             { role: 'user', content: userContent }
         ],
         temperature: 0.5,
-        maxTokens: 800,
+        maxTokens: 1500,
         responseFormat: { type: 'json_object' }
     });
 

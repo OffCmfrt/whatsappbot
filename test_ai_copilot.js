@@ -34,6 +34,15 @@ const mockDbAdapter = {
         if (/FROM\s+orders/i.test(sql)) {
             return [{ order_id: '#1234', status: 'shipped', awb: 'AWB123', courier_name: 'Delhivery', product_name: 'Oversized Tee', total: 999, payment_method: 'COD', expected_delivery: null, created_at: '2026-07-20T10:00:00Z' }];
         }
+        if (/FROM\s+returns/i.test(sql)) {
+            return [{ return_id: 'RET-001', order_id: '#1234', items: 'Oversized Tee - L', reason: 'Size issue', status: 'completed', refund_amount: 999, refund_status: 'refunded', created_at: '2026-07-22T10:00:00Z' }];
+        }
+        if (/FROM\s+exchanges/i.test(sql)) {
+            return [{ exchange_id: 'EXC-001', order_id: '#1234', old_items: 'Oversized Tee - M', new_items: 'Oversized Tee - XL', reason: 'Size change', status: 'pickup_booked', price_difference: 0, payment_status: 'completed', created_at: '2026-07-23T10:00:00Z' }];
+        }
+        if (/FROM\s+support_tickets/i.test(sql)) {
+            return [{ id: 1, ticket_number: 'TKT-001', message: 'Where is my order', status: 'open', sentiment: 'neutral', ai_confidence: 0.9, ai_scenario: 'where_is_my_order', created_at: '2026-07-25T09:00:00Z' }];
+        }
         if (/FROM\s+ai_usage_log/i.test(sql)) return [{ count: 0 }];
         return [];
     },
@@ -50,14 +59,16 @@ mockModule('./src/models/Settings', { get: async (key, def) => def, set: async (
 // Mock aiClient with a scripted response queue
 let scriptedResponses = [];
 let aiCallCount = 0;
+let lastPrompt = null; // capture last user prompt for assertion
 function scriptAi(responses) { scriptedResponses = responses.slice(); aiCallCount = 0; }
 mockModule('./src/services/ai/aiClient', {
     isConfigured: () => true,
     getConfig: () => ({ provider: 'mock', model: 'mock-model', baseUrl: 'http://mock' }),
     estimateTokens: (t) => Math.ceil(String(t || '').length / 4),
     computeCostUsd: () => 0,
-    async chatCompletion() {
+    async chatCompletion({ messages }) {
         aiCallCount++;
+        lastPrompt = messages?.[1]?.content || null; // capture user content
         if (!scriptedResponses.length) throw new Error('Test script exhausted: unexpected extra AI call');
         const next = scriptedResponses.shift();
         return { message: next, finishReason: next.tool_calls ? 'tool_calls' : 'stop', usage: { prompt_tokens: 100, completion_tokens: 50 }, model: 'mock-model' };
@@ -204,6 +215,29 @@ function toolCall(id, name, args) {
     assert(store.usage.some((u, i) => i >= usageBefore && u.kind === 'suggest_reply'), 'usage logged as suggest_reply');
     const loadedSendModules = Object.keys(require.cache).filter(k => /whatsappService|broadcast/i.test(k));
     assert(loadedSendModules.length === 0, 'no send/broadcast module was ever loaded');
+
+    // ---- 6. suggestReply includes returns+exchanges in prompt ----
+    console.log('\n6. Reply suggestions with exchange context');
+    scriptAi([
+        { role: 'assistant', content: JSON.stringify({ suggestions: ['Draft about exchange M→XL'] }) }
+    ]);
+    const s2 = await suggestReply({ actor: 'tester', phone: '+91 98765 43210' });
+    assert(Array.isArray(s2.suggestions) && s2.suggestions.length >= 1, 'returns drafts with exchange context');
+    const prompt = lastPrompt;
+    assert(prompt && typeof prompt === 'string', 'prompt was captured');
+    const parsed = JSON.parse(prompt);
+    assert(parsed.rnx && Array.isArray(parsed.rnx), 'rnx array present in prompt');
+    const exchange = parsed.rnx.find(r => r.t === 'E');
+    assert(exchange !== undefined, 'exchange record found in rnx with t=E');
+    assert(exchange.old && exchange.old.includes('M'), 'exchange old size = M');
+    assert(exchange.new && exchange.new.includes('XL'), 'exchange new size = XL');
+    assert(exchange.st === 'pickup_booked', 'exchange status = pickup_booked');
+    const ret = parsed.rnx.find(r => r.t === 'R');
+    assert(ret !== undefined, 'return record found in rnx with t=R');
+    assert(parsed.ord && parsed.ord.length > 0, 'orders also present (ord)');
+    assert(parsed.tkt && parsed.tkt.length > 0, 'tickets also present (tkt)');
+    assert(parsed.sent === 'neutral', 'sentiment forwarded as sent');
+    assert(parsed.sc === 'where_is_my_order', 'scenario forwarded as sc');
 
     // ---- summary ----
     console.log(`\n${'='.repeat(40)}\n${passed} passed, ${failed} failed`);
