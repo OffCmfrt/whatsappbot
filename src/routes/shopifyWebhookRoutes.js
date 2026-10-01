@@ -4,13 +4,7 @@ const shopifyService = require('../services/shopifyService');
 const abandonedCartService = require('../services/abandonedCartService');
 const { dbAdapter } = require('../database/db');
 
-// Function to invalidate admin cache (imported from adminRoutes logic)
-function invalidateCache() {
-  // We'll call this through the dbAdapter or just log it
-  console.log('🗑️ Webhook triggered - cache should be invalidated');
-  // Note: Since this is in a different file, we'd need to export invalidateCache from adminRoutes
-  // For now, the 2-minute cache TTL will handle this automatically
-}
+// Note: Shoppers cache invalidation is handled inside abandonedCartService.handleOrderCreated()
 
 // Middleware to verify Shopify webhook signature
 const verifyShopifyWebhook = (req, res, next) => {
@@ -83,7 +77,6 @@ const verifyShopifyWebhook = (req, res, next) => {
 router.post('/checkout/create', verifyShopifyWebhook, async (req, res) => {
     try {
         await abandonedCartService.processAbandonedCheckout(req.body);
-        invalidateCache();
         res.status(200).send('OK');
     } catch (error) {
         // Don't fail webhooks for duplicate constraint errors
@@ -100,7 +93,6 @@ router.post('/checkout/create', verifyShopifyWebhook, async (req, res) => {
 router.post('/checkout/update', verifyShopifyWebhook, async (req, res) => {
     try {
         await abandonedCartService.processAbandonedCheckout(req.body);
-        invalidateCache();
         res.status(200).send('OK');
     } catch (error) {
         // Don't fail webhooks for duplicate constraint errors
@@ -118,7 +110,6 @@ router.post('/checkout/update', verifyShopifyWebhook, async (req, res) => {
 router.post('/orders/create', verifyShopifyWebhook, async (req, res) => {
     try {
         await abandonedCartService.handleOrderCreated(req.body);
-        invalidateCache();
         res.status(200).send('OK');
     } catch (error) {
         console.error('Webhook error:', error);

@@ -3,6 +3,7 @@ const Settings = require('../models/Settings');
 const shopifyService = require('./shopifyService');
 const whatsappService = require('./whatsappService');
 const { dbAdapter } = require('../database/db');
+const { invalidateCache } = require('../utils/cache');
 
 class AbandonedCartService {
 
@@ -228,6 +229,8 @@ class AbandonedCartService {
                         await dbAdapter.insert('store_shoppers', shopperData);
                         console.log(`[INSERT] Inserted new shopper for order ${orderId}`);
                     }
+                    // Invalidate shoppers cache so new order appears immediately in Shoppers Hub
+                    invalidateCache('shoppers');
                 } catch (shopperError) {
                     if (shopperError.message && shopperError.message.includes('no such table')) {
                         console.warn(`[WARN] store_shoppers table does not exist. Skipping shopper data save.`);
@@ -238,6 +241,7 @@ class AbandonedCartService {
                         try {
                             const { id, ...updateData } = shopperData;
                             await dbAdapter.update('store_shoppers', updateData, { order_id: orderId });
+                            invalidateCache('shoppers');
                         } catch (updateError) {
                             console.error(`[ERROR] Failed to update shopper for order ${orderId}:`, updateError.message);
                         }

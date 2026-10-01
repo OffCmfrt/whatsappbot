@@ -3215,7 +3215,7 @@ async function sendChatMessage() {
         chatMessages.scrollTop = chatMessages.scrollHeight;
 
         try {
-            const token = localStorage.getItem('hubToken');
+            const token = localStorage.getItem('authToken');
             const formData = new FormData();
             formData.append('image', file);
             formData.append('phone', currentChatPhone);

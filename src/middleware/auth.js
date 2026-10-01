@@ -171,6 +171,7 @@ const ROUTE_PERMISSIONS = [
     { prefix: '/templates', key: null },
     { prefix: '/broadcast', key: null },
     { prefix: '/support-portals', key: null },
+    { prefix: '/support-tickets/send-image', key: 'send_messages' },
     { prefix: '/support-tickets', key: null },
     { prefix: '/ig-comments', key: null },
     { prefix: '/upload', key: null },
