@@ -216,7 +216,33 @@ async function uploadFileToStorage(filePath, storagePath, contentType) {
         }
     );
 
-    return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
+    // Generate signed URL (valid for 7 days) - more reliable than public URLs
+    try {
+        const { data: signedUrlData, error } = await axios.post(
+            `${SUPABASE_URL}/storage/v1/object/sign/${STORAGE_BUCKET}/${storagePath}`,
+            { expiresIn: 604800 }, // 7 days in seconds
+            {
+                headers: {
+                    'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+                    'apikey': SUPABASE_SERVICE_KEY,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 10000
+            }
+        ).then(r => ({ data: r.data, error: null })).catch(e => ({ data: null, error: e }));
+
+        if (signedUrlData?.signedUrl) {
+            console.log(`[MEDIA] Generated signed URL for ${storagePath}`);
+            return signedUrlData.signedUrl;
+        }
+    } catch (err) {
+        console.warn('[MEDIA] Signed URL generation failed, falling back to public URL:', err.message);
+    }
+
+    // Fallback to public URL
+    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
+    console.log(`[MEDIA] Using public URL: ${publicUrl}`);
+    return publicUrl;
 }
 
 /**
