@@ -2866,6 +2866,10 @@ async function openChat(phone, nameEnc, orderId, status) {
     document.getElementById('chatCustomerPhone').textContent = phone;
     document.getElementById('chatCustomerOrder').textContent = orderId || 'N/A';
     document.getElementById('chatCustomerStatus').textContent = (status || 'pending').toUpperCase();
+    // Reset dynamic fields until context loads
+    document.getElementById('chatCustomerEmailRow').style.display = 'none';
+    document.getElementById('chatCustomerLocationRow').style.display = 'none';
+    document.getElementById('chatCustomerStats').style.display = 'none';
     document.getElementById('chatHeaderTitle').textContent = `Chat with ${nameEnc ? decodeURIComponent(nameEnc).split(' ')[0] : 'Customer'}`;
     
     chatMessages.innerHTML = '<div class="chat-loading"><div class="spinner"></div><span>Loading conversation...</span></div>';
@@ -7979,11 +7983,35 @@ async function loadCustomerContext(phone) {
 
 function renderCustomerContext(data) {
     console.log('[customer-context] renderCustomerContext called with:', {
+        customer: data.customer,
         orders: data.orders?.length || 0,
         rto: data.rto?.length || 0,
         returns: data.returns?.length || 0,
         exchanges: data.exchanges?.length || 0
     });
+    
+    // ── Populate Customer Info Card ──
+    const customer = data.customer || {};
+    if (customer.email) {
+        document.getElementById('chatCustomerEmailRow').style.display = 'flex';
+        document.getElementById('chatCustomerEmail').textContent = customer.email;
+    }
+    if (customer.city || customer.province) {
+        document.getElementById('chatCustomerLocationRow').style.display = 'flex';
+        const loc = [customer.city, customer.province].filter(Boolean).join(', ');
+        document.getElementById('chatCustomerLocation').textContent = loc;
+    }
+
+    // Stats row
+    const returns = data.returns || [];
+    const exchanges = data.exchanges || [];
+    const totalRE = returns.length + exchanges.length;
+    const statsEl = document.getElementById('chatCustomerStats');
+    if (customer.totalOrders > 0 || totalRE > 0) {
+        statsEl.style.display = 'grid';
+        document.getElementById('chatStatOrders').textContent = customer.totalOrders || 0;
+        document.getElementById('chatStatReturns').textContent = totalRE;
+    }
     
     const ordersSection = document.getElementById('ctxOrdersSection');
     const rtoSection = document.getElementById('ctxRtoSection');
@@ -7992,13 +8020,13 @@ function renderCustomerContext(data) {
     const rtoBody = document.getElementById('ctxRto');
     const returnsBody = document.getElementById('ctxReturns');
 
-    // ── Orders ──
+    // ── Orders (expandable cards) ──
     const orders = data.orders || [];
     document.getElementById('ctxOrdersCount').textContent = orders.length;
     if (orders.length > 0) {
         ordersSection.style.display = 'block';
-        ordersBody.innerHTML = orders.slice(0, 10).map(o => {
-            const date = o.created_at ? new Date(o.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+        ordersBody.innerHTML = orders.slice(0, 10).map((o, idx) => {
+            const date = o.created_at ? new Date(o.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
             const statusClass = getStatusClass(o.status);
             const items = safeParseItems(o.items_json);
             const itemsPreview = items.length > 0 ? items.map(i => {
@@ -8013,10 +8041,29 @@ function renderCustomerContext(data) {
                 const qtyPart = qty > 1 ? ` x${qty}` : '';
                 return `${name}${sizePart}${qtyPart}`;
             }).filter(Boolean).slice(0, 3).join(', ') : '';
+
+            // Build detailed items list for expanded view
+            let itemsDetailHtml = '';
+            if (items.length > 0) {
+                itemsDetailHtml = items.map(item => {
+                    const name = escapeHtml(item.title || item.name || 'Item');
+                    const qty = item.quantity || 1;
+                    const price = item.price ? `₹${parseFloat(item.price).toFixed(2)}` : '';
+                    return `<div class="ctx-detail-row"><span class="ctx-detail-label">${name} ×${qty}</span><span class="ctx-detail-value">${price}</span></div>`;
+                }).join('');
+            }
+
+            // First order expanded by default
+            const expandedClass = idx === 0 ? ' expanded' : '';
+            const rotatedClass = idx === 0 ? ' rotated' : '';
+
             return `<div class="ctx-order-card">
-                <div class="ctx-order-top">
+                <div class="ctx-order-top" data-order-toggle>
                     <span class="ctx-order-id" title="${o.order_id}">#${String(o.order_id).slice(-6)}</span>
-                    <span class="ctx-status-pill ${statusClass}">${(o.status || 'unknown').toUpperCase()}</span>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <span class="ctx-status-pill ${statusClass}">${(o.status || 'unknown').toUpperCase()}</span>
+                        <svg class="ctx-order-toggle-icon${rotatedClass}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                    </div>
                 </div>
                 ${itemsPreview ? `<div class="ctx-order-items">${escapeHtml(itemsPreview)}</div>` : ''}
                 <div class="ctx-order-meta">
@@ -8024,12 +8071,39 @@ function renderCustomerContext(data) {
                     <span>${o.payment_method || ''}</span>
                     ${o.order_total ? `<span>₹${Number(o.order_total).toLocaleString('en-IN')}</span>` : ''}
                 </div>
-                ${o.awb ? `<div class="ctx-order-awb">AWB: ${o.awb}</div>` : ''}
+                <div class="ctx-order-details${expandedClass}">
+                    ${o.delivery_type ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Delivery</span><span class="ctx-detail-value">${escapeHtml(o.delivery_type)}</span></div>` : ''}
+                    ${itemsDetailHtml}
+                    ${o.address ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Address</span><span class="ctx-detail-value" style="white-space:normal;max-width:180px;font-size:0.62rem;">${escapeHtml(o.address)}</span></div>` : ''}
+                    ${o.city ? `<div class="ctx-detail-row"><span class="ctx-detail-label">City</span><span class="ctx-detail-value">${escapeHtml(o.city)}${o.province ? ', ' + escapeHtml(o.province) : ''}</span></div>` : ''}
+                    ${o.awb ? `<div class="ctx-detail-row"><span class="ctx-detail-label">AWB</span><span class="ctx-detail-value">${escapeHtml(o.awb)}</span></div>` : ''}
+                    ${o.courier_name ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Courier</span><span class="ctx-detail-value">${escapeHtml(o.courier_name)}</span></div>` : ''}
+                    ${o.tracking_url ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Tracking</span><span class="ctx-detail-value"><a href="${escapeHtml(o.tracking_url)}" target="_blank">Track →</a></span></div>` : ''}
+                    ${o.delivered_at ? `<div class="ctx-detail-row"><span class="ctx-detail-label">Delivered</span><span class="ctx-detail-value">${new Date(o.delivered_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>` : ''}
+                </div>
             </div>`;
         }).join('');
         if (orders.length > 10) {
             ordersBody.innerHTML += `<div class="ctx-more-note">+${orders.length - 10} more orders</div>`;
         }
+
+        // Attach order card toggle handlers
+        ordersBody.querySelectorAll('[data-order-toggle]').forEach(header => {
+            header.addEventListener('click', () => {
+                const details = header.nextElementSibling?.nextElementSibling; // skip items + meta to get details div
+                // Actually the structure is: top -> items -> meta -> details
+                // Let's find the details div as the next sibling after meta
+                let el = header.nextElementSibling;
+                while (el && !el.classList.contains('ctx-order-details')) {
+                    el = el.nextElementSibling;
+                }
+                if (el) {
+                    el.classList.toggle('expanded');
+                    const icon = header.querySelector('.ctx-order-toggle-icon');
+                    if (icon) icon.classList.toggle('rotated');
+                }
+            });
+        });
     }
 
     // ── RTO ──
@@ -8054,9 +8128,6 @@ function renderCustomerContext(data) {
     }
 
     // ─ Returns & Exchanges ──
-    const returns = data.returns || [];
-    const exchanges = data.exchanges || [];
-    const totalRE = returns.length + exchanges.length;
     document.getElementById('ctxReturnsCount').textContent = totalRE;
     if (totalRE > 0) {
         returnsSection.style.display = 'block';

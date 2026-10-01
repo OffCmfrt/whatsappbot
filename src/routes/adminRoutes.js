@@ -2166,7 +2166,7 @@ router.get('/customer-context/:phone', verifyToken, async (req, res) => {
         //    Enriched with AWB/tracking from orders table.
         const ordersRows = await dbAdapter.query(`
             SELECT
-                s.order_id, s.name, s.phone, s.status AS shopper_status,
+                s.order_id, s.name, s.phone, s.email, s.status AS shopper_status,
                 s.items_json, s.order_total, s.payment_method, s.delivery_type,
                 s.created_at, s.address, s.city, s.province, s.zip,
                 o.awb, o.tracking_url, o.courier_name,
@@ -2226,9 +2226,21 @@ router.get('/customer-context/:phone', verifyToken, async (req, res) => {
             r.shopper_status === 'rto' || r.order_status === 'rto'
         );
 
+        // 6) Extract customer-level info from first order row
+        const firstRow = ordersRows[0] || {};
+        const customer = {
+            name: firstRow.name || null,
+            phone: digits,
+            email: firstRow.email || null,
+            city: firstRow.city || null,
+            province: firstRow.province || null,
+            totalOrders: ordersRows.length
+        };
+
         res.json({
             success: true,
             phone: digits,
+            customer,
             orders: ordersRows.map(r => ({
                 order_id: r.order_id,
                 status: r.shopper_status || r.order_status || 'unknown',

@@ -331,6 +331,8 @@
         <div class="chat-container">
             <div class="chat-sidebar">
                 <h3>Customer Info</h3>
+
+                <!-- Detailed Customer Info Card -->
                 <div class="chat-customer-info" id="chatCustomerInfo">
                     <div class="info-row">
                         <span class="info-label">Name:</span>
@@ -340,6 +342,14 @@
                         <span class="info-label">Phone:</span>
                         <span class="info-value" id="chatCustomerPhone">-</span>
                     </div>
+                    <div class="info-row" id="chatCustomerEmailRow" style="display:none;">
+                        <span class="info-label">Email:</span>
+                        <span class="info-value" id="chatCustomerEmail">-</span>
+                    </div>
+                    <div class="info-row" id="chatCustomerLocationRow" style="display:none;">
+                        <span class="info-label">Location:</span>
+                        <span class="info-value" id="chatCustomerLocation">-</span>
+                    </div>
                     <div class="info-row">
                         <span class="info-label">Order:</span>
                         <span class="info-value" id="chatCustomerOrder">-</span>
@@ -347,6 +357,17 @@
                     <div class="info-row">
                         <span class="info-label">Status:</span>
                         <span class="info-value" id="chatCustomerStatus">-</span>
+                    </div>
+                    <!-- Stats Row -->
+                    <div class="ci-stats-row" id="chatCustomerStats" style="display:none;">
+                        <div class="ci-stat-box">
+                            <div class="ci-stat-value" id="chatStatOrders">0</div>
+                            <div class="ci-stat-label">Orders</div>
+                        </div>
+                        <div class="ci-stat-box">
+                            <div class="ci-stat-value" id="chatStatReturns">0</div>
+                            <div class="ci-stat-label">Returns</div>
+                        </div>
                     </div>
                 </div>
                 <button class="btn btn-outline" id="viewOrderBtn" style="width: 100%; margin-bottom: 0.5rem;">View Order Details</button>

@@ -1326,6 +1326,35 @@
         .chat-customer-info .info-row { display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.85rem; }
         .chat-customer-info .info-label { color: #888; }
         .chat-customer-info .info-value { color: #fff; font-weight: 500; }
+        
+        /* Stats row inside customer info card */
+        .ci-stats-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .ci-stat-box {
+            padding: 10px 8px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            text-align: center;
+        }
+        .ci-stat-value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #00d4a1;
+            font-family: 'Outfit', sans-serif;
+        }
+        .ci-stat-label {
+            font-size: 0.6rem;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 2px;
+        }
+        
         .chat-main { flex: 1; display: flex; flex-direction: column; background: #080808; }
         .chat-header { padding: 0.75rem 1.5rem; background: rgba(255,255,255,0.04); border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; }
         .chat-header h4 { margin: 0; font-family: 'Outfit', sans-serif; font-size: 0.95rem; font-weight: 500; }
@@ -5760,8 +5789,9 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
         .ctx-order-card:hover { background: rgba(255,255,255,0.06); }
         .ctx-order-top {
             display: flex; align-items: center; justify-content: space-between;
-            margin-bottom: 3px;
+            margin-bottom: 3px; cursor: pointer;
         }
+        .ctx-order-top:hover { opacity: 0.85; }
         .ctx-order-id {
             font-size: 0.72rem; font-weight: 600; color: #e0e0e0;
             font-family: 'SF Mono', 'Fira Code', monospace;
@@ -5779,6 +5809,34 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
         .ctx-order-awb {
             font-size: 0.63rem; color: #555; margin-top: 2px;
             font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        /* Expandable order details */
+        .ctx-order-details {
+            max-height: 0; opacity: 0; overflow: hidden;
+            transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                        opacity 0.2s ease, padding 0.2s ease;
+            padding: 0 4px;
+        }
+        .ctx-order-details.expanded {
+            max-height: 500px; opacity: 1; padding: 8px 4px 4px;
+        }
+        .ctx-detail-row {
+            display: flex; justify-content: space-between; align-items: flex-start;
+            padding: 3px 0; font-size: 0.65rem; gap: 6px;
+        }
+        .ctx-detail-label { color: #666; flex: 1; min-width: 0; }
+        .ctx-detail-value { color: #ccc; font-weight: 500; text-align: right; white-space: nowrap; flex-shrink: 0; }
+        .ctx-detail-value a {
+            color: #00d4a1; text-decoration: none; font-weight: 500;
+        }
+        .ctx-detail-value a:hover { text-decoration: underline; }
+        .ctx-order-toggle-icon {
+            transition: transform 0.2s;
+            opacity: 0.4;
+        }
+        .ctx-order-toggle-icon.rotated {
+            transform: rotate(180deg);
         }
 
         /* Status pills */
