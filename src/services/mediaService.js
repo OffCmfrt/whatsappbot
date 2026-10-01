@@ -196,12 +196,17 @@ async function optimizeImage(inputPath, originalMime) {
  * Streams the file instead of buffering entire content in RAM.
  */
 async function uploadFileToStorage(filePath, storagePath, contentType) {
+    console.log(`[MEDIA] uploadFileToStorage called:`, { filePath, storagePath, contentType });
     await ensureBucket();
 
     const fileBuffer = await fs.readFile(filePath);
+    console.log(`[MEDIA] File read, size:`, fileBuffer.length, 'bytes');
 
-    await axios.post(
-        `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${storagePath}`,
+    const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${storagePath}`;
+    console.log(`[MEDIA] Uploading to:`, uploadUrl);
+
+    const uploadResp = await axios.post(
+        uploadUrl,
         fileBuffer,
         {
             headers: {
@@ -215,11 +220,15 @@ async function uploadFileToStorage(filePath, storagePath, contentType) {
             timeout: 60000
         }
     );
+    console.log(`[MEDIA] Upload response status:`, uploadResp.status);
 
     // Generate signed URL (valid for 7 days) - more reliable than public URLs
     try {
+        const signUrl = `${SUPABASE_URL}/storage/v1/object/sign/${STORAGE_BUCKET}/${storagePath}`;
+        console.log(`[MEDIA] Requesting signed URL from:`, signUrl);
+        
         const { data: signedUrlData, error } = await axios.post(
-            `${SUPABASE_URL}/storage/v1/object/sign/${STORAGE_BUCKET}/${storagePath}`,
+            signUrl,
             { expiresIn: 604800 }, // 7 days in seconds
             {
                 headers: {
@@ -229,11 +238,19 @@ async function uploadFileToStorage(filePath, storagePath, contentType) {
                 },
                 timeout: 10000
             }
-        ).then(r => ({ data: r.data, error: null })).catch(e => ({ data: null, error: e }));
+        ).then(r => {
+            console.log(`[MEDIA] Sign response:`, r.status, r.data);
+            return { data: r.data, error: null };
+        }).catch(e => {
+            console.error(`[MEDIA] Sign error:`, e.response?.status, e.response?.data || e.message);
+            return { data: null, error: e };
+        });
 
         if (signedUrlData?.signedUrl) {
-            console.log(`[MEDIA] Generated signed URL for ${storagePath}`);
+            console.log(`[MEDIA] ✓ Signed URL generated:`, signedUrlData.signedUrl.substring(0, 100) + '...');
             return signedUrlData.signedUrl;
+        } else {
+            console.warn(`[MEDIA] Signed URL response missing signedUrl field:`, signedUrlData);
         }
     } catch (err) {
         console.warn('[MEDIA] Signed URL generation failed, falling back to public URL:', err.message);
@@ -241,7 +258,7 @@ async function uploadFileToStorage(filePath, storagePath, contentType) {
 
     // Fallback to public URL
     const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
-    console.log(`[MEDIA] Using public URL: ${publicUrl}`);
+    console.log(`[MEDIA] Using public URL:`, publicUrl);
     return publicUrl;
 }
 

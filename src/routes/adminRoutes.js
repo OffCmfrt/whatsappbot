@@ -8591,16 +8591,21 @@ router.get('/support-tickets/:phone/attachments', verifyToken, async (req, res) 
 router.post('/support-tickets/send-image', verifyToken, uploadMedia.single('image'), async (req, res) => {
     try {
         const { phone, caption = '' } = req.body;
+        console.log(`[SEND-IMAGE] Request received:`, { phone, caption, hasFile: !!req.file, fileName: req.file?.originalname, fileSize: req.file?.size });
+        
         if (!phone || !req.file) return res.status(400).json({ error: 'Phone and image are required' });
 
         const mediaService = require('../services/mediaService');
         const uploaded = await mediaService.uploadFromFilePath(req.file.path, req.file.originalname, req.file.mimetype);
+        console.log(`[SEND-IMAGE] Upload result:`, uploaded);
 
         // Cleanup multer temp file
         try { require('fs').unlinkSync(req.file.path); } catch (e) { /* ignore */ }
 
         const cleanPhone = phone.replace(/\D/g, '');
         const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
+        console.log(`[SEND-IMAGE] Sending to WhatsApp:`, { to: formattedPhone, imageUrl: uploaded.fileUrl?.substring(0, 80) + '...', caption });
+        
         await whatsappService.sendImage(formattedPhone, uploaded.fileUrl, caption, 'manual_reply');
 
         // Save attachment record
@@ -8621,9 +8626,10 @@ router.post('/support-tickets/send-image', verifyToken, uploadMedia.single('imag
             direction: 'outgoing'
         });
 
+        console.log(`[SEND-IMAGE] ✓ Success for phone:`, phone);
         res.json({ success: true, message: 'Image sent', fileUrl: uploaded.fileUrl });
     } catch (error) {
-        console.error('Admin send image error:', error);
+        console.error('[SEND-IMAGE] Error:', error);
         res.status(500).json({ error: 'Failed to send image', details: error.message });
     }
 });
