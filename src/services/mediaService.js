@@ -246,11 +246,14 @@ async function uploadFileToStorage(filePath, storagePath, contentType) {
             return { data: null, error: e };
         });
 
-        if (signedUrlData?.signedUrl) {
-            console.log(`[MEDIA] ✓ Signed URL generated:`, signedUrlData.signedUrl.substring(0, 100) + '...');
-            return signedUrlData.signedUrl;
+        if (signedUrlData?.signedURL || signedUrlData?.signedUrl) {
+            const rawSigned = signedUrlData.signedURL || signedUrlData.signedUrl;
+            // Supabase may return a relative path — prepend base URL if so
+            const fullSignedUrl = rawSigned.startsWith('http') ? rawSigned : `${SUPABASE_URL}${rawSigned}`;
+            console.log(`[MEDIA] ✓ Signed URL generated:`, fullSignedUrl.substring(0, 100) + '...');
+            return fullSignedUrl;
         } else {
-            console.warn(`[MEDIA] Signed URL response missing signedUrl field:`, signedUrlData);
+            console.warn(`[MEDIA] Signed URL response missing field:`, JSON.stringify(signedUrlData));
         }
     } catch (err) {
         console.warn('[MEDIA] Signed URL generation failed, falling back to public URL:', err.message);
