@@ -257,8 +257,9 @@ class IGBotEngine {
                     'cancellation', 'refund', 'greeting', 'positive_message',
                     'size_question', 'stock_check', 'product_link'
                 ];
-                if (AUTOMATABLE_INTENTS.includes(result.intent) && result.confidence > 0) {
-                    // Automatable intent — proceed with normal routing below.
+                if (AUTOMATABLE_INTENTS.includes(result.intent) || result.intent === 'unknown') {
+                    // Automatable intent OR unknown (which may resolve via catalog
+                    // fallback in _handleUnknown) — proceed with normal routing.
                     // Don't touch is_escalated or the ticket.
                     console.log(`[IG BOT] Escalated user ${igUserId} — automatable intent: ${result.intent}`);
                 } else {
@@ -314,36 +315,39 @@ class IGBotEngine {
      * @returns {boolean} true if handled (stay waiting), false to resume flow
      */
     async _handleWaitingForCustomer(igUserId, message, context, result) {
-        const isClearNewRequest =
-            result.isIntentSwitch ||
-            (result.confidence >= CONFIDENCE.HIGH &&
-             result.intent !== 'greeting' &&
-             result.intent !== 'positive_message');
+        // An open support ticket must NOT globally lock the bot.
+        // Resume normal flow for EVERY intent except when the user is
+        // actively describing a support issue for the human team.
+        //
+        // The existing routing below handles product, tracking, FAQ,
+        // greeting, catalog-aware unknown, etc. — all safely.
 
-        if (isClearNewRequest) {
-            await instagramService.setBotState(igUserId, STATES.IDLE, context);
-            return false; // resume normal routing
+        if (result.intent === 'provide_support_description') {
+            // User is actively describing a support issue — append to ticket
+            if (context.ticketId) {
+                try {
+                    await dbAdapter.query(
+                        `UPDATE support_tickets
+                         SET message = message || '\n\n---\n' || ?,
+                             is_read = false,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ?`,
+                        [message, context.ticketId]
+                    );
+                } catch (e) { /* best-effort */ }
+            }
+
+            await instagramService.sendMessage(
+                igUserId,
+                'Got it — our team has this conversation and will update you right here shortly.'
+            );
+            return true; // handled — stay waiting
         }
 
-        // Follow-up while waiting — log to the linked ticket if any
-        if (context.ticketId) {
-            try {
-                await dbAdapter.query(
-                    `UPDATE support_tickets
-                     SET message = message || '\n\n---\n' || ?,
-                         is_read = false,
-                         updated_at = CURRENT_TIMESTAMP
-                     WHERE id = ?`,
-                    [message, context.ticketId]
-                );
-            } catch (e) { /* best-effort */ }
-        }
-
-        await instagramService.sendMessage(
-            igUserId,
-            'Got it — our team has this conversation and will update you right here shortly.'
-        );
-        return true; // handled — stay waiting
+        // Everything else — resume normal bot routing.
+        // Don't touch is_escalated or the ticket.
+        await instagramService.setBotState(igUserId, STATES.IDLE, context);
+        return false; // resume normal routing below
     }
 
     // ─── Stateful Flow Handling ─────────────────────────────────
