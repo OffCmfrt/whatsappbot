@@ -2219,12 +2219,15 @@ router.get('/customer-context/:phone', verifyToken, async (req, res) => {
             console.warn('[customer-context] Returns server unavailable, skipping portal data:', rsErr.message);
         }
 
-        // Filter returns-server requests to this customer's orders
-        const customerOrderIds = new Set(ordersRows.map(r => String(r.order_id)));
+        // Filter returns-server requests to this customer's orders.
+        // Normalize by stripping '#' — the returns server stores Shopify format
+        // ("#55197") while store_shoppers stores bare order ids ("55197").
+        const normOrderId = v => String(v || '').replace(/^#/, '');
+        const customerOrderIds = new Set(ordersRows.map(r => normOrderId(r.order_id)));
         const portalReturns = [];
         const portalExchanges = [];
         for (const req of rsRequests) {
-            if (!customerOrderIds.has(String(req.order_number))) continue;
+            if (!customerOrderIds.has(normOrderId(req.order_number))) continue;
             const target = req.type === 'exchange' ? portalExchanges : portalReturns;
             target.push({
                 request_id: req.request_id,
