@@ -3,9 +3,14 @@
  * Reduces database reads by caching frequently accessed data
  */
 
+// Bound pending bookkeeping across all cache namespaces, not just stored values.
+let pendingReadCount = 0;
+const MAX_PENDING_READS = 100;
+
 class LRUCache {
   constructor(maxSize = 100, defaultTTL = 5 * 60 * 1000) {
     this.cache = new Map();
+    this.pending = new Map();
     this.maxSize = maxSize;
     this.defaultTTL = defaultTTL; // 5 minutes default
     this.stats = { hits: 0, misses: 0, evictions: 0 };
@@ -37,6 +42,7 @@ class LRUCache {
   }
 
   set(key, value, ttl = this.defaultTTL) {
+    this.forgetPending(key);
     // If key exists, delete it first to update position
     if (this.cache.has(key)) {
       this.cache.delete(key);
@@ -61,12 +67,43 @@ class LRUCache {
     return this.get(key) !== null;
   }
 
+  forgetPending(key) {
+    if (this.pending.delete(key)) pendingReadCount--;
+  }
+
   delete(key) {
+    this.forgetPending(key);
     return this.cache.delete(key);
   }
 
   clear() {
+    pendingReadCount -= this.pending.size;
+    this.pending.clear();
     this.cache.clear();
+  }
+
+  async getOrLoad(key, queryFn, ttl = this.defaultTTL, { refresh = false, cacheResult = true } = {}) {
+    const previous = this.pending.get(key);
+    if (previous && (!refresh || previous.refresh)) return previous.promise;
+    if (refresh) this.delete(key);
+    else if (cacheResult) {
+      const cached = this.get(key);
+      if (cached !== null) return cached;
+    }
+    // Overflow reads still succeed, but cannot repopulate an invalidated cache.
+    if (pendingReadCount >= MAX_PENDING_READS) return queryFn();
+
+    const entry = { refresh, promise: null };
+    pendingReadCount++;
+    this.pending.set(key, entry);
+    entry.promise = Promise.resolve().then(queryFn).then(result => {
+      // Identity is a generation token: delete/clear/set detach older reads.
+      if (cacheResult && this.pending.get(key) === entry) this.set(key, result, ttl);
+      return result;
+    }).finally(() => {
+      if (this.pending.get(key) === entry) this.forgetPending(key);
+    });
+    return entry.promise;
   }
 
   getStats() {
@@ -131,30 +168,14 @@ function generateQueryKey(sql, params = []) {
 }
 
 // Cache wrapper for database queries
-async function cachedQuery(cacheName, key, queryFn, ttl = null) {
+async function cachedQuery(cacheName, key, queryFn, ttl = null, options = {}) {
   const cache = caches[cacheName];
   if (!cache) {
     console.warn(`⚠️ Cache "${cacheName}" not found`);
     return await queryFn();
   }
 
-  // Try to get from cache
-  const cached = cache.get(key);
-  if (cached !== null) {
-    return cached;
-  }
-
-  // Execute query
-  const result = await queryFn();
-  
-  // Store in cache
-  if (ttl) {
-    cache.set(key, result, ttl);
-  } else {
-    cache.set(key, result);
-  }
-
-  return result;
+  return cache.getOrLoad(key, queryFn, ttl || cache.defaultTTL, options);
 }
 
 // Invalidate specific cache or all caches
@@ -194,7 +215,7 @@ function getCached(key) {
 
 // Helper function to set cached value
 function setCache(key, value, cacheName = 'stats', ttl = null) {
-  const cache = caches[cacheName];
+  let cache = caches[cacheName];
   if (!cache) {
     console.warn(`⚠️ Cache "${cacheName}" not found, using default cache`);
     cache = caches.stats;

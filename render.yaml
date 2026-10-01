@@ -48,3 +48,7 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
+      - key: RETURNS_SERVER_URL
+        sync: false
+      - key: WHATSAPP_INTERNAL_TOKEN
+        sync: false

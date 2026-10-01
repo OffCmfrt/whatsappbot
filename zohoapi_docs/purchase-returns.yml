@@ -1,0 +1,1839 @@
+openapi: 3.0.0
+info:
+  title: Purchase Returns
+  description: A purchase return is a document used to return goods to a vendor. It can be created standalone or from a purchase order. It tracks fulfillment and refund statuses, and can generate vendor credits, packages, and shipments.
+  contact: {}
+  version: 1.0.0
+servers:
+  - url: https://www.zohoapis.com/books/v3
+    description: API Endpoint
+tags:
+  - name: purchase-returns
+    description: Purchase-Returns Module
+paths:
+  /purchasereturns:
+    x-mcp-group:
+      - Purchase Returns
+    post:
+      tags:
+        - purchase-returns
+      operationId: create_purchase_return
+      summary: Create a purchase return
+      description: Create a new purchase return for a vendor. A purchase return can be created standalone or from a purchase order.
+      parameters:
+        - name: ignore_auto_number_generation
+          in: query
+          description: Ignore auto purchase return number generation for this purchase return. This mandates the purchase return number. Allowed values are <code>true</code> and <code>false</code>.
+          required: false
+          schema:
+            type: boolean
+          example: false
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/create-purchase-return-request'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/create-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.CREATE
+    get:
+      tags:
+        - purchase-returns
+      operationId: list_purchase_returns
+      summary: List purchase returns
+      description: List all purchase returns. Use query parameters to filter by status, vendor, date range, and other criteria.
+      parameters:
+        - name: filter_by
+          in: query
+          description: 'Filter purchase returns by status. Allowed values: <code>Status.All</code>, <code>Status.Draft</code>, <code>Status.Confirmed</code>, <code>Status.Void</code>, <code>Status.Closed</code>.'
+          required: false
+          schema:
+            type: string
+          example: Status.All
+        - name: status
+          in: query
+          description: 'Filter by purchase return status. Allowed values: <code>draft</code>, <code>confirmed</code>, <code>void</code>, <code>closed</code>, <code>shipped</code>, <code>refunded</code>, <code>not_shipped</code>, <code>not_refunded</code>, <code>partially_shipped</code>, <code>partially_refunded</code>, <code>packed</code>, <code>not_packed</code>, <code>partially_packed</code>, <code>picked</code>, <code>not_picked</code>, <code>partially_picked</code>.'
+          required: false
+          schema:
+            type: string
+          example: confirmed
+        - name: search_text
+          in: query
+          description: Search purchase returns by purchase return number, vendor name, or other searchable fields.
+          required: false
+          schema:
+            type: string
+        - name: sort_column
+          in: query
+          description: 'Column by which the list should be sorted. Allowed values: <code>purchasereturn_number</code>, <code>vendor_name</code>, <code>purchaseorder_number</code>, <code>date</code>, <code>created_time</code>, <code>last_modified_time</code>.'
+          required: false
+          schema:
+            type: string
+          example: created_time
+        - name: purchasereturn_date
+          in: query
+          description: 'Search purchase returns by date. Use YYYY-MM-DD format. Variants: <code>purchasereturn_date_start</code>, <code>purchasereturn_date_end</code>, <code>purchasereturn_date_before</code>, <code>purchasereturn_date_after</code>.'
+          required: false
+          schema:
+            type: string
+          example: '2024-01-15'
+        - name: vendor_name
+          in: query
+          description: 'Search purchase returns by vendor name. Variants: <code>vendor_name_startswith</code>, <code>vendor_name_contains</code>.'
+          required: false
+          schema:
+            type: string
+        - name: purchasereturn_number
+          in: query
+          description: 'Search purchase returns by purchase return number. Variants: <code>purchasereturn_number_startswith</code>, <code>purchasereturn_number_contains</code>.'
+          required: false
+          schema:
+            type: string
+          example: PR-00001
+        - name: purchaseorder_number
+          in: query
+          description: 'Search purchase returns by purchase order number. Variants: <code>purchaseorder_number_startswith</code>, <code>purchaseorder_number_contains</code>.'
+          required: false
+          schema:
+            type: string
+          example: PO-00001
+        - name: item_name
+          in: query
+          description: 'Search purchase returns by item name. Variants: <code>item_name_startswith</code>, <code>item_name_contains</code>.'
+          required: false
+          schema:
+            type: string
+        - name: item_description
+          in: query
+          description: 'Search purchase returns by item description. Variants: <code>item_description_startswith</code>, <code>item_description_contains</code>.'
+          required: false
+          schema:
+            type: string
+        - name: customview_id
+          in: query
+          description: Filter purchase returns by custom view.
+          required: false
+          schema:
+            type: string
+          example: '460000000045001'
+        - name: page
+          in: query
+          description: Page number to be fetched. Default value is 1.
+          required: false
+          schema:
+            type: integer
+            default: 1
+          example: 1
+        - name: per_page
+          in: query
+          description: Number of records to be fetched per page.
+          required: false
+          schema:
+            type: integer
+            default: 10
+          example: 10
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/list-purchase-returns-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.READ
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}:
+    x-mcp-group:
+      - Purchase Returns
+    get:
+      tags:
+        - purchase-returns
+      operationId: get_purchase_return
+      summary: Retrieve a purchase return
+      description: Retrieve the details of an existing purchase return.
+      parameters:
+        - name: print
+          in: query
+          description: Set to <code>true</code> to get the print-friendly version of the purchase return.
+          required: false
+          schema:
+            type: boolean
+          example: false
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/get-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.READ
+    put:
+      tags:
+        - purchase-returns
+      operationId: update_purchase_return
+      summary: Update a purchase return
+      description: Update an existing purchase return.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/update-purchase-return-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/update-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.UPDATE
+    delete:
+      tags:
+        - purchase-returns
+      operationId: delete_purchase_return
+      summary: Delete a purchase return
+      description: Delete an existing purchase return.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/delete-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.DELETE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}/status/open:
+    x-mcp-group:
+      - Purchase Returns
+    post:
+      tags:
+        - purchase-returns
+      operationId: confirm_purchase_return
+      summary: Confirm a purchase return
+      description: Change the status of a draft purchase return to confirmed.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/confirm-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.CREATE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}/status/void:
+    x-mcp-group:
+      - Purchase Returns
+    post:
+      tags:
+        - purchase-returns
+      operationId: void_purchase_return
+      summary: Void a purchase return
+      description: Mark an existing purchase return as void.
+      parameters:
+        - name: reason
+          in: query
+          description: Reason for voiding the purchase return. Max-length [500].
+          required: false
+          schema:
+            type: string
+            maxLength: 500
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/void-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.CREATE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}/status/fulfilled:
+    x-mcp-group:
+      - Purchase Returns
+    post:
+      tags:
+        - purchase-returns
+      operationId: fulfill_purchase_return
+      summary: Fulfill a purchase return
+      description: Mark the items in a purchase return as fulfilled (shipped back to the vendor).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/fulfill-purchase-return-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/fulfill-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.CREATE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}/status/unfulfilled:
+    x-mcp-group:
+      - Purchase Returns
+    post:
+      tags:
+        - purchase-returns
+      operationId: unfulfill_purchase_return
+      summary: Unfulfill a purchase return
+      description: Reverse the fulfillment of items in a purchase return.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/unfulfill-purchase-return-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/unfulfill-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.CREATE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}/email:
+    x-mcp-group:
+      - Purchase Returns
+    post:
+      tags:
+        - purchase-returns
+      operationId: email_purchase_return
+      summary: Email a purchase return
+      description: Send a purchase return via email to the vendor or specified recipients.
+      parameters:
+        - name: send_attachment
+          in: query
+          description: Send the purchase return attachment with the email.
+          required: false
+          schema:
+            type: boolean
+          example: false
+        - name: attach_pdf
+          in: query
+          description: Whether to attach the PDF of the purchase return.
+          required: false
+          schema:
+            type: boolean
+          example: true
+        - name: file_name
+          in: query
+          description: Custom file name for the PDF attachment. Max-length [100].
+          required: false
+          schema:
+            type: string
+          example: PR-00001.pdf
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/email-purchase-return-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/email-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.CREATE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}/attachment:
+    x-mcp-group:
+      - Purchase Returns
+    post:
+      tags:
+        - purchase-returns
+      operationId: add_attachment_to_purchase_return
+      summary: Add attachment to a purchase return
+      description: 'Attach a file to a purchase return. The file must be multipart/form-data. Allowed extensions: gif, png, jpeg, jpg, bmp, pdf, xls, xlsx, doc, docx, xml, csv, txt, tif, tiff, msg, eml, dwg. Maximum file size is 10 MB.'
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                attachment:
+                  type: string
+                  format: binary
+                  description: File to attach to the purchase return.
+                can_send_in_mail:
+                  type: boolean
+                  description: Set to <code>true</code> to allow the attachment to be sent via email.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/add-attachment-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.CREATE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/status/closed:
+    x-mcp-group:
+      - Purchase Returns
+    put:
+      tags:
+        - purchase-returns
+      operationId: close_purchase_return
+      summary: Close a purchase return
+      description: Mark one or more purchase returns as closed. Closing a purchase return cancels the remaining unfulfilled quantities.
+      parameters:
+        - name: purchasereturn_ids
+          in: query
+          description: Comma-separated list of purchase return IDs to close. Maximum 200 IDs.
+          required: true
+          schema:
+            type: string
+          example: 460000000044972,460000000044980
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/close-purchase-return-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/close-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.UPDATE
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/status/reopen:
+    x-mcp-group:
+      - Purchase Returns
+    put:
+      tags:
+        - purchase-returns
+      operationId: reopen_purchase_return
+      summary: Reopen a purchase return
+      description: Reopen one or more closed purchase returns.
+      parameters:
+        - name: purchasereturn_ids
+          in: query
+          description: Comma-separated list of purchase return IDs to reopen. Maximum 200 IDs.
+          required: true
+          schema:
+            type: string
+          example: 460000000044972,460000000044980
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/reopen-purchase-return-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.UPDATE
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}/address/shipping:
+    x-mcp-group:
+      - Purchase Returns
+    put:
+      tags:
+        - purchase-returns
+      operationId: update_purchase_return_shipping_address
+      summary: Update shipping address
+      description: Update the shipping address of a purchase return.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/update-address-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/update-shipping-address-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.UPDATE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}/address/billing:
+    x-mcp-group:
+      - Purchase Returns
+    put:
+      tags:
+        - purchase-returns
+      operationId: update_purchase_return_billing_address
+      summary: Update billing address
+      description: Update the billing address of a purchase return.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/update-address-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/update-billing-address-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.UPDATE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - $ref: '#/components/parameters/organization_id'
+  /purchasereturns/{purchase_return_id}/documents/{document_id}:
+    x-mcp-group:
+      - Purchase Returns
+    delete:
+      tags:
+        - purchase-returns
+      operationId: delete_purchase_return_attachment
+      summary: Delete an attachment
+      description: Delete a file attached to a purchase return.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/delete-attachment-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.purchasereturns.DELETE
+    parameters:
+      - name: purchase_return_id
+        in: path
+        required: true
+        description: Unique identifier of the purchase return.
+        schema:
+          type: string
+        example: '460000000044972'
+      - name: document_id
+        in: path
+        required: true
+        description: Unique identifier of the document (attachment) to delete.
+        schema:
+          type: string
+        example: '460000000045020'
+      - $ref: '#/components/parameters/organization_id'
+components:
+  parameters:
+    organization_id:
+      name: organization_id
+      description: 'ID of the organization. <code>Note</code>: This value is a set of numeric characters.'
+      in: query
+      required: true
+      schema:
+        type: string
+      example: '10234695'
+  schemas:
+    gendoc-attributes-schema:
+      $ref: '#/components/schemas/purchase-return-response'
+    purchase-return-response:
+      type: object
+      properties:
+        purchasereturn_id:
+          $ref: '#/components/schemas/purchasereturn_id'
+        purchasereturn_number:
+          $ref: '#/components/schemas/purchasereturn_number'
+        reference_number:
+          $ref: '#/components/schemas/reference_number'
+        date:
+          $ref: '#/components/schemas/date'
+        reason:
+          $ref: '#/components/schemas/reason'
+        total_quantity:
+          $ref: '#/components/schemas/total_quantity'
+        sub_total:
+          $ref: '#/components/schemas/sub_total'
+        bcy_sub_total:
+          $ref: '#/components/schemas/bcy_sub_total'
+        total:
+          $ref: '#/components/schemas/total'
+        purchasereturn_status:
+          $ref: '#/components/schemas/purchasereturn_status'
+        shipped_status:
+          $ref: '#/components/schemas/shipped_status'
+        dn_status:
+          $ref: '#/components/schemas/dn_status'
+        vendor_id:
+          $ref: '#/components/schemas/vendor_id'
+        contact:
+          $ref: '#/components/schemas/contact'
+        currency_id:
+          $ref: '#/components/schemas/currency_id'
+        currency_code:
+          $ref: '#/components/schemas/currency_code'
+        currency_symbol:
+          $ref: '#/components/schemas/currency_symbol'
+        exchange_rate:
+          $ref: '#/components/schemas/exchange_rate'
+        line_items:
+          $ref: '#/components/schemas/line_items'
+        purchaseorders:
+          $ref: '#/components/schemas/purchaseorders'
+        vendorcredits:
+          $ref: '#/components/schemas/vendorcredits'
+        billing_address:
+          $ref: '#/components/schemas/address-object'
+        shipping_address:
+          $ref: '#/components/schemas/address-object'
+        terms:
+          $ref: '#/components/schemas/terms'
+        template_name:
+          $ref: '#/components/schemas/template_name'
+        template_id:
+          $ref: '#/components/schemas/template_id'
+        location_id:
+          $ref: '#/components/schemas/location_id'
+        location_name:
+          $ref: '#/components/schemas/location_name'
+        documents:
+          $ref: '#/components/schemas/documents'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+        gst_treatment:
+          $ref: '#/components/schemas/gst_treatment'
+        tax_treatment:
+          $ref: '#/components/schemas/tax_treatment'
+        vat_treatment:
+          $ref: '#/components/schemas/vat_treatment'
+        gst_no:
+          $ref: '#/components/schemas/gst_no'
+        tax_reg_no:
+          $ref: '#/components/schemas/tax_reg_no'
+        source_of_supply:
+          $ref: '#/components/schemas/source_of_supply'
+        destination_of_supply:
+          $ref: '#/components/schemas/destination_of_supply'
+        place_of_supply:
+          $ref: '#/components/schemas/place_of_supply'
+        is_inclusive_tax:
+          $ref: '#/components/schemas/is_inclusive_tax'
+        discount:
+          $ref: '#/components/schemas/discount'
+        is_discount_before_tax:
+          $ref: '#/components/schemas/is_discount_before_tax'
+        discount_type:
+          $ref: '#/components/schemas/discount_type'
+        can_create_vendorcredit:
+          $ref: '#/components/schemas/can_create_vendorcredit'
+        is_adv_tracking_in_package:
+          $ref: '#/components/schemas/is_adv_tracking_in_package'
+    purchasereturn_id:
+      description: Unique ID generated by the server for the purchase return.
+      type: string
+      example: '460000000044972'
+    purchasereturn_number:
+      description: Unique number assigned to the purchase return.
+      type: string
+      example: PR-00001
+    reference_number:
+      description: Reference number for the purchase return. Max-length [100].
+      type: string
+      example: REF-001
+    date:
+      description: Date of the purchase return. Format [yyyy-mm-dd].
+      type: string
+      example: '2024-01-15'
+    reason:
+      description: Reason for returning the items to the vendor. Max-length [1000].
+      type: string
+      example: Defective items received
+    total_quantity:
+      description: Total quantity of all items in the purchase return.
+      type: number
+      format: double
+      example: 10
+    sub_total:
+      description: Sub-total of the purchase return (before taxes and adjustments).
+      type: number
+      format: double
+      example: 5000
+    bcy_sub_total:
+      description: Sub-total of the purchase return in base currency.
+      type: number
+      format: double
+      example: 5000
+    total:
+      description: Total amount of the purchase return.
+      type: number
+      format: double
+      example: 5600
+    purchasereturn_status:
+      description: 'Status of the purchase return. Possible values: <code>draft</code>, <code>confirmed</code>, <code>void</code>, <code>closed</code>.'
+      type: string
+      example: confirmed
+    shipped_status:
+      description: 'Shipment status of the purchase return. Possible values: <code>shipped</code>, <code>not_shipped</code>, <code>partially_shipped</code>.'
+      type: string
+      example: not_shipped
+    dn_status:
+      description: 'Vendor credit (debit note) status of the purchase return. Possible values: <code>refunded</code>, <code>not_refunded</code>, <code>partially_refunded</code>.'
+      type: string
+      example: not_refunded
+    vendor_id:
+      description: Unique ID of the vendor associated with the purchase return.
+      type: string
+      example: '460000000026049'
+    vendor_name:
+      description: Name of the vendor.
+      type: string
+      example: Bowman & Co
+    currency_id:
+      description: Unique ID of the currency used in the purchase return.
+      type: string
+      example: '460000000000097'
+    currency_code:
+      description: Currency code (e.g. USD, INR).
+      type: string
+      example: USD
+    currency_symbol:
+      description: Currency symbol (e.g. $, ₹).
+      type: string
+      example: $
+    exchange_rate:
+      description: Exchange rate for the currency used.
+      type: number
+      format: double
+      example: 1
+    terms:
+      description: Terms and conditions for the purchase return. Max-length [10000].
+      type: string
+      example: Items must be returned in original packaging.
+    template_name:
+      description: Name of the PDF template associated with the purchase return.
+      type: string
+      example: Standard Template
+    template_id:
+      description: Unique ID of the PDF template associated with the purchase return.
+      type: string
+      example: '460000000000143'
+    location_id:
+      description: Unique ID of the location.
+      type: string
+      example: '460000000044020'
+    location_name:
+      description: Name of the location.
+      type: string
+      example: Head Office
+    gst_treatment:
+      description: GST treatment for the vendor.
+      type: string
+      example: business_gst
+    tax_treatment:
+      description: Tax treatment for the vendor.
+      type: string
+      example: vat_registered
+    vat_treatment:
+      description: VAT treatment for the vendor.
+      type: string
+      example: uk_vat_registered
+    gst_no:
+      description: GST identification number. Max-length [15].
+      type: string
+      example: 22AAAAA0000A1Z5
+    tax_reg_no:
+      description: Tax registration number of the vendor.
+      type: string
+      example: '100234567890003'
+    source_of_supply:
+      description: Source state code for GST.
+      type: string
+      example: '33'
+    destination_of_supply:
+      description: Destination state code for GST.
+      type: string
+      example: '27'
+    place_of_supply:
+      description: Place of supply state code.
+      type: string
+      example: '33'
+    is_inclusive_tax:
+      description: Whether the line item rates are inclusive of tax.
+      type: boolean
+      example: false
+    discount:
+      description: Discount applied on the purchase return. Can be a percentage (e.g. <code>10%</code>) or a flat amount.
+      type: string
+      example: '0.0'
+    is_discount_before_tax:
+      description: Whether the discount is applied before tax calculation.
+      type: boolean
+      example: true
+    discount_type:
+      description: 'Type of discount applied. Possible values: <code>entity_level</code>, <code>item_level</code>.'
+      type: string
+      example: entity_level
+    can_create_vendorcredit:
+      description: Whether a vendor credit can be created from this purchase return.
+      type: boolean
+      example: true
+    is_adv_tracking_in_package:
+      description: Whether advanced tracking (serial/batch) is enabled for packaging in this purchase return.
+      type: boolean
+      example: false
+    contact:
+      description: Contact details of the vendor.
+      type: object
+      properties:
+        contact_id:
+          description: Unique ID of the contact.
+          type: string
+          example: '460000000026049'
+        name:
+          description: Name of the contact.
+          type: string
+          example: Bowman & Co
+    line_items:
+      description: Line items in the purchase return.
+      type: array
+      items:
+        $ref: '#/components/schemas/purchase-return-line-item-response'
+    purchase-return-line-item-response:
+      type: object
+      properties:
+        line_item_id:
+          description: Unique ID of the line item.
+          type: string
+          example: '460000000044897'
+        item_id:
+          description: Unique ID of the item.
+          type: string
+          example: '460000000027009'
+        po_item_id:
+          description: Unique ID of the corresponding purchase order line item.
+          type: string
+          example: '460000000044892'
+        item_order:
+          description: Display order of the line item.
+          type: integer
+          example: 1
+        name:
+          description: Name of the item.
+          type: string
+          example: Hard Drive
+        description:
+          description: Description of the line item.
+          type: string
+          example: 500GB External Hard Drive
+        quantity:
+          description: Quantity being returned.
+          type: number
+          format: double
+          example: 5
+        quantity_remaining:
+          description: Remaining quantity to be processed.
+          type: number
+          format: double
+          example: 3
+        quantity_packed:
+          description: Quantity that has been packed.
+          type: number
+          format: double
+          example: 2
+        quantity_shipped:
+          description: Quantity that has been shipped.
+          type: number
+          format: double
+          example: 2
+        quantity_returned:
+          description: Total quantity returned.
+          type: number
+          format: double
+          example: 5
+        quantity_cancelled:
+          description: Quantity that has been cancelled.
+          type: number
+          format: double
+          example: 0
+        unit:
+          description: Unit of measurement for the item.
+          type: string
+          example: pcs
+        rate:
+          description: Rate (price) per unit of the item.
+          type: number
+          format: double
+          example: 1000
+        item_total:
+          description: Total amount for this line item.
+          type: number
+          format: double
+          example: 5000
+        account_id:
+          description: Unique ID of the account associated with this line item.
+          type: string
+          example: '460000000000388'
+        item_type:
+          description: 'Type of item. Possible values: <code>inventory</code>, <code>sales</code>, <code>purchases</code>, <code>sales_and_purchases</code>, <code>service</code>.'
+          type: string
+          example: inventory
+        tax_id:
+          description: Unique ID of the tax applied to this line item.
+          type: string
+          example: '460000000044043'
+        tax_name:
+          description: Name of the tax applied.
+          type: string
+          example: GST
+        tax_type:
+          description: Type of tax applied.
+          type: string
+          example: tax
+        tax_percentage:
+          description: Tax percentage applied to this line item.
+          type: number
+          format: double
+          example: 12
+        location_id:
+          description: Unique ID of the location for this line item.
+          type: string
+          example: '460000000044020'
+        location_name:
+          description: Name of the location.
+          type: string
+          example: Head Office
+        discount:
+          description: Discount applied on the line item.
+          type: string
+          example: '0.0'
+        line_item_taxes:
+          description: Taxes applied on the line item.
+          type: array
+          items:
+            type: object
+            properties:
+              tax_id:
+                description: Unique ID of the tax.
+                type: string
+                example: '460000000044043'
+              tax_name:
+                description: Name of the tax.
+                type: string
+                example: GST
+              tax_amount:
+                description: Amount of tax applied.
+                type: number
+                format: double
+                example: 600
+    purchaseorders:
+      description: Purchase orders associated with this purchase return.
+      type: array
+      items:
+        type: object
+        properties:
+          purchaseorder_id:
+            description: Unique ID of the purchase order.
+            type: string
+            example: '460000000044936'
+          purchaseorder_number:
+            description: Purchase order number.
+            type: string
+            example: PO-00032
+          purchaseorder_date:
+            description: Date of the purchase order.
+            type: string
+            example: '2024-01-10'
+    vendorcredits:
+      description: Vendor credits associated with this purchase return.
+      type: array
+      items:
+        type: object
+        properties:
+          vendor_credit_id:
+            description: Unique ID of the vendor credit.
+            type: string
+            example: '460000000045001'
+          vendor_credit_number:
+            description: Vendor credit number.
+            type: string
+            example: DN-00001
+          date:
+            description: Date of the vendor credit.
+            type: string
+            example: '2024-01-20'
+          total:
+            description: Total amount of the vendor credit.
+            type: number
+            format: double
+            example: 5600
+          status:
+            description: Status of the vendor credit.
+            type: string
+            example: open
+    address-object:
+      description: Address details.
+      type: object
+      properties:
+        address:
+          description: Street address.
+          type: string
+          example: 123 Main St
+        street2:
+          description: Additional street address.
+          type: string
+          example: Suite 100
+        city:
+          description: City.
+          type: string
+          example: New York
+        state:
+          description: State or province.
+          type: string
+          example: New York
+        zip:
+          description: ZIP or postal code.
+          type: string
+          example: '10001'
+        country:
+          description: Country.
+          type: string
+          example: US
+        fax:
+          description: Fax number.
+          type: string
+          example: ''
+        phone:
+          description: Phone number.
+          type: string
+          example: +1-212-555-0100
+        attention:
+          description: Name of the attention person.
+          type: string
+          example: John Smith
+    documents:
+      description: Documents attached to the purchase return.
+      type: array
+      items:
+        type: object
+        properties:
+          document_id:
+            description: Unique ID of the document.
+            type: string
+            example: '460000000045020'
+          file_name:
+            description: Name of the file.
+            type: string
+            example: receipt.pdf
+          file_type:
+            description: Type of the file.
+            type: string
+            example: pdf
+          file_size:
+            description: Size of the file in bytes.
+            type: integer
+            example: 12345
+    custom_fields:
+      description: Custom fields associated with the purchase return.
+      type: array
+      items:
+        type: object
+        properties:
+          customfield_id:
+            description: Unique ID of the custom field.
+            type: string
+            example: '460000000044050'
+          value:
+            description: Value of the custom field.
+            type: string
+            example: Priority Return
+    page_context:
+      type: object
+      properties:
+        page:
+          description: Current page number.
+          type: integer
+          example: 1
+        per_page:
+          description: Number of records per page.
+          type: integer
+          example: 10
+        has_more_page:
+          description: Whether there are more pages.
+          type: boolean
+          example: false
+        report_name:
+          description: Name of the report.
+          type: string
+          example: Purchase Returns
+        applied_filter:
+          description: Filter applied to the list.
+          type: string
+          example: Status.All
+        sort_column:
+          description: Column by which the results are sorted.
+          type: string
+          example: created_time
+        sort_order:
+          description: 'Order of sorting. Possible values: <code>A</code> (ascending), <code>D</code> (descending).'
+          type: string
+          example: D
+    list-purchase-returns-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: success
+          readOnly: true
+        purchasereturns:
+          type: array
+          items:
+            type: object
+            properties:
+              purchasereturn_id:
+                $ref: '#/components/schemas/purchasereturn_id'
+              purchasereturn_number:
+                $ref: '#/components/schemas/purchasereturn_number'
+              purchaseorder_number:
+                description: Purchase order number associated with the purchase return.
+                type: string
+                example: PO-00032
+              date:
+                $ref: '#/components/schemas/date'
+              reason:
+                $ref: '#/components/schemas/reason'
+              vendor_id:
+                $ref: '#/components/schemas/vendor_id'
+              vendor_name:
+                $ref: '#/components/schemas/vendor_name'
+              quantity:
+                description: Total return quantity.
+                type: number
+                format: double
+                example: 10
+              amount:
+                description: Total return amount.
+                type: number
+                format: double
+                example: 5600
+              purchasereturn_status:
+                $ref: '#/components/schemas/purchasereturn_status'
+              shipment_status:
+                description: 'Shipment status. Possible values: <code>shipped</code>, <code>not_shipped</code>, <code>partially_shipped</code>.'
+                type: string
+                example: not_shipped
+              package_status:
+                description: 'Package status. Possible values: <code>packed</code>, <code>not_packed</code>, <code>partially_packed</code>.'
+                type: string
+                example: not_packed
+              picked_status:
+                description: 'Pick list status. Possible values: <code>picked</code>, <code>not_picked</code>, <code>partially_picked</code>.'
+                type: string
+                example: not_picked
+              refund_status:
+                description: 'Refund status. Possible values: <code>refunded</code>, <code>not_refunded</code>, <code>partially_refunded</code>.'
+                type: string
+                example: not_refunded
+              created_time:
+                description: Time at which the purchase return was created.
+                type: string
+                example: 2024-01-15T10:30:00+0530
+              last_modified_time:
+                description: Time at which the purchase return was last modified.
+                type: string
+                example: 2024-01-15T10:30:00+0530
+        page_context:
+          $ref: '#/components/schemas/page_context'
+    get-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: success
+          readOnly: true
+        purchasereturn:
+          $ref: '#/components/schemas/purchase-return-response'
+    create-purchase-return-request:
+      required:
+        - date
+        - vendor_id
+        - line_items
+      type: object
+      properties:
+        purchasereturn_number:
+          description: Unique number for the purchase return. Required when <code>ignore_auto_number_generation</code> is <code>true</code>. Max-length [50].
+          type: string
+          example: PR-00001
+        reference_number:
+          description: Reference number for the purchase return. Max-length [100].
+          type: string
+          example: REF-001
+        date:
+          description: Date of the purchase return. Format [yyyy-mm-dd].
+          type: string
+          example: '2024-01-15'
+        reason:
+          description: Reason for creating the purchase return. Max-length [1000].
+          type: string
+          example: Defective items received
+        vendor_id:
+          description: Unique ID of the vendor.
+          type: string
+          example: '460000000026049'
+        is_inclusive_tax:
+          description: Whether the line item rates are inclusive of tax.
+          type: boolean
+          example: false
+        line_items:
+          description: Line items in the purchase return.
+          type: array
+          items:
+            $ref: '#/components/schemas/purchase-return-line-item-request'
+        terms:
+          description: Terms and conditions. Max-length [10000].
+          type: string
+          example: Items must be returned in original packaging.
+        gst_treatment:
+          description: GST treatment for the vendor.
+          type: string
+          example: business_gst
+        tax_treatment:
+          description: Tax treatment for the vendor.
+          type: string
+          example: vat_registered
+        vat_treatment:
+          description: VAT treatment for the vendor.
+          type: string
+          example: uk_vat_registered
+        source_of_supply:
+          description: Source state code for GST. Max-length [5].
+          type: string
+          example: '33'
+        destination_of_supply:
+          description: Destination state code for GST. Max-length [5].
+          type: string
+          example: '27'
+        place_of_supply:
+          description: Place of supply state code. Max-length [5].
+          type: string
+          example: '33'
+        discount:
+          description: Discount applied on the purchase return.
+          type: string
+          example: '0.0'
+        is_discount_before_tax:
+          description: Whether the discount is applied before tax calculation.
+          type: boolean
+          example: true
+        discount_type:
+          description: 'Type of discount. Possible values: <code>entity_level</code>, <code>item_level</code>.'
+          type: string
+          example: entity_level
+        shipping_charge:
+          description: Shipping charges for the purchase return.
+          type: number
+          format: double
+          example: 0
+        adjustment:
+          description: Adjustment amount (positive or negative).
+          type: number
+          format: double
+          example: 0
+        adjustment_description:
+          description: Description for the adjustment. Max-length [100].
+          type: string
+          example: Rounding adjustment
+        exchange_rate:
+          description: Exchange rate for the currency used.
+          type: number
+          format: double
+          example: 1
+        currency_id:
+          description: Unique ID of the currency.
+          type: string
+          example: '460000000000097'
+        billing_address_id:
+          description: Unique ID of the billing address.
+          type: string
+          example: '460000000044030'
+        shipping_address_id:
+          description: Unique ID of the shipping address.
+          type: string
+          example: '460000000044031'
+        location_id:
+          description: Unique ID of the location.
+          type: string
+          example: '460000000044020'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+    purchase-return-line-item-request:
+      type: object
+      required:
+        - quantity
+      properties:
+        item_id:
+          description: Unique ID of the item.
+          type: string
+          example: '460000000027009'
+        po_item_id:
+          description: Unique ID of the corresponding purchase order line item.
+          type: string
+          example: '460000000044892'
+        name:
+          description: Name of the item. Max-length [200].
+          type: string
+          example: Hard Drive
+        description:
+          description: Description of the line item. Max-length [1000].
+          type: string
+          example: 500GB External Hard Drive
+        quantity:
+          description: Quantity being returned.
+          type: number
+          format: double
+          example: 5
+        unit:
+          description: Unit of measurement. Max-length [120].
+          type: string
+          example: pcs
+        rate:
+          description: Rate (price) per unit of the item.
+          type: number
+          format: double
+          example: 1000
+        item_order:
+          description: Display order of the line item.
+          type: integer
+          example: 1
+        tax_id:
+          description: Unique ID of the tax to apply to this line item.
+          type: string
+          example: '460000000044043'
+        tax_exemption_id:
+          description: Unique ID of the tax exemption.
+          type: string
+          example: '460000000044055'
+        hsn_or_sac:
+          description: HSN or SAC code for the item.
+          type: string
+          example: '84713010'
+        location_id:
+          description: Unique ID of the location.
+          type: string
+          example: '460000000044020'
+        discount:
+          description: Discount applied on the line item.
+          type: string
+          example: '0.0'
+    update-purchase-return-request:
+      type: object
+      properties:
+        purchasereturn_number:
+          description: Unique number for the purchase return. Max-length [50].
+          type: string
+          example: PR-00001
+        reference_number:
+          description: Reference number for the purchase return. Max-length [100].
+          type: string
+          example: REF-001
+        date:
+          description: Date of the purchase return. Format [yyyy-mm-dd].
+          type: string
+          example: '2024-01-15'
+        reason:
+          description: Reason for the purchase return. Max-length [1000].
+          type: string
+          example: Defective items received
+        vendor_id:
+          description: Unique ID of the vendor.
+          type: string
+          example: '460000000026049'
+        is_inclusive_tax:
+          description: Whether the line item rates are inclusive of tax.
+          type: boolean
+          example: false
+        line_items:
+          description: Line items in the purchase return.
+          type: array
+          items:
+            $ref: '#/components/schemas/purchase-return-line-item-request'
+        terms:
+          description: Terms and conditions. Max-length [10000].
+          type: string
+          example: Items must be returned in original packaging.
+        gst_treatment:
+          description: GST treatment for the vendor.
+          type: string
+          example: business_gst
+        tax_treatment:
+          description: Tax treatment for the vendor.
+          type: string
+          example: vat_registered
+        vat_treatment:
+          description: VAT treatment for the vendor.
+          type: string
+          example: uk_vat_registered
+        source_of_supply:
+          description: Source state code for GST. Max-length [5].
+          type: string
+          example: '33'
+        destination_of_supply:
+          description: Destination state code for GST. Max-length [5].
+          type: string
+          example: '27'
+        place_of_supply:
+          description: Place of supply state code. Max-length [5].
+          type: string
+          example: '33'
+        discount:
+          description: Discount applied on the purchase return.
+          type: string
+          example: '0.0'
+        is_discount_before_tax:
+          description: Whether the discount is applied before tax calculation.
+          type: boolean
+          example: true
+        discount_type:
+          description: 'Type of discount. Possible values: <code>entity_level</code>, <code>item_level</code>.'
+          type: string
+          example: entity_level
+        shipping_charge:
+          description: Shipping charges for the purchase return.
+          type: number
+          format: double
+          example: 0
+        adjustment:
+          description: Adjustment amount (positive or negative).
+          type: number
+          format: double
+          example: 0
+        adjustment_description:
+          description: Description for the adjustment. Max-length [100].
+          type: string
+          example: Rounding adjustment
+        exchange_rate:
+          description: Exchange rate for the currency used.
+          type: number
+          format: double
+          example: 1
+        currency_id:
+          description: Unique ID of the currency.
+          type: string
+          example: '460000000000097'
+        billing_address_id:
+          description: Unique ID of the billing address.
+          type: string
+          example: '460000000044030'
+        shipping_address_id:
+          description: Unique ID of the shipping address.
+          type: string
+          example: '460000000044031'
+        location_id:
+          description: Unique ID of the location.
+          type: string
+          example: '460000000044020'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+    create-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Purchase return created successfully.
+          readOnly: true
+        purchasereturn:
+          $ref: '#/components/schemas/purchase-return-response'
+    update-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Purchase return updated successfully.
+          readOnly: true
+        purchasereturn:
+          $ref: '#/components/schemas/purchase-return-response'
+    delete-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Purchase return deleted successfully.
+          readOnly: true
+    confirm-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Purchase return has been confirmed.
+          readOnly: true
+    void-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Purchase return has been voided.
+          readOnly: true
+    fulfill-purchase-return-request:
+      type: object
+      properties:
+        line_items:
+          description: Line items to fulfill.
+          type: array
+          items:
+            type: object
+            properties:
+              purchasereturn_item_id:
+                description: Unique ID of the purchase return line item.
+                type: string
+                example: '460000000044897'
+              quantity:
+                description: Quantity to fulfill.
+                type: integer
+                example: 5
+    fulfill-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Purchase return has been fulfilled.
+          readOnly: true
+    unfulfill-purchase-return-request:
+      type: object
+      properties:
+        line_items:
+          description: Line items to unfulfill.
+          type: array
+          items:
+            type: object
+            properties:
+              purchasereturn_item_id:
+                description: Unique ID of the purchase return line item.
+                type: string
+                example: '460000000044897'
+              quantity:
+                description: Quantity to unfulfill.
+                type: integer
+                example: 5
+    unfulfill-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Purchase return has been unfulfilled.
+          readOnly: true
+    email-purchase-return-request:
+      type: object
+      properties:
+        to_mail_ids:
+          description: Array of recipient email addresses.
+          type: array
+          items:
+            type: string
+          example:
+            - vendor@example.com
+        cc_mail_ids:
+          description: Array of CC email addresses.
+          type: array
+          items:
+            type: string
+          example:
+            - manager@example.com
+        bcc_mail_ids:
+          description: Array of BCC email addresses.
+          type: array
+          items:
+            type: string
+        subject:
+          description: Subject of the email. Max-length [1000].
+          type: string
+          example: Purchase Return PR-00001
+        body:
+          description: Body of the email. Max-length [100000].
+          type: string
+          example: Please find the attached purchase return.
+    email-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Email has been sent.
+          readOnly: true
+    close-purchase-return-request:
+      type: object
+      properties:
+        line_items:
+          description: Line items with quantities to cancel.
+          type: array
+          items:
+            type: object
+            properties:
+              line_item_id:
+                description: Unique ID of the line item.
+                type: string
+                example: '460000000044897'
+              qty_cancelled:
+                description: Quantity to cancel.
+                type: number
+                format: double
+                example: 2
+    close-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Purchase return has been closed.
+          readOnly: true
+    reopen-purchase-return-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Purchase return has been reopened.
+          readOnly: true
+    update-address-request:
+      type: object
+      properties:
+        address:
+          description: Street address.
+          type: string
+          example: 123 Main St
+        street2:
+          description: Additional street address.
+          type: string
+          example: Suite 100
+        city:
+          description: City.
+          type: string
+          example: New York
+        state:
+          description: State or province.
+          type: string
+          example: New York
+        zip:
+          description: ZIP or postal code.
+          type: string
+          example: '10001'
+        country:
+          description: Country.
+          type: string
+          example: US
+        fax:
+          description: Fax number.
+          type: string
+          example: ''
+        phone:
+          description: Phone number.
+          type: string
+          example: +1-212-555-0100
+        attention:
+          description: Attention person.
+          type: string
+          example: John Smith
+    update-shipping-address-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Shipping address updated.
+          readOnly: true
+    update-billing-address-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Billing address updated.
+          readOnly: true
+    add-attachment-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The document has been attached.
+          readOnly: true
+    delete-attachment-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The attachment has been deleted.
+          readOnly: true
+  securitySchemes:
+    Zoho_Auth:
+      type: oauth2
+      flows:
+        implicit:
+          authorizationUrl: https://accounts.zoho.com/oauth/v2/auth
+          scopes:
+            ZohoBooks.purchasereturns.CREATE: Create Purchase Returns
+            ZohoBooks.purchasereturns.READ: Read Purchase Returns
+            ZohoBooks.purchasereturns.UPDATE: Update Purchase Returns
+            ZohoBooks.purchasereturns.DELETE: Delete Purchase Returns

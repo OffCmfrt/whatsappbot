@@ -2,8 +2,18 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
 const whatsappService = require('../services/whatsappService');
 const { dbAdapter } = require('../database/db');
+
+// Multer config: disk storage (avoids holding files in RAM)
+const upload = multer({
+    storage: multer.diskStorage({
+        dest: require('os').tmpdir() + '/whatsapp-media-uploads',
+        filename: (req, file, cb) => cb(null, `portal_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
+    }),
+    limits: { fileSize: 25 * 1024 * 1024 }
+});
 
 // Allowed ticket status values — 'follow_up' parks a ticket for later action.
 // It is NOT resolved and still counts as active work for the portal.
@@ -885,6 +895,75 @@ router.get('/:slug/customers/:phone/all-orders', verifyPortalToken, async (req, 
             error: 'Failed to fetch orders from database',
             details: error.message 
         });
+    }
+});
+
+// ── Media Attachments ────────────────────────────────────────
+
+// Get attachments for a customer phone (portal-scoped)
+router.get('/:slug/attachments/:phone', verifyPortalToken, async (req, res) => {
+    try {
+        const { slug, phone } = req.params;
+        if (slug !== req.portal.slug) return res.status(403).json({ error: 'Portal mismatch' });
+
+        const hasAccess = await verifyPhoneInPortal(phone, req.portal);
+        if (!hasAccess) return res.status(403).json({ error: 'Phone not associated with this portal' });
+
+        const mediaService = require('../services/mediaService');
+        const attachments = await mediaService.getAttachmentsForPhone(phone, 100);
+        res.json({ success: true, attachments });
+    } catch (error) {
+        console.error('Portal attachments error:', error);
+        res.status(500).json({ error: 'Failed to fetch attachments' });
+    }
+});
+
+// Upload & send an image to a customer from the portal
+router.post('/:slug/chat/send-image', verifyPortalToken, upload.single('image'), async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const { phone, caption = '' } = req.body;
+
+        if (slug !== req.portal.slug) return res.status(403).json({ error: 'Portal mismatch' });
+        if (!phone || !req.file) return res.status(400).json({ error: 'Phone and image file are required' });
+
+        const hasAccess = await verifyPhoneInPortal(phone, req.portal);
+        if (!hasAccess) return res.status(403).json({ error: 'Phone not associated with this portal' });
+
+        // Upload to Supabase Storage (pass file path — avoids buffer copy)
+        const mediaService = require('../services/mediaService');
+        const uploaded = await mediaService.uploadFromFilePath(req.file.path, req.file.originalname, req.file.mimetype);
+
+        // Cleanup multer temp file
+        try { require('fs').unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+
+        // Send via WhatsApp
+        const cleanPhone = phone.replace(/\D/g, '');
+        const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
+        await whatsappService.sendImage(formattedPhone, uploaded.fileUrl, caption, 'manual_reply');
+
+        // Save attachment record
+        const ticketRows = await dbAdapter.query(
+            'SELECT id FROM support_tickets WHERE customer_phone = ? AND status != ? ORDER BY created_at DESC LIMIT 1',
+            [phone, 'closed']
+        );
+        await mediaService.saveAttachment({
+            ticketId: ticketRows?.[0]?.id || null,
+            customerPhone: phone,
+            fileUrl: uploaded.fileUrl,
+            thumbnailUrl: uploaded.thumbnailUrl,
+            fileType: 'image',
+            fileName: uploaded.fileName,
+            fileSize: uploaded.fileSize,
+            mimeType: uploaded.mimeType,
+            caption,
+            direction: 'outgoing'
+        });
+
+        res.json({ success: true, message: 'Image sent', fileUrl: uploaded.fileUrl });
+    } catch (error) {
+        console.error('Portal send image error:', error);
+        res.status(500).json({ error: 'Failed to send image', details: error.message });
     }
 });
 

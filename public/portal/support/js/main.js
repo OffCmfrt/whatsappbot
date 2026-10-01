@@ -528,6 +528,9 @@ async function loadChatMessages(ticketId, showLoading = true) {
             chat.messages = data.messages || [];
             if (String(ticketId) === activeChatId) {
                 renderChatMessages(chat.messages, showLoading);
+                // Load and render attachments below the chat
+                const attachments = await loadAttachmentsForChat(chat.ticket.phone);
+                renderAttachmentsInChat(attachments);
             }
         }
     } catch (error) {
@@ -535,6 +538,20 @@ async function loadChatMessages(ticketId, showLoading = true) {
             document.getElementById('chatMessages').innerHTML = '<div class="chat-loading">Failed to load messages</div>';
         }
     }
+}
+
+function renderAttachmentsInChat(attachments) {
+    // Remove old attachment section if any
+    document.getElementById('chatAttachmentsSection')?.remove();
+    if (!attachments || attachments.length === 0) return;
+
+    const container = document.getElementById('chatMessages');
+    const section = document.createElement('div');
+    section.id = 'chatAttachmentsSection';
+    section.innerHTML = `<div style="text-align:center;font-size:11px;color:var(--text-tertiary);margin:12px 0 6px;">── Shared Media ──</div>` +
+        attachments.map(att => renderAttachment(att)).join('');
+    container.appendChild(section);
+    container.scrollTop = container.scrollHeight;
 }
 
 function renderChatMessages(messages, isInitialLoad = true) {
@@ -994,6 +1011,12 @@ function escapeHtml(text) {
 }
 function escapeJs(text) { if (!text) return ''; return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"'); }
 function truncate(text, length) { if (!text) return ''; return text.length > length ? text.substring(0, length) + '...' : text; }
+function formatFileSize(bytes) {
+    if (!bytes || bytes === 0) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
 
 function formatDate(dateStr) {
     if (!dateStr) return '-';
@@ -1072,6 +1095,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('sendMessageBtn')?.addEventListener('click', sendMessage);
 
+    // ── Media attachment handlers ──
+    document.getElementById('attachImageBtn')?.addEventListener('click', () => {
+        document.getElementById('chatImageInput')?.click();
+    });
+    document.getElementById('chatImageInput')?.addEventListener('change', handleFileSelect);
+
     // AI suggestions
     injectAiSuggestButton();
 
@@ -1094,3 +1123,209 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 });
+
+// ══════════════════════════════════════════════════════════
+// MEDIA ATTACHMENTS
+// ══════════════════════════════════════════════════════════
+let pendingMediaFile = null;
+
+// Client-side image compression using Canvas API
+// Resizes large images and converts to WebP for massive size savings
+async function compressImage(file, maxWidth = 1920, quality = 0.82) {
+    if (!file.type.startsWith('image/') || file.type === 'image/gif') return file; // Skip non-images and GIFs
+    if (file.size < 200 * 1024) return file; // Skip tiny images (< 200KB)
+
+    return new Promise((resolve) => {
+        const img = new Image();
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        img.onload = () => {
+            let { width, height } = img;
+            if (width > maxWidth) {
+                height = Math.round((height * maxWidth) / width);
+                width = maxWidth;
+            }
+            canvas.width = width;
+            canvas.height = height;
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // Convert to WebP for best compression (fallback to JPEG)
+            const outputType = 'image/webp';
+            canvas.toBlob(
+                (blob) => {
+                    if (blob && blob.size < file.size) {
+                        const compressed = new File([blob], file.name.replace(/\.[^.]+$/, '.webp'), { type: outputType });
+                        console.log(`[MEDIA] Compressed ${file.name}: ${(file.size/1024).toFixed(0)}KB → ${(compressed.size/1024).toFixed(0)}KB`);
+                        resolve(compressed);
+                    } else {
+                        resolve(file); // Compression didn't help, use original
+                    }
+                },
+                outputType,
+                quality
+            );
+        };
+
+        img.onerror = () => resolve(file); // On error, just use original
+        img.src = URL.createObjectURL(file);
+    });
+}
+
+function handleFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file size (max 25MB)
+    if (file.size > 25 * 1024 * 1024) {
+        showToast('File too large. Maximum size is 25MB.', 'error');
+        e.target.value = '';
+        return;
+    }
+
+    // Compress images client-side before upload
+    if (file.type.startsWith('image/')) {
+        compressImage(file).then(compressed => {
+            pendingMediaFile = compressed;
+            showPreviewBar(compressed);
+        });
+    } else {
+        pendingMediaFile = file;
+        showPreviewBar(file);
+    }
+    e.target.value = ''; // Reset so same file can be re-selected
+}
+
+function showPreviewBar(file) {
+    const bar = document.getElementById('imagePreviewBar');
+    if (!bar) return;
+    bar.style.display = 'flex';
+
+    const isImage = file.type.startsWith('image/');
+    let previewHtml = '';
+    if (isImage) {
+        const url = URL.createObjectURL(file);
+        previewHtml = `<div class="preview-item"><img src="${url}" alt="preview"><button class="preview-remove" onclick="removePendingMedia()">&times;</button></div>`;
+    } else {
+        previewHtml = `<div class="preview-item" style="display:flex;align-items:center;justify-content:center;background:var(--bg-hover);"><span style="font-size:20px;">📄</span><button class="preview-remove" onclick="removePendingMedia()">&times;</button></div>`;
+    }
+    bar.innerHTML = previewHtml;
+}
+
+function removePendingMedia() {
+    pendingMediaFile = null;
+    const bar = document.getElementById('imagePreviewBar');
+    if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
+}
+
+// Override sendMessage to handle media
+const _originalSendMessage = sendMessage;
+sendMessage = async function() {
+    const input = document.getElementById('chatInput');
+    const message = input?.value.trim() || '';
+    const chat = activeChatId ? openChats.get(String(activeChatId)) : null;
+    if (!chat) return;
+
+    // If there's a pending media file, upload and send it
+    if (pendingMediaFile) {
+        const file = pendingMediaFile;
+        removePendingMedia();
+
+        const container = document.getElementById('chatMessages');
+        const isImage = file.type.startsWith('image/');
+        const tempMsg = document.createElement('div');
+        tempMsg.className = 'chat-message agent';
+        tempMsg.innerHTML = `<div class="msg-bubble"><div class="msg-content">${isImage ? '📷 Sending image...' : '📎 Sending file...'}</div><div class="msg-meta"><span class="msg-time">${formatTime(new Date().toISOString())}</span></div></div>`;
+        container.appendChild(tempMsg);
+        container.scrollTop = container.scrollHeight;
+
+        try {
+            const formData = new FormData();
+            formData.append('image', file);
+            formData.append('phone', chat.ticket.phone);
+            formData.append('caption', message);
+
+            const resp = await fetch(`${API_BASE}/portal/${portalSlug}/chat/send-image`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${portalToken}` },
+                body: formData
+            });
+            const data = await resp.json();
+            tempMsg.remove();
+
+            if (data.success) {
+                // Also send text caption if present
+                if (message) {
+                    await portalApi(`/portal/${portalSlug}/chat/send`, 'POST', {
+                        phone: chat.ticket.phone, message
+                    });
+                }
+                await loadChatMessages(activeChatId, false);
+            } else {
+                showToast(data.error || 'Failed to send image', 'error');
+            }
+        } catch (err) {
+            tempMsg.remove();
+            showToast('Failed to send media', 'error');
+        }
+        if (input) { input.value = ''; input.style.height = 'auto'; }
+        return;
+    }
+
+    // No media — use original text send
+    return _originalSendMessage();
+};
+
+// Load attachments for a phone and merge into chat display
+async function loadAttachmentsForChat(phone) {
+    try {
+        const data = await portalApi(`/portal/${portalSlug}/attachments/${encodeURIComponent(phone)}`);
+        return data.success ? (data.attachments || []) : [];
+    } catch { return []; }
+}
+
+// Render an attachment in the chat
+function renderAttachment(att) {
+    const isAgent = att.direction === 'outgoing';
+    const time = formatTime(att.created_at);
+    const isImage = att.file_type === 'image' || (att.mime_type && att.mime_type.startsWith('image/'));
+    const isVideo = att.file_type === 'video' || (att.mime_type && att.mime_type.startsWith('video/'));
+
+    let attachHtml = '';
+    if (isImage) {
+        // Use thumbnail for display (loads faster), full image on click
+        const displayUrl = att.thumbnail_url || att.file_url;
+        attachHtml = `<div class="msg-attachment" onclick="openLightbox('${escapeJs(att.file_url)}', 'image')"><img src="${escapeHtml(displayUrl)}" alt="attachment" loading="lazy" decoding="async"></div>`;
+    } else if (isVideo) {
+        attachHtml = `<div class="msg-attachment" onclick="openLightbox('${escapeJs(att.file_url)}', 'video')"><video src="${escapeHtml(att.file_url)}" preload="metadata" loading="lazy" style="width:100%;border-radius:8px;"></video></div>`;
+    } else {
+        attachHtml = `<a class="msg-attachment-file" href="${escapeHtml(att.file_url)}" target="_blank"><span class="file-icon">📄</span><span class="file-name">${escapeHtml(att.file_name || 'File')}</span><span class="file-size">${formatFileSize(att.file_size)}</span></a>`;
+    }
+
+    if (att.caption) {
+        attachHtml += `<div class="msg-content" style="margin-top:4px;font-size:12px;color:var(--text-secondary);">${escapeHtml(att.caption)}</div>`;
+    }
+
+    return `<div class="chat-message ${isAgent ? 'agent' : 'customer'}">
+        <div class="msg-bubble">
+            ${attachHtml}
+            <div class="msg-meta">
+                ${isAgent ? '<span class="msg-type-badge">Media</span>' : ''}
+                <span class="msg-time">${time}</span>
+            </div>
+        </div>
+    </div>`;
+}
+
+// Lightbox for full-size image/video viewing
+function openLightbox(url, type) {
+    const lb = document.createElement('div');
+    lb.className = 'media-lightbox';
+    lb.onclick = () => lb.remove();
+    if (type === 'video') {
+        lb.innerHTML = `<video src="${url}" controls autoplay style="max-width:90vw;max-height:90vh;border-radius:8px;"></video><button class="media-lightbox-close">&times;</button>`;
+    } else {
+        lb.innerHTML = `<img src="${url}" alt="full size"><button class="media-lightbox-close">&times;</button>`;
+    }
+    document.body.appendChild(lb);
+}

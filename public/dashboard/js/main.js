@@ -99,6 +99,12 @@ function setupEventListeners() {
         if (ticketId) updateTicketStatus(ticketId, this.value);
     });
 
+    // Media attachment handlers
+    document.getElementById('attachImageBtn')?.addEventListener('click', () => {
+        document.getElementById('chatImageInput')?.click();
+    });
+    document.getElementById('chatImageInput')?.addEventListener('change', handleDashFileSelect);
+
     // Assign portal modal
     document.getElementById('confirmAssignBtn')?.addEventListener('click', confirmAssignPortal);
 
@@ -497,6 +503,16 @@ async function sendChatMessage() {
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
     if (!message || !currentChatPhone) return;
+
+    // If there's a pending media file, send it as image
+    if (dashPendingMediaFile) {
+        await sendDashMedia(dashPendingMediaFile, message);
+        dashPendingMediaFile = null;
+        removeDashPreview();
+        input.value = '';
+        return;
+    }
+
     input.value = '';
 
     const data = await apiFetch('/chat/send', {
@@ -511,6 +527,138 @@ async function sendChatMessage() {
         div.innerHTML = `<div>${esc(message)}</div><div class="chat-msg-time">Just now</div>`;
         container.appendChild(div);
         container.scrollTop = container.scrollHeight;
+    }
+}
+
+// ── Dashboard Media Attachment Handling ──────────────────────
+let dashPendingMediaFile = null;
+
+// Client-side image compression using Canvas API
+async function dashCompressImage(file, maxWidth = 1920, quality = 0.82) {
+    if (!file.type.startsWith('image/') || file.type === 'image/gif') return file;
+    if (file.size < 200 * 1024) return file; // Skip tiny images
+
+    return new Promise((resolve) => {
+        const img = new Image();
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        img.onload = () => {
+            let { width, height } = img;
+            if (width > maxWidth) {
+                height = Math.round((height * maxWidth) / width);
+                width = maxWidth;
+            }
+            canvas.width = width;
+            canvas.height = height;
+            ctx.drawImage(img, 0, 0, width, height);
+
+            canvas.toBlob(
+                (blob) => {
+                    if (blob && blob.size < file.size) {
+                        const compressed = new File([blob], file.name.replace(/\.[^.]+$/, '.webp'), { type: 'image/webp' });
+                        console.log(`[MEDIA] Dashboard compressed: ${(file.size/1024).toFixed(0)}KB → ${(compressed.size/1024).toFixed(0)}KB`);
+                        resolve(compressed);
+                    } else {
+                        resolve(file);
+                    }
+                },
+                'image/webp',
+                quality
+            );
+        };
+
+        img.onerror = () => resolve(file);
+        img.src = URL.createObjectURL(file);
+    });
+}
+
+function handleDashFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file size (max 25MB)
+    if (file.size > 25 * 1024 * 1024) {
+        alert('File too large. Maximum size is 25MB.');
+        e.target.value = '';
+        return;
+    }
+
+    // Compress images client-side before upload
+    if (file.type.startsWith('image/')) {
+        dashCompressImage(file).then(compressed => {
+            dashPendingMediaFile = compressed;
+            showDashPreview(compressed);
+        });
+    } else {
+        dashPendingMediaFile = file;
+        showDashPreview(file);
+    }
+    e.target.value = '';
+}
+
+function showDashPreview(file) {
+    const bar = document.getElementById('imagePreviewBar');
+    if (!bar) return;
+    bar.style.display = 'flex';
+    const isImage = file.type.startsWith('image/');
+    if (isImage) {
+        const url = URL.createObjectURL(file);
+        bar.innerHTML = `<div style="position:relative;width:50px;height:50px;border-radius:6px;overflow:hidden;border:1px solid #333;">
+            <img src="${url}" style="width:100%;height:100%;object-fit:cover;">
+            <button onclick="removeDashPreview()" style="position:absolute;top:1px;right:1px;width:16px;height:16px;border-radius:50%;background:rgba(0,0,0,0.7);color:#fff;border:none;cursor:pointer;font-size:9px;display:flex;align-items:center;justify-content:center;">&times;</button>
+        </div>`;
+    } else {
+        bar.innerHTML = `<div style="position:relative;width:50px;height:50px;border-radius:6px;overflow:hidden;border:1px solid #333;display:flex;align-items:center;justify-content:center;background:#1a1a2e;">
+            <span style="font-size:18px;">📄</span>
+            <button onclick="removeDashPreview()" style="position:absolute;top:1px;right:1px;width:16px;height:16px;border-radius:50%;background:rgba(0,0,0,0.7);color:#fff;border:none;cursor:pointer;font-size:9px;display:flex;align-items:center;justify-content:center;">&times;</button>
+        </div>`;
+    }
+}
+
+function removeDashPreview() {
+    dashPendingMediaFile = null;
+    const bar = document.getElementById('imagePreviewBar');
+    if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
+}
+
+async function sendDashMedia(file, caption) {
+    if (!currentChatPhone) return;
+    const container = document.getElementById('chatMessages');
+    const tempDiv = document.createElement('div');
+    tempDiv.className = 'chat-msg outgoing';
+    tempDiv.innerHTML = `<div>📷 Sending media...</div><div class="chat-msg-time">Just now</div>`;
+    container.appendChild(tempDiv);
+    container.scrollTop = container.scrollHeight;
+
+    try {
+        const token = localStorage.getItem('adminToken');
+        const formData = new FormData();
+        formData.append('image', file);
+        formData.append('phone', currentChatPhone);
+        formData.append('caption', caption || '');
+
+        const resp = await fetch('/api/admin/support-tickets/send-image', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+        });
+        const data = await resp.json();
+        tempDiv.remove();
+
+        if (data.success) {
+            const div = document.createElement('div');
+            div.className = 'chat-msg outgoing';
+            const isImage = file.type.startsWith('image/');
+            div.innerHTML = `<div>${isImage ? `<img src="${data.fileUrl}" style="max-width:200px;border-radius:8px;display:block;margin-bottom:4px;">` : `📎 ${esc(file.name)}`}${caption ? `<div style="font-size:12px;margin-top:4px;">${esc(caption)}</div>` : ''}</div><div class="chat-msg-time">Just now</div>`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        } else {
+            showToast(data.error || 'Failed to send media', 'error');
+        }
+    } catch (err) {
+        tempDiv.remove();
+        showToast('Failed to send media', 'error');
     }
 }
 

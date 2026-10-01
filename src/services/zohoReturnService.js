@@ -1012,6 +1012,8 @@ module.exports = {
     handleRTOByOrderId,
     handleExchange,
     handleReturnsServerReturn,
+    prepareAndCreateCreditNote,
+    creditNoteReference,
     retryReturn,
     getReturnStats,
     getReturnLog

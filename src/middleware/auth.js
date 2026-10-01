@@ -87,6 +87,19 @@ const ALL_PERMISSION_KEYS = [
     ...PERMISSIONS.functions.map(f => f.key)
 ];
 
+// Request identity stays private and token-bound; every new request rechecks revocation.
+const verifiedRequests = new WeakMap();
+function verifyRequest(req, token) {
+    const previous = verifiedRequests.get(req);
+    if (previous && previous.token === token) return previous.promise;
+    const entry = { token, promise: verifyJwtOrThrow(token) };
+    verifiedRequests.set(req, entry);
+    entry.promise.catch(() => {
+        if (verifiedRequests.get(req) === entry) verifiedRequests.delete(req);
+    });
+    return entry.promise;
+}
+
 // Middleware to verify JWT token
 async function verifyToken(req, res, next) {
     const token = req.headers['authorization']?.split(' ')[1]; // Bearer TOKEN
@@ -96,7 +109,7 @@ async function verifyToken(req, res, next) {
     }
 
     try {
-        req.admin = await verifyJwtOrThrow(token);
+        req.admin = await verifyRequest(req, token);
         next();
     } catch (error) {
         return res.status(401).json({ error: sessionErrorMessage(error) });
@@ -176,14 +189,12 @@ const ROUTE_PERMISSIONS = [
 // Maps the request path to a page/function permission.
 // Self-contained: verifies the JWT itself if verifyToken hasn't run yet.
 async function permissionGate(req, res, next) {
-    if (!req.admin) {
-        const token = req.headers['authorization']?.split(' ')[1];
-        if (!token) return res.status(401).json({ error: 'Access denied. No token provided.' });
-        try {
-            req.admin = await verifyJwtOrThrow(token);
-        } catch (error) {
-            return res.status(401).json({ error: sessionErrorMessage(error) });
-        }
+    const token = req.headers['authorization']?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Access denied. No token provided.' });
+    try {
+        req.admin = await verifyRequest(req, token);
+    } catch (error) {
+        return res.status(401).json({ error: sessionErrorMessage(error) });
     }
 
     const identity = req.admin;

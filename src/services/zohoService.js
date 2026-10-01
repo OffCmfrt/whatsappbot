@@ -196,6 +196,11 @@ async function deleteInvoice(invoiceId) {
     return zohoRequest('delete', url);
 }
 
+async function bulkDeleteInvoices(invoiceIds) {
+    const url = `${BOOKS_BASE()}/invoices`;
+    return zohoRequest('delete', url, null, { invoice_ids: invoiceIds.join(',') });
+}
+
 async function markInvoiceSent(invoiceId) {
     const url = `${BOOKS_BASE()}/invoices/${invoiceId}/status/sent`;
     return zohoRequest('post', url);
@@ -260,8 +265,9 @@ async function searchCreditNotes({ reference_number, page_limit = 5 } = {}) {
     return all.filter(cn => String(cn.reference_number || '').trim() === ref);
 }
 
-async function updateInvoice(invoiceId, invoicePayload) {
+async function updateInvoice(invoiceId, invoicePayload, reason) {
     const url = `${BOOKS_BASE()}/invoices/${invoiceId}`;
+    if (reason) invoicePayload.reason = reason;
     const result = await zohoRequest('put', url, invoicePayload);
     return result.invoice;
 }
@@ -558,6 +564,7 @@ module.exports = {
     searchInvoice,
     voidInvoice,
     deleteInvoice,
+    bulkDeleteInvoices,
     markInvoiceSent,
     deleteCreditNote,
     deletePayment,

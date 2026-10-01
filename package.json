@@ -37,6 +37,7 @@
     "pdfkit": "^0.20.2",
     "pg": "^8.11.3",
     "razorpay": "^2.9.6",
+    "sharp": "^0.35.5",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

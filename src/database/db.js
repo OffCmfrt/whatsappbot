@@ -266,6 +266,14 @@ async function initializeDatabase() {
     } catch (e) {
         console.warn('⚠️ Zoho tables init skipped:', e.message);
     }
+
+    // Initialize Support Ticket Attachments Table
+    try {
+        const { initializeAttachmentsTable } = require('../services/mediaService');
+        await initializeAttachmentsTable();
+    } catch (e) {
+        console.warn('⚠️ Attachments table init skipped:', e.message);
+    }
     
     console.log('ℹ️ Supabase database initialized');
     return true;

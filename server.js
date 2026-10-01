@@ -390,6 +390,7 @@ app.post('/webhook', (req, res) => {
         const senderName = value.contacts?.[0]?.profile?.name;
 
         let messageBody = null;
+        let mediaAttachment = null;
 
         // 1. Check for interactive button/list replies
         if (message.interactive) {
@@ -401,8 +402,35 @@ app.post('/webhook', (req, res) => {
         // 2. Check for Quick Reply template button clicks
         else if (message.type === 'button' && message.button?.payload) {
           messageBody = handleButtonResponse(message.button.payload);
-        } 
-        // 3. Fallback to regular text
+        }
+        // 3. Media messages (image, video, document, audio, sticker)
+        else if (['image', 'video', 'document', 'audio', 'sticker'].includes(message.type)) {
+          const mediaType = message.type;
+          const mediaObj = message[mediaType]; // e.g. message.image, message.video, etc.
+
+          if (mediaObj && mediaObj.id) {
+            console.log(`📎 Webhook media (${mediaType}) from ${from} [queued]`);
+            res.sendStatus(200);
+
+            // Process media asynchronously: download from Meta → upload to Supabase Storage
+            enqueueTask(async () => {
+              try {
+                const mediaService = require('./src/services/mediaService');
+                mediaAttachment = await mediaService.processIncomingMedia(mediaObj, mediaType);
+                // Build a caption as the text body (if any)
+                const caption = mediaObj.caption || '';
+                const textBody = caption || `[${mediaType}]`;
+                await messageHandler.processMessage(from, textBody, senderName, mediaAttachment);
+              } catch (mediaErr) {
+                console.error(`❌ Media processing error from ${from}:`, mediaErr.message);
+                // Still process as a text fallback so the ticket isn't lost
+                await messageHandler.processMessage(from, `[Sent a ${mediaType}]`, senderName, null);
+              }
+            });
+            return; // Already sent 200
+          }
+        }
+        // 4. Fallback to regular text
         else if (message.text?.body) {
           messageBody = message.text.body;
         }

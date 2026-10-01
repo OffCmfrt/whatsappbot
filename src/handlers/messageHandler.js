@@ -39,7 +39,7 @@ class MessageHandler {
     // Behavior: every inbound text creates (or appends to) a support ticket.
     // Exceptions: order-template button clicks (shop_confirm/cancel/edit) keep
     // their original automation, and the 48h conversation lock is still honored.
-    async processMessage(phone, message, senderName = null) {
+    async processMessage(phone, message, senderName = null, attachment = null) {
         try {
             // CRITICAL: Normalize phone to consistent format (+91XXXXXXXXXX)
             // This ensures all DB lookups and inserts match correctly
@@ -155,6 +155,29 @@ class MessageHandler {
                     'INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, portal_id, is_read) VALUES (?, ?, ?, ?, ?, false)',
                     [ticketNumber, normalizedPhone, name, cleanMessage, portalId]
                 );
+                // Save attachment for this new ticket if present
+                if (attachment && attachment.fileUrl) {
+                    try {
+                        const newTicket = await dbAdapter.query(
+                            'SELECT id FROM support_tickets WHERE ticket_number = ? LIMIT 1',
+                            [ticketNumber]
+                        );
+                        const mediaService = require('../services/mediaService');
+                        await mediaService.saveAttachment({
+                            ticketId: newTicket?.[0]?.id || null,
+                            customerPhone: normalizedPhone,
+                            fileUrl: attachment.fileUrl,
+                            fileType: attachment.fileType,
+                            fileName: attachment.fileName,
+                            fileSize: attachment.fileSize,
+                            mimeType: attachment.mimeType,
+                            caption: attachment.caption || null,
+                            direction: 'incoming'
+                        });
+                    } catch (attErr) {
+                        console.error('[MEDIA] Failed to save attachment:', attErr.message);
+                    }
+                }
                 await dbAdapter.query(
                     'UPDATE conversations SET state = NULL WHERE customer_phone = ?',
                     [normalizedPhone]
@@ -242,6 +265,31 @@ class MessageHandler {
                     [ticketNumber, normalizedPhone, name, ticketMessage, portalId, aiSentiment, aiConfidence, scenarioTag]
                 );
                 console.log(`[DASHBOARD TICKET] Created ticket ${ticketNumber} for ${normalizedPhone} with AI suggestion ready for Admin review.`);
+            }
+
+            // Save media attachment if present (linked to the latest open ticket)
+            if (attachment && attachment.fileUrl) {
+                try {
+                    const latestTicket = await dbAdapter.query(
+                        'SELECT id FROM support_tickets WHERE customer_phone = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
+                        [normalizedPhone, 'open']
+                    );
+                    const mediaService = require('../services/mediaService');
+                    await mediaService.saveAttachment({
+                        ticketId: latestTicket?.[0]?.id || null,
+                        customerPhone: normalizedPhone,
+                        fileUrl: attachment.fileUrl,
+                        fileType: attachment.fileType,
+                        fileName: attachment.fileName,
+                        fileSize: attachment.fileSize,
+                        mimeType: attachment.mimeType,
+                        caption: attachment.caption || null,
+                        direction: 'incoming'
+                    });
+                    console.log(`[MEDIA] Saved attachment for ticket (phone: ${normalizedPhone}): ${attachment.fileType}`);
+                } catch (attErr) {
+                    console.error('[MEDIA] Failed to save attachment:', attErr.message);
+                }
             }
 
         } catch (error) {

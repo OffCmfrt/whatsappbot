@@ -1,0 +1,2988 @@
+openapi: 3.0.0
+info:
+  title: Items
+  description: Items are the products or services that you sell to your customers.
+  contact: {}
+  version: 1.0.0
+servers:
+  - url: https://www.zohoapis.com/books/v3
+    description: API Endpoint
+tags:
+  - name: items
+    description: Items Module
+paths:
+  /items:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: create_item
+      summary: Create an Item
+      description: Create a new item.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/create-an-item-request'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/create-an-item-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.CREATE
+    get:
+      tags:
+        - items
+      operationId: list_items
+      summary: List items
+      description: Get the list of all active items with pagination.
+      parameters:
+        - name: name
+          in: query
+          description: 'Search items by name. Max-length [100]. Variants: <code>name_startswith</code> and <code>name_contains</code>'
+          required: false
+          schema:
+            type: string
+          example: Hard Drive
+        - name: name_startswith
+          in: query
+          description: Search items whose name starts with the specified value. Maximum length allowed is 100 characters.
+          required: false
+          schema:
+            type: string
+          example: Hard Drive
+        - name: name_contains
+          in: query
+          description: Search items whose name contains the specified value. Maximum length allowed is 100 characters.
+          required: false
+          schema:
+            type: string
+          example: Hard Drive
+        - name: description
+          in: query
+          description: 'Search items by description. Max-length [100]. Variants: <code>description_startswith</code> and <code>description_contains</code>'
+          required: false
+          schema:
+            type: string
+          example: 500GB
+        - name: description_startswith
+          in: query
+          description: Search items whose description starts with the specified value. Maximum length allowed is 100 characters.
+          required: false
+          schema:
+            type: string
+          example: 500GB
+        - name: description_contains
+          in: query
+          description: Search items whose description contains the specified value. Maximum length allowed is 100 characters.
+          required: false
+          schema:
+            type: string
+          example: 500GB
+        - name: rate
+          in: query
+          description: 'Search items by rate. Variants: <code>rate_less_than</code>, <code>rate_less_equals</code>, <code>rate_greater_than</code> and <code>rate_greater_equals</code>'
+          required: false
+          schema:
+            type: string
+          example: 120
+        - name: rate_less_than
+          in: query
+          description: Search items whose rate is less than the specified value.
+          required: false
+          schema:
+            type: string
+          example: 120
+        - name: rate_less_equals
+          in: query
+          description: Search items whose rate is less than or equal to the specified value.
+          required: false
+          schema:
+            type: string
+          example: 120
+        - name: rate_greater_than
+          in: query
+          description: Search items whose rate is greater than the specified value.
+          required: false
+          schema:
+            type: string
+          example: 120
+        - name: rate_greater_equals
+          in: query
+          description: Search items whose rate is greater than or equal to the specified value.
+          required: false
+          schema:
+            type: string
+          example: 120
+        - name: tax_id
+          in: query
+          description: 'Search items by tax id. Note: This value is a set of numeric characters.'
+          required: false
+          schema:
+            type: string
+          example: 982000000037049
+        - name: tax_name
+          in: query
+          description: Search items by tax name. Max-length [100]
+          required: false
+          schema:
+            type: string
+          example: Sales Tax
+        - name: is_taxable
+          in: query
+          description: Boolean to track the taxability of the item.
+          required: false
+          schema:
+            type: boolean
+          x-node_available_in:
+            - in
+            - us
+            - mx
+          x-node_unavailable_in: []
+        - name: tax_exemption_id
+          in: query
+          description: 'ID of the tax exemption. Mandatory, if <code>is_taxable</code> is false. Note: This value is a set of numeric characters.'
+          required: false
+          schema:
+            type: string
+          x-node_available_in:
+            - in
+            - us
+            - mx
+          x-node_unavailable_in: []
+          example: ''
+        - name: account_id
+          in: query
+          description: 'ID of the account to which the item has to be associated with. Note: This value is a set of numeric characters.'
+          required: false
+          schema:
+            type: string
+          example: ''
+        - name: filter_by
+          in: query
+          description: 'Filter items by status. Allowed Values: <code>Status.All</code>, <code>Status.Active</code> and <code>Status.Inactive</code>'
+          required: false
+          schema:
+            type: string
+          example: ''
+        - name: search_text
+          in: query
+          description: Search items by name or description. Max-length [100]
+          required: false
+          schema:
+            type: string
+          example: ''
+        - name: sort_column
+          in: query
+          description: 'Sort items. Allowed Values: <code>name</code>, <code>rate</code> and <code>tax_name</code>'
+          required: false
+          schema:
+            type: string
+          example: ''
+        - name: sat_item_key_code
+          in: query
+          description: SAT Item key code
+          required: false
+          schema:
+            type: string
+          x-node_available_in:
+            - mx
+          x-node_unavailable_in: []
+          example: ''
+        - name: unitkey_code
+          in: query
+          description: SAT Unit code
+          required: false
+          schema:
+            type: string
+          x-node_available_in:
+            - mx
+          x-node_unavailable_in: []
+          example: ''
+        - name: page
+          in: query
+          description: Page number to be fetched. Default value is 1.
+          required: false
+          schema:
+            type: integer
+            default: 1
+          example: 1
+        - name: per_page
+          in: query
+          description: Number of records to be fetched per page.
+          required: false
+          schema:
+            type: integer
+            default: 10
+          example: 10
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/list-items-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.READ
+    put:
+      tags:
+        - items
+      operationId: update_item_using_custom_field
+      summary: Update an item using a custom field's unique value
+      description: A custom field will have unique values if it's configured to not accept duplicate values. Now, you can use that custom field's value to update an item by providing its API name in the X-Unique-Identifier-Key header and its value in the X-Unique-Identifier-Value header. Based on this value, the corresponding item will be retrieved and updated. Additionally, there is an optional X-Upsert header. If the X-Upsert header is true and the custom field's unique value is not found in any of the existing items, a new item will be created if the necessary payload details are available
+      parameters:
+        - name: X-Unique-Identifier-Key
+          in: header
+          description: Unique CustomField Api Name
+          required: true
+          schema:
+            type: string
+            example: cf_unique_cf
+        - name: X-Unique-Identifier-Value
+          in: header
+          description: Unique CustomField Value
+          required: true
+          schema:
+            type: string
+            example: unique Value
+        - name: X-Upsert
+          in: header
+          description: If there is no record is found unique custom field value , will create new invoice
+          required: false
+          schema:
+            type: boolean
+            example: true
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/update-an-item-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/update-an-item-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.UPDATE
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /itemdetails:
+    x-mcp-group:
+      - Items
+    get:
+      tags:
+        - items
+      operationId: list_item_details
+      summary: Bulk fetch item details
+      description: Fetch item details for the mentioned item IDs
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/bulk-fetch-item-details-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.READ
+    parameters:
+      - name: item_ids
+        in: query
+        required: true
+        description: '<code>List of item ids separated by comma</code>. Note: This value is a set of numeric characters separated by comma.'
+        schema:
+          type: string
+        example: 4815000000044208,4815000000044274,4815000000044340
+      - $ref: '#/components/parameters/organization_id'
+  /items/{item_id}:
+    x-mcp-group:
+      - Items
+    put:
+      tags:
+        - items
+      operationId: update_item
+      summary: Update an item
+      description: Update the details of an item.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/update-an-item-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/update-an-item-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.UPDATE
+    get:
+      tags:
+        - items
+      operationId: get_item
+      summary: Get an item
+      description: Details of an existing item.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/get-an-item-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.READ
+    delete:
+      tags:
+        - items
+      operationId: delete_item
+      summary: Delete an item
+      description: Delete the item created.items that are part of transaction cannot be deleted.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/delete-an-item-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.DELETE
+    parameters:
+      - name: item_id
+        in: path
+        required: true
+        description: 'Unique identifier of the item. Note: This value is a set of numeric characters.'
+        schema:
+          type: string
+        example: 45667789900
+      - $ref: '#/components/parameters/organization_id'
+  /item/{item_id}/customfields:
+    x-mcp-group:
+      - Items
+    put:
+      tags:
+        - items
+      operationId: update_custom_fields_in_item
+      summary: Update custom field in existing items
+      description: Update the value of the custom field in existing items.
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          description: 'Unique identifier of the item. Note: This value is a set of numeric characters.'
+          schema:
+            type: string
+          example: 45667789900
+        - $ref: '#/components/parameters/organization_id'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/custom_fields'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/update-an-item-customfield-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.UPDATE
+  /items/{item_id}/active:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: mark_item_active
+      summary: Mark as active
+      description: Mark an inactive item as active.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-active-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.CREATE
+    parameters:
+      - name: item_id
+        in: path
+        required: true
+        description: 'Unique identifier of the item. Note: This value is a set of numeric characters.'
+        schema:
+          type: string
+        example: 45667789900
+      - $ref: '#/components/parameters/organization_id'
+  /items/{item_id}/inactive:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: mark_item_inactive
+      summary: Mark as inactive
+      description: Mark an active item as inactive.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-inactive-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.CREATE
+    parameters:
+      - name: item_id
+        in: path
+        required: true
+        description: 'Unique identifier of the item. Note: This value is a set of numeric characters.'
+        schema:
+          type: string
+        example: 45667789900
+      - $ref: '#/components/parameters/organization_id'
+  /itemmasters:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: create_item_master
+      summary: Create an item
+      description: Creates a new item in Zoho Books. You can attach an image by passing the form-data parameter <code>image</code>.
+      parameters:
+        - name: pricebook_id
+          in: query
+          description: Price book ID associated with the create request.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044700'
+        - name: date
+          in: query
+          description: Date in <code>yyyy-mm-dd</code> format used for price computation.
+          required: false
+          schema:
+            type: string
+        - name: document_ids
+          in: query
+          description: Comma-separated document IDs to associate with the item.
+          required: false
+          schema:
+            type: string
+        - name: can_sync_to_variant
+          in: query
+          description: When <code>true</code>, sync applicable item fields to its variants.
+          required: false
+          schema:
+            type: boolean
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/create-an-item-master-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/create-an-item-master-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.CREATE
+    get:
+      tags:
+        - items
+      operationId: list_item_masters
+      summary: List items
+      description: Lists all items in the organization. Supports filters, search, and pagination.
+      parameters:
+        - name: page
+          in: query
+          description: Page number to be fetched. Default value is 1.
+          required: false
+          schema:
+            type: integer
+            default: 1
+          example: 1
+        - name: per_page
+          in: query
+          description: Number of records to be fetched per page. Default value is 25.
+          required: false
+          schema:
+            type: integer
+            default: 25
+          example: 25
+        - name: search_text
+          in: query
+          description: Search items by name or other searchable fields.
+          required: false
+          schema:
+            type: string
+        - name: filter_by
+          in: query
+          description: 'Filter items by status. Allowed values: <code>Status.All</code>, <code>Status.Active</code>, <code>Status.Inactive</code>, <code>Status.Ungrouped</code>, <code>Status.Grouped</code>.'
+          required: false
+          schema:
+            type: string
+        - name: sort_column
+          in: query
+          description: 'Sort by column. Allowed values: <code>group_name</code>, <code>created_time</code>, <code>last_modified_time</code>, <code>item_master_name</code>.'
+          required: false
+          schema:
+            type: string
+        - name: sort_order
+          in: query
+          description: 'Sort order. Allowed values: <code>A</code> for ascending and <code>D</code> for descending.'
+          required: false
+          schema:
+            type: string
+        - name: item_master_name
+          in: query
+          description: Filter by exact item name.
+          required: false
+          schema:
+            type: string
+        - name: item_master_name_startswith
+          in: query
+          description: Filter by item name that starts with the given value.
+          required: false
+          schema:
+            type: string
+        - name: item_master_name_contains
+          in: query
+          description: Filter by item name that contains the given value.
+          required: false
+          schema:
+            type: string
+        - name: description
+          in: query
+          description: Filter by exact description.
+          required: false
+          schema:
+            type: string
+        - name: rate
+          in: query
+          description: Filter by exact selling rate.
+          required: false
+          schema:
+            type: number
+            format: double
+        - name: purchase_rate
+          in: query
+          description: Filter by exact purchase rate.
+          required: false
+          schema:
+            type: number
+            format: double
+        - name: brand
+          in: query
+          description: Filter by brand.
+          required: false
+          schema:
+            type: string
+        - name: manufacturer
+          in: query
+          description: Filter by manufacturer.
+          required: false
+          schema:
+            type: string
+        - name: category_id
+          in: query
+          description: Filter by category ID.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044001'
+        - name: account_id
+          in: query
+          description: Filter by sales account ID.
+          required: false
+          schema:
+            type: string
+          example: '4815000000035001'
+        - name: purchase_account_id
+          in: query
+          description: Filter by purchase account ID.
+          required: false
+          schema:
+            type: string
+          example: '4815000000035003'
+        - name: inventory_account_id
+          in: query
+          description: Filter by inventory account ID.
+          required: false
+          schema:
+            type: string
+          example: '4815000000035005'
+        - name: tax_id
+          in: query
+          description: Filter by tax ID.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044043'
+        - name: skip_variant
+          in: query
+          description: When <code>true</code>, omit nested variant details from the list response.
+          required: false
+          schema:
+            type: boolean
+        - name: last_modified_time
+          in: query
+          description: Return items modified on or after this UTC datetime.
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/list-item-masters-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.READ
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /itemmasters/{item_master_id}:
+    x-mcp-group:
+      - Items
+    get:
+      tags:
+        - items
+      operationId: get_item_master
+      summary: Retrieve an item
+      description: Fetches the details of an existing item.
+      parameters:
+        - name: include
+          in: query
+          description: 'Additional response content. Allowed value: <code>html</code>.'
+          required: false
+          schema:
+            type: string
+        - name: print
+          in: query
+          description: Print-related flag. Allowed values follow the boolean-all convention.
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/get-an-item-master-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.READ
+    put:
+      tags:
+        - items
+      operationId: update_item_master
+      summary: Update an item
+      description: Updates the details of an existing item. You can attach or replace an image by passing the form-data parameter <code>image</code>.
+      parameters:
+        - name: update_recurring_invoice
+          in: query
+          description: When <code>true</code>, apply rate changes to associated recurring invoices.
+          required: false
+          schema:
+            type: boolean
+        - name: pricebook_id
+          in: query
+          description: Price book ID associated with the update request.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044700'
+        - name: date
+          in: query
+          description: Date in <code>yyyy-mm-dd</code> format used for price computation.
+          required: false
+          schema:
+            type: string
+        - name: delete_image
+          in: query
+          description: When <code>true</code>, deletes the existing item image.
+          required: false
+          schema:
+            type: boolean
+        - name: can_sync_to_variant
+          in: query
+          description: When <code>true</code>, sync applicable item fields to its variants.
+          required: false
+          schema:
+            type: boolean
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/update-an-item-master-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/update-an-item-master-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.UPDATE
+    delete:
+      tags:
+        - items
+      operationId: delete_item_master
+      summary: Delete an item
+      description: Deletes an existing item.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/delete-an-item-master-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.DELETE
+    parameters:
+      - name: item_master_id
+        in: path
+        required: true
+        description: Unique identifier of the item.
+        schema:
+          type: string
+        example: 4815000000044220
+      - $ref: '#/components/parameters/organization_id'
+  /itemmasters/active:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: bulk_mark_item_masters_active
+      summary: Bulk mark items as active
+      description: Changes the status of multiple items to active.
+      parameters:
+        - name: item_master_ids
+          in: query
+          description: Comma-separated list of item IDs.
+          required: true
+          schema:
+            type: string
+          example: 4815000000044220,4815000000044221
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-active-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.CREATE
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /itemmasters/inactive:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: bulk_mark_item_masters_inactive
+      summary: Bulk mark items as inactive
+      description: Changes the status of multiple items to inactive.
+      parameters:
+        - name: item_master_ids
+          in: query
+          description: Comma-separated list of item IDs.
+          required: true
+          schema:
+            type: string
+          example: 4815000000044220,4815000000044221
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-inactive-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.CREATE
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /itemmasters/{item_master_id}/active:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: mark_item_master_as_active
+      summary: Mark an item as active
+      description: Changes the status of an item to active.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-active-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.CREATE
+    parameters:
+      - name: item_master_id
+        in: path
+        required: true
+        description: Unique identifier of the item.
+        schema:
+          type: string
+        example: 4815000000044220
+      - $ref: '#/components/parameters/organization_id'
+  /itemmasters/{item_master_id}/inactive:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: mark_item_master_as_inactive
+      summary: Mark an item as inactive
+      description: Changes the status of an item to inactive.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-inactive-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.CREATE
+    parameters:
+      - name: item_master_id
+        in: path
+        required: true
+        description: Unique identifier of the item.
+        schema:
+          type: string
+        example: 4815000000044220
+      - $ref: '#/components/parameters/organization_id'
+  /itemvariants:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: create_item_variant
+      summary: Create an item variant
+      description: Creates a new item variant in Zoho Books. You can attach an image by passing the form-data parameter <code>image</code>.
+      parameters:
+        - name: pricebook_id
+          in: query
+          description: Price book ID associated with the create request.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044700'
+        - name: date
+          in: query
+          description: Date in <code>yyyy-mm-dd</code> format used for price computation.
+          required: false
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/create-an-item-variant-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/create-an-item-variant-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.CREATE
+    get:
+      tags:
+        - items
+      operationId: list_item_variants
+      summary: List item variants
+      description: Lists all item variants in the organization. Supports filters, search, and pagination.
+      parameters:
+        - name: page
+          in: query
+          description: Page number to be fetched. Default value is 1.
+          required: false
+          schema:
+            type: integer
+            default: 1
+          example: 1
+        - name: per_page
+          in: query
+          description: Number of records to be fetched per page. Default value is 200.
+          required: false
+          schema:
+            type: integer
+            default: 200
+          example: 200
+        - name: search_text
+          in: query
+          description: Search variants by name, SKU, or other searchable fields.
+          required: false
+          schema:
+            type: string
+        - name: filter_by
+          in: query
+          description: Filter variants by status or item type. Allowed values include <code>Status.All</code>, <code>Status.Active</code>, <code>Status.Inactive</code>, <code>Status.Lowstock</code>, <code>Status.Unmapped</code>, <code>Status.Uncategorized</code>, <code>Status.Grouped</code>, and item-type filters from the Items list API.
+          required: false
+          schema:
+            type: string
+        - name: sort_column
+          in: query
+          description: Sort by column. Allowed values include <code>name</code>, <code>sku</code>, <code>rate</code>, <code>purchase_rate</code>, <code>created_time</code>, <code>last_modified_time</code>, <code>reorder_level</code>, and <code>stock_on_hand</code>.
+          required: false
+          schema:
+            type: string
+        - name: sort_order
+          in: query
+          description: 'Sort order. Allowed values: <code>A</code> for ascending and <code>D</code> for descending.'
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: 'Filter by variant status. Allowed values: <code>active</code>, <code>inactive</code>, <code>confirmation_pending</code>.'
+          required: false
+          schema:
+            type: string
+        - name: name
+          in: query
+          description: Filter by exact variant name.
+          required: false
+          schema:
+            type: string
+        - name: name_startswith
+          in: query
+          description: Filter by variant name that starts with the given value.
+          required: false
+          schema:
+            type: string
+        - name: name_contains
+          in: query
+          description: Filter by variant name that contains the given value.
+          required: false
+          schema:
+            type: string
+        - name: sku
+          in: query
+          description: Filter by exact SKU.
+          required: false
+          schema:
+            type: string
+        - name: sku_startswith
+          in: query
+          description: Filter by SKU that starts with the given value.
+          required: false
+          schema:
+            type: string
+        - name: sku_contains
+          in: query
+          description: Filter by SKU that contains the given value.
+          required: false
+          schema:
+            type: string
+        - name: rate
+          in: query
+          description: Filter by exact selling rate.
+          required: false
+          schema:
+            type: number
+            format: double
+        - name: purchase_rate
+          in: query
+          description: Filter by exact purchase rate.
+          required: false
+          schema:
+            type: number
+            format: double
+        - name: item_master_id
+          in: query
+          description: Filter variants belonging to the given item.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044220'
+        - name: variant_ids
+          in: query
+          description: Comma-separated list of variant IDs to fetch.
+          required: false
+          schema:
+            type: string
+          example: 4815000000044208,4815000000044220
+        - name: brand
+          in: query
+          description: Filter by brand.
+          required: false
+          schema:
+            type: string
+        - name: manufacturer
+          in: query
+          description: Filter by manufacturer.
+          required: false
+          schema:
+            type: string
+        - name: category_id
+          in: query
+          description: Filter by category ID.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044001'
+        - name: warehouse_id
+          in: query
+          description: Filter by warehouse ID.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044500'
+        - name: location_id
+          in: query
+          description: Filter by location ID.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044600'
+        - name: product_type
+          in: query
+          description: Filter by product type.
+          required: false
+          schema:
+            type: string
+        - name: is_combo_product
+          in: query
+          description: Filter by whether the variant is a combo product.
+          required: false
+          schema:
+            type: boolean
+        - name: last_modified_time
+          in: query
+          description: Return variants modified on or after this UTC datetime.
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/list-item-variants-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.READ
+    delete:
+      tags:
+        - items
+      operationId: bulk_delete_item_variants
+      summary: Bulk delete item variants
+      description: Deletes multiple item variants.
+      parameters:
+        - name: variant_ids
+          in: query
+          description: Comma-separated list of variant IDs to delete.
+          required: false
+          schema:
+            type: string
+          example: 4815000000044208,4815000000044274
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/delete-an-item-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.DELETE
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /itemvariants/{variant_id}:
+    x-mcp-group:
+      - Items
+    get:
+      tags:
+        - items
+      operationId: get_item_variant
+      summary: Retrieve an item variant
+      description: Fetches the details of an existing item variant.
+      parameters:
+        - name: pricebook_id
+          in: query
+          description: Price book ID used to compute the price book rate.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044700'
+        - name: contact_id
+          in: query
+          description: Contact ID used for tax or price computation.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044080'
+        - name: location_id
+          in: query
+          description: Location ID for stock and pricing context.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044600'
+        - name: branch_id
+          in: query
+          description: Branch ID for stock and pricing context.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044600'
+        - name: date
+          in: query
+          description: Transaction date in <code>yyyy-mm-dd</code> format used for price and tax computation.
+          required: false
+          schema:
+            type: string
+        - name: include
+          in: query
+          description: 'Additional response content. Allowed value: <code>html</code>.'
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/get-an-item-variant-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.READ
+    put:
+      tags:
+        - items
+      operationId: update_item_variant
+      summary: Update an item variant
+      description: Updates the details of an existing item variant. You can attach or replace an image by passing the form-data parameter <code>image</code>.
+      parameters:
+        - name: update_recurring_invoice
+          in: query
+          description: When <code>true</code>, apply rate changes to associated recurring invoices.
+          required: false
+          schema:
+            type: boolean
+        - name: pricebook_id
+          in: query
+          description: Price book ID associated with the update request.
+          required: false
+          schema:
+            type: string
+          example: '4815000000044700'
+        - name: date
+          in: query
+          description: Date in <code>yyyy-mm-dd</code> format used for price computation.
+          required: false
+          schema:
+            type: string
+        - name: delete_image
+          in: query
+          description: When <code>true</code>, deletes the existing variant image.
+          required: false
+          schema:
+            type: boolean
+        - name: can_sync_to_master
+          in: query
+          description: When <code>true</code>, sync applicable variant fields to the parent item.
+          required: false
+          schema:
+            type: boolean
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/update-an-item-variant-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/update-an-item-variant-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.UPDATE
+    delete:
+      tags:
+        - items
+      operationId: delete_item_variant
+      summary: Delete an item variant
+      description: Deletes an existing item variant.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/delete-an-item-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.DELETE
+    parameters:
+      - name: variant_id
+        in: path
+        required: true
+        description: Unique identifier of the item variant.
+        schema:
+          type: string
+        example: 4815000000044208
+      - $ref: '#/components/parameters/organization_id'
+  /itemvariants/active:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: bulk_mark_item_variants_active
+      summary: Bulk mark item variants as active
+      description: Changes the status of multiple item variants to active.
+      parameters:
+        - name: variant_ids
+          in: query
+          description: Comma-separated list of variant IDs.
+          required: true
+          schema:
+            type: string
+          example: 4815000000044208,4815000000044274
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-active-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.CREATE
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /itemvariants/inactive:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: bulk_mark_item_variants_inactive
+      summary: Bulk mark item variants as inactive
+      description: Changes the status of multiple item variants to inactive.
+      parameters:
+        - name: variant_ids
+          in: query
+          description: Comma-separated list of variant IDs.
+          required: true
+          schema:
+            type: string
+          example: 4815000000044208,4815000000044274
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-inactive-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.CREATE
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+  /itemvariants/{variant_id}/active:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: mark_item_variant_as_active
+      summary: Mark an item variant as active
+      description: Changes the status of an item variant to active.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-active-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.CREATE
+    parameters:
+      - name: variant_id
+        in: path
+        required: true
+        description: Unique identifier of the item variant.
+        schema:
+          type: string
+        example: 4815000000044208
+      - $ref: '#/components/parameters/organization_id'
+  /itemvariants/{variant_id}/inactive:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: mark_item_variant_as_inactive
+      summary: Mark an item variant as inactive
+      description: Changes the status of an item variant to inactive.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mark-as-inactive-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.settings.CREATE
+    parameters:
+      - name: variant_id
+        in: path
+        required: true
+        description: Unique identifier of the item variant.
+        schema:
+          type: string
+        example: 4815000000044208
+      - $ref: '#/components/parameters/organization_id'
+  /itemvariants/move/{variant_id}:
+    x-mcp-group:
+      - Items
+    put:
+      tags:
+        - items
+      operationId: move_item_variant
+      summary: Move an item variant
+      description: Moves an item variant to another item. The request body follows the item variant create or update structure and must include the target grouping fields.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/move-an-item-variant-request'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/get-an-item-variant-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.UPDATE
+    parameters:
+      - name: variant_id
+        in: path
+        required: true
+        description: Unique identifier of the item variant to move.
+        schema:
+          type: string
+        example: 4815000000044208
+      - $ref: '#/components/parameters/organization_id'
+  /itemvariants/ungroup:
+    x-mcp-group:
+      - Items
+    post:
+      tags:
+        - items
+      operationId: ungroup_item_variants
+      summary: Mark item variants as single items
+      description: Marks the specified item variants as single items.
+      parameters:
+        - name: variant_ids
+          in: query
+          description: Comma-separated list of variant IDs to ungroup.
+          required: false
+          schema:
+            type: string
+          example: 4815000000044208,4815000000044274
+        - name: composite_item_ids
+          in: query
+          description: Comma-separated list of composite item IDs to ungroup.
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ungroup-item-variants-response'
+      deprecated: false
+      security:
+        - Zoho_Auth:
+            - ZohoBooks.items.CREATE
+    parameters:
+      - $ref: '#/components/parameters/organization_id'
+components:
+  parameters:
+    organization_id:
+      name: organization_id
+      description: 'ID of the organization. Note: This value is a set of numeric characters.'
+      in: query
+      required: true
+      schema:
+        type: string
+      example: '10234695'
+  schemas:
+    gendoc-attributes-schema:
+      $ref: '#/components/schemas/item-response'
+    item-response:
+      type: object
+      properties:
+        item_id:
+          $ref: '#/components/schemas/item_id'
+        name:
+          $ref: '#/components/schemas/name'
+        status:
+          $ref: '#/components/schemas/status'
+        description:
+          $ref: '#/components/schemas/description'
+        rate:
+          $ref: '#/components/schemas/rate'
+        unit:
+          $ref: '#/components/schemas/unit'
+        tax_id:
+          $ref: '#/components/schemas/tax_id'
+        purchase_tax_rule_id:
+          $ref: '#/components/schemas/purchase_tax_rule_id'
+        sales_tax_rule_id:
+          $ref: '#/components/schemas/sales_tax_rule_id'
+        tax_name:
+          $ref: '#/components/schemas/tax_name'
+        hsn_or_sac:
+          $ref: '#/components/schemas/hsn_or_sac'
+        sat_item_key_code:
+          $ref: '#/components/schemas/sat_item_key_code'
+        unitkey_code:
+          $ref: '#/components/schemas/unitkey_code'
+        tax_percentage:
+          $ref: '#/components/schemas/tax_percentage'
+        tax_type:
+          $ref: '#/components/schemas/tax_type'
+        sku:
+          $ref: '#/components/schemas/sku'
+        product_type:
+          $ref: '#/components/schemas/product_type'
+        item_tax_preferences:
+          $ref: '#/components/schemas/item_tax_preferences'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+        locations:
+          $ref: '#/components/schemas/locations'
+    name:
+      description: Name of the item. Max-length [100]
+      type: string
+      example: Hard Drive
+    rate:
+      description: Price of the item.
+      type: number
+      format: double
+      example: 120
+    description:
+      description: Description for the item. Max-length [2000]
+      type: string
+      example: 500GB
+    status:
+      description: Status of the item. It can be <code>active</code> or <code>inactive</code>
+      type: string
+      example: active
+    unit:
+      description: If there is a measurement unit for the items you are adding.
+      type: string
+      example: 100GB
+    tax_id:
+      description: 'ID of the tax to be associated to the item. Note: This value is a set of numeric characters.'
+      type: string
+      example: 982000000037049
+      x-node_available_in: []
+      x-node_unavailable_in:
+        - us
+        - in
+    purchase_tax_rule_id:
+      description: 'Id of the purchase tax rule. Note: This value is a set of numeric characters.'
+      type: string
+      example: 127919000000106780
+      x-node_available_in:
+        - mx
+        - ke
+        - za
+      x-node_unavailable_in: []
+    sales_tax_rule_id:
+      description: 'Id of the sales tax rule. Note: This value is a set of numeric characters.'
+      type: string
+      example: 127919000000106780
+      x-node_available_in:
+        - mx
+        - ke
+        - za
+      x-node_unavailable_in: []
+    tax_precentage:
+      type: string
+      example: 10.5
+      x-node_available_in: []
+      x-node_unavailable_in:
+        - us
+    tax_name:
+      type: string
+      description: Name of the tax to be associated to the item.
+      example: Sales Tax
+    account_id:
+      description: 'ID of the account to which the item has to be associated with. Note: This value is a set of numeric characters.'
+      type: string
+      example: ' '
+    is_taxable:
+      description: Boolean to track the taxability of the item.
+      type: boolean
+      example: true
+      x-node_available_in:
+        - in
+        - us
+        - mx
+        - ke
+        - za
+      x-node_unavailable_in: []
+    tax_exemption_id:
+      description: 'ID of the tax exemption. Mandatory, if <code>is_taxable</code> is false. Note: This value is a set of numeric characters.'
+      type: string
+      example: '123456789'
+      x-node_available_in:
+        - in
+        - us
+        - mx
+        - ke
+        - za
+      x-node_unavailable_in: []
+    purchase_tax_exemption_id:
+      description: 'ID of the purchase tax exemption. Mandatory, if <code>is_taxable</code> is false. Note: This value is a set of numeric characters.'
+      type: string
+      example: '123456789'
+      x-node_available_in:
+        - ke
+        - za
+      x-node_unavailable_in: []
+    avatax_tax_code:
+      description: A tax code is a unique label used to group Items (products, services, or charges) together. Max-length [25]
+      type: string
+      example: 982000000037049
+      x-node_available_in:
+        - Avalara Integration
+      x-node_unavailable_in: []
+    avatax_use_code:
+      description: Used to group like customers for exemption purposes. It is a custom value that links customers to a tax rule. Select from Avalara [standard codes][1] or enter a custom code. Max-length [25]
+      type: string
+      example: 982000000037049
+      x-node_available_in:
+        - Avalara Integration
+      x-node_unavailable_in: []
+    purchase_description:
+      description: Purchase description for the item.
+      type: string
+      example: ' '
+    purchase_rate:
+      description: Purchase price of the item.
+      type: string
+      example: ' '
+    purchase_account_id:
+      description: 'ID of the COGS account to which the item has to be associated with. Mandatory, if item_type is purchase / sales and purchase / inventory. Note: This value is a set of numeric characters.'
+      type: string
+      example: ' '
+    inventory_account_id:
+      description: 'ID of the stock account to which the item has to be associated with. Mandatory, if item_type is inventory. Note: This value is a set of numeric characters.'
+      type: string
+      example: ' '
+    vendor_id:
+      description: 'Preferred vendor ID. Note: This value is a set of numeric characters.'
+      type: string
+      example: ' '
+    customfield_id:
+      type: string
+      description: 'ID of the custom field. Note: This value is a set of numeric characters.'
+      example: '46000000012845'
+    value:
+      description: Value of the Custom Field
+      type: string
+      example: Normal
+    custom_fields:
+      description: Custom fields for an item.
+      type: array
+      items:
+        type: object
+        properties:
+          customfield_id:
+            $ref: '#/components/schemas/customfield_id'
+          value:
+            $ref: '#/components/schemas/value'
+    reorder_level:
+      description: Reorder level of the item.
+      type: string
+      example: ' '
+    initial_stock:
+      description: Opening stock of the item.
+      type: string
+      example: ' '
+    initial_stock_rate:
+      description: Unit price of the opening stock.
+      type: string
+      example: ' '
+    item_type:
+      description: 'Type of the item. Allowed values: <code>sales</code>,<code>purchases</code>,<code>sales_and_purchases</code> and <code>inventory</code>. Default value will be <code>sales</code>.'
+      type: string
+      example: ' '
+    item_id:
+      description: 'ID of the item. Note: This value is a set of numeric characters.'
+      type: string
+      example: 45667789900
+    tax_percentage:
+      description: Percent of the tax.
+      type: string
+      example: 70%
+    tax_type:
+      description: Type of the tax.
+      type: string
+      example: tax
+    filter_by:
+      description: 'Filter items by status. Allowed Values: <code>Status.All</code>, <code>Status.Active</code> and <code>Status.Inactive</code>'
+      type: string
+    search_text:
+      description: Search items by name or description. Max-length [100]
+      type: string
+    sort_column:
+      description: 'Sort items. Allowed Values: <code>name</code>, <code>rate</code> and <code>tax_name</code>'
+      type: string
+      example: name
+    product_type:
+      description: Specify the type of an item. Allowed values:<br/><code> goods</code> or <code> service</code> or <code> digital_service</code>. <br/><b>For SouthAfrica Edition:</b> <code>service</code>, <code>goods</code>, <code>capital_service</code> and <code>capital_goods</code>
+      type: string
+      example: goods
+    sku:
+      description: SKU value of item,should be unique throughout the product
+      type: string
+      example: s12345
+    page:
+      description: Number of pages
+      type: integer
+      example: 1
+    per_page:
+      description: Per page values
+      type: integer
+      example: 10
+    has_more_page:
+      description: Check if has more pages
+      type: boolean
+      example: false
+    hsn_or_sac:
+      description: HSN Code
+      type: string
+      example: '123456'
+      x-node_available_in:
+        - in
+        - ke
+        - za
+      x-node_unavailable_in: []
+    sat_item_key_code:
+      description: Add SAT Item Key Code for your goods/services. Download the <a href= http://omawww.sat.gob.mx/tramitesyservicios/Paginas/documentos/catCFDI_V_4_07122022.xls  >CFDI Catalogs.</a>
+      type: string
+      example: '12345678'
+      x-node_available_in:
+        - mx
+      x-node_unavailable_in: []
+    unitkey_code:
+      description: Add Unit Key Code for your goods/services. Download the <a href= http://omawww.sat.gob.mx/tramitesyservicios/Paginas/documentos/catCFDI_V_4_07122022.xls  >CFDI Catalogs.</a>
+      type: string
+      example: '12345678'
+      x-node_available_in:
+        - mx
+      x-node_unavailable_in: []
+    sort_order:
+      description: The order for sorting
+      type: string
+      example: A
+    applied_filter:
+      description: The filer applied
+      type: string
+      example: Status.All
+    report_name:
+      description: The displaying the  report name
+      type: string
+      example: Items
+    tax_specification:
+      description: Set whether the tax type is intra/interstate
+      type: string
+      example: intra
+      x-node_available_in:
+        - in
+      x-node_unavailable_in: []
+    item_tax_preferences:
+      type: array
+      description: Tax preferences for the item.
+      items:
+        type: object
+        properties:
+          tax_id:
+            description: 'ID of the tax to be associated to the item. Note: This value is a set of numeric characters.'
+            type: string
+            example: 982000000037049
+            x-node_available_in:
+              - in
+            x-node_unavailable_in: []
+          tax_specification:
+            $ref: '#/components/schemas/tax_specification'
+      x-node_available_in:
+        - in
+      x-node_unavailable_in: []
+    location_id:
+      description: 'Location ID. Note: This value is a set of numeric characters.'
+      type: string
+      example: '460000000038080'
+    location_name:
+      description: Name of the location
+      type: string
+      example: ''
+    is_primary:
+      description: Mention whether the item is primary or not
+      type: boolean
+      example: false
+    location_stock_on_hand:
+      description: Current available stock in your location.
+      type: string
+      example: ''
+    location_available_stock:
+      description: Available stock in your location.
+      type: string
+      example: ''
+    location_actual_available_stock:
+      description: Actual available stock in your location.
+      type: string
+      example: ''
+    locations:
+      type: array
+      description: Locations for the item.
+      items:
+        type: object
+        properties:
+          location_id:
+            $ref: '#/components/schemas/location_id'
+          location_name:
+            $ref: '#/components/schemas/location_name'
+          status:
+            $ref: '#/components/schemas/status'
+          is_primary:
+            $ref: '#/components/schemas/is_primary'
+          location_stock_on_hand:
+            $ref: '#/components/schemas/location_stock_on_hand'
+          location_available_stock:
+            $ref: '#/components/schemas/location_available_stock'
+          location_actual_available_stock:
+            $ref: '#/components/schemas/location_actual_available_stock'
+    create-an-item-request:
+      required:
+        - name
+        - rate
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/name'
+        rate:
+          $ref: '#/components/schemas/rate'
+        description:
+          $ref: '#/components/schemas/description'
+        tax_id:
+          $ref: '#/components/schemas/tax_id'
+        locations:
+          type: array
+          description: Locations for the item.
+          items:
+            type: object
+            properties:
+              location_id:
+                $ref: '#/components/schemas/location_id'
+              initial_stock:
+                $ref: '#/components/schemas/initial_stock'
+              initial_stock_rate:
+                $ref: '#/components/schemas/initial_stock_rate'
+        purchase_tax_rule_id:
+          $ref: '#/components/schemas/purchase_tax_rule_id'
+        sales_tax_rule_id:
+          $ref: '#/components/schemas/sales_tax_rule_id'
+        tax_percentage:
+          $ref: '#/components/schemas/tax_percentage'
+        sku:
+          $ref: '#/components/schemas/sku'
+        product_type:
+          $ref: '#/components/schemas/product_type'
+        hsn_or_sac:
+          $ref: '#/components/schemas/hsn_or_sac'
+        sat_item_key_code:
+          $ref: '#/components/schemas/sat_item_key_code'
+        unitkey_code:
+          $ref: '#/components/schemas/unitkey_code'
+        is_taxable:
+          $ref: '#/components/schemas/is_taxable'
+        tax_exemption_id:
+          $ref: '#/components/schemas/tax_exemption_id'
+        purchase_tax_exemption_id:
+          $ref: '#/components/schemas/purchase_tax_exemption_id'
+        account_id:
+          $ref: '#/components/schemas/account_id'
+        avatax_tax_code:
+          $ref: '#/components/schemas/avatax_tax_code'
+        avatax_use_code:
+          $ref: '#/components/schemas/avatax_use_code'
+        item_type:
+          $ref: '#/components/schemas/item_type'
+        purchase_description:
+          $ref: '#/components/schemas/purchase_description'
+        purchase_rate:
+          $ref: '#/components/schemas/purchase_rate'
+        purchase_account_id:
+          $ref: '#/components/schemas/purchase_account_id'
+        inventory_account_id:
+          $ref: '#/components/schemas/inventory_account_id'
+        vendor_id:
+          $ref: '#/components/schemas/vendor_id'
+        reorder_level:
+          $ref: '#/components/schemas/reorder_level'
+        item_tax_preferences:
+          $ref: '#/components/schemas/item_tax_preferences'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+    create-an-item-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The item has been added.
+          readOnly: true
+        item:
+          $ref: '#/components/schemas/item-response'
+    list-items-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: success
+          readOnly: true
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                $ref: '#/components/schemas/item_id'
+              name:
+                $ref: '#/components/schemas/name'
+              status:
+                $ref: '#/components/schemas/status'
+              description:
+                $ref: '#/components/schemas/description'
+              rate:
+                $ref: '#/components/schemas/rate'
+              unit:
+                $ref: '#/components/schemas/unit'
+              tax_id:
+                $ref: '#/components/schemas/tax_id'
+              purchase_tax_rule_id:
+                $ref: '#/components/schemas/purchase_tax_rule_id'
+              sales_tax_rule_id:
+                $ref: '#/components/schemas/sales_tax_rule_id'
+              tax_name:
+                $ref: '#/components/schemas/tax_name'
+              tax_percentage:
+                $ref: '#/components/schemas/tax_percentage'
+              tax_type:
+                $ref: '#/components/schemas/tax_type'
+              sku:
+                $ref: '#/components/schemas/sku'
+              product_type:
+                $ref: '#/components/schemas/product_type'
+              sat_item_key_code:
+                $ref: '#/components/schemas/sat_item_key_code'
+              unitkey_code:
+                $ref: '#/components/schemas/unitkey_code'
+              custom_fields:
+                $ref: '#/components/schemas/custom_fields'
+        page_context:
+          description: The context of a particular page.
+          type: object
+          properties:
+            page:
+              $ref: '#/components/schemas/page'
+            per_page:
+              $ref: '#/components/schemas/per_page'
+            has_more_page:
+              $ref: '#/components/schemas/has_more_page'
+            report_name:
+              $ref: '#/components/schemas/report_name'
+            sort_column:
+              $ref: '#/components/schemas/sort_column'
+            sort_order:
+              $ref: '#/components/schemas/sort_order'
+    bulk-fetch-item-details-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: success
+          readOnly: true
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                $ref: '#/components/schemas/item_id'
+              name:
+                $ref: '#/components/schemas/name'
+              status:
+                $ref: '#/components/schemas/status'
+              description:
+                $ref: '#/components/schemas/description'
+              rate:
+                $ref: '#/components/schemas/rate'
+              unit:
+                $ref: '#/components/schemas/unit'
+              tax_id:
+                $ref: '#/components/schemas/tax_id'
+              purchase_tax_rule_id:
+                $ref: '#/components/schemas/purchase_tax_rule_id'
+              sales_tax_rule_id:
+                $ref: '#/components/schemas/sales_tax_rule_id'
+              tax_name:
+                $ref: '#/components/schemas/tax_name'
+              tax_percentage:
+                $ref: '#/components/schemas/tax_percentage'
+              tax_type:
+                $ref: '#/components/schemas/tax_type'
+              sku:
+                $ref: '#/components/schemas/sku'
+              product_type:
+                $ref: '#/components/schemas/product_type'
+              sat_item_key_code:
+                $ref: '#/components/schemas/sat_item_key_code'
+              unitkey_code:
+                $ref: '#/components/schemas/unitkey_code'
+              custom_fields:
+                $ref: '#/components/schemas/custom_fields'
+        page_context:
+          description: The context of a particular page.
+          type: object
+          properties:
+            page:
+              $ref: '#/components/schemas/page'
+            per_page:
+              $ref: '#/components/schemas/per_page'
+            has_more_page:
+              $ref: '#/components/schemas/has_more_page'
+            report_name:
+              $ref: '#/components/schemas/report_name'
+            sort_column:
+              $ref: '#/components/schemas/sort_column'
+            sort_order:
+              $ref: '#/components/schemas/sort_order'
+    update-an-item-request:
+      required:
+        - name
+        - rate
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/name'
+        rate:
+          $ref: '#/components/schemas/rate'
+        description:
+          $ref: '#/components/schemas/description'
+        tax_id:
+          $ref: '#/components/schemas/tax_id'
+        purchase_tax_rule_id:
+          $ref: '#/components/schemas/purchase_tax_rule_id'
+        sales_tax_rule_id:
+          $ref: '#/components/schemas/sales_tax_rule_id'
+        tax_percentage:
+          $ref: '#/components/schemas/tax_percentage'
+        hsn_or_sac:
+          $ref: '#/components/schemas/hsn_or_sac'
+        sat_item_key_code:
+          $ref: '#/components/schemas/sat_item_key_code'
+        unitkey_code:
+          $ref: '#/components/schemas/unitkey_code'
+        sku:
+          $ref: '#/components/schemas/sku'
+        product_type:
+          $ref: '#/components/schemas/product_type'
+        is_taxable:
+          $ref: '#/components/schemas/is_taxable'
+        tax_exemption_id:
+          $ref: '#/components/schemas/tax_exemption_id'
+        purchase_tax_exemption_id:
+          $ref: '#/components/schemas/purchase_tax_exemption_id'
+        account_id:
+          $ref: '#/components/schemas/account_id'
+        avatax_tax_code:
+          $ref: '#/components/schemas/avatax_tax_code'
+        avatax_use_code:
+          $ref: '#/components/schemas/avatax_use_code'
+        item_type:
+          $ref: '#/components/schemas/item_type'
+        purchase_description:
+          $ref: '#/components/schemas/purchase_description'
+        purchase_rate:
+          $ref: '#/components/schemas/purchase_rate'
+        purchase_account_id:
+          $ref: '#/components/schemas/purchase_account_id'
+        inventory_account_id:
+          $ref: '#/components/schemas/inventory_account_id'
+        vendor_id:
+          $ref: '#/components/schemas/vendor_id'
+        reorder_level:
+          $ref: '#/components/schemas/reorder_level'
+        locations:
+          type: array
+          description: Locations for the item.
+          items:
+            type: object
+            properties:
+              location_id:
+                $ref: '#/components/schemas/location_id'
+              initial_stock:
+                $ref: '#/components/schemas/initial_stock'
+              initial_stock_rate:
+                $ref: '#/components/schemas/initial_stock_rate'
+        item_tax_preferences:
+          $ref: '#/components/schemas/item_tax_preferences'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+    update-an-item-customfield-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Custom Fields Updated Successfully
+          readOnly: true
+    update-an-item-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Item details have been saved.
+          readOnly: true
+        item:
+          type: object
+          properties:
+            item_id:
+              $ref: '#/components/schemas/item_id'
+            name:
+              $ref: '#/components/schemas/name'
+            status:
+              $ref: '#/components/schemas/status'
+            description:
+              $ref: '#/components/schemas/description'
+            rate:
+              $ref: '#/components/schemas/rate'
+            unit:
+              $ref: '#/components/schemas/unit'
+            hsn_or_sac:
+              $ref: '#/components/schemas/hsn_or_sac'
+            sat_item_key_code:
+              $ref: '#/components/schemas/sat_item_key_code'
+            unitkey_code:
+              $ref: '#/components/schemas/unitkey_code'
+            tax_id:
+              $ref: '#/components/schemas/tax_id'
+            purchase_tax_rule_id:
+              $ref: '#/components/schemas/purchase_tax_rule_id'
+            sales_tax_rule_id:
+              $ref: '#/components/schemas/sales_tax_rule_id'
+            tax_name:
+              $ref: '#/components/schemas/tax_name'
+            tax_percentage:
+              $ref: '#/components/schemas/tax_percentage'
+            tax_type:
+              $ref: '#/components/schemas/tax_type'
+            sku:
+              $ref: '#/components/schemas/sku'
+            product_type:
+              $ref: '#/components/schemas/product_type'
+            item_tax_preferences:
+              $ref: '#/components/schemas/item_tax_preferences'
+            locations:
+              $ref: '#/components/schemas/locations'
+    get-an-item-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: success
+          readOnly: true
+        item:
+          type: object
+          properties:
+            item_id:
+              $ref: '#/components/schemas/item_id'
+            name:
+              $ref: '#/components/schemas/name'
+            status:
+              $ref: '#/components/schemas/status'
+            description:
+              $ref: '#/components/schemas/description'
+            rate:
+              $ref: '#/components/schemas/rate'
+            unit:
+              $ref: '#/components/schemas/unit'
+            hsn_or_sac:
+              $ref: '#/components/schemas/hsn_or_sac'
+            sat_item_key_code:
+              $ref: '#/components/schemas/sat_item_key_code'
+            unitkey_code:
+              $ref: '#/components/schemas/unitkey_code'
+            tax_id:
+              $ref: '#/components/schemas/tax_id'
+            purchase_tax_rule_id:
+              $ref: '#/components/schemas/purchase_tax_rule_id'
+            sales_tax_rule_id:
+              $ref: '#/components/schemas/sales_tax_rule_id'
+            tax_name:
+              $ref: '#/components/schemas/tax_name'
+            tax_percentage:
+              $ref: '#/components/schemas/tax_percentage'
+            tax_type:
+              $ref: '#/components/schemas/tax_type'
+            sku:
+              $ref: '#/components/schemas/sku'
+            product_type:
+              $ref: '#/components/schemas/product_type'
+            item_tax_preferences:
+              $ref: '#/components/schemas/item_tax_preferences'
+            locations:
+              $ref: '#/components/schemas/locations'
+    delete-an-item-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The item has been deleted.
+          readOnly: true
+    mark-as-active-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The item has been marked as active.
+          readOnly: true
+    mark-as-inactive-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The item has been marked as inactive.
+          readOnly: true
+    item_master_id:
+      description: Unique ID generated by the server for the item. This is used as an identifier.
+      type: string
+      example: 4815000000044220
+    item_master_name:
+      description: Name of the item.
+      type: string
+      example: Bags
+    variant_id:
+      description: Unique ID generated by the server for the item variant. This is used as an identifier.
+      type: string
+      example: 4815000000044208
+    variant_name:
+      description: Name of the item variant.
+      type: string
+      example: Bags-small
+    brand:
+      description: Brand of the item or variant.
+      type: string
+      example: Brand
+    manufacturer:
+      description: Manufacturer of the item or variant.
+      type: string
+      example: Bagstore
+    page_context:
+      type: object
+      description: Pagination and list context for the current result set.
+      properties:
+        page:
+          type: integer
+          example: 1
+        per_page:
+          type: integer
+          example: 25
+        has_more_page:
+          type: boolean
+        report_name:
+          type: string
+        applied_filter:
+          type: string
+        sort_column:
+          type: string
+        sort_order:
+          type: string
+    item-master-variant-response:
+      type: object
+      description: Variant nested under an item.
+      properties:
+        variant_id:
+          $ref: '#/components/schemas/variant_id'
+        variant_name:
+          $ref: '#/components/schemas/variant_name'
+        status:
+          $ref: '#/components/schemas/status'
+        rate:
+          $ref: '#/components/schemas/rate'
+        purchase_rate:
+          $ref: '#/components/schemas/purchase_rate'
+        reorder_level:
+          $ref: '#/components/schemas/reorder_level'
+        sku:
+          $ref: '#/components/schemas/sku'
+        upc:
+          $ref: '#/components/schemas/upc'
+        ean:
+          $ref: '#/components/schemas/ean'
+        isbn:
+          $ref: '#/components/schemas/isbn'
+        part_number:
+          $ref: '#/components/schemas/part_number'
+        attribute_option_id1:
+          $ref: '#/components/schemas/attribute_option_id1'
+        attribute_option_name1:
+          $ref: '#/components/schemas/attribute_option_name1'
+        image_name:
+          $ref: '#/components/schemas/image_name'
+        image_type:
+          $ref: '#/components/schemas/image_type'
+        stock_on_hand:
+          $ref: '#/components/schemas/stock_on_hand'
+    item-master-response:
+      type: object
+      description: Item resource returned by item APIs.
+      properties:
+        item_master_id:
+          $ref: '#/components/schemas/item_master_id'
+        group_id:
+          $ref: '#/components/schemas/group_id'
+        item_master_name:
+          $ref: '#/components/schemas/item_master_name'
+        group_name:
+          $ref: '#/components/schemas/group_name'
+        category_id:
+          type: string
+          description: Category ID associated with the item.
+          example: '4815000000044001'
+        category_name:
+          type: string
+          description: Category name associated with the item.
+        product_type:
+          $ref: '#/components/schemas/product_type'
+        brand:
+          $ref: '#/components/schemas/brand'
+        manufacturer:
+          $ref: '#/components/schemas/manufacturer'
+        unit:
+          $ref: '#/components/schemas/unit'
+        description:
+          $ref: '#/components/schemas/description'
+        is_taxable:
+          $ref: '#/components/schemas/is_taxable'
+        tax_id:
+          $ref: '#/components/schemas/tax_id'
+        tax_name:
+          $ref: '#/components/schemas/tax_name'
+        tax_percentage:
+          $ref: '#/components/schemas/tax_percentage'
+        tax_type:
+          $ref: '#/components/schemas/tax_type'
+        purchase_account_id:
+          $ref: '#/components/schemas/purchase_account_id'
+        purchase_account_name:
+          $ref: '#/components/schemas/purchase_account_name'
+        account_name:
+          $ref: '#/components/schemas/account_name'
+        inventory_account_id:
+          $ref: '#/components/schemas/inventory_account_id'
+        attribute_id1:
+          $ref: '#/components/schemas/attribute_id1'
+        attribute_name1:
+          $ref: '#/components/schemas/attribute_name1'
+        status:
+          $ref: '#/components/schemas/status'
+        source:
+          $ref: '#/components/schemas/source'
+        image_name:
+          $ref: '#/components/schemas/image_name'
+        image_type:
+          $ref: '#/components/schemas/image_type'
+        documents:
+          $ref: '#/components/schemas/documents'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+        item_variants:
+          type: array
+          description: Variants belonging to this item.
+          items:
+            $ref: '#/components/schemas/item-master-variant-response'
+    item-variant-response:
+      type: object
+      description: Item variant resource returned by item variant APIs.
+      properties:
+        variant_id:
+          $ref: '#/components/schemas/variant_id'
+        variant_name:
+          $ref: '#/components/schemas/variant_name'
+        item_master_id:
+          $ref: '#/components/schemas/item_master_id'
+        item_master_name:
+          $ref: '#/components/schemas/item_master_name'
+        group_id:
+          $ref: '#/components/schemas/group_id'
+        group_name:
+          $ref: '#/components/schemas/group_name'
+        unit:
+          $ref: '#/components/schemas/unit'
+        unit_id:
+          $ref: '#/components/schemas/unit_id'
+        item_type:
+          $ref: '#/components/schemas/item_type'
+        product_type:
+          $ref: '#/components/schemas/product_type'
+        can_be_sold:
+          $ref: '#/components/schemas/can_be_sold'
+        can_be_purchased:
+          $ref: '#/components/schemas/can_be_purchased'
+        track_inventory:
+          $ref: '#/components/schemas/track_inventory'
+        is_taxable:
+          $ref: '#/components/schemas/is_taxable'
+        tax_id:
+          $ref: '#/components/schemas/tax_id'
+        documents:
+          $ref: '#/components/schemas/documents'
+        description:
+          $ref: '#/components/schemas/description'
+        tax_name:
+          $ref: '#/components/schemas/tax_name'
+        tax_percentage:
+          $ref: '#/components/schemas/tax_percentage'
+        tax_type:
+          $ref: '#/components/schemas/tax_type'
+        purchase_account_id:
+          $ref: '#/components/schemas/purchase_account_id'
+        purchase_account_name:
+          $ref: '#/components/schemas/purchase_account_name'
+        account_name:
+          $ref: '#/components/schemas/account_name'
+        inventory_account_id:
+          $ref: '#/components/schemas/inventory_account_id'
+        attribute_id1:
+          $ref: '#/components/schemas/attribute_id1'
+        attribute_name1:
+          $ref: '#/components/schemas/attribute_name1'
+        status:
+          $ref: '#/components/schemas/status'
+        source:
+          $ref: '#/components/schemas/source'
+        rate:
+          $ref: '#/components/schemas/rate'
+        pricebook_rate:
+          $ref: '#/components/schemas/pricebook_rate'
+        purchase_rate:
+          $ref: '#/components/schemas/purchase_rate'
+        reorder_level:
+          $ref: '#/components/schemas/reorder_level'
+        vendor_id:
+          $ref: '#/components/schemas/vendor_id'
+        vendor_name:
+          $ref: '#/components/schemas/vendor_name'
+        locations:
+          $ref: '#/components/schemas/locations'
+        sku:
+          $ref: '#/components/schemas/sku'
+        upc:
+          $ref: '#/components/schemas/upc'
+        ean:
+          $ref: '#/components/schemas/ean'
+        isbn:
+          $ref: '#/components/schemas/isbn'
+        part_number:
+          $ref: '#/components/schemas/part_number'
+        attribute_option_id1:
+          $ref: '#/components/schemas/attribute_option_id1'
+        attribute_option_name1:
+          $ref: '#/components/schemas/attribute_option_name1'
+        image_id:
+          $ref: '#/components/schemas/image_id'
+        image_name:
+          $ref: '#/components/schemas/image_name'
+        purchase_description:
+          $ref: '#/components/schemas/purchase_description'
+        image_type:
+          $ref: '#/components/schemas/image_type'
+        item_tax_preferences:
+          $ref: '#/components/schemas/item_tax_preferences'
+        hsn_or_sac:
+          $ref: '#/components/schemas/hsn_or_sac'
+        sat_item_key_code:
+          $ref: '#/components/schemas/sat_item_key_code'
+        unitkey_code:
+          $ref: '#/components/schemas/unitkey_code'
+        brand:
+          $ref: '#/components/schemas/brand'
+        manufacturer:
+          $ref: '#/components/schemas/manufacturer'
+        is_combo_product:
+          $ref: '#/components/schemas/is_combo_product'
+        stock_on_hand:
+          $ref: '#/components/schemas/stock_on_hand'
+        created_time:
+          $ref: '#/components/schemas/created_time'
+        last_modified_time:
+          $ref: '#/components/schemas/last_modified_time'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+    create-an-item-master-request:
+      required:
+        - item_master_name
+        - unit
+        - item_variants
+      type: object
+      properties:
+        item_master_name:
+          $ref: '#/components/schemas/item_master_name'
+        name:
+          type: string
+          description: Alternate name field accepted by some create payloads. Prefer <code>item_master_name</code> for item APIs.
+        brand:
+          $ref: '#/components/schemas/brand'
+        manufacturer:
+          $ref: '#/components/schemas/manufacturer'
+        unit:
+          $ref: '#/components/schemas/unit'
+        description:
+          $ref: '#/components/schemas/description'
+        product_type:
+          $ref: '#/components/schemas/product_type'
+        tax_id:
+          $ref: '#/components/schemas/tax_id'
+        is_taxable:
+          $ref: '#/components/schemas/is_taxable'
+        account_id:
+          type: string
+          description: Sales account ID.
+          example: '4815000000035001'
+        purchase_account_id:
+          $ref: '#/components/schemas/purchase_account_id'
+        inventory_account_id:
+          $ref: '#/components/schemas/inventory_account_id'
+        category_id:
+          type: string
+          description: Category ID associated with the item.
+          example: '4815000000044001'
+        attribute_name1:
+          $ref: '#/components/schemas/attribute_name1'
+        attribute_name2:
+          type: string
+          description: Name of the second attribute.
+        attribute_name3:
+          type: string
+          description: Name of the third attribute.
+        item_variants:
+          type: array
+          description: Variants to create under this item.
+          items:
+            type: object
+            required:
+              - variant_name
+              - rate
+            properties:
+              variant_id:
+                $ref: '#/components/schemas/variant_id'
+              variant_name:
+                $ref: '#/components/schemas/variant_name'
+              rate:
+                $ref: '#/components/schemas/rate'
+              purchase_rate:
+                $ref: '#/components/schemas/purchase_rate'
+              sku:
+                $ref: '#/components/schemas/sku'
+              upc:
+                $ref: '#/components/schemas/upc'
+              ean:
+                $ref: '#/components/schemas/ean'
+              isbn:
+                $ref: '#/components/schemas/isbn'
+              part_number:
+                $ref: '#/components/schemas/part_number'
+              reorder_level:
+                $ref: '#/components/schemas/reorder_level'
+              attribute_option_name1:
+                $ref: '#/components/schemas/attribute_option_name1'
+              attribute_option_name2:
+                type: string
+                description: Option name for the second attribute.
+              attribute_option_name3:
+                type: string
+                description: Option name for the third attribute.
+              vendor_id:
+                $ref: '#/components/schemas/vendor_id'
+              custom_fields:
+                $ref: '#/components/schemas/custom_fields'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+    update-an-item-master-request:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/create-an-item-master-request'
+    create-an-item-master-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The item has been added.
+          readOnly: true
+        item_master:
+          $ref: '#/components/schemas/item-master-response'
+    get-an-item-master-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: success
+          readOnly: true
+        item_master:
+          $ref: '#/components/schemas/item-master-response'
+    update-an-item-master-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Item details have been updated.
+          readOnly: true
+        item_master:
+          $ref: '#/components/schemas/item-master-response'
+    delete-an-item-master-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The item has been deleted.
+          readOnly: true
+    list-item-masters-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: success
+          readOnly: true
+        item_masters:
+          type: array
+          items:
+            $ref: '#/components/schemas/item-master-response'
+        page_context:
+          $ref: '#/components/schemas/page_context'
+    create-an-item-variant-request:
+      required:
+        - variant_name
+        - rate
+      type: object
+      properties:
+        variant_id:
+          $ref: '#/components/schemas/variant_id'
+        variant_name:
+          $ref: '#/components/schemas/variant_name'
+        rate:
+          $ref: '#/components/schemas/rate'
+        group_id:
+          $ref: '#/components/schemas/group_id'
+        item_master_id:
+          $ref: '#/components/schemas/item_master_id'
+        unit:
+          $ref: '#/components/schemas/unit'
+        unit_id:
+          $ref: '#/components/schemas/unit_id'
+        item_type:
+          $ref: '#/components/schemas/item_type'
+        product_type:
+          $ref: '#/components/schemas/product_type'
+        can_be_sold:
+          $ref: '#/components/schemas/can_be_sold'
+        can_be_purchased:
+          $ref: '#/components/schemas/can_be_purchased'
+        track_inventory:
+          $ref: '#/components/schemas/track_inventory'
+        is_taxable:
+          $ref: '#/components/schemas/is_taxable'
+        tax_id:
+          $ref: '#/components/schemas/tax_id'
+        description:
+          $ref: '#/components/schemas/description'
+        purchase_description:
+          $ref: '#/components/schemas/purchase_description'
+        purchase_rate:
+          $ref: '#/components/schemas/purchase_rate'
+        purchase_account_id:
+          $ref: '#/components/schemas/purchase_account_id'
+        inventory_account_id:
+          $ref: '#/components/schemas/inventory_account_id'
+        reorder_level:
+          $ref: '#/components/schemas/reorder_level'
+        sku:
+          $ref: '#/components/schemas/sku'
+        upc:
+          $ref: '#/components/schemas/upc'
+        ean:
+          $ref: '#/components/schemas/ean'
+        isbn:
+          $ref: '#/components/schemas/isbn'
+        part_number:
+          $ref: '#/components/schemas/part_number'
+        attribute_option_name1:
+          $ref: '#/components/schemas/attribute_option_name1'
+        vendor_id:
+          $ref: '#/components/schemas/vendor_id'
+        brand:
+          $ref: '#/components/schemas/brand'
+        manufacturer:
+          $ref: '#/components/schemas/manufacturer'
+        hsn_or_sac:
+          $ref: '#/components/schemas/hsn_or_sac'
+        locations:
+          type: array
+          description: List of locations.
+          items:
+            type: object
+            properties:
+              location_id:
+                $ref: '#/components/schemas/location_id'
+              initial_stock:
+                $ref: '#/components/schemas/initial_stock'
+              initial_stock_rate:
+                $ref: '#/components/schemas/initial_stock_rate'
+        custom_fields:
+          $ref: '#/components/schemas/custom_fields'
+    update-an-item-variant-request:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/create-an-item-variant-request'
+    move-an-item-variant-request:
+      type: object
+      description: Request body to move a variant into another item. Uses the item variant create or update structure. Include the target <code>item_master_id</code> or <code>group_id</code>.
+      allOf:
+        - $ref: '#/components/schemas/create-an-item-variant-request'
+    create-an-item-variant-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The item has been added.
+          readOnly: true
+        item_variant:
+          $ref: '#/components/schemas/item-variant-response'
+    get-an-item-variant-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: success
+          readOnly: true
+        item_variant:
+          $ref: '#/components/schemas/item-variant-response'
+    update-an-item-variant-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: Item details have been updated
+          readOnly: true
+        item_variant:
+          $ref: '#/components/schemas/item-variant-response'
+    list-item-variants-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: success
+          readOnly: true
+        item_variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/item-variant-response'
+        page_context:
+          $ref: '#/components/schemas/page_context'
+    ungroup-item-variants-response:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 0
+          readOnly: true
+        message:
+          type: string
+          example: The selected variants have been ungrouped.
+          readOnly: true
+    group_id:
+      description: Unique ID generated by the server for the group to which the item belongs, if any. This is used as an identifier.
+      type: string
+      example: 4815000000044220
+    group_name:
+      description: Name of product group
+      type: string
+      example: Bags
+    upc:
+      description: The 12 digit Unique Product Code (UPC) of the item.
+      type: integer
+      format: int64
+      example: 111111111111
+    ean:
+      description: Unique EAN value for the Item.
+      type: integer
+      format: int64
+      example: 111111111112
+    isbn:
+      description: Unique ISBN value for the Item.
+      type: string
+      example: 111111111113
+    part_number:
+      description: Part Number of the Item.
+      type: string
+      example: 111111111114
+    attribute_option_id1:
+      description: Unique ID generated by the server for the attribute's options. This is used as an identifier.
+      type: string
+      example: 4815000000044214
+    attribute_option_name1:
+      description: Name of the attribute's option.
+      type: string
+      example: Small
+    image_name:
+      description: Image name of the Item.
+      type: string
+      example: bag_s.jpg
+    image_type:
+      description: Type of the image i.e., its file format.
+      type: string
+      example: jpg
+    stock_on_hand:
+      description: Stock available for a particular item.
+      type: number
+      format: double
+      example: 50
+    attribute_id1:
+      description: Unique ID used by the server. This is used as an identifier.
+      type: string
+      example: 4815000000044112
+    attribute_name1:
+      description: Name of the attribute present in the Item Group.
+      type: string
+      example: Small
+    source:
+      description: The source of the Item Group.
+      type: string
+    documents:
+      description: List of all the documents associated with the item
+      type: array
+      items:
+        type: string
+    purchase_account_name:
+      description: Name of the Purchase Account
+      type: string
+      example: Cost of Goods Sold
+    account_name:
+      description: Name of the Sales Account.
+      type: string
+      example: Sales
+    can_be_sold:
+      description: Boolean to indicate whether the item can be sold.
+      type: boolean
+      example: true
+    can_be_purchased:
+      description: Boolean to indicate whether the item can be purchased.
+      type: boolean
+      example: true
+    track_inventory:
+      description: Boolean to indicate whether inventory tracking is enabled for the item.
+      type: boolean
+      example: true
+    pricebook_rate:
+      description: Pricelist rate applied on the item.
+      type: number
+      format: double
+      example: 6
+    vendor_name:
+      description: Name of the preferred Vendor for purchasing this item.
+      type: string
+      example: Molly
+    image_id:
+      description: Unique ID generated by the server for the item image. This is used as an identifier.
+      type: string
+      example: 2077500000000002000
+    is_combo_product:
+      type: boolean
+      example: false
+    created_time:
+      description: Created Time of the Transaction
+      type: string
+      example: '2013-01-24'
+    last_modified_time:
+      description: Last Modified time of the Transaction
+      type: string
+      example: '2013-01-24'
+    unit_id:
+      description: Unique ID of the unit associated with the item.
+      type: string
+      example: '4815000000044300'
+  securitySchemes:
+    Zoho_Auth:
+      type: oauth2
+      flows:
+        implicit:
+          authorizationUrl: https://accounts.zoho.com/oauth/v2/auth
+          scopes:
+            ZohoBooks.settings.CREATE: Create Settings
+            ZohoBooks.settings.UPDATE: Update Settings
+            ZohoBooks.settings.READ: Read Settings
+            ZohoBooks.settings.DELETE: Delete Settings
+            ZohoBooks.items.CREATE: Create Items
+            ZohoBooks.items.READ: Read Items
+            ZohoBooks.items.UPDATE: Update Items
+            ZohoBooks.items.DELETE: Delete Items

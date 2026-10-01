@@ -938,6 +938,72 @@ function setupChatEvents() {
         });
     }
 
+    // ── Media attach button ──
+    const hubAttachBtn = document.getElementById('hubAttachBtn');
+    const hubChatImageInput = document.getElementById('hubChatImageInput');
+    if (hubAttachBtn && hubChatImageInput) {
+        hubAttachBtn.addEventListener('click', () => hubChatImageInput.click());
+        hubChatImageInput.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+
+            // Validate file size (max 25MB)
+            if (file.size > 25 * 1024 * 1024) {
+                alert('File too large. Maximum size is 25MB.');
+                e.target.value = '';
+                return;
+            }
+
+            // Compress images client-side before upload
+            const processFile = (f) => {
+                window.__hubPendingMedia = f;
+                const bar = document.getElementById('hubImagePreviewBar');
+                if (bar) {
+                    bar.style.display = 'block';
+                    const isImg = f.type.startsWith('image/');
+                    const url = isImg ? URL.createObjectURL(f) : '';
+                    bar.innerHTML = `<div style="display:flex;align-items:center;gap:8px;">
+                        ${isImg ? `<img src="${url}" style="width:40px;height:40px;border-radius:6px;object-fit:cover;">` : '<span style="font-size:24px;">📄</span>'}
+                        <span style="color:#8696a0;font-size:12px;">${escapeHtml(f.name)}</span>
+                        <button onclick="hubRemoveMedia()" style="background:rgba(255,255,255,0.1);border:none;color:#fff;border-radius:50%;width:20px;height:20px;cursor:pointer;font-size:10px;">&times;</button>
+                    </div>`;
+                }
+            };
+
+            if (file.type.startsWith('image/') && file.type !== 'image/gif' && file.size > 200 * 1024) {
+                // Compress image using Canvas API
+                const img = new Image();
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                img.onload = () => {
+                    let { width, height } = img;
+                    const maxWidth = 1920;
+                    if (width > maxWidth) {
+                        height = Math.round((height * maxWidth) / width);
+                        width = maxWidth;
+                    }
+                    canvas.width = width;
+                    canvas.height = height;
+                    ctx.drawImage(img, 0, 0, width, height);
+                    canvas.toBlob((blob) => {
+                        if (blob && blob.size < file.size) {
+                            const compressed = new File([blob], file.name.replace(/\.[^.]+$/, '.webp'), { type: 'image/webp' });
+                            console.log(`[MEDIA] Hub compressed: ${(file.size/1024).toFixed(0)}KB → ${(compressed.size/1024).toFixed(0)}KB`);
+                            processFile(compressed);
+                        } else {
+                            processFile(file);
+                        }
+                    }, 'image/webp', 0.82);
+                };
+                img.onerror = () => processFile(file);
+                img.src = URL.createObjectURL(file);
+            } else {
+                processFile(file);
+            }
+            e.target.value = '';
+        });
+    }
+
     if (markResolvedBtn) {
         markResolvedBtn.addEventListener('click', async () => {
             if (!currentChatPhone) return;
@@ -3119,12 +3185,71 @@ function renderChatMessages(messages) {
     }
 }
 
+function hubRemoveMedia() {
+    window.__hubPendingMedia = null;
+    const bar = document.getElementById('hubImagePreviewBar');
+    if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
+}
+
 async function sendChatMessage() {
     if (!hubRequirePerm('send_messages', 'send WhatsApp messages')) return;
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
     
-    if (!message || !currentChatPhone) return;
+    if (!message && !window.__hubPendingMedia) return;
+    if (!currentChatPhone) return;
+
+    // If there's a pending media file, send it via the admin media endpoint
+    if (window.__hubPendingMedia) {
+        const file = window.__hubPendingMedia;
+        window.__hubPendingMedia = null;
+        hubRemoveMedia();
+        input.value = '';
+        input.style.height = '44px';
+
+        const chatMessages = document.getElementById('chatMessages');
+        const tempDiv = document.createElement('div');
+        tempDiv.className = 'chat-message agent';
+        tempDiv.innerHTML = `<div class="msg-bubble"><div class="msg-content">📷 Sending media...</div></div>`;
+        chatMessages.appendChild(tempDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        try {
+            const token = localStorage.getItem('hubToken');
+            const formData = new FormData();
+            formData.append('image', file);
+            formData.append('phone', currentChatPhone);
+            formData.append('caption', message);
+
+            const resp = await fetch('/api/admin/support-tickets/send-image', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: formData
+            });
+            const data = await resp.json();
+            tempDiv.remove();
+
+            if (data.success) {
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'chat-message agent';
+                const isImg = file.type.startsWith('image/');
+                msgDiv.innerHTML = `<div class="msg-bubble">
+                    ${isImg ? `<img src="${data.fileUrl}" style="max-width:200px;border-radius:8px;display:block;">` : `<div style="padding:8px;">📎 ${escapeHtml(file.name)}</div>`}
+                    ${message ? `<div class="msg-content" style="margin-top:4px;font-size:12px;">${escapeHtml(message)}</div>` : ''}
+                </div>`;
+                chatMessages.appendChild(msgDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            } else {
+                alert(data.error || 'Failed to send media');
+            }
+        } catch (err) {
+            tempDiv.remove();
+            alert('Failed to send media');
+        }
+        return;
+    }
+    
+    if (!message) return;
     
     // Add message to UI immediately (optimistic update)
     const chatMessages = document.getElementById('chatMessages');

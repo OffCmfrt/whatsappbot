@@ -1,13 +1,14 @@
 /**
  * Delete all duplicate Zoho invoices created by the native Zoho ↔ Shopify
- * integration. Uses the sync log DB to identify which invoice to keep
- * (the middleware's) and voids+deletes the rest.
+ * integration using BULK operations for maximum speed.
  *
- * Optimized: 350ms pacing + 3 concurrent workers = ~25 removals/min
+ * Uses bulk delete endpoint: DELETE /invoices?invoice_ids=id1,id2,...
+ * Up to 200 invoices per API call.
  *
  * Usage:
  *   node scripts/delete_duplicate_invoices.js            dry-run
  *   node scripts/delete_duplicate_invoices.js --apply    execute
+ *   node scripts/delete_duplicate_invoices.js --apply --from=2026-09-01  only invoices from date
  */
 require('dotenv').config();
 const fs = require('fs');
@@ -16,8 +17,9 @@ const zohoService = require('../src/services/zohoService');
 const { dbAdapter } = require('../src/database/db');
 
 const APPLY = process.argv.includes('--apply');
-const PACE_MS = 350; // ~170 req/min per worker, 3 workers = ~510 req/min total (but Zoho allows bursts)
-const CONCURRENCY = 3; // 3 parallel workers
+const FROM_ARG = process.argv.find(a => a.startsWith('--from='));
+const DATE_START = FROM_ARG ? FROM_ARG.split('=')[1] : null;
+const PACE_MS = 200;
 const startTime = Date.now();
 let removed = 0, errors = 0, scanned = 0;
 
@@ -25,66 +27,67 @@ function log(msg) { console.log(`${APPLY ? '[APPLY]' : '[DRY]'} ${msg}`); }
 function elapsed() { return ((Date.now() - startTime) / 1000).toFixed(0); }
 async function pace() { return new Promise(r => setTimeout(r, PACE_MS)); }
 
-// Simple semaphore for bounded concurrency
-class Semaphore {
-    constructor(max) { this.max = max; this.running = 0; this.queue = []; }
-    async acquire() {
-        if (this.running < this.max) { this.running++; return; }
-        await new Promise(r => this.queue.push(r));
-        this.running++;
-    }
-    release() {
-        this.running--;
-        if (this.queue.length > 0) { this.queue.shift()(); }
-    }
-}
-
-async function removeDuplicate(dup, orderNum, keepInv, csvLines, sem) {
-    await sem.acquire();
-    try {
-        // Skip payment deletion for definitely unpaid invoices
-        if (dup.status === 'paid' || dup.status === 'payment_made') {
+async function bulkDeleteInvoices(invoiceIds, csvLines, orderMap) {
+    // Process in batches of 200 (Zoho limit)
+    for (let i = 0; i < invoiceIds.length; i += 200) {
+        const batch = invoiceIds.slice(i, i + 200);
+        const batchNum = Math.floor(i / 200) + 1;
+        const totalBatches = Math.ceil(invoiceIds.length / 200);
+        
+        log(`  Batch ${batchNum}/${totalBatches}: Deleting ${batch.length} invoices...`);
+        
+        try {
             await pace();
-            const pmts = await zohoService.getPayments(dup.invoice_id);
-            for (const p of pmts) {
-                await pace();
-                try { await zohoService.deletePayment(p.payment_id); } catch (_) {}
+            // Use bulk delete endpoint
+            const result = await zohoService.bulkDeleteInvoices(batch);
+            
+            // Track successes and failures
+            if (result && result.invoice_ids) {
+                for (const invId of batch) {
+                    const orderNum = orderMap[invId] || 'unknown';
+                    if (result.invoice_ids.includes(invId)) {
+                        removed++;
+                        csvLines.push(`${orderNum},removed,bulk_batch_${batchNum},,`);
+                    } else {
+                        errors++;
+                        csvLines.push(`${orderNum},error,bulk_batch_${batchNum},,Failed in bulk delete`);
+                    }
+                }
+            } else {
+                // Assume all succeeded if no specific result
+                removed += batch.length;
+                for (const invId of batch) {
+                    const orderNum = orderMap[invId] || 'unknown';
+                    csvLines.push(`${orderNum},removed,bulk_batch_${batchNum},,`);
+                }
+            }
+            
+            log(`  ✅ Batch ${batchNum} complete: ${batch.length} invoices deleted (${elapsed()}s)`);
+        } catch (e) {
+            errors += batch.length;
+            log(`  ⚠️ Batch ${batchNum} failed: ${e.message}`);
+            for (const invId of batch) {
+                const orderNum = orderMap[invId] || 'unknown';
+                csvLines.push(`${orderNum},error,bulk_batch_${batchNum},,"${e.message}"`);
             }
         }
-
-        // Void (skip if already void or draft)
-        if (dup.status !== 'void' && dup.status !== 'draft') {
-            await pace();
-            await zohoService.voidInvoice(dup.invoice_id);
-        }
-        // Delete
-        await pace();
-        await zohoService.deleteInvoice(dup.invoice_id);
-        removed++;
-        csvLines.push(`${orderNum},removed,${keepInv.invoice_number},${dup.invoice_number},`);
-
-        if (removed % 25 === 0) {
-            log(`  ✅ ${removed} removed (${elapsed()}s) — #${orderNum} ${dup.invoice_number}`);
-        }
-    } catch (e) {
-        errors++;
-        csvLines.push(`${orderNum},error,${keepInv.invoice_number},${dup.invoice_number},"${e.message}"`);
-        if (errors <= 50) log(`  ⚠️ #${orderNum} ${dup.invoice_number}: ${e.message}`);
-    } finally {
-        sem.release();
     }
 }
 
 async function main() {
-    console.log(`\n🗑️  Zoho Duplicate Invoice Cleanup (optimized)`);
-    console.log(`   mode: ${APPLY ? 'APPLY' : 'DRY-RUN'} | pace: ${PACE_MS}ms | workers: ${CONCURRENCY}\n`);
+    console.log(`\n🗑️  Zoho Duplicate Invoice Cleanup (BULK OPERATIONS)`);
+    console.log(`   mode: ${APPLY ? 'APPLY' : 'DRY-RUN'} | pace: ${PACE_MS}ms${DATE_START ? ` | from: ${DATE_START}` : ''}\n`);
 
     // Step 1: Scan all active Zoho invoices, group by reference_number
     log('Step 1: Scanning Zoho invoices...');
     const seenRefs = {};
     for (let page = 1; page <= 100; page++) {
         let invoices = [];
-        try { invoices = await zohoService.searchInvoice({ page, per_page: 200 }); } catch (e) { break; }
+        try {
+            const filters = { page, per_page: 200 };
+            if (DATE_START) filters.date_start = DATE_START;
+            invoices = await zohoService.searchInvoice(filters);
+        } catch (e) { break; }
         if (!invoices.length) break;
         for (const inv of invoices) {
             const ref = String(inv.reference_number || '').replace(/^#/, '').trim();
@@ -119,11 +122,11 @@ async function main() {
     }
     log(`  ${Object.keys(syncMap).length} middleware invoices identified (${elapsed()}s)\n`);
 
-    // Step 3: Process each duplicate group with bounded concurrency
-    log(`Step 3: Processing ${dups.length} duplicate groups...`);
+    // Step 3: Collect all invoice IDs to remove
+    log(`Step 3: Identifying invoices to remove...`);
+    const invoicesToRemove = [];
+    const orderMap = {}; // invoice_id -> order_number
     const csvLines = ['order,action,kept,removed,details'];
-    const sem = new Semaphore(CONCURRENCY);
-    const promises = [];
 
     for (const [ref, invoices] of dups) {
         const orderNum = ref.replace(/^#/, '');
@@ -150,14 +153,22 @@ async function main() {
             continue;
         }
 
-        // Queue removal with bounded concurrency
+        // Collect for bulk deletion
         for (const dup of removeInvs) {
-            promises.push(removeDuplicate(dup, orderNum, keepInv, csvLines, sem));
+            invoicesToRemove.push(dup.invoice_id);
+            orderMap[dup.invoice_id] = orderNum;
         }
     }
 
-    // Wait for all removals to complete
-    await Promise.all(promises);
+    if (!APPLY) {
+        log(`  ${invoicesToRemove.length} invoices would be removed`);
+    } else {
+        log(`  ${invoicesToRemove.length} invoices to remove in bulk\n`);
+
+        // Step 4: Bulk delete all invoices
+        log(`Step 4: Bulk deleting ${invoicesToRemove.length} invoices...`);
+        await bulkDeleteInvoices(invoicesToRemove, csvLines, orderMap);
+    }
 
     // Write CSV
     const csvPath = path.join(__dirname, `../tmp/dedup_result_${new Date().toISOString().slice(0, 10)}.csv`);

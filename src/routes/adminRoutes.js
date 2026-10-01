@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
 const { verifyToken, requirePermission, permissionGate, logOperatorActivity, adminCredentialFingerprint } = require('../middleware/auth');
 const Customer = require('../models/Customer');
 const Order = require('../models/Order');
@@ -13,6 +14,15 @@ const { dbAdapter } = require('../database/db');
 const cloudinaryService = require('../services/cloudinaryService');
 const igCommentService = require('../services/igCommentService');
 const { toIST, formatDateForExport, fromISTtoUTC } = require('../utils/timezone');
+
+// Multer config: disk storage (avoids holding files in RAM)
+const uploadMedia = multer({
+    storage: multer.diskStorage({
+        dest: require('os').tmpdir() + '/whatsapp-media-uploads',
+        filename: (req, file, cb) => cb(null, `admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
+    }),
+    limits: { fileSize: 25 * 1024 * 1024 }
+});
 const { invalidateCache: clearAllCaches, caches, getCacheStats, getCached, setCache } = require('../utils/cache');
 const { getPhoneVariations } = require('../utils/validators');
 
@@ -24,7 +34,12 @@ let _upload = null;
 function getUpload() {
   if (!_upload) {
     const multer = require('multer');
-    _upload = multer({ storage: multer.memoryStorage() });
+    _upload = multer({
+        storage: multer.diskStorage({
+            dest: require('os').tmpdir() + '/whatsapp-media-uploads',
+            filename: (req, file, cb) => cb(null, `lazy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
+        })
+    });
   }
   return _upload;
 }
@@ -8498,6 +8513,79 @@ router.post('/widget-chats/release/:sessionId', verifyToken, async (req, res) =>
     } catch (error) {
         console.error('widget-chats/release error:', error.message);
         res.status(500).json({ success: false, error: 'Failed to release' });
+    }
+});
+
+// ── Media Attachments (Admin Dashboard) ──────────────────────
+
+// Get attachments for a customer phone
+router.get('/support-tickets/:phone/attachments', verifyToken, async (req, res) => {
+    try {
+        const { phone } = req.params;
+        const mediaService = require('../services/mediaService');
+        const attachments = await mediaService.getAttachmentsForPhone(phone, 100);
+        res.json({ success: true, attachments });
+    } catch (error) {
+        console.error('Admin attachments error:', error);
+        res.status(500).json({ error: 'Failed to fetch attachments' });
+    }
+});
+
+// Upload & send an image to a customer from admin dashboard
+router.post('/support-tickets/send-image', verifyToken, uploadMedia.single('image'), async (req, res) => {
+    try {
+        const { phone, caption = '' } = req.body;
+        if (!phone || !req.file) return res.status(400).json({ error: 'Phone and image are required' });
+
+        const mediaService = require('../services/mediaService');
+        const uploaded = await mediaService.uploadFromFilePath(req.file.path, req.file.originalname, req.file.mimetype);
+
+        // Cleanup multer temp file
+        try { require('fs').unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+
+        const cleanPhone = phone.replace(/\D/g, '');
+        const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
+        await whatsappService.sendImage(formattedPhone, uploaded.fileUrl, caption, 'manual_reply');
+
+        // Save attachment record
+        const ticketRows = await dbAdapter.query(
+            'SELECT id FROM support_tickets WHERE customer_phone = ? AND status != ? ORDER BY created_at DESC LIMIT 1',
+            [phone, 'closed']
+        );
+        await mediaService.saveAttachment({
+            ticketId: ticketRows?.[0]?.id || null,
+            customerPhone: phone,
+            fileUrl: uploaded.fileUrl,
+            thumbnailUrl: uploaded.thumbnailUrl,
+            fileType: 'image',
+            fileName: uploaded.fileName,
+            fileSize: uploaded.fileSize,
+            mimeType: uploaded.mimeType,
+            caption,
+            direction: 'outgoing'
+        });
+
+        res.json({ success: true, message: 'Image sent', fileUrl: uploaded.fileUrl });
+    } catch (error) {
+        console.error('Admin send image error:', error);
+        res.status(500).json({ error: 'Failed to send image', details: error.message });
+    }
+});
+
+// Upload image and return URL only (for Shoppers Hub / preview use)
+router.post('/media/upload', verifyToken, uploadMedia.single('image'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'Image file is required' });
+        const mediaService = require('../services/mediaService');
+        const uploaded = await mediaService.uploadFromFilePath(req.file.path, req.file.originalname, req.file.mimetype);
+
+        // Cleanup multer temp file
+        try { require('fs').unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+
+        res.json({ success: true, ...uploaded });
+    } catch (error) {
+        console.error('Admin media upload error:', error);
+        res.status(500).json({ error: 'Upload failed', details: error.message });
     }
 });
 
