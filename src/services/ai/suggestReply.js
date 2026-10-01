@@ -40,19 +40,49 @@ async function fetchExternalRnx(orderIds) {
             const reqs = Array.isArray(res.data?.requests) ? res.data.requests : [];
             console.log('[suggestReply] external RNX response for order', orderIds[i], ':', reqs.length, 'requests');
             for (const r of reqs) {
+                // Parse items array to extract old/new sizes for exchanges
+                let itemsText = '';
+                let oldItemsText = '';
+                let newItemsText = '';
+                const itemsArray = Array.isArray(r.items) ? r.items : (typeof r.items === 'string' ? (() => { try { return JSON.parse(r.items); } catch(e) { return []; } })() : []);
+
+                if (itemsArray.length) {
+                    // Build human-readable items text
+                    itemsText = itemsArray.map(i => {
+                        const name = i.name || i.title || i.productTitle || '';
+                        const variant = i.variant || i.size || i.variantTitle || '';
+                        const qty = i.quantity || i.qty || '';
+                        return `${name}${variant ? ' - ' + variant : ''}${qty ? ' x' + qty : ''}`;
+                    }).join(', ').trim();
+
+                    // For exchanges: extract old (original) and new (replacement) sizes
+                    const isExchange = (r.type || 'return').toLowerCase() === 'exchange';
+                    if (isExchange) {
+                        oldItemsText = itemsArray.map(i => {
+                            const name = i.name || i.title || i.productTitle || '';
+                            const variant = i.variant || i.size || i.variantTitle || '';
+                            return `${name}${variant ? ' - ' + variant : ''}`;
+                        }).join(', ').trim();
+
+                        newItemsText = itemsArray.map(i => {
+                            const name = i.replacementProductTitle || i.name || i.title || '';
+                            const variant = i.replacementVariant || i.replacementVariantTitle || '';
+                            return `${name}${variant ? ' - ' + variant : ''}`;
+                        }).join(', ').trim();
+                    }
+                } else {
+                    itemsText = String(r.items || '');
+                }
+
                 all.push({
                     request_id: r.request_id || r.requestId || r.id || null,
                     order_id: r.order_number || r.orderNumber || r.order_id || null,
                     type: (r.type || 'return').toLowerCase() === 'exchange' ? 'E' : 'R',
                     status: r.status || 'Pending',
                     reason: r.reason || null,
-                    // External items may be an array of {name, size, qty} or a string
-                    items: Array.isArray(r.items)
-                        ? r.items.map(i => `${i.name || i.title || ''}${i.size ? ' - ' + i.size : ''}${i.quantity ? ' x' + i.quantity : ''}`).join(', ').trim()
-                        : String(r.items || ''),
-                    old_items: r.old_items || (Array.isArray(r.items) && r.type?.toLowerCase() === 'exchange'
-                        ? r.items.map(i => `${i.name || i.title || ''}${i.size ? ' - ' + i.size : ''}`).join(', ') : ''),
-                    new_items: r.new_items || '',
+                    items: itemsText,
+                    old_items: r.old_items || oldItemsText,
+                    new_items: r.new_items || newItemsText,
                     refund_amount: r.refund_amount || r.refundAmount || null,
                     refund_status: r.refund_status || r.refundStatus || null,
                     price_difference: r.price_difference || r.priceDifference || null,
