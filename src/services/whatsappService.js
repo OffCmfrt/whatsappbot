@@ -217,6 +217,42 @@ class WhatsAppService {
         }
     }
 
+    // Send a document (PDF, DOC, etc.)
+    async sendDocument(to, documentUrl, filename = '', caption = '', logType = 'outgoing') {
+        try {
+            const cleanPhone = this.formatPhoneNumber(to);
+
+            const response = await axios.post(
+                `${this.baseURL}/messages`,
+                {
+                    messaging_product: 'whatsapp',
+                    recipient_type: 'individual',
+                    to: cleanPhone,
+                    type: 'document',
+                    document: {
+                        link: documentUrl,
+                        filename: filename || 'document'
+                    }
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            console.log(`[OK] Document sent to ${cleanPhone}`);
+            const waMsgId = response.data?.messages?.[0]?.id || null;
+            this._logOutgoing(cleanPhone, caption ? `[Document] ${caption}` : '[Document]', logType, waMsgId);
+            return response.data;
+        } catch (error) {
+            console.error('❌ Error sending WhatsApp document:', error.response?.data || error.message);
+            if (error.response?.data) console.error('Meta API Response Detail:', JSON.stringify(error.response.data, null, 2));
+            throw error;
+        }
+    }
+
     // Send a CTA URL button message (tappable button that opens a URL)
     async sendCtaUrlMessage(to, bodyText, buttonLabel, url, header = null, footerText = null) {
         try {

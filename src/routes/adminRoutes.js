@@ -8604,9 +8604,22 @@ router.post('/support-tickets/send-image', verifyToken, uploadMedia.single('imag
 
         const cleanPhone = phone.replace(/\D/g, '');
         const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
-        console.log(`[SEND-IMAGE] Sending to WhatsApp:`, { to: formattedPhone, imageUrl: uploaded.fileUrl?.substring(0, 80) + '...', caption });
         
-        await whatsappService.sendImage(formattedPhone, uploaded.fileUrl, caption, 'manual_reply');
+        // Check if file is an image or document (PDF, DOC, etc.)
+        const isImage = uploaded.mimeType?.startsWith('image/');
+        console.log(`[SEND-IMAGE] Sending to WhatsApp:`, { 
+            to: formattedPhone, 
+            fileUrl: uploaded.fileUrl?.substring(0, 80) + '...', 
+            mimeType: uploaded.mimeType,
+            isImage,
+            caption 
+        });
+        
+        if (isImage) {
+            await whatsappService.sendImage(formattedPhone, uploaded.fileUrl, caption, 'manual_reply');
+        } else {
+            await whatsappService.sendDocument(formattedPhone, uploaded.fileUrl, uploaded.fileName, caption, 'manual_reply');
+        }
 
         // Save attachment record
         const ticketRows = await dbAdapter.query(
@@ -8618,7 +8631,7 @@ router.post('/support-tickets/send-image', verifyToken, uploadMedia.single('imag
             customerPhone: phone,
             fileUrl: uploaded.fileUrl,
             thumbnailUrl: uploaded.thumbnailUrl,
-            fileType: 'image',
+            fileType: isImage ? 'image' : 'document',
             fileName: uploaded.fileName,
             fileSize: uploaded.fileSize,
             mimeType: uploaded.mimeType,
@@ -8627,7 +8640,7 @@ router.post('/support-tickets/send-image', verifyToken, uploadMedia.single('imag
         });
 
         console.log(`[SEND-IMAGE] ✓ Success for phone:`, phone);
-        res.json({ success: true, message: 'Image sent', fileUrl: uploaded.fileUrl });
+        res.json({ success: true, message: isImage ? 'Image sent' : 'Document sent', fileUrl: uploaded.fileUrl });
     } catch (error) {
         console.error('[SEND-IMAGE] Error:', error);
         res.status(500).json({ error: 'Failed to send image', details: error.message });
