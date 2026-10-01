@@ -223,27 +223,9 @@ async function handleTextMessage(senderId, message, timestamp) {
     // Check if this conversation is escalated to a human agent
     const botState = await instagramService.getBotState(senderId);
 
-    if (botState?.isEscalated) {
-        // Conversation is being handled by a human — don't auto-respond
-        // The message is already logged; the human agent will see it in the portal
-        console.log(`[IG] 🔺 User ${senderId} is escalated — message logged for human agent`);
-
-        // Append to existing support ticket
-        if (botState.ticketId) {
-            await dbAdapter.query(
-                `UPDATE support_tickets
-                 SET message = message || '\n\n---\n' || ?,
-                     is_read = false,
-                     updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ?`,
-                [messageText, botState.ticketId]
-            );
-        }
-        return;
-    }
-
-    // Route to bot engine (Phase 5 will implement this)
-    // For now, import and call if available
+    // Route to bot engine — escalated conversations are now handled
+    // inside the bot engine so automatable intents (product, tracking, FAQ)
+    // still get answered even when a support ticket is open.
     try {
         const botEngine = require('../handlers/igBotEngine');
         await botEngine.processMessage(senderId, messageText, {
@@ -298,21 +280,7 @@ async function handleAttachment(senderId, message, timestamp) {
     const attachmentDesc = attachments.map(a => `[${a.type || 'file'}]`).join(', ');
     await instagramService.logIncoming(senderId, attachmentDesc, messageId);
 
-    // If escalated, append to ticket
-    const botState = await instagramService.getBotState(senderId);
-    if (botState?.isEscalated && botState.ticketId) {
-        await dbAdapter.query(
-            `UPDATE support_tickets
-             SET message = message || '\n\n---\n' || ?,
-                 is_read = false,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?`,
-            [`[Sent ${attachmentDesc}]`, botState.ticketId]
-        );
-        return;
-    }
-
-    // For non-escalated: pass attachment info to bot engine
+    // Pass attachment to bot engine (escalation handling is inside the engine)
     try {
         const botEngine = require('../handlers/igBotEngine');
         await botEngine.processMessage(senderId, `[attachment: ${attachmentDesc}]`, {

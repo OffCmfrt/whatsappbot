@@ -246,6 +246,43 @@ class IGBotEngine {
                 // Clear new request — resume normal flow below
             }
 
+            // ── 3b. Escalated conversation — bot may still answer automatable intents ──
+            // An open support ticket must NOT globally lock the bot. If the user's
+            // current message is an automatable intent (product, tracking, FAQ),
+            // answer normally. Otherwise append to the ticket + quiet ack.
+            if (botState?.isEscalated) {
+                const AUTOMATABLE_INTENTS = [
+                    'product_question', 'order_tracking', 'provide_order_id',
+                    'faq', 'return', 'exchange', 'shipping', 'payment',
+                    'cancellation', 'refund', 'greeting', 'positive_message',
+                    'size_question', 'stock_check', 'product_link'
+                ];
+                if (AUTOMATABLE_INTENTS.includes(result.intent) && result.confidence > 0) {
+                    // Automatable intent — proceed with normal routing below.
+                    // Don't touch is_escalated or the ticket.
+                    console.log(`[IG BOT] Escalated user ${igUserId} — automatable intent: ${result.intent}`);
+                } else {
+                    // Same support issue follow-up — append to ticket + quiet ack
+                    if (botState.ticketId) {
+                        try {
+                            await dbAdapter.query(
+                                `UPDATE support_tickets
+                                 SET message = message || '\n\n---\n' || ?,
+                                     is_read = false,
+                                     updated_at = CURRENT_TIMESTAMP
+                                 WHERE id = ?`,
+                                [cleanMessage, botState.ticketId]
+                            );
+                        } catch (e) { /* best-effort */ }
+                    }
+                    await instagramService.sendMessage(
+                        igUserId,
+                        'Got it — our team is reviewing your issue and will respond here shortly.'
+                    );
+                    return;
+                }
+            }
+
             // ── 4. Stateful flows (collecting order ID, creator info, etc.) ──
             const stateHandled = await this._handleStateful(igUserId, cleanMessage, currentState, context, result);
             if (stateHandled) return;
@@ -1091,6 +1128,17 @@ Please describe your issue and I'll do my best to resolve it. If I can't, I'll c
     }
 
     async _createSupportTicket(igUserId, description, context = {}) {
+        // Guard: if user is already escalated, they already have an open ticket.
+        // Don't create a duplicate — the escalation handler in processMessage
+        // appends follow-ups to the existing ticket.
+        if (context.isEscalated) {
+            await instagramService.sendMessage(
+                igUserId,
+                'Your issue is already being reviewed by our team. We\'ll get back to you shortly.'
+            );
+            return;
+        }
+
         await instagramService.setBotState(igUserId, STATES.IDLE);
 
         if (!description || description.length < 3) {
@@ -1233,27 +1281,13 @@ A senior team member will respond right here shortly.`
      * state machine that collects profile + collab details.
      */
     async _startCreatorFlow(igUserId, intent, context) {
-        context = smartEngine.updateContext(context, {
-            creatorInfo: { type: this._creatorTypeFor(intent) }
-        });
-
-        await instagramService.sendQuickReplies(
+        // Creator/business collaborations → direct to email.
+        // No support ticket created, no state change — user stays in IDLE
+        // and can continue asking product questions normally.
+        await instagramService.sendMessage(
             igUserId,
-            `Awesome — we'd love to work with you!
-
-To get you to the right person, tell us a bit about yourself:
-• Your Instagram handle
-• Follower count
-• The kind of collab you have in mind (paid collab / barter / UGC / affiliate)`,
-            [
-                { title: 'Paid Collab', payload: 'creator_paid' },
-                { title: 'Barter / Gifting', payload: 'creator_barter' },
-                { title: 'UGC', payload: 'creator_ugc' },
-                { title: 'Affiliate', payload: 'creator_affiliate' }
-            ]
+            `For collaborations and business enquiries, please reach out to us at:\n\nsupport@offcomfrt.in\n\nWe'd love to work with you!`
         );
-
-        await instagramService.setBotState(igUserId, STATES.COLLECTING_CREATOR_PROFILE, context);
     }
 
     /**
