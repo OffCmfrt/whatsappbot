@@ -2264,6 +2264,14 @@ router.get('/customer-context/:phone', verifyToken, async (req, res) => {
                         // ai-data returns camelCase; the pipeline returns snake_case
                         const requestId = r.requestId || r.request_id;
                         if (!requestId || seenRsIds.has(requestId)) continue;
+                        // The returns server's ai-data search uses substring/ILIKE
+                        // matching, so it can surface requests belonging to OTHER
+                        // customers whose order numbers share digits with ours.
+                        // Only keep requests whose order_number actually belongs
+                        // to this customer — otherwise the sidebar falsely shows
+                        // R&E for customers who have none.
+                        const rn = normOrderId(r.orderNumber || r.order_number);
+                        if (!rn || !customerOrderIds.has(rn)) continue;
                         seenRsIds.add(requestId);
                         const entry = {
                             request_id: requestId,
