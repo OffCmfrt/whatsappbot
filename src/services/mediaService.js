@@ -248,8 +248,12 @@ async function uploadFileToStorage(filePath, storagePath, contentType) {
 
         if (signedUrlData?.signedURL || signedUrlData?.signedUrl) {
             const rawSigned = signedUrlData.signedURL || signedUrlData.signedUrl;
-            // Supabase may return a relative path — prepend base URL if so
-            const fullSignedUrl = rawSigned.startsWith('http') ? rawSigned : `${SUPABASE_URL}${rawSigned}`;
+            // Supabase returns relative path like /object/sign/... — need /storage/v1 prefix
+            const fullSignedUrl = rawSigned.startsWith('http') 
+                ? rawSigned 
+                : rawSigned.startsWith('/object/')
+                    ? `${SUPABASE_URL}/storage/v1${rawSigned}`
+                    : `${SUPABASE_URL}${rawSigned}`;
             console.log(`[MEDIA] ✓ Signed URL generated:`, fullSignedUrl.substring(0, 100) + '...');
             return fullSignedUrl;
         } else {
