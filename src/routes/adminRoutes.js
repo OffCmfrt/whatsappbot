@@ -16,9 +16,11 @@ const igCommentService = require('../services/igCommentService');
 const { toIST, formatDateForExport, fromISTtoUTC } = require('../utils/timezone');
 
 // Multer config: disk storage (avoids holding files in RAM)
+const mediaUploadDir = require('os').tmpdir() + '/whatsapp-media-uploads';
+require('fs').mkdirSync(mediaUploadDir, { recursive: true });
 const uploadMedia = multer({
     storage: multer.diskStorage({
-        dest: require('os').tmpdir() + '/whatsapp-media-uploads',
+        dest: mediaUploadDir,
         filename: (req, file, cb) => cb(null, `admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
     }),
     limits: { fileSize: 25 * 1024 * 1024 }
@@ -36,7 +38,7 @@ function getUpload() {
     const multer = require('multer');
     _upload = multer({
         storage: multer.diskStorage({
-            dest: require('os').tmpdir() + '/whatsapp-media-uploads',
+            dest: mediaUploadDir,
             filename: (req, file, cb) => cb(null, `lazy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
         })
     });
