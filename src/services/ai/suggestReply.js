@@ -164,7 +164,23 @@ async function gatherContext(phone, ticketId) {
     ]);
 
     // Fetch external returns/exchanges from Shopify portal server (graceful — [] on failure)
-    const orderIds = orders.map(o => o.order_id).filter(Boolean);
+    let orderIds = orders.map(o => o.order_id).filter(Boolean);
+    // Fallback: if orders table returned nothing, get order IDs from store_shoppers
+    // (the dashboard reads from store_shoppers, so this is often the authoritative source)
+    if (!orderIds.length) {
+        try {
+            const shopperOrders = await dbAdapter.query(
+                `SELECT DISTINCT order_id FROM store_shoppers
+                 WHERE phone LIKE ? AND order_id IS NOT NULL AND order_id != ''
+                 ORDER BY order_id DESC LIMIT 10`,
+                [phonePattern]
+            );
+            orderIds = shopperOrders.map(r => r.order_id).filter(Boolean);
+            console.log('[suggestReply] gatherContext: orders table empty, store_shoppers fallback orderIds=', orderIds);
+        } catch (e) {
+            console.log('[suggestReply] store_shoppers fallback failed:', e.message);
+        }
+    }
     console.log('[suggestReply] gatherContext: orderIds=', orderIds, 'local returns=', returns.length, 'local exchanges=', exchanges.length);
     const externalRnx = await fetchExternalRnx(orderIds);
 

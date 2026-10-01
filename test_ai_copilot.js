@@ -48,6 +48,9 @@ const mockDbAdapter = {
             return [{ id: 1, ticket_number: 'TKT-001', message: 'Where is my order', status: 'open', sentiment: 'neutral', ai_confidence: 0.9, ai_scenario: 'where_is_my_order', created_at: '2026-07-25T09:00:00Z' }];
         }
         if (/FROM\s+ai_usage_log/i.test(sql)) return [{ count: 0 }];
+        if (/FROM\s+store_shoppers/i.test(sql)) {
+            return [{ order_id: '#1234' }];
+        }
         return [];
     },
     async run() { return { changes: 0 }; },
