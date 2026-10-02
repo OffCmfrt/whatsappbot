@@ -30,6 +30,7 @@
 
 const instagramService = require('./instagramService');
 const smartEngine = require('./igSmartEngine');
+const shopifyService = require('./shopifyService');
 const { dbAdapter } = require('../database/db');
 
 // ─── Configuration ───────────────────────────────────────────
@@ -125,13 +126,29 @@ Orders can be cancelled free of charge before shipping. After dispatch, you can 
 
 Share your Order ID and I'll check if it's still cancellable.`,
 
-    productInfo: (u) => `Hi ${handle(u)}!
+    productInfo: (u, product = null) => {
+        if (product && product.handle) {
+            const price = product.variants?.length > 0
+                ? Math.min(...product.variants.map(v => v.price).filter(p => p > 0))
+                : null;
+            const priceLine = price ? `Price: Rs.${price}` : '';
+            return `Hi ${handle(u)}!
+
+${product.title}
+${priceLine}
+
+Check it out here: https://offcomfrt.in/products/${product.handle}
+
+Tell me your usual size and I'll help you pick the right one.`;
+        }
+        return `Hi ${handle(u)}!
 
 All our tees are 100% premium cotton, pre-shrunk, with a unisex fit. Available in sizes S to XXL.
 
 Full collection and size chart: https://offcomfrt.in
 
-Tell me your usual size and I'll help you pick the right one.`,
+Tell me your usual size and I'll help you pick the right one.`;
+    },
 
     genericHelp: (u) => `Hi ${handle(u)}!
 
@@ -206,6 +223,14 @@ class IGCommentService {
             // 4. Classify (comments have no prior conversation context)
             const classification = smartEngine.classify(text, {});
 
+            // 4b. Resolve product from media caption for product-related intents
+            const mediaId = comment.media?.id || comment.media_id || null;
+            let resolvedProduct = null;
+            const PRODUCT_INTENTS = ['product_question', 'size_question'];
+            if (PRODUCT_INTENTS.includes(classification.intent) && mediaId) {
+                resolvedProduct = await this._resolveProductFromCaption(mediaId);
+            }
+
             // 5. Decide what automation should do
             const decision = this._decideAutomation(classification);
 
@@ -215,7 +240,10 @@ class IGCommentService {
 
             if (decision.action === 'private_reply') {
                 const templateFn = TEMPLATES[decision.template] || TEMPLATES.clarify;
-                const replyText = templateFn(comment.from?.username || null);
+                // Pass resolved product to productInfo template
+                const replyText = decision.template === 'productInfo'
+                    ? templateFn(comment.from?.username || null, resolvedProduct)
+                    : templateFn(comment.from?.username || null);
 
                 const replyResult = await instagramService.sendPrivateReply(commentId, replyText);
 
@@ -238,13 +266,20 @@ class IGCommentService {
                 classification,
                 automationAction,
                 privateReplySent: automationAction === 'private_reply',
-                finalStatus
+                finalStatus,
+                mediaCaption: resolvedProduct?._mediaCaption || null,
+                mediaPermalink: resolvedProduct?._mediaPermalink || null,
+                resolvedProductId: resolvedProduct?.id || null,
+                resolvedProductHandle: resolvedProduct?.handle || null
             });
 
             // 8. Mark processed (prevents reprocessing on webhook retries)
             await this._markProcessed(commentId, automationAction);
 
             console.log(`[IG COMMENT] ${automationAction} | ${classification.intent} (${classification.confidence}) | @${record?.ig_username || commentId}`);
+            if (resolvedProduct) {
+                console.log(`[IG COMMENT PRODUCT] media=${mediaId} product=${resolvedProduct.id} handle=${resolvedProduct.handle}`);
+            }
 
             return {
                 ok: true,
@@ -315,6 +350,73 @@ class IGCommentService {
     }
 
     // ═══════════════════════════════════════════════════════
+    //  PRODUCT RESOLUTION FROM MEDIA CAPTION
+    // ═══════════════════════════════════════════════════════
+
+    /**
+     * Resolve a Shopify product from an Instagram post/reel's caption.
+     * Fetches media info, extracts caption, searches catalog for product
+     * titles mentioned in the caption.
+     *
+     * Returns the matched product (with _mediaCaption/_mediaPermalink attached)
+     * or null if no deterministic match is found.
+     *
+     * SAFETY: Never guesses. If 0 or 2+ products match, returns null.
+     */
+    async _resolveProductFromCaption(mediaId) {
+        try {
+            // 1. Fetch media info (caption, permalink)
+            const mediaInfo = await instagramService.fetchMediaInfo(mediaId);
+            const caption = (mediaInfo?.caption || '').trim();
+            if (!caption) return null;
+
+            // 2. Get Shopify catalog
+            const catalog = await shopifyService.getProductCatalog();
+            if (!catalog || catalog.length === 0) return null;
+
+            // 3. Search for product titles in the caption (case-insensitive)
+            const captionLower = caption.toLowerCase();
+            const matches = [];
+
+            for (const product of catalog) {
+                const titleLower = (product.title || '').toLowerCase();
+                if (!titleLower) continue;
+
+                // Check if the product title appears in the caption
+                if (captionLower.includes(titleLower)) {
+                    matches.push(product);
+                    continue;
+                }
+
+                // Check individual words from the title (for multi-word titles)
+                const titleWords = titleLower.split(/\s+/).filter(w => w.length > 2);
+                if (titleWords.length > 0) {
+                    const matchCount = titleWords.filter(w => captionLower.includes(w)).length;
+                    // If most title words appear in caption, consider it a match
+                    if (matchCount >= Math.ceil(titleWords.length * 0.6)) {
+                        matches.push(product);
+                    }
+                }
+            }
+
+            // 4. Only return if exactly ONE product matched (deterministic)
+            if (matches.length === 1) {
+                const product = matches[0];
+                product._mediaCaption = caption.substring(0, 500);
+                product._mediaPermalink = mediaInfo?.permalink || null;
+                return product;
+            }
+
+            // 0 or 2+ matches → cannot determine → return null (safe fallback)
+            return null;
+
+        } catch (error) {
+            console.error('[IG COMMENT] Product resolution from caption failed:', error.message);
+            return null;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════
     //  PERSISTENCE + IDEMPOTENCY
     // ═══════════════════════════════════════════════════════
 
@@ -337,15 +439,19 @@ class IGCommentService {
                  (comment_id, media_id, ig_user_id, ig_username, comment_text,
                   comment_timestamp, detected_intent, confidence, sentiment,
                   automation_action, public_reply_sent, private_reply_sent, dm_started,
-                  status, conversation_id, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  status, conversation_id, media_caption, media_permalink,
+                  created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (comment_id) DO NOTHING`,
                 [
                     data.commentId, data.mediaId, data.igUserId, data.igUsername, data.text,
                     data.timestamp, data.classification.intent, data.classification.confidence,
                     data.classification.sentiment, data.automationAction, false,
                     data.privateReplySent, data.privateReplySent, data.finalStatus,
-                    conversationId, new Date().toISOString(), new Date().toISOString()
+                    conversationId,
+                    data.mediaCaption || null,
+                    data.mediaPermalink || null,
+                    new Date().toISOString(), new Date().toISOString()
                 ]
             );
 
