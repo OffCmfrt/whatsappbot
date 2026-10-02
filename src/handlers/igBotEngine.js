@@ -1642,9 +1642,15 @@ They'll review and reply right here within 24-48 hours.`
             msg += `\n\nView: offcomfrt.in/products/${product.handle}`;
         }
 
-        // Product image
+        // Product image — send as actual media message, not a raw URL
         if (product.image) {
-            msg += `\n\nImage: ${product.image}`;
+            try {
+                await instagramService.sendImage(igUserId, product.image);
+            } catch (imgErr) {
+                console.log(`[IG BOT] Failed to send product image: ${imgErr.message}`);
+                // Fallback: include image URL as text if media send fails
+                msg += `\n\nImage: ${product.image}`;
+            }
         }
 
         await instagramService.sendQuickReplies(
