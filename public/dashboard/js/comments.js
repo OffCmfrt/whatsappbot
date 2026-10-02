@@ -1,7 +1,7 @@
 // ===================================
 // Instagram Comments Center
 // Page logic: filters, list, detail panel, actions.
-// Uses global apiCall() and showToast() from main.js.
+// Uses global apiFetch() from main.js. Defines local showToast().
 // ===================================
 
 window.CommentsCenter = (() => {
@@ -42,6 +42,20 @@ window.CommentsCenter = (() => {
     let searchDebounce = null;
     let intentsPopulated = false;
 
+    // ─── Toast helper ─────────────────────────────────────
+    // showToast() is not defined in main.js; provide a local implementation
+    // using the same pm-toast CSS class already used by flashCopied().
+    function showToast(message, type = 'info') {
+        const el = document.createElement('div');
+        el.className = 'pm-toast';
+        el.textContent = message;
+        if (type === 'error') el.style.background = '#e74c3c';
+        else if (type === 'success') el.style.background = '#27ae60';
+        document.body.appendChild(el);
+        requestAnimationFrame(() => el.classList.add('pm-toast-show'));
+        setTimeout(() => { el.classList.remove('pm-toast-show'); setTimeout(() => el.remove(), 300); }, 2200);
+    }
+
     // ─── Public API ───────────────────────────────────────
 
     async function load() {
@@ -53,7 +67,7 @@ window.CommentsCenter = (() => {
 
     async function loadStats() {
         try {
-            const data = await apiCall('/ig-comments/stats');
+            const data = await apiFetch('/ig-comments/stats');
             const s = data?.stats || {};
             setText('igcStatTotal', s.total ?? 0);
             setText('igcStatNew', (s.byStatus?.new) || 0);
@@ -91,7 +105,7 @@ window.CommentsCenter = (() => {
             if (dateFrom) params.set('date_from', dateFrom);
             if (dateTo) params.set('date_to', dateTo);
 
-            const data = await apiCall(`/ig-comments?${params.toString()}`);
+            const data = await apiFetch(`/ig-comments?${params.toString()}`);
 
             total = data?.meta?.total || 0;
             page = data?.meta?.page || page;
@@ -159,7 +173,7 @@ window.CommentsCenter = (() => {
 
     async function openDetail(id) {
         try {
-            const data = await apiCall(`/ig-comments/${id}`);
+            const data = await apiFetch(`/ig-comments/${id}`);
             if (!data?.success || !data?.comment) {
                 showToast('Comment not found', 'info');
                 return;
@@ -315,7 +329,7 @@ window.CommentsCenter = (() => {
 
         const endpoint = replyMode === 'public' ? 'reply' : 'private-reply';
         try {
-            const data = await apiCall(`/ig-comments/${c.id}/${endpoint}`, 'POST', { text });
+            const data = await apiFetch(`/ig-comments/${c.id}/${endpoint}`, { method: 'POST', body: { text } });
             if (data?.success) {
                 showToast(replyMode === 'public' ? 'Public reply posted' : 'Private reply sent', 'success');
                 replyMode = null;
@@ -337,7 +351,7 @@ window.CommentsCenter = (() => {
 
         try {
             if (action === 'ticket') {
-                const data = await apiCall(`/ig-comments/${c.id}/create-ticket`, 'POST', {});
+                const data = await apiFetch(`/ig-comments/${c.id}/create-ticket`, { method: 'POST' });
                 if (data?.success) {
                     showToast(data.existing
                         ? `Ticket already exists: ${data.ticketNumber}`
@@ -350,7 +364,7 @@ window.CommentsCenter = (() => {
             }
 
             if (action === 'open-dm') {
-                const data = await apiCall(`/ig-comments/${c.id}/open-dm`, 'POST', {});
+                const data = await apiFetch(`/ig-comments/${c.id}/open-dm`, { method: 'POST' });
                 if (data?.success) {
                     showToast(`DM sent via ${data.via === 'dm' ? 'direct message' : 'private reply'}`, 'success');
                     await refreshAfterAction(c.id);
@@ -363,7 +377,7 @@ window.CommentsCenter = (() => {
             }
 
             // ignore / spam / resolve
-            const data = await apiCall(`/ig-comments/${c.id}/${action}`, 'POST', {});
+            const data = await apiFetch(`/ig-comments/${c.id}/${action}`, { method: 'POST' });
             if (data?.success) {
                 showToast(action === 'ignore' ? 'Marked ignored' : action === 'spam' ? 'Marked spam' : 'Marked resolved', 'success');
                 closeDetail();
@@ -381,7 +395,7 @@ window.CommentsCenter = (() => {
         await Promise.all([loadStats(), loadComments()]);
         // Reload the detail view with fresh data
         try {
-            const data = await apiCall(`/ig-comments/${commentId}`);
+            const data = await apiFetch(`/ig-comments/${commentId}`);
             if (data?.success && data?.comment) {
                 currentDetail = data.comment;
                 renderDetail();
