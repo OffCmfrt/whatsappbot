@@ -252,6 +252,16 @@ class IGCommentService {
                     // Deliberately NO public fallback (safe default).
                     finalStatus = 'needs_review';
                     automationAction = 'private_reply_failed';
+                    // Structured log for debugging — no secrets, no sensitive data
+                    console.log(
+                        `[IG COMMENT] private_reply_failed | ` +
+                        `comment=${commentId} ` +
+                        `media=${mediaId || 'none'} ` +
+                        `intent=${classification.intent} ` +
+                        `product=${resolvedProduct?.title || 'none'} ` +
+                        `handle=${resolvedProduct?.handle || 'none'} ` +
+                        `reason=${replyResult?.reason || 'api_error'}`
+                    );
                 }
             }
 

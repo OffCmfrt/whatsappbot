@@ -305,8 +305,12 @@ class InstagramService {
 
     /**
      * Send a private reply (DM) to the author of a comment.
-     * Instagram API: POST /me/messages with recipient.comment_id
+     * Instagram API: POST /<IG_USER_ID>/messages with recipient.comment_id
      * Opens a 24-hour messaging window with the commenter.
+     *
+     * IMPORTANT: Meta docs require /<APP_USERS_IG_ID>/messages (not /me/messages)
+     * for private replies. Regular DMs work with /me but private replies with
+     * recipient.comment_id need the actual numeric IG user ID in the path.
      *
      * @param {string} commentId - Instagram comment ID
      * @param {string} text      - Private reply text
@@ -323,8 +327,15 @@ class InstagramService {
         this._trackCall();
 
         try {
+            // Meta docs: private replies MUST use /<IG_USER_ID>/messages
+            // (not /me/messages — that works for DMs but not comment_id recipient)
+            const ownId = await this.getOwnUserId();
+            const privateReplyURL = ownId
+                ? `https://graph.instagram.com/${this.apiVersion}/${ownId}/messages`
+                : this.messagesURL; // fallback to /me if we can't resolve ownId
+
             const response = await axios.post(
-                this.messagesURL,
+                privateReplyURL,
                 {
                     recipient: { comment_id: commentId },
                     message: { text: text }
@@ -802,8 +813,25 @@ class InstagramService {
             return null;
         }
 
-        // Generic error
-        console.error(`[IG] ❌ ${methodName} failed for ${igUserId}:`, igError?.message || error.message);
+        // ─── Structured Meta error logging ───
+        // Capture the FULL Meta error response so we can distinguish:
+        //   A. application bug
+        //   B. incorrect endpoint/payload
+        //   C. permission/token problem
+        //   D. Meta eligibility/restriction
+        //   E. temporary Meta API failure
+        // Never log access tokens or sensitive auth headers.
+        console.error(
+            `[IG PRIVATE REPLY ERROR] ` +
+            `method=${methodName} ` +
+            `target=${igUserId} ` +
+            `status=${status || 'none'} ` +
+            `code=${igError?.code || 'none'} ` +
+            `subcode=${igError?.error_subcode || 'none'} ` +
+            `message="${igError?.message || error.message}" ` +
+            `trace_id=${igError?.fbtrace_id || 'none'} ` +
+            `type=${igError?.type || 'none'}`
+        );
         return null;
     }
 }
