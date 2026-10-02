@@ -383,6 +383,10 @@ class IGBotEngine {
                     await this._routeIntent(igUserId, message, result, context);
                     return true;
                 }
+                // Catalog-aware escape: bare product names, tracking keywords, FAQ
+                if (await this._tryEscapeCollection(igUserId, message, context, result)) {
+                    return true;
+                }
                 await this._askForOrderId(igUserId, 'tracking');
                 return true;
 
@@ -398,6 +402,10 @@ class IGBotEngine {
                 if (this._isNewIntent(result)) {
                     if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId);
                     await this._routeIntent(igUserId, message, result, context);
+                    return true;
+                }
+                // Catalog-aware escape: bare product names, tracking keywords, FAQ
+                if (await this._tryEscapeCollection(igUserId, message, context, result)) {
                     return true;
                 }
                 await instagramService.sendMessage(
@@ -513,6 +521,70 @@ class IGBotEngine {
             result.confidence >= CONFIDENCE.MEDIUM) {
             return true;
         }
+
+        return false;
+    }
+
+    /**
+     * Catalog-aware escape for data-collection states.
+     * When _isNewIntent() returns false (bare product names, low-confidence
+     * tracking, FAQ questions), this provides a second chance to escape
+     * the collection state and route to the correct flow.
+     *
+     * Checks (in order):
+     *   1. Product catalog match — bare product names like "Waffle", "Henley"
+     *   2. Tracking keywords — "track", "where is my order", etc.
+     *   3. FAQ/general questions — "what is the return policy", etc.
+     *
+     * Returns true if the message was routed to a new flow.
+     * Returns false if the caller should continue with the collection prompt.
+     */
+    async _tryEscapeCollection(igUserId, message, context, result) {
+        // 1. Product catalog check — bare product names
+        const extractedName = this._extractProductName(message, context);
+        if (extractedName) {
+            const searchResult = await this._searchProducts(extractedName);
+            if (searchResult && searchResult.type === 'match') {
+                // Product found — escape to product flow
+                await instagramService.setBotState(igUserId, STATES.IDLE, context);
+                await this._routeIntent(igUserId, message,
+                    { intent: 'product_question', entities: {}, confidence: 0.5 },
+                    context);
+                return true;
+            }
+            if (searchResult && searchResult.type === 'ambiguous') {
+                // Multiple products — show clarification
+                await instagramService.setBotState(igUserId, STATES.IDLE, context);
+                await this._routeIntent(igUserId, message,
+                    { intent: 'product_question', entities: {}, confidence: 0.5 },
+                    context);
+                return true;
+            }
+        }
+
+        // 2. Tracking keywords — low-confidence order_tracking
+        if (/\b(track|tracking|where.*order|order.*status|where.*is.*my|shipment|dispatched|shipped|delivered|courier|awb)\b/i.test(message)) {
+            await instagramService.setBotState(igUserId, STATES.IDLE, context);
+            await this._routeIntent(igUserId, message,
+                { intent: 'order_tracking', entities: result.entities || {}, confidence: 0.5 },
+                context);
+            return true;
+        }
+
+        // 3. FAQ/general questions — return policy, shipping policy, etc.
+        if (/\b(policy|policies|what is|what's|tell me about|about|faq|help|hours|timing|store)\b/i.test(message) &&
+            !/\b(return|exchange)\b.*\b(order|id|#)\b/i.test(message)) {
+            await instagramService.setBotState(igUserId, STATES.IDLE, context);
+            // Try FAQ match first
+            const faqMatch = await this._tryFAQMatch(message, igUserId);
+            if (faqMatch) return true;
+            // Fall through to unknown handling
+            await this._handleUnknown(igUserId, message, context);
+            return true;
+        }
+
+        // 4. Positive message / acknowledgment — just stay in state
+        // (don't escape for "ok", "sure", "yes" — these don't indicate a new flow)
 
         return false;
     }
