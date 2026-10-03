@@ -703,6 +703,7 @@ async function confirmAssignPortal() {
     });
     document.getElementById('assignPortalModal').classList.remove('active');
     loadTickets();
+    loadPortals();
 }
 
 // ===================================
@@ -1085,6 +1086,23 @@ async function rebalancePortals() {
         alert(data?.error || 'Rebalance failed');
     }
 }
+
+async function rebalanceShift(shift) {
+    const shiftLabel = shift === 'morning' ? 'Morning Shift (9am-5pm)' : shift === 'evening' ? 'Evening Shift (5pm-9pm)' : shift;
+    if (!confirm(`Evenly distribute all open tickets across ${shiftLabel} portals using round-robin?`)) return;
+    try {
+        const data = await apiFetch('/support-portals/rebalance', { method: 'POST', body: { shift } });
+        if (data?.success) {
+            alert(`Successfully distributed ${data.ticketsRebalanced} open tickets across ${data.portalsCount} active members in ${shiftLabel} using round-robin.`);
+            loadPortals();
+        } else {
+            alert(data?.error || 'Rebalance failed');
+        }
+    } catch (err) {
+        alert('Rebalance request failed: ' + (err.message || 'Unknown error'));
+    }
+}
+window.rebalanceShift = rebalanceShift;
 
 // ===================================
 // Auto Distribute
