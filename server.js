@@ -181,6 +181,11 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
 }));
 
+// Route / and /admin directly to the admin dashboard
+app.get(['/', '/admin'], (req, res) => {
+    res.redirect('/dashboard');
+});
+
 // Serve support portal
 app.use('/portal/support', express.static(path.join(__dirname, 'public', 'portal', 'support')));
 
