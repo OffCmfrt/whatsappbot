@@ -46,7 +46,7 @@ function timeInWindow(currentTime, startStr, endStr) {
 async function getActivePortalsForNow() {
     const portals = await dbAdapter.query(
         "SELECT id, name, type, config, shift_start, shift_end, max_tickets, assigned_count " +
-        "FROM support_portals WHERE type IN ('auto', 'time_based') AND is_active = true"
+        "FROM support_portals WHERE type IN ('auto', 'time_based') AND is_active = true ORDER BY id ASC"
     );
 
     if (!portals || portals.length === 0) return [];

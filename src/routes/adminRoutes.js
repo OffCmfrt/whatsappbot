@@ -1933,16 +1933,41 @@ router.post('/support-tickets/:id/assign-portal', verifyToken, async (req, res) 
         const { id } = req.params;
         const { portalId } = req.body;
 
+        // Fetch ticket's previous portal_id to update counts accurately
+        const existing = await dbAdapter.query(
+            'SELECT portal_id FROM support_tickets WHERE id = ?',
+            [id]
+        );
+        const oldPortalId = existing?.[0]?.portal_id;
+
         // portalId can be null to remove assignment
         await dbAdapter.run(
             `UPDATE support_tickets SET portal_id = ? WHERE id = ?`,
             [portalId || null, id]
         );
 
+        // Update assigned_count for affected portals
+        const affected = new Set();
+        if (oldPortalId) affected.add(Number(oldPortalId));
+        if (portalId) affected.add(Number(portalId));
+
+        for (const pid of affected) {
+            const countResult = await dbAdapter.query(
+                "SELECT COUNT(*) as count FROM support_tickets WHERE portal_id = ? AND status IN ('open', 'follow_up')",
+                [pid]
+            );
+            const newCount = countResult?.[0]?.count || 0;
+            await dbAdapter.run(
+                'UPDATE support_portals SET assigned_count = ? WHERE id = ?',
+                [newCount, pid]
+            );
+        }
+
         invalidateCache('stats');
         res.json({ 
             success: true, 
-            message: portalId ? 'Ticket assigned to portal' : 'Ticket removed from portal'
+            message: portalId ? 'Ticket assigned to portal' : 'Ticket removed from portal',
+            portalId: portalId || null
         });
     } catch (error) {
         console.error('Error assigning ticket to portal:', error);
@@ -4160,9 +4185,12 @@ router.post('/support-portals', verifyToken, async (req, res) => {
         const portalPassword = password || generatePassword();
         const passwordHash = await bcrypt.hash(portalPassword, 10);
 
+        const shiftStart = config?.time_start || null;
+        const shiftEnd = config?.time_end || null;
+
         const result = await dbAdapter.run(
-            `INSERT INTO support_portals (name, slug, password_hash, password_plain, type, config) VALUES (?, ?, ?, ?, ?, ?)`,
-            [name, slug, passwordHash, portalPassword, type, config ? JSON.stringify(config) : null]
+            `INSERT INTO support_portals (name, slug, password_hash, password_plain, type, config, shift_start, shift_end, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, true)`,
+            [name, slug, passwordHash, portalPassword, type, config ? JSON.stringify(config) : null, shiftStart, shiftEnd]
         );
 
         // Also keep in memory as a fast fallback
@@ -4199,32 +4227,48 @@ router.get('/support-portals', verifyToken, async (req, res) => {
             ORDER BY p.created_at DESC
         `);
 
-        // For time-based portals, calculate combined ticket count:
-        // explicitly-assigned (round-robin / split / transfer) + unassigned in time window
+        // Track how many portals share each shift time window
+        const windowPortalCounts = new Map();
+        for (const p of portals) {
+            if (p.type === 'time_based' && p.config) {
+                try {
+                    const cfg = typeof p.config === 'string' ? JSON.parse(p.config) : p.config;
+                    const key = `${cfg.time_start || ''}-${cfg.time_end || ''}`;
+                    windowPortalCounts.set(key, (windowPortalCounts.get(key) || 0) + 1);
+                } catch { /* ignore */ }
+            }
+        }
+
         const enrichedPortals = await Promise.all(portals.map(async (portal) => {
+            const explicitTotal = Number(portal.ticket_count || 0);
+            let explicitOpen = Number(portal.assigned_count || 0);
+
             if (portal.type === 'time_based' && portal.config) {
                 try {
                     const config = typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config;
-                    const rangeClause = timeRangeSqlClause(config);
-                    if (rangeClause) {
-                        // Count BOTH: tickets explicitly assigned to this portal PLUS
-                        // unassigned tickets whose created_at falls in the time window.
-                        const [row] = await dbAdapter.query(
-                            `SELECT COUNT(*) AS ticket_count,
-                                      COUNT(*) FILTER (WHERE status = 'open') AS open_count
-                               FROM support_tickets
-                               WHERE portal_id = ? OR (portal_id IS NULL AND ${rangeClause})`,
-                            [portal.id]
-                        );
+                    const key = `${config.time_start || ''}-${config.time_end || ''}`;
+                    const isSoleOperator = (windowPortalCounts.get(key) || 0) <= 1;
 
-                        return {
-                            ...portal,
-                            ticket_count: Number(row?.ticket_count || 0),
-                            assigned_count: Number(row?.open_count || 0),
-                            config,
-                            url: `${req.protocol}://${req.get('host')}/portal/support/?slug=${portal.slug}`
-                        };
+                    // If sole operator in this shift window (e.g. Nitin in Evening), include unassigned open tickets
+                    if (isSoleOperator) {
+                        const rangeClause = timeRangeSqlClause(config);
+                        if (rangeClause) {
+                            const [row] = await dbAdapter.query(
+                                `SELECT COUNT(*) FILTER (WHERE status = 'open') AS open_count
+                                 FROM support_tickets
+                                 WHERE portal_id IS NULL AND ${rangeClause}`
+                            );
+                            explicitOpen += Number(row?.open_count || 0);
+                        }
                     }
+
+                    return {
+                        ...portal,
+                        ticket_count: explicitTotal,
+                        assigned_count: explicitOpen,
+                        config,
+                        url: `${req.protocol}://${req.get('host')}/portal/support/?slug=${portal.slug}`
+                    };
                 } catch (e) {
                     console.error('Error calculating time-based portal count:', e);
                 }
@@ -4232,6 +4276,8 @@ router.get('/support-portals', verifyToken, async (req, res) => {
             
             return {
                 ...portal,
+                ticket_count: explicitTotal,
+                assigned_count: explicitOpen,
                 config: typeof portal.config === 'string' ? JSON.parse(portal.config) : portal.config,
                 url: `${req.protocol}://${req.get('host')}/portal/support/?slug=${portal.slug}`
             };
@@ -4271,7 +4317,18 @@ router.put('/support-portals/:id', verifyToken, async (req, res) => {
         if (name) { updates.push('name = ?'); params.push(name); }
         if (slug) { updates.push('slug = ?'); params.push(slug); }
         if (type) { updates.push('type = ?'); params.push(type); }
-        if (config) { updates.push('config = ?'); params.push(JSON.stringify(config)); }
+        if (config) {
+            updates.push('config = ?');
+            params.push(JSON.stringify(config));
+            if (config.time_start) {
+                updates.push('shift_start = ?');
+                params.push(config.time_start);
+            }
+            if (config.time_end) {
+                updates.push('shift_end = ?');
+                params.push(config.time_end);
+            }
+        }
         updates.push('updated_at = CURRENT_TIMESTAMP');
 
         if (password) {
@@ -4975,89 +5032,113 @@ router.post('/support-portals/:id/update-rules', verifyToken, async (req, res) =
     }
 });
 
-// Rebalance tickets across existing portals
+// Rebalance tickets across existing portals using round-robin
 router.post('/support-portals/rebalance', verifyToken, async (req, res) => {
     try {
-        const { portalIds } = req.body;
+        const { portalIds, shift } = req.body;
 
-        // Get all active auto portals
-        const portals = await dbAdapter.query(
-            "SELECT id, max_tickets FROM support_portals WHERE type = 'auto' AND is_active = true" +
-            (portalIds && portalIds.length > 0 ? ` AND id IN (${portalIds.join(',')})` : '')
+        // Fetch all active portals in deterministic order
+        const allPortals = await dbAdapter.query(
+            "SELECT id, name, type, config, shift_start, shift_end, max_tickets, assigned_count FROM support_portals WHERE is_active = true ORDER BY id ASC"
         );
 
-        if (portals.length < 2) {
+        let portals = [];
+        if (shift === 'morning' || shift === 'evening') {
+            portals = allPortals.filter(p => {
+                if (p.type === 'time_based' && p.config) {
+                    const cfg = typeof p.config === 'string' ? JSON.parse(p.config) : p.config;
+                    const start = cfg.time_start || p.shift_start || '';
+                    const end = cfg.time_end || p.shift_end || '';
+                    if (end && start && end < start) {
+                        return (start >= '17:00' ? 'evening' : 'morning') === shift;
+                    }
+                    if (start >= '09:00' && end <= '17:00') return shift === 'morning';
+                    if (start >= '17:00' && end <= '21:00') return shift === 'evening';
+                }
+                return false;
+            });
+        } else if (Array.isArray(portalIds) && portalIds.length > 0) {
+            const idSet = new Set(portalIds.map(Number));
+            portals = allPortals.filter(p => idSet.has(p.id));
+        } else {
+            // Default to all active shift or auto portals
+            portals = allPortals.filter(p => p.type === 'auto' || p.type === 'time_based');
+        }
+
+        if (!portals || portals.length < 2) {
             return res.status(400).json({ success: false, error: 'Need at least 2 active portals to rebalance' });
         }
 
-        // Get all unassigned or assigned tickets from these portals
         const portalIdList = portals.map(p => p.id).join(',');
+        
+        // Build ticket query: open tickets assigned to these portals PLUS unassigned open tickets in the shift window
+        const timeClauses = [];
+        for (const p of portals) {
+            if (p.type === 'time_based' && p.config) {
+                try {
+                    const cfg = typeof p.config === 'string' ? JSON.parse(p.config) : p.config;
+                    const tc = timeRangeSqlClause(cfg);
+                    if (tc && !timeClauses.includes(tc)) timeClauses.push(tc);
+                } catch { /* ignore */ }
+            }
+        }
+
+        let whereClause = `portal_id IN (${portalIdList})`;
+        if (timeClauses.length > 0) {
+            whereClause = `(${whereClause} OR (portal_id IS NULL AND (${timeClauses.join(' OR ')})))`;
+        }
+
         const tickets = await dbAdapter.query(
-            `SELECT id FROM support_tickets WHERE portal_id IN (${portalIdList}) AND status = 'open' ORDER BY created_at`
+            `SELECT id FROM support_tickets WHERE ${whereClause} AND status = 'open' ORDER BY created_at ASC`
         );
 
-        if (tickets.length === 0) {
-            return res.status(400).json({ success: false, error: 'No tickets to rebalance' });
+        if (!tickets || tickets.length === 0) {
+            return res.status(400).json({ success: false, error: 'No open tickets found to rebalance' });
         }
 
-        // Clear current assignments
-        await dbAdapter.run(
-            `UPDATE support_tickets SET portal_id = NULL WHERE portal_id IN (${portalIdList}) AND status = 'open'`
-        );
-
-        // Reset assigned counts
-        for (const portal of portals) {
-            await dbAdapter.run('UPDATE support_portals SET assigned_count = 0 WHERE id = ?', [portal.id]);
+        // Distribute tickets using pure ROUND-ROBIN across the portals
+        const ticketGroups = new Map();
+        for (const p of portals) {
+            ticketGroups.set(p.id, []);
         }
 
-        // Redistribute using workload-balanced algorithm
-        const portalStats = portals.map(p => ({
-            id: p.id,
-            maxTickets: p.max_tickets,
-            ticketCount: 0
-        }));
+        for (let i = 0; i < tickets.length; i++) {
+            const targetPortal = portals[i % portals.length];
+            ticketGroups.get(targetPortal.id).push(tickets[i].id);
+        }
 
-        for (const ticket of tickets) {
-            // Find portal with least tickets
-            let minPortal = portalStats[0];
-            for (const portal of portalStats) {
-                if (portal.ticketCount < minPortal.ticketCount) {
-                    if (!portal.maxTickets || portal.ticketCount < portal.maxTickets) {
-                        minPortal = portal;
-                    }
-                }
-            }
-
-            if (minPortal && (!minPortal.maxTickets || minPortal.ticketCount < minPortal.maxTickets)) {
+        // Batch update support_tickets in chunks of 500 for database performance
+        for (const [targetPortalId, ticketIds] of ticketGroups) {
+            for (let c = 0; c < ticketIds.length; c += 500) {
+                const chunk = ticketIds.slice(c, c + 500);
+                const placeholders = chunk.map(() => '?').join(',');
                 await dbAdapter.run(
-                    'UPDATE support_tickets SET portal_id = ? WHERE id = ?',
-                    [minPortal.id, ticket.id]
+                    `UPDATE support_tickets SET portal_id = ? WHERE id IN (${placeholders})`,
+                    [targetPortalId, ...chunk]
                 );
-                minPortal.ticketCount++;
             }
-        }
-
-        // Update assigned counts
-        for (const portal of portalStats) {
             await dbAdapter.run(
                 'UPDATE support_portals SET assigned_count = ? WHERE id = ?',
-                [portal.ticketCount, portal.id]
+                [ticketIds.length, targetPortalId]
             );
         }
 
-        // Record in history
+        // Record operation in history
         await dbAdapter.run(
             'INSERT INTO distribution_history (distribution_type, portal_count, ticket_count, filters_applied) VALUES (?, ?, ?, ?)',
-            ['rebalance', portals.length, tickets.length, JSON.stringify({ portalIds })]
+            ['rebalance_round_robin', portals.length, tickets.length, JSON.stringify({ shift: shift || 'custom', portalIds: portals.map(p => p.id), mode: 'round_robin' })]
         );
 
         invalidateCache('stats');
         res.json({
             success: true,
-            message: `${tickets.length} tickets rebalanced across ${portals.length} portals`,
-            stats: portalStats.map(p => ({
+            message: `${tickets.length} tickets distributed evenly via round-robin across ${portals.length} portals (${portals.map(p => p.name).join(', ')})`,
+            ticketsRebalanced: tickets.length,
+            portalsCount: portals.length,
+            stats: portals.map(p => ({
                 portalId: p.id,
-                ticketCount: p.ticketCount
+                name: p.name,
+                ticketCount: ticketGroups.get(p.id)?.length || 0
             }))
         });
     } catch (error) {

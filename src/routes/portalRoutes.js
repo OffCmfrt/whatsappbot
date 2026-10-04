@@ -109,35 +109,42 @@ function timeRangeSqlClause(config, col = 'created_at') {
 }
 
 // Helper to get portal tickets
-async function getPortalTickets(portalId, portalType, portalConfig) {
+async function getPortalTickets(portalId, portalType, portalConfig, status, channel) {
+    let baseWhere = '';
+    const params = [portalId];
+
     if (portalType === 'time_based') {
         const config = portalConfig
             ? (typeof portalConfig === 'string' ? JSON.parse(portalConfig) : portalConfig)
             : {};
         const rangeClause = timeRangeSqlClause(config);
-        if (!rangeClause) {
-            // No time window configured — fall back to explicitly-assigned tickets only
-            return await dbAdapter.query(
-                'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC LIMIT 200',
-                [portalId]
-            );
+        if (rangeClause) {
+            baseWhere = `(portal_id = ? OR (portal_id IS NULL AND ${rangeClause}))`;
+        } else {
+            baseWhere = 'portal_id = ?';
         }
-        // Show BOTH explicitly-assigned tickets (from round-robin or split/transfer)
-        // AND unassigned tickets whose created_at falls within the portal's time window.
-        // This ensures the portal sees its full fair share regardless of how tickets arrived.
-        return await dbAdapter.query(
-            `SELECT * FROM support_tickets
-             WHERE portal_id = ? OR (portal_id IS NULL AND ${rangeClause})
-             ORDER BY created_at DESC LIMIT 200`,
-            [portalId]
-        );
     } else {
-        // manual or auto
-        return await dbAdapter.query(
-            'SELECT * FROM support_tickets WHERE portal_id = ? ORDER BY created_at DESC LIMIT 200',
-            [portalId]
-        );
+        baseWhere = 'portal_id = ?';
     }
+
+    const conditions = [baseWhere];
+    if (status) {
+        conditions.push('status = ?');
+        params.push(status);
+    }
+    if (channel) {
+        conditions.push("(channel = ? OR (channel IS NULL AND ? = 'whatsapp'))");
+        params.push(channel, channel);
+    }
+
+    const whereSql = conditions.join(' AND ');
+    // Prioritize tickets explicitly assigned to this portal first, then newest
+    return await dbAdapter.query(
+        `SELECT * FROM support_tickets
+         WHERE ${whereSql}
+         ORDER BY (CASE WHEN portal_id = ? THEN 0 ELSE 1 END), created_at DESC LIMIT 200`,
+        [...params, portalId]
+    );
 }
 
 // Helper to verify a phone belongs to the portal
@@ -246,19 +253,7 @@ router.get('/:slug/tickets', verifyPortalToken, async (req, res) => {
 
         const portal = portals[0];
         const { status, channel } = req.query;
-        let tickets = await getPortalTickets(portal.id, portal.type, portal.config);
-
-        if (status) {
-            tickets = tickets.filter(t => t.status === status);
-        }
-
-        // Channel filter: 'whatsapp', 'instagram', or undefined for all
-        if (channel) {
-            tickets = tickets.filter(t => {
-                const ticketChannel = t.channel || 'whatsapp';
-                return ticketChannel === channel;
-            });
-        }
+        const tickets = await getPortalTickets(portal.id, portal.type, portal.config, status, channel);
 
         res.json({ success: true, tickets });
     } catch (error) {
