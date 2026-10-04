@@ -277,7 +277,7 @@ async function exportSelection(body, signal) {
 async function download(body, signal) {
     const controller = new AbortController();
     signal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-    const opts = labels.options({ ...(body.options || {}), pageSize: 'thermal_4x6' });
+    const opts = labels.options({ pageSize: 'original', ...(body.options || {}) });
     const { rows, batchNumber } = await exportSelection(body, signal);
     labels.sortLabels(rows, opts);
     const seen = new Map();
@@ -301,7 +301,12 @@ async function download(body, signal) {
                 bytes += buffer.length;
                 if (bytes > 30 * 1024 * 1024) throw fail('Labels exceed 30 MB; split the batch first', 413);
                 const pdf = await labels.loadLabelPdf(buffer);
-                Object.assign(row, await labels.normalizeThermal(pdf));
+                if (opts.pageSize === 'thermal_4x6') {
+                    Object.assign(row, await labels.normalizeThermal(pdf));
+                } else {
+                    row.pdf = pdf;
+                    row.warnings = [];
+                }
             } catch (err) {
                 row.label_error = err.status ? err.message : 'Carrier label could not be processed';
                 if (err.status === 413 || signal.aborted) { fatal ||= err; controller.abort(); }

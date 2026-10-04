@@ -276,7 +276,7 @@ test('Delhivery accepts direct binary PDFs and JSON links, normalizing relative/
     let payload = onePage;
     t.mock.method(axios, 'get', async (url, options) => {
         assert.equal(options.responseType, 'arraybuffer');
-        assert.equal(options.params.pdf_size, '4R');
+        assert.equal(options.params.pdf_size, undefined, 'must not force a thermal pdf_size — let the carrier return its native label');
         return { data: payload };
     });
     assert.deepEqual((await delhivery.generateLabel({ awb: '123' })).data.labelBuffer, onePage);

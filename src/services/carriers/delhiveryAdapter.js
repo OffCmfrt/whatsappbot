@@ -342,12 +342,12 @@ class DelhiveryAdapter extends BaseCarrier {
         }
     }
 
-    // Packing slip / label PDF link (4R = 4x6 inch thermal label format)
+    // Packing slip / label PDF link — omit pdf_size so the carrier returns its native label format
     async generateLabel(shipment) {
         try {
             const response = await axios.get(`${this.baseURL}/api/p/packing_slip`, {
                 headers: this.authHeaders(),
-                params: { wbns: shipment.awb, pdf: 'true', pdf_size: '4R' },
+                params: { wbns: shipment.awb, pdf: 'true' },
                 responseType: 'arraybuffer',
                 maxContentLength: 10 * 1024 * 1024,
                 signal: AbortSignal.timeout(25000),

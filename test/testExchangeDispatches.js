@@ -270,7 +270,7 @@ test('duplicates print once; missing AWBs cause strict failure or explicit parti
     assert.equal(pdfs.length, 1); await assertThermal(pdfs[0][1], 1);
     assert.match(entries.get('_label_index.csv').toString(), /DUPLICATE REFERENCE/);
     assert.match(entries.get('_failed_labels.csv').toString(), /EX-3/);
-    assert.match(entries.get('_download_summary.txt').toString(), /4 x 6 inches/);
+    assert.match(entries.get('_download_summary.txt').toString(), /Original carrier page sizes/);
 });
 
 test('100-dispatch limit, four-worker bound, cancellation, and aggregate byte cap', async () => {
@@ -316,6 +316,54 @@ test('normalization preserves multipage vector content, rotation, CropBox offset
     assert.deepEqual(form.dict.lookup(PDFName.of('BBox')).asArray().map(n => n.asNumber()), [23, 31, 523, 731]);
     assert.deepEqual(form.dict.lookup(PDFName.of('Matrix')).asArray().map(n => n.asNumber()), [1, 0, 0, 1, -23, -31]);
     assert.match(Buffer.from(decodePDFRawStream(form).decode()).toString(), /Tj/);
+});
+
+test('exchange download preserves original carrier label sizes instead of normalizing to thermal', async () => {
+    // Simulate three different carrier label formats with distinct page sizes
+    const delhiveryPdf = await PDFDocument.create();
+    delhiveryPdf.addPage([288, 432]).drawText('Delhivery 4x6 label', { x: 10, y: 390 });
+    const ekartPdf = await PDFDocument.create();
+    ekartPdf.addPage([226, 340]).drawText('Ekart label', { x: 10, y: 300 });
+    const fwdDelhiveryPdf = await PDFDocument.create();
+    fwdDelhiveryPdf.addPage([595, 842]).drawText('Forward Delhivery A4 label', { x: 10, y: 800 });
+
+    const rows = [
+        sourceRow(1, { forward_carrier: 'delhivery' }),
+        sourceRow(2, { forward_carrier: 'ekart' }),
+        sourceRow(3, { forward_carrier: 'delhivery' })
+    ];
+    await seed(rows);
+
+    // Each carrier returns a differently-sized label
+    const carrierPdfs = new Map([
+        ['EX-1', Buffer.from(await delhiveryPdf.save())],
+        ['EX-2', Buffer.from(await ekartPdf.save())],
+        ['EX-3', Buffer.from(await fwdDelhiveryPdf.save())]
+    ]);
+    fetchSource = async config => {
+        if (config.responseType === 'arraybuffer') {
+            const match = config.url.match(/\/(EX-\d+)\/label/);
+            return { data: carrierPdfs.get(match[1]) };
+        }
+        return { data: { success: true, dispatches: rows.filter(r => config.data?.requestIds?.includes(r.request_id) || true), next_cursor: null } };
+    };
+
+    // Default download (original size)
+    const result = await service.download({ selection: selection(), options: { output: 'pdf' } });
+    assert.equal(result.labelCount, 3);
+    const merged = await PDFDocument.load(result.pdfBuffer);
+    assert.equal(merged.getPageCount(), 3);
+    // Each page must retain its original carrier dimensions — no thermal normalization
+    assert.deepEqual(merged.getPage(0).getSize(), { width: 288, height: 432 });  // Delhivery
+    assert.deepEqual(merged.getPage(1).getSize(), { width: 226, height: 340 });  // Ekart
+    assert.deepEqual(merged.getPage(2).getSize(), { width: 595, height: 842 });  // Forward Delhivery A4
+
+    // Explicit thermal_4x6 still normalizes when requested
+    const thermal = await service.download({ selection: selection(), options: { output: 'pdf', pageSize: 'thermal_4x6' } });
+    const thermalPdf = await PDFDocument.load(thermal.pdfBuffer);
+    for (const page of thermalPdf.getPages()) {
+        assert.deepEqual(page.getSize(), { width: 288, height: 432 });
+    }
 });
 
 test('sorting, validation, and packaging preserve original sizes unless thermal normalization is requested', async () => {
