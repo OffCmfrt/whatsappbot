@@ -838,8 +838,10 @@ class InstagramService {
             `api_version=${apiVersion || this.apiVersion}`
         );
 
-        // Return structured error so caller can distinguish failure reasons
-        return { blocked: false, reason: 'api_error' };
+        // Return structured error so caller can distinguish failure reasons.
+        // blocked: true because the reply was NOT sent — caller must treat
+        // this as a failure (not success).
+        return { blocked: true, reason: 'api_error' };
     }
 }
 

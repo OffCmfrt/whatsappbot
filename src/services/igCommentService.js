@@ -395,11 +395,32 @@ class IGCommentService {
             // 1. Fetch media info (caption, permalink)
             const mediaInfo = await instagramService.fetchMediaInfo(mediaId);
             const caption = (mediaInfo?.caption || '').trim();
+
+            // Diagnostic: log what we fetched (safe — no secrets)
+            console.log(
+                `[IG COMMENT PRODUCT DIAG] ` +
+                `media=${mediaId} ` +
+                `caption_len=${caption.length} ` +
+                `caption_preview="${caption.substring(0, 100)}" ` +
+                `comment_len=${(commentText || '').length} ` +
+                `comment_preview="${(commentText || '').substring(0, 80)}" ` +
+                `has_permalink=${!!mediaInfo?.permalink}`
+            );
+
             if (!caption && !commentText) return null;
 
             // 2. Get Shopify catalog
             const catalog = await shopifyService.getProductCatalog();
-            if (!catalog || catalog.length === 0) return null;
+            if (!catalog || catalog.length === 0) {
+                console.log(`[IG COMMENT PRODUCT DIAG] catalog empty or unavailable`);
+                return null;
+            }
+
+            console.log(
+                `[IG COMMENT PRODUCT DIAG] ` +
+                `catalog_size=${catalog.length} ` +
+                `titles=${catalog.map(p => p.title).join(', ')}`
+            );
 
             const commentLower = (commentText || '').toLowerCase();
 
@@ -412,6 +433,13 @@ class IGCommentService {
             let finalMatches = captionMatches;
             if (captionMatches.length !== 1 && commentLower) {
                 const commentMatches = this._matchProductsInText(commentLower, catalog);
+                // Diagnostic: log match counts
+                console.log(
+                    `[IG COMMENT PRODUCT DIAG] ` +
+                    `caption_matches=${captionMatches.length} ` +
+                    `comment_matches=${commentMatches.length} ` +
+                    `comment_matches_titles=${commentMatches.map(p => p.title).join(', ') || 'none'}`
+                );
                 // Merge: prefer caption matches; if caption had 0, use comment matches
                 if (captionMatches.length === 0) {
                     finalMatches = commentMatches;
@@ -425,6 +453,12 @@ class IGCommentService {
                     }
                     // If overlap is still 0 or 2+, keep caption matches (ambiguous)
                 }
+            } else {
+                console.log(
+                    `[IG COMMENT PRODUCT DIAG] ` +
+                    `caption_matches=${captionMatches.length} ` +
+                    `caption_matches_titles=${captionMatches.map(p => p.title).join(', ') || 'none'}`
+                );
             }
 
             // 5. Only return if exactly ONE product matched (deterministic)
