@@ -478,7 +478,24 @@ class IGCommentService {
                 return product;
             }
 
-            // 0 or 2+ matches → cannot determine → return null (safe fallback)
+            // 5b. Multiple matches — check if all from the same product family
+            // e.g. "SLUB - 002" matches "SLUB - 002 ( B )" + "SLUB - 002 ( COMBO )"
+            // → same base product, just different variants → pick first
+            if (finalMatches.length >= 2) {
+                const bases = finalMatches.map(p => this._extractProductBase(p.title));
+                const allSameBase = bases.every(b => b === bases[0]);
+                if (allSameBase) {
+                    const product = finalMatches[0];
+                    product._mediaCaption = caption.substring(0, 500);
+                    product._mediaPermalink = mediaInfo?.permalink || null;
+                    product._matchSource = captionMatches.length >= 2
+                        ? 'caption_family'
+                        : (captionMatches.length === 0 ? 'comment_family' : 'family_overlap');
+                    return product;
+                }
+            }
+
+            // 0 or 2+ truly different matches → cannot determine → return null
             return null;
 
         } catch (error) {
@@ -503,22 +520,45 @@ class IGCommentService {
     }
 
     /**
-     * Match catalog product titles against a given text string.
+     * Extract the base product name (before variant parentheses).
+     * "SLUB - 002 ( B )" → "slub 002"
+     * "HENLEY - 001 ( ACID WASH )" → "henley 001"
+     * Used to detect when multiple matches are variants of the same product.
+     */
+    _extractProductBase(title) {
+        return (title || '')
+            .toLowerCase()
+            .split('(')[0]                          // take only before first '('
+            .replace(/[^a-z0-9\s]/g, ' ')          // non-alphanum → space
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    /**
+     * Match catalog products against a given text string.
      * Returns array of matching products (may be 0, 1, or many).
      *
-     * Two-tier matching (highest precision first):
+     * Strategy — match against the product BASE NAME (the part before
+     * variant parentheses):
      *   Tier 1 — Exact normalized match:
-     *            normalized title === normalized text → unique answer
-     *   Tier 2 — Word-coverage match:
-     *            ≥70% of significant words (length > 2) from the title
-     *            appear in the text, AND title must have ≥2 significant
-     *            words (prevents single generic keywords like "henley"
-     *            from matching every variant).
+     *            normalized full title === normalized text → unique answer
+     *   Tier 2 — Base-name match:
+     *            Extract base from each title (before parentheses).
+     *            Match when normalized base appears in normalized text
+     *            AND base has ≥2 words AND all base words appear in text.
+     *            This ensures "SLUB - 002" matches ALL SLUB-002 variants
+     *            while "henley" (1 word) matches nothing.
+     *
+     * The caller (_resolveProductFromCaption) handles disambiguation:
+     *   - 1 match → return it
+     *   - 2+ matches, all same base → pick first (same product family)
+     *   - 2+ matches, different bases → null (truly ambiguous)
+     *   - 0 matches → null
      */
     _matchProductsInText(textLower, catalog) {
         const normText = this._normalizeForMatch(textLower);
 
-        // ── Tier 1: Exact normalized match ──────────────────────
+        // ── Tier 1: Exact normalized full-title match ────────────
         const exactMatches = [];
         for (const product of catalog) {
             const titleLower = (product.title || '').toLowerCase();
@@ -528,28 +568,29 @@ class IGCommentService {
                 exactMatches.push(product);
             }
         }
-        if (exactMatches.length === 1) return exactMatches;
-        if (exactMatches.length > 1) return exactMatches; // still ambiguous
+        if (exactMatches.length >= 1) return exactMatches;
 
-        // ── Tier 2: Word-coverage match ─────────────────────────
-        // Require ≥70% of the title's significant words to appear in
-        // the text, AND the title must have ≥2 significant words.
-        // This prevents "henley" (1 word) from matching every variant
-        // while allowing "henley 001 acid wash" (4 words) to match.
-        const wordMatches = [];
+        // ── Tier 2: Base-name match ─────────────────────────────
+        // Extract the base name from each title (before parentheses).
+        // Match when:
+        //   (a) base has ≥2 significant words (prevents bare "henley" matching)
+        //   (b) ALL base words appear in the normalized text
+        //       (ensures "slub 002" matches base "slub 002" but not "slub 001")
+        const baseMatches = [];
         for (const product of catalog) {
-            const titleLower = (product.title || '').toLowerCase();
-            if (!titleLower) continue;
+            const base = this._extractProductBase(product.title);
+            if (!base) continue;
 
-            const titleWords = titleLower.split(/\s+/).filter(w => w.length > 2);
-            if (titleWords.length < 2) continue; // need ≥2 significant words
+            const baseWords = base.split(/\s+/).filter(w => w.length > 0);
+            if (baseWords.length < 2) continue; // need ≥2 words in base
 
-            const matchCount = titleWords.filter(w => normText.includes(w)).length;
-            if (matchCount >= Math.ceil(titleWords.length * 0.7)) {
-                wordMatches.push(product);
+            // ALL base words must appear in the text
+            const allWordsPresent = baseWords.every(w => normText.includes(w));
+            if (allWordsPresent) {
+                baseMatches.push(product);
             }
         }
-        return wordMatches;
+        return baseMatches;
     }
 
     // ═══════════════════════════════════════════════════════
