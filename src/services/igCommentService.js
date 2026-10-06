@@ -215,8 +215,10 @@ class IGCommentService {
                 return { skipped: 'self_comment' };
             }
 
-            // 3. Deduplicate webhook redeliveries
-            if (await this._isDuplicate(commentId)) {
+            // 3. Atomic claim — prevents duplicate processing from concurrent
+            //    webhook deliveries (only ONE delivery may proceed)
+            if (await this._claimOnce(commentId)) {
+                console.log(`[IG COMMENT] duplicate_skipped | comment=${commentId}`);
                 return { skipped: 'duplicate' };
             }
 
@@ -229,6 +231,15 @@ class IGCommentService {
             const PRODUCT_INTENTS = ['product_question', 'size_question'];
             if (PRODUCT_INTENTS.includes(classification.intent) && mediaId) {
                 resolvedProduct = await this._resolveProductFromCaption(mediaId);
+                // Structured product resolution log (safe — no secrets)
+                console.log(
+                    `[IG COMMENT PRODUCT] ` +
+                    `comment=${commentId} ` +
+                    `media=${mediaId} ` +
+                    `product=${resolvedProduct?.id || 'none'} ` +
+                    `handle=${resolvedProduct?.handle || 'none'} ` +
+                    `url=${resolvedProduct?.handle ? 'https://offcomfrt.in/products/' + resolvedProduct.handle : 'none'}`
+                );
             }
 
             // 5. Decide what automation should do
@@ -283,8 +294,7 @@ class IGCommentService {
                 resolvedProductHandle: resolvedProduct?.handle || null
             });
 
-            // 8. Mark processed (prevents reprocessing on webhook retries)
-            await this._markProcessed(commentId, automationAction);
+            // 8. Already claimed atomically at step 3 (no separate mark needed)
 
             console.log(`[IG COMMENT] ${automationAction} | ${classification.intent} (${classification.confidence}) | @${record?.ig_username || commentId}`);
             if (resolvedProduct) {
@@ -478,7 +488,55 @@ class IGCommentService {
     }
 
     /**
+     * Atomically claim this comment for processing.
+     * Uses INSERT ON CONFLICT + a unique per-attempt token to guarantee
+     * exactly-once execution even under concurrent webhook deliveries.
+     *
+     * How it works:
+     *   1. Generate a unique token for THIS attempt
+     *   2. INSERT … ON CONFLICT DO NOTHING (only the first delivery creates the row)
+     *   3. SELECT the stored token — if it matches ours, we own the claim
+     *
+     * @returns {boolean} true = already claimed (skip), false = claimed now (proceed)
+     */
+    async _claimOnce(commentId) {
+        try {
+            // Unique token identifies THIS delivery's attempt
+            const myToken = `proc:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+
+            // Try to insert our claim (no-op if row already exists)
+            await dbAdapter.query(
+                `INSERT INTO ig_comment_idempotency (ig_comment_id, processed_at, handler_result)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT (ig_comment_id) DO NOTHING`,
+                [commentId, new Date().toISOString(), myToken]
+            );
+
+            // Read back the stored token — if it matches ours, we created the row
+            const rows = await dbAdapter.query(
+                'SELECT handler_result FROM ig_comment_idempotency WHERE ig_comment_id = ? LIMIT 1',
+                [commentId]
+            );
+
+            if (rows?.[0]?.handler_result === myToken) {
+                return false; // Our token is stored → we claimed it → proceed
+            }
+            return true; // Different token is stored → someone else claimed it → skip
+        } catch (error) {
+            // UNIQUE constraint violation = concurrent claim by another delivery
+            if (error.message?.includes('duplicate') || error.message?.includes('unique')) {
+                return true;
+            }
+            console.error('[IG COMMENT] Claim check failed:', error.message);
+            // Fail open — let the comment through rather than blocking all comments
+            return false;
+        }
+    }
+
+    /**
      * Check if this comment was already processed (webhook redelivery).
+     * @deprecated Use _claimOnce() for atomic claim — this method has a TOCTOU race.
+     *             Kept for backwards compatibility only.
      */
     async _isDuplicate(commentId) {
         try {
@@ -497,6 +555,9 @@ class IGCommentService {
         }
     }
 
+    /**
+     * @deprecated Replaced by _claimOnce(). Kept for backwards compatibility.
+     */
     async _markProcessed(commentId, result) {
         try {
             await dbAdapter.query(

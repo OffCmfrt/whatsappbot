@@ -1557,7 +1557,191 @@ td { color: var(--text-secondary); }
     font-family: inherit;
 }
 .igc-filter-input { min-width: 200px; }
-.igc-list { padding: 16px 24px; min-height: 100px; }
+
+/* ─── Table Header ─────────────────────────────────── */
+.igc-table-header {
+    display: grid;
+    grid-template-columns: 160px 1fr 160px 130px 120px 90px;
+    gap: 0;
+    padding: 10px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-hover);
+}
+.igc-table-header .igc-col {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    display: flex;
+    align-items: center;
+}
+
+/* ─── Table Rows ───────────────────────────────────── */
+.igc-list { padding: 0; min-height: 100px; }
+.igc-row {
+    display: grid;
+    grid-template-columns: 160px 1fr 160px 130px 120px 90px;
+    gap: 0;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+    align-items: center;
+}
+.igc-row:hover {
+    background: var(--bg-hover);
+}
+.igc-row:last-child {
+    border-bottom: none;
+}
+
+/* ─── Columns ──────────────────────────────────────── */
+.igc-col {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    overflow: hidden;
+}
+.igc-col-user {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+.igc-col-icon {
+    display: flex;
+    align-items: center;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+.igc-col-username {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.igc-col-comment {
+    color: var(--text-secondary);
+}
+.igc-col-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+    width: 100%;
+}
+.igc-col-intent {
+    gap: 6px;
+}
+.igc-col-status {
+    justify-content: flex-start;
+}
+.igc-col-flags {
+    gap: 4px;
+}
+.igc-col-empty {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+.igc-col-time {
+    justify-content: flex-end;
+}
+.igc-col-timestamp {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+/* ─── Flags (DM / Ticket / Replied) ────────────────── */
+.igc-flag {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.igc-flag-dm {
+    background: rgba(46, 213, 115, 0.12);
+    color: #2ed573;
+    border: 1px solid rgba(46, 213, 115, 0.2);
+}
+.igc-flag-ticket {
+    background: rgba(255, 165, 2, 0.12);
+    color: #ffa502;
+    border: 1px solid rgba(255, 165, 2, 0.2);
+}
+.igc-flag-replied {
+    background: rgba(116, 185, 255, 0.12);
+    color: #74b9ff;
+    border: 1px solid rgba(116, 185, 255, 0.2);
+}
+
+/* ─── Badges ──────────────────────────────────────── */
+.igc-badge {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 10px;
+    border-radius: 20px;
+    white-space: nowrap;
+}
+.igc-badge-intent {
+    background: rgba(255,255,255,0.06);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+}
+.igc-badge-conf {
+    font-size: 10px;
+    background: rgba(255,255,255,0.04);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border);
+    padding: 2px 7px;
+}
+.igc-badge-status-new {
+    background: rgba(116, 185, 255, 0.12);
+    color: #74b9ff;
+    border: 1px solid rgba(116, 185, 255, 0.2);
+}
+.igc-badge-status-review {
+    background: rgba(255, 165, 2, 0.12);
+    color: #ffa502;
+    border: 1px solid rgba(255, 165, 2, 0.2);
+}
+.igc-badge-status-human {
+    background: rgba(255, 71, 87, 0.12);
+    color: #ff4757;
+    border: 1px solid rgba(255, 71, 87, 0.2);
+}
+.igc-badge-status-dm {
+    background: rgba(46, 213, 115, 0.12);
+    color: #2ed573;
+    border: 1px solid rgba(46, 213, 115, 0.2);
+}
+.igc-badge-status-ticket {
+    background: rgba(255, 165, 2, 0.12);
+    color: #ffa502;
+    border: 1px solid rgba(255, 165, 2, 0.2);
+}
+.igc-badge-status-auto {
+    background: rgba(116, 185, 255, 0.12);
+    color: #74b9ff;
+    border: 1px solid rgba(116, 185, 255, 0.2);
+}
+.igc-badge-status-resolved {
+    background: rgba(46, 213, 115, 0.12);
+    color: #2ed573;
+    border: 1px solid rgba(46, 213, 115, 0.2);
+}
+.igc-badge-status-ignored {
+    background: rgba(255,255,255,0.04);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border);
+}
+.igc-badge-status-spam {
+    background: rgba(255, 71, 87, 0.12);
+    color: #ff4757;
+    border: 1px solid rgba(255, 71, 87, 0.2);
+}
 .igc-empty { color: var(--text-tertiary); text-align: center; padding: 40px; font-size: 13px; }
 .igc-pagination {
     display: flex;

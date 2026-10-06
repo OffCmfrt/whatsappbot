@@ -129,27 +129,36 @@ window.CommentsCenter = (() => {
     function renderRow(c) {
         const status = STATUS_META[c.status] || { label: c.status, cls: 'igc-badge-status-review' };
         const username = c.ig_username ? `@${c.ig_username}` : (c.ig_user_id || 'unknown');
+        const truncated = (c.comment_text || '').length > 80
+            ? (c.comment_text || '').substring(0, 80) + '\u2026'
+            : (c.comment_text || '');
 
         const flags = [];
-        if (c.dm_started) flags.push('<span class="igc-badge igc-badge-status-dm">DM</span>');
-        if (c.ticket_id) flags.push('<span class="igc-badge igc-badge-status-ticket">Ticket</span>');
-        if (c.public_reply_sent) flags.push('<span class="igc-badge igc-badge-status-auto">Replied</span>');
+        if (c.dm_started) flags.push('<span class="igc-flag igc-flag-dm">DM</span>');
+        if (c.ticket_id) flags.push('<span class="igc-flag igc-flag-ticket">Ticket</span>');
+        if (c.public_reply_sent) flags.push('<span class="igc-flag igc-flag-replied">Replied</span>');
 
         return `
             <div class="igc-row" data-id="${c.id}">
-                <div class="igc-avatar">${IG_ICON}</div>
-                <div class="igc-row-main">
-                    <div class="igc-row-top">
-                        <span class="igc-username">${escapeHtml(username)}</span>
-                        <span class="igc-time">${timeAgo(c.created_at)}</span>
-                    </div>
-                    <div class="igc-text">${escapeHtml(c.comment_text || '')}</div>
-                    <div class="igc-badges">
-                        <span class="igc-badge ${status.cls}">${status.label}</span>
-                        <span class="igc-badge igc-badge-intent">${escapeHtml(intentLabel(c.detected_intent))}</span>
-                        ${confidenceBadge(c.confidence)}
-                        ${flags.join('')}
-                    </div>
+                <div class="igc-col igc-col-user">
+                    <span class="igc-col-icon">${IG_ICON}</span>
+                    <span class="igc-col-username">${escapeHtml(username)}</span>
+                </div>
+                <div class="igc-col igc-col-comment">
+                    <span class="igc-col-text" title="${escapeHtml(c.comment_text || '')}">${escapeHtml(truncated)}</span>
+                </div>
+                <div class="igc-col igc-col-intent">
+                    <span class="igc-badge igc-badge-intent">${escapeHtml(intentLabel(c.detected_intent))}</span>
+                    ${confidenceBadge(c.confidence)}
+                </div>
+                <div class="igc-col igc-col-status">
+                    <span class="igc-badge ${status.cls}">${status.label}</span>
+                </div>
+                <div class="igc-col igc-col-flags">
+                    ${flags.join('') || '<span class="igc-col-empty">\u2014</span>'}
+                </div>
+                <div class="igc-col igc-col-time">
+                    <span class="igc-col-timestamp">${timeAgo(c.created_at)}</span>
                 </div>
             </div>`;
     }

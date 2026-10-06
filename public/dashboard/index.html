@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark">
     <title>OffComfrt — Support Command Center</title>
-    <link rel="stylesheet" href="/dashboard/css/style.css?v=29">
+    <link rel="stylesheet" href="/dashboard/css/style.css?v=30">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -647,6 +647,14 @@
                             <input type="date" id="igcDateFrom" class="igc-filter-input" title="From date" />
                             <input type="date" id="igcDateTo" class="igc-filter-input" title="To date" />
                         </div>
+                        <div class="igc-table-header">
+                            <div class="igc-col igc-col-user">User</div>
+                            <div class="igc-col igc-col-comment">Comment</div>
+                            <div class="igc-col igc-col-intent">Intent</div>
+                            <div class="igc-col igc-col-status">Status</div>
+                            <div class="igc-col igc-col-flags">Flags</div>
+                            <div class="igc-col igc-col-time">Time</div>
+                        </div>
                         <div id="igCommentsList" class="igc-list">
                             <div class="igc-empty">No comments yet. Comment webhook events will appear here.</div>
                         </div>
@@ -1134,7 +1142,7 @@
 
     <!-- Scripts -->
     <script src="/dashboard/js/main.js?v=31" defer></script>
-    <script src="/dashboard/js/comments.js?v=2" defer></script>
+    <script src="/dashboard/js/comments.js?v=3" defer></script>
     <script src="/dashboard/js/ai-copilot.js?v=2" defer></script>
 </body>
 </html>

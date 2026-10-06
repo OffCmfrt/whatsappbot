@@ -360,7 +360,7 @@ class InstagramService {
             return response.data;
 
         } catch (error) {
-            return this._handleError(error, commentId, 'sendPrivateReply');
+            return this._handleError(error, commentId, 'sendPrivateReply', privateReplyURL, this.apiVersion);
         }
     }
 
@@ -783,7 +783,7 @@ class InstagramService {
     /**
      * Centralized error handler for Instagram API calls.
      */
-    async _handleError(error, igUserId, methodName) {
+    async _handleError(error, igUserId, methodName, endpoint, apiVersion) {
         const status = error.response?.status;
         const igError = error.response?.data?.error;
 
@@ -830,9 +830,13 @@ class InstagramService {
             `subcode=${igError?.error_subcode || 'none'} ` +
             `message="${igError?.message || error.message}" ` +
             `trace_id=${igError?.fbtrace_id || 'none'} ` +
-            `type=${igError?.type || 'none'}`
+            `type=${igError?.type || 'none'} ` +
+            `endpoint=${endpoint || 'none'} ` +
+            `api_version=${apiVersion || this.apiVersion}`
         );
-        return null;
+
+        // Return structured error so caller can distinguish failure reasons
+        return { blocked: false, reason: 'api_error' };
     }
 }
 
