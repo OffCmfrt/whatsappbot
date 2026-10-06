@@ -238,7 +238,8 @@ class IGCommentService {
                     `media=${mediaId} ` +
                     `product=${resolvedProduct?.id || 'none'} ` +
                     `handle=${resolvedProduct?.handle || 'none'} ` +
-                    `url=${resolvedProduct?.handle ? 'https://offcomfrt.in/products/' + resolvedProduct.handle : 'none'}`
+                    `url=${resolvedProduct?.handle ? 'https://offcomfrt.in/products/' + resolvedProduct.handle : 'none'} ` +
+                    `source=${resolvedProduct?._matchSource || 'none'}`
                 );
             }
 
@@ -466,6 +467,14 @@ class IGCommentService {
                 const product = finalMatches[0];
                 product._mediaCaption = caption.substring(0, 500);
                 product._mediaPermalink = mediaInfo?.permalink || null;
+                // Tag how the match was found (for structured log)
+                if (captionMatches.length === 1) {
+                    product._matchSource = 'caption_exact';
+                } else if (captionMatches.length === 0 && commentLower) {
+                    product._matchSource = 'comment_text';
+                } else {
+                    product._matchSource = 'caption_comment_overlap';
+                }
                 return product;
             }
 
@@ -479,35 +488,68 @@ class IGCommentService {
     }
 
     /**
+     * Normalize text for product matching: lowercase, strip parentheses,
+     * remove non-alphanumeric chars (except spaces), collapse whitespace.
+     * This ensures "HENLEY - 001 ( ACID WASH )" and "HENLEY - 001 ( Acid Wash )"
+     * produce the same normalized form: "henley 001 acid wash".
+     */
+    _normalizeForMatch(text) {
+        return (text || '')
+            .toLowerCase()
+            .replace(/[()\[\]{}]/g, '')           // strip brackets
+            .replace(/[^a-z0-9\s]/g, ' ')         // non-alphanum → space
+            .replace(/\s+/g, ' ')                  // collapse whitespace
+            .trim();
+    }
+
+    /**
      * Match catalog product titles against a given text string.
      * Returns array of matching products (may be 0, 1, or many).
      *
-     * Matching rules:
-     *   - Full title appears in text (case-insensitive)
-     *   - OR most words (>=60%) from multi-word titles appear in text
+     * Two-tier matching (highest precision first):
+     *   Tier 1 — Exact normalized match:
+     *            normalized title === normalized text → unique answer
+     *   Tier 2 — Word-coverage match:
+     *            ≥70% of significant words (length > 2) from the title
+     *            appear in the text, AND title must have ≥2 significant
+     *            words (prevents single generic keywords like "henley"
+     *            from matching every variant).
      */
     _matchProductsInText(textLower, catalog) {
-        const matches = [];
+        const normText = this._normalizeForMatch(textLower);
+
+        // ── Tier 1: Exact normalized match ──────────────────────
+        const exactMatches = [];
+        for (const product of catalog) {
+            const titleLower = (product.title || '').toLowerCase();
+            if (!titleLower) continue;
+            const normTitle = this._normalizeForMatch(titleLower);
+            if (normTitle && normTitle === normText) {
+                exactMatches.push(product);
+            }
+        }
+        if (exactMatches.length === 1) return exactMatches;
+        if (exactMatches.length > 1) return exactMatches; // still ambiguous
+
+        // ── Tier 2: Word-coverage match ─────────────────────────
+        // Require ≥70% of the title's significant words to appear in
+        // the text, AND the title must have ≥2 significant words.
+        // This prevents "henley" (1 word) from matching every variant
+        // while allowing "henley 001 acid wash" (4 words) to match.
+        const wordMatches = [];
         for (const product of catalog) {
             const titleLower = (product.title || '').toLowerCase();
             if (!titleLower) continue;
 
-            // Full title in text
-            if (textLower.includes(titleLower)) {
-                matches.push(product);
-                continue;
-            }
-
-            // Word-level match for multi-word titles
             const titleWords = titleLower.split(/\s+/).filter(w => w.length > 2);
-            if (titleWords.length > 0) {
-                const matchCount = titleWords.filter(w => textLower.includes(w)).length;
-                if (matchCount >= Math.ceil(titleWords.length * 0.6)) {
-                    matches.push(product);
-                }
+            if (titleWords.length < 2) continue; // need ≥2 significant words
+
+            const matchCount = titleWords.filter(w => normText.includes(w)).length;
+            if (matchCount >= Math.ceil(titleWords.length * 0.7)) {
+                wordMatches.push(product);
             }
         }
-        return matches;
+        return wordMatches;
     }
 
     // ═══════════════════════════════════════════════════════
