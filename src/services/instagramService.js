@@ -326,11 +326,14 @@ class InstagramService {
 
         this._trackCall();
 
+        // Declare outside try so catch block can reference it safely
+        let privateReplyURL = this.messagesURL;
+
         try {
             // Meta docs: private replies MUST use /<IG_USER_ID>/messages
             // (not /me/messages — that works for DMs but not comment_id recipient)
             const ownId = await this.getOwnUserId();
-            const privateReplyURL = ownId
+            privateReplyURL = ownId
                 ? `https://graph.instagram.com/${this.apiVersion}/${ownId}/messages`
                 : this.messagesURL; // fallback to /me if we can't resolve ownId
 

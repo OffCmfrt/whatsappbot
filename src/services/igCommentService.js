@@ -230,7 +230,7 @@ class IGCommentService {
             let resolvedProduct = null;
             const PRODUCT_INTENTS = ['product_question', 'size_question'];
             if (PRODUCT_INTENTS.includes(classification.intent) && mediaId) {
-                resolvedProduct = await this._resolveProductFromCaption(mediaId);
+                resolvedProduct = await this._resolveProductFromCaption(mediaId, text);
                 // Structured product resolution log (safe — no secrets)
                 console.log(
                     `[IG COMMENT PRODUCT] ` +
@@ -374,54 +374,62 @@ class IGCommentService {
     // ═══════════════════════════════════════════════════════
 
     /**
-     * Resolve a Shopify product from an Instagram post/reel's caption.
-     * Fetches media info, extracts caption, searches catalog for product
-     * titles mentioned in the caption.
+     * Resolve a Shopify product from an Instagram post/reel's caption
+     * and/or the comment text itself.
      *
-     * Returns the matched product (with _mediaCaption/_mediaPermalink attached)
-     * or null if no deterministic match is found.
+     * Strategy:
+     *   1. Fetch media caption
+     *   2. Get Shopify catalog
+     *   3. Search caption for product title matches (primary signal)
+     *   4. If caption yields 0 or 2+ matches, also search the comment text
+     *      (users often name the product they're asking about)
+     *   5. Return match ONLY when exactly ONE product is identified across
+     *      both sources — never guesses
      *
-     * SAFETY: Never guesses. If 0 or 2+ products match, returns null.
+     * @param {string} mediaId   - Instagram media/post ID
+     * @param {string} commentText - The comment text (optional, used as fallback)
+     * @returns {object|null} Matched product with _mediaCaption/_mediaPermalink, or null
      */
-    async _resolveProductFromCaption(mediaId) {
+    async _resolveProductFromCaption(mediaId, commentText = '') {
         try {
             // 1. Fetch media info (caption, permalink)
             const mediaInfo = await instagramService.fetchMediaInfo(mediaId);
             const caption = (mediaInfo?.caption || '').trim();
-            if (!caption) return null;
+            if (!caption && !commentText) return null;
 
             // 2. Get Shopify catalog
             const catalog = await shopifyService.getProductCatalog();
             if (!catalog || catalog.length === 0) return null;
 
-            // 3. Search for product titles in the caption (case-insensitive)
-            const captionLower = caption.toLowerCase();
-            const matches = [];
+            const commentLower = (commentText || '').toLowerCase();
 
-            for (const product of catalog) {
-                const titleLower = (product.title || '').toLowerCase();
-                if (!titleLower) continue;
+            // 3. Search caption for product title matches (primary)
+            const captionMatches = caption
+                ? this._matchProductsInText(caption.toLowerCase(), catalog)
+                : [];
 
-                // Check if the product title appears in the caption
-                if (captionLower.includes(titleLower)) {
-                    matches.push(product);
-                    continue;
-                }
-
-                // Check individual words from the title (for multi-word titles)
-                const titleWords = titleLower.split(/\s+/).filter(w => w.length > 2);
-                if (titleWords.length > 0) {
-                    const matchCount = titleWords.filter(w => captionLower.includes(w)).length;
-                    // If most title words appear in caption, consider it a match
-                    if (matchCount >= Math.ceil(titleWords.length * 0.6)) {
-                        matches.push(product);
+            // 4. If caption is ambiguous (0 or 2+), also search comment text
+            let finalMatches = captionMatches;
+            if (captionMatches.length !== 1 && commentLower) {
+                const commentMatches = this._matchProductsInText(commentLower, catalog);
+                // Merge: prefer caption matches; if caption had 0, use comment matches
+                if (captionMatches.length === 0) {
+                    finalMatches = commentMatches;
+                } else if (captionMatches.length >= 2) {
+                    // Caption is ambiguous — check if comment narrows it down
+                    const overlap = captionMatches.filter(cp =>
+                        commentMatches.some(cm => cm.id === cp.id)
+                    );
+                    if (overlap.length === 1) {
+                        finalMatches = overlap;
                     }
+                    // If overlap is still 0 or 2+, keep caption matches (ambiguous)
                 }
             }
 
-            // 4. Only return if exactly ONE product matched (deterministic)
-            if (matches.length === 1) {
-                const product = matches[0];
+            // 5. Only return if exactly ONE product matched (deterministic)
+            if (finalMatches.length === 1) {
+                const product = finalMatches[0];
                 product._mediaCaption = caption.substring(0, 500);
                 product._mediaPermalink = mediaInfo?.permalink || null;
                 return product;
@@ -434,6 +442,38 @@ class IGCommentService {
             console.error('[IG COMMENT] Product resolution from caption failed:', error.message);
             return null;
         }
+    }
+
+    /**
+     * Match catalog product titles against a given text string.
+     * Returns array of matching products (may be 0, 1, or many).
+     *
+     * Matching rules:
+     *   - Full title appears in text (case-insensitive)
+     *   - OR most words (>=60%) from multi-word titles appear in text
+     */
+    _matchProductsInText(textLower, catalog) {
+        const matches = [];
+        for (const product of catalog) {
+            const titleLower = (product.title || '').toLowerCase();
+            if (!titleLower) continue;
+
+            // Full title in text
+            if (textLower.includes(titleLower)) {
+                matches.push(product);
+                continue;
+            }
+
+            // Word-level match for multi-word titles
+            const titleWords = titleLower.split(/\s+/).filter(w => w.length > 2);
+            if (titleWords.length > 0) {
+                const matchCount = titleWords.filter(w => textLower.includes(w)).length;
+                if (matchCount >= Math.ceil(titleWords.length * 0.6)) {
+                    matches.push(product);
+                }
+            }
+        }
+        return matches;
     }
 
     // ═══════════════════════════════════════════════════════
