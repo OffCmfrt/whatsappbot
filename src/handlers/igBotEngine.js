@@ -1412,9 +1412,65 @@ You can continue messaging us here for updates.`
 
     /**
      * Complaint, anger or sensitive (legal) issue detected —
-     * escalate immediately with the full conversation summary.
+     * sentiment-aware escalation:
+     *   - Angry/frustrated → immediate priority escalation
+     *   - Neutral/mild → acknowledge, try to help directly, offer
+     *     human support if still unresolved (resolution-first)
+     *   - Sensitive (legal) → always escalate immediately
      */
     async _handleSmartEscalation(igUserId, result, context, message) {
+        // Sensitive issues (legal threats) — always escalate immediately
+        if (result.intent === 'sensitive_issue') {
+            return await this._createEscalationTicket(igUserId, result, context, message, true);
+        }
+
+        // Angry or frustrated — immediate priority escalation
+        if (result.sentiment === 'angry' || result.sentiment === 'frustrated') {
+            return await this._createEscalationTicket(igUserId, result, context, message, false);
+        }
+
+        // ── Resolution-first for neutral/mild complaint ──
+        // The customer is unhappy but not aggressive. Try to help
+        // directly before creating a ticket.
+        await instagramService.setBotState(igUserId, STATES.IDLE, context);
+
+        // Check for existing open ticket first
+        const existingTicket = await dbAdapter.query(
+            `SELECT * FROM support_tickets
+             WHERE ig_user_id = ? AND status = 'open'
+             ORDER BY created_at DESC LIMIT 1`,
+            [igUserId]
+        );
+
+        if (existingTicket && existingTicket.length > 0) {
+            await instagramService.sendMessage(
+                igUserId,
+                `I'm sorry to hear that. Your ticket ${existingTicket[0].ticket_number} is still open and our team is working on it.
+
+They'll respond here shortly. Is there anything else I can help you with right now?`
+            );
+            return;
+        }
+
+        // Try FAQ resolution first
+        const faqResolved = await this._tryFAQMatch(message, igUserId);
+        if (faqResolved) {
+            await instagramService.sendMessage(
+                igUserId,
+                `I understand your concern. Does this help? If you still need assistance, just type "support" and I'll connect you with our team.`
+            );
+            return;
+        }
+
+        // Can't resolve — create ticket but with normal priority
+        await this._createEscalationTicket(igUserId, result, context, message, false);
+    }
+
+    /**
+     * Create or append to an escalation ticket.
+     * @param {boolean} isPriority - true for angry/sensitive, false for mild
+     */
+    async _createEscalationTicket(igUserId, result, context, message, isPriority) {
         // Duplicate prevention: reuse an open ticket if one exists
         const existingTicket = await dbAdapter.query(
             `SELECT * FROM support_tickets
@@ -1427,9 +1483,9 @@ You can continue messaging us here for updates.`
             await instagramService.escalateToHuman(igUserId, existingTicket[0].id);
             await instagramService.sendMessage(
                 igUserId,
-                `We hear you, and we're truly sorry.
-
-Your open ticket ${existingTicket[0].ticket_number} has been marked as priority — a senior team member will respond here shortly.`
+                isPriority
+                    ? `We hear you, and we're truly sorry.\n\nYour open ticket ${existingTicket[0].ticket_number} has been marked as priority — a senior team member will respond here shortly.`
+                    : `I'm sorry we couldn't resolve this. Your ticket ${existingTicket[0].ticket_number} has been flagged for our team.\n\nThey'll respond here shortly.`
             );
             return;
         }
@@ -1443,7 +1499,7 @@ Your open ticket ${existingTicket[0].ticket_number} has been marked as priority 
 
         const smartSummary = smartEngine.buildEscalationSummary(context);
         const ticketMessage = [
-            `[PRIORITY — ${result.intent}${result.sentiment !== 'neutral' ? ` | sentiment: ${result.sentiment}` : ''}]`,
+            `[${isPriority ? 'PRIORITY' : 'STANDARD'} — ${result.intent}${result.sentiment !== 'neutral' ? ` | sentiment: ${result.sentiment}` : ''}]`,
             `Customer: "${(message || '').substring(0, 500)}"`,
             '',
             smartSummary ? `--- Conversation context ---\n${smartSummary}` : null
@@ -1465,14 +1521,12 @@ Your open ticket ${existingTicket[0].ticket_number} has been marked as priority 
 
         await instagramService.sendMessage(
             igUserId,
-            `We hear you, and we're truly sorry about this experience.
-
-I've flagged this as a priority — ticket ${ticketNumber}.
-
-A senior team member will respond right here shortly.`
+            isPriority
+                ? `We hear you, and we're truly sorry about this experience.\n\nI've flagged this as a priority — ticket ${ticketNumber}.\n\nA senior team member will respond right here shortly.`
+                : `I'm sorry about this experience. I've created ticket ${ticketNumber} so our team can look into it.\n\nThey'll respond here shortly.`
         );
 
-        console.log(`[IG BOT] Smart escalation ${ticketNumber} for ${igUserId} (${result.intent}, sentiment: ${result.sentiment})`);
+        console.log(`[IG BOT] Escalation ${ticketNumber} for ${igUserId} (${result.intent}, sentiment: ${result.sentiment}, priority: ${isPriority})`);
     }
 
     // ─── Creator / Business Flow ────────────────────────────────

@@ -491,6 +491,20 @@ class IGSmartEngine {
             bestScore = scores.spam;
         }
 
+        // 6b. Composite support signal override —
+        // When multiple support signals are present (complaint + problem +
+        // raised + dispute) and the winning intent is a routine action,
+        // override to complaint so the bot acknowledges the support issue
+        // instead of just showing a policy FAQ.
+        if (bestIntent !== 'sensitive_issue' && bestIntent !== 'spam') {
+            const supportSignals = this.detectSupportSignals(text);
+            if (supportSignals.supportRequired &&
+                ['return', 'exchange', 'refund', 'cancellation'].includes(bestIntent)) {
+                bestIntent = 'complaint';
+                bestScore = Math.max(bestScore, 6);
+            }
+        }
+
         const confidence = this._scoreToConfidence(bestScore, text);
 
         // 7. Intent switch detection
@@ -761,6 +775,62 @@ class IGSmartEngine {
      */
     _isSensitive(text) {
         return SENSITIVE_SIGNALS.some(signal => text.includes(signal));
+    }
+
+    /**
+     * Composite support signal detection.
+     * Scans for multiple support signals across 4 categories:
+     *   1. complaint  — explicit dissatisfaction
+     *   2. problem    — support/communication failure
+     *   3. raised     — action already taken
+     *   4. dispute    — policy disagreement
+     *
+     * Returns supportRequired: true when 2+ categories fire,
+     * OR when 1 category fires AND sentiment is angry/frustrated.
+     */
+    detectSupportSignals(text) {
+        const signals = { complaint: false, problem: false, raised: false, dispute: false };
+
+        // 1. Complaint signals — explicit dissatisfaction
+        const complaintKw = [
+            'disappointed', 'dissatisfied', 'unhappy', 'not acceptable',
+            'not good enough', 'terrible experience', 'worst experience',
+            'very poor', 'really bad', 'unfair'
+        ];
+        if (complaintKw.some(k => text.includes(k))) signals.complaint = true;
+
+        // 2. Support problem signals — communication failure
+        const problemKw = [
+            'no response', 'no reply', 'no one called', 'no contact',
+            'not responding', 'not replying', 'no one reached',
+            'no one contacted', 'ignored', 'being ignored', 'no support',
+            'nobody responded', 'nobody replied', 'no update'
+        ];
+        if (problemKw.some(k => text.includes(k))) signals.problem = true;
+
+        // 3. Already raised signals — action already completed
+        const raisedKw = [
+            'already raised', 'already done', 'already requested',
+            'already applied', 'already submitted', 'i have raised',
+            'i already raised', 'already initiated', 'already contacted'
+        ];
+        if (raisedKw.some(k => text.includes(k))) signals.raised = true;
+
+        // 4. Policy dispute signals — disagreement with rules
+        const disputeKw = [
+            'window is over', '2-day limit', 'two day limit',
+            'not fair', 'unfair policy', 'should allow', 'should be allowed',
+            'unreasonable', 'look into this', 'please look', 'please check',
+            'need help with', 'please help'
+        ];
+        if (disputeKw.some(k => text.includes(k))) signals.dispute = true;
+
+        const activeCount = Object.values(signals).filter(Boolean).length;
+        const sentiment = this._detectSentiment(text);
+        const supportRequired = activeCount >= 2 ||
+            (activeCount >= 1 && (sentiment === 'angry' || sentiment === 'frustrated'));
+
+        return { supportRequired, signals, activeCount };
     }
 
     _isCollectingState(state) {
