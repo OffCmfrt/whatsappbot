@@ -187,6 +187,26 @@ class FAQHandler {
 
 
 `
+            },
+            {
+                keywords: ['location', 'address', 'where are you', 'where is your store', 'store location', 'shop address', 'where located', 'physical store', 'office address'],
+                question: 'Where are you located?',
+                answer: `📍 *OFFCOMFRT — STORE LOCATION*
+
+▫️ We are an *online-only* store.
+
+▫️ *Website:* offcomfrt.in
+
+▫️ *WhatsApp Support:* Available 24/7
+
+▫️ *Business Hours:*
+▫️ Monday to Saturday: 10 AM to 7 PM IST
+▫️ Sunday: Closed
+
+▫️ We ship across India!
+
+
+`
             }
         ];
     }

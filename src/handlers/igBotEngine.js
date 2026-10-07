@@ -119,7 +119,21 @@ Care: Machine wash cold, tumble dry low`,
 Before Shipping: Free cancellation
 After Shipping: Cannot cancel (return after delivery instead)
 
-Send your Order ID and type "cancel" to proceed.`
+Send your Order ID and type "cancel" to proceed.`,
+
+    location: `OFFCOMFRT — STORE LOCATION
+
+We are an online-only store.
+
+Website: offcomfrt.in
+
+WhatsApp Support: Available 24/7
+
+Business Hours:
+  Monday to Saturday: 10 AM to 7 PM IST
+  Sunday: Closed
+
+We ship across India!`
 };
 
 // ─── Bot Engine Class ─────────────────────────────────────────
