@@ -158,6 +158,24 @@ class IGBotEngine {
             // ── 1. Classify via smart engine (context-aware) ──────
             const result = smartEngine.classify(cleanMessage, context);
 
+            // ── 1b. Structured observability logs (safe — no secrets) ──
+            const entities = result.entities || {};
+            console.log(
+                `[IG ENTITY] ` +
+                `order=${entities.orderId || entities.bareNumber ? 'present' : 'absent'} ` +
+                `awb=${entities.awb ? 'present' : 'absent'} ` +
+                `product=${entities.productName || context.lastProduct?.name ? 'present' : 'absent'} ` +
+                `size=${entities.size ? 'present' : 'absent'}`
+            );
+            console.log(
+                `[IG DECISION] ` +
+                `intent=${result.intent} ` +
+                `state=${currentState} ` +
+                `confidence=${result.confidence} ` +
+                `intentSwitch=${result.isIntentSwitch || false} ` +
+                `sentiment=${result.sentiment || 'neutral'}`
+            );
+
             // ── 2. Update conversation memory ─────────────────────
             context = smartEngine.updateContext(context, {
                 intent: result.intent,
@@ -288,6 +306,11 @@ class IGBotEngine {
             }
 
             // ── 4. Stateful flows (collecting order ID, creator info, etc.) ──
+            // BEFORE state handling: check for conversation intelligence intents
+            // that should override the current collecting state.
+            // This prevents the bot from ignoring "I already raised it" and
+            // re-asking for Order ID, or ignoring "no response on WhatsApp"
+            // and treating it as a non-answer.
             const stateHandled = await this._handleStateful(igUserId, cleanMessage, currentState, context, result);
             if (stateHandled) return;
 
@@ -636,6 +659,9 @@ class IGBotEngine {
             case 'size_question':
                 return await this._handleProductQuestion(igUserId, message, result, context);
 
+            case 'product_discovery':
+                return await this._handleProductDiscovery(igUserId, message, context);
+
             case 'delivery_issue':
             case 'damaged_product':
             case 'wrong_product':
@@ -647,6 +673,12 @@ class IGBotEngine {
             case 'complaint':
             case 'sensitive_issue':
                 return await this._handleSmartEscalation(igUserId, result, context, message);
+
+            case 'already_raised':
+                return await this._handleAlreadyRaised(igUserId, message, context);
+
+            case 'support_problem':
+                return await this._handleSupportProblem(igUserId, message, context);
 
             case 'faq':
                 return await this._handleUnknown(igUserId, message, context);
@@ -724,18 +756,40 @@ You can also find it in your order confirmation email.`
             return;
         }
 
-        // ── 1. Try local DB first ──────────────────────────────────
+        // ── 1. Try local DB first — EXACT match for explicit Order ID ──
+        // SAFETY: When customer provides an explicit Order ID, we MUST
+        // use exact match. Never use ILIKE wildcards that could return
+        // the wrong order (e.g., customer says "55310" but we return "58432").
         let order = null;
         try {
             const orders = await dbAdapter.query(
-                `SELECT * FROM orders
-                 WHERE order_id ILIKE ? OR awb ILIKE ?
-                 ORDER BY created_at DESC LIMIT 1`,
-                [`%${cleanOrderId}%`, `%${cleanOrderId}%`]
+                `SELECT * FROM orders WHERE order_id = ? LIMIT 1`,
+                [cleanOrderId]
             );
             order = orders?.[0] || null;
         } catch (e) {
             console.error('[IG BOT] Local order lookup error:', e.message);
+        }
+
+        // ── 1b. If exact match failed, try AWB lookup (separate path) ──
+        if (!order && /^[A-Z0-9]{8,15}$/i.test(cleanOrderId)) {
+            try {
+                const awbOrders = await dbAdapter.query(
+                    `SELECT * FROM orders WHERE awb = ? LIMIT 1`,
+                    [cleanOrderId]
+                );
+                order = awbOrders?.[0] || null;
+            } catch (e) {
+                console.error('[IG BOT] AWB lookup error:', e.message);
+            }
+        }
+
+        // ── 1c. Identity safety assertion ──
+        // If we found an order, verify it matches the requested Order ID.
+        // This prevents returning the wrong order due to data issues.
+        if (order && order.order_id !== cleanOrderId && order.awb !== cleanOrderId) {
+            console.error(`[IG BOT] ORDER ID MISMATCH: requested=${cleanOrderId}, returned=${order.order_id} — blocking response`);
+            order = null; // Block the response — don't show wrong order
         }
 
         // ── 2. If local DB found it, show complete status ──────────
@@ -748,10 +802,16 @@ You can also find it in your order confirmation email.`
         try {
             const srOrder = await shiprocketService.getOrderStatus(cleanOrderId);
             if (srOrder) {
-                await this._sendShiprocketOrderStatus(igUserId, srOrder);
-                // Also save to local DB for future fast lookups
-                await this._saveOrderToDB(srOrder);
-                return;
+                // SAFETY: Verify Shiprocket returned the correct order
+                const srOrderId = srOrder.channelOrderId || String(srOrder.orderId);
+                if (srOrderId !== cleanOrderId) {
+                    console.error(`[IG BOT] SHIPROCKET ORDER ID MISMATCH: requested=${cleanOrderId}, returned=${srOrderId} — blocking response`);
+                } else {
+                    await this._sendShiprocketOrderStatus(igUserId, srOrder);
+                    // Also save to local DB for future fast lookups
+                    await this._saveOrderToDB(srOrder);
+                    return;
+                }
             }
         } catch (e) {
             console.error('[IG BOT] Shiprocket order lookup error:', e.message);
@@ -955,16 +1015,35 @@ Item: ${productName}${otherItems}`;
 
         const cleanOrderId = (orderId || '').toString().trim();
 
-        // Look up the order (local DB first)
+        // Look up the order — EXACT match (never wildcard)
         let order = null;
         try {
             const orders = await dbAdapter.query(
-                `SELECT * FROM orders WHERE order_id ILIKE ? OR awb ILIKE ? ORDER BY created_at DESC LIMIT 1`,
-                [`%${cleanOrderId}%`, `%${cleanOrderId}%`]
+                `SELECT * FROM orders WHERE order_id = ? LIMIT 1`,
+                [cleanOrderId]
             );
             order = orders?.[0] || null;
         } catch (e) {
             console.error('[IG BOT] Return/exchange order lookup error:', e.message);
+        }
+
+        // AWB fallback (separate path)
+        if (!order && /^[A-Z0-9]{8,15}$/i.test(cleanOrderId)) {
+            try {
+                const awbOrders = await dbAdapter.query(
+                    `SELECT * FROM orders WHERE awb = ? LIMIT 1`,
+                    [cleanOrderId]
+                );
+                order = awbOrders?.[0] || null;
+            } catch (e) {
+                console.error('[IG BOT] Return/exchange AWB lookup error:', e.message);
+            }
+        }
+
+        // Identity safety assertion
+        if (order && order.order_id !== cleanOrderId && order.awb !== cleanOrderId) {
+            console.error(`[IG BOT] RETURN ORDER ID MISMATCH: requested=${cleanOrderId}, returned=${order.order_id} — blocking`);
+            order = null;
         }
 
         // If not found locally, try Shiprocket
@@ -972,14 +1051,19 @@ Item: ${productName}${otherItems}`;
             try {
                 const srOrder = await shiprocketService.getOrderStatus(cleanOrderId);
                 if (srOrder) {
-                    await this._sendShiprocketOrderStatus(igUserId, srOrder);
-                    await this._saveOrderToDB(srOrder);
-                    // Fetch the saved order for window check
-                    const savedOrders = await dbAdapter.query(
-                        `SELECT * FROM orders WHERE order_id = ? LIMIT 1`,
-                        [srOrder.channelOrderId || String(srOrder.orderId)]
-                    );
-                    order = savedOrders?.[0] || null;
+                    const srOrderId = srOrder.channelOrderId || String(srOrder.orderId);
+                    if (srOrderId !== cleanOrderId) {
+                        console.error(`[IG BOT] SHIPROCKET RETURN MISMATCH: requested=${cleanOrderId}, returned=${srOrderId} — blocking`);
+                    } else {
+                        await this._sendShiprocketOrderStatus(igUserId, srOrder);
+                        await this._saveOrderToDB(srOrder);
+                        // Fetch the saved order for window check
+                        const savedOrders = await dbAdapter.query(
+                            `SELECT * FROM orders WHERE order_id = ? LIMIT 1`,
+                            [srOrder.channelOrderId || String(srOrder.orderId)]
+                        );
+                        order = savedOrders?.[0] || null;
+                    }
                 }
             } catch (e) {
                 console.error('[IG BOT] Shiprocket lookup for return/exchange:', e.message);
@@ -1077,16 +1161,35 @@ Please share your Order ID so I can check your order details first.`
     async _handleProductIssueWithOrder(igUserId, orderId, context) {
         const cleanOrderId = (orderId || '').toString().trim();
 
-        // Look up the order
+        // Look up the order — EXACT match (never wildcard)
         let order = null;
         try {
             const orders = await dbAdapter.query(
-                `SELECT * FROM orders WHERE order_id ILIKE ? OR awb ILIKE ? ORDER BY created_at DESC LIMIT 1`,
-                [`%${cleanOrderId}%`, `%${cleanOrderId}%`]
+                `SELECT * FROM orders WHERE order_id = ? LIMIT 1`,
+                [cleanOrderId]
             );
             order = orders?.[0] || null;
         } catch (e) {
             console.error('[IG BOT] Product issue order lookup error:', e.message);
+        }
+
+        // AWB fallback (separate path)
+        if (!order && /^[A-Z0-9]{8,15}$/i.test(cleanOrderId)) {
+            try {
+                const awbOrders = await dbAdapter.query(
+                    `SELECT * FROM orders WHERE awb = ? LIMIT 1`,
+                    [cleanOrderId]
+                );
+                order = awbOrders?.[0] || null;
+            } catch (e) {
+                console.error('[IG BOT] Product issue AWB lookup error:', e.message);
+            }
+        }
+
+        // Identity safety assertion
+        if (order && order.order_id !== cleanOrderId && order.awb !== cleanOrderId) {
+            console.error(`[IG BOT] PRODUCT ISSUE ORDER ID MISMATCH: requested=${cleanOrderId}, returned=${order.order_id} — blocking`);
+            order = null;
         }
 
         // If order not found locally, try Shiprocket
@@ -1094,8 +1197,13 @@ Please share your Order ID so I can check your order details first.`
             try {
                 const srOrder = await shiprocketService.getOrderStatus(cleanOrderId);
                 if (srOrder) {
-                    await this._sendShiprocketOrderStatus(igUserId, srOrder);
-                    await this._saveOrderToDB(srOrder);
+                    const srOrderId = srOrder.channelOrderId || String(srOrder.orderId);
+                    if (srOrderId !== cleanOrderId) {
+                        console.error(`[IG BOT] SHIPROCKET PRODUCT ISSUE MISMATCH: requested=${cleanOrderId}, returned=${srOrderId} — blocking`);
+                    } else {
+                        await this._sendShiprocketOrderStatus(igUserId, srOrder);
+                        await this._saveOrderToDB(srOrder);
+                    }
                 }
             } catch (e) {
                 console.error('[IG BOT] Shiprocket lookup for product issue:', e.message);
@@ -1444,6 +1552,140 @@ They'll review and reply right here within 24-48 hours.`
             wholesale: 'wholesale',
             business_enquiry: 'business'
         }[intent] || 'general';
+    }
+
+    // ─── Conversation Intelligence Handlers ─────────────────────
+
+    /**
+     * Handle "already_raised" intent — customer is saying the action
+     * (return/exchange/request) was already completed.
+     * DO NOT restart the flow. Acknowledge and offer to check status.
+     */
+    async _handleAlreadyRaised(igUserId, message, context) {
+        // Reset any collecting state
+        await instagramService.setBotState(igUserId, STATES.IDLE, context);
+
+        // Check if we have an Order ID in context to check status
+        const orderId = context.entities?.orderId || context.entities?.bareNumber;
+
+        if (orderId) {
+            // We have an Order ID — check the status
+            await instagramService.sendMessage(
+                igUserId,
+                `Got it — your request has already been raised. Let me check the latest status for Order ${orderId}.`
+            );
+            await this._handleOrderTracking(igUserId, orderId);
+            return;
+        }
+
+        // No Order ID — acknowledge and ask for it to check status
+        await instagramService.sendMessage(
+            igUserId,
+            `Got it — your request has already been raised. I can check the latest status for you.
+
+Please share the Order ID and I'll look it up right away.`
+        );
+        // Don't set a collecting state — just wait for the Order ID
+        // If they send it, it will be classified as provide_order_id
+    }
+
+    /**
+     * Handle "support_problem" intent — customer is reporting a support
+     * communication problem (no response, no contact, etc.).
+     * DO NOT ignore this and re-ask for the same field.
+     */
+    async _handleSupportProblem(igUserId, message, context) {
+        // Reset any collecting state
+        await instagramService.setBotState(igUserId, STATES.IDLE, context);
+
+        // Check if there's an existing open ticket
+        const existingTicket = await dbAdapter.query(
+            `SELECT * FROM support_tickets
+             WHERE ig_user_id = ? AND status = 'open'
+             ORDER BY created_at DESC LIMIT 1`,
+            [igUserId]
+        );
+
+        if (existingTicket && existingTicket.length > 0) {
+            // Ticket exists — acknowledge and reassure
+            await instagramService.sendMessage(
+                igUserId,
+                `I understand your concern. Your ticket ${existingTicket[0].ticket_number} is still open and our team is reviewing it.
+
+They will respond here shortly. In the meantime, I can help you with order tracking, product questions, or anything else.`
+            );
+            return;
+        }
+
+        // No ticket — offer to help directly or create one
+        const orderId = context.entities?.orderId || context.entities?.bareNumber;
+
+        if (orderId) {
+            // We have an Order ID — offer to check status directly
+            await instagramService.sendMessage(
+                igUserId,
+                `I'm sorry about the delay. I can help you right now.
+
+Let me check your Order ${orderId} status.`
+            );
+            await this._handleOrderTracking(igUserId, orderId);
+            return;
+        }
+
+        // No ticket, no Order ID — offer support
+        await instagramService.sendMessage(
+            igUserId,
+            `I'm sorry about the experience. I'm here to help right now.
+
+If you share your Order ID, I can check the latest status for you. Or if you'd prefer to talk to our team, just let me know.`
+        );
+    }
+
+    /**
+     * Handle "product_discovery" intent — customer wants to browse products.
+     * Show featured products from the Shopify catalog.
+     */
+    async _handleProductDiscovery(igUserId, message, context) {
+        try {
+            const catalog = await shopifyService.getProductCatalog();
+            if (!catalog || catalog.length === 0) {
+                await instagramService.sendMessage(
+                    igUserId,
+                    'Our catalog is being updated right now. Please check back in a few minutes, or visit offcomfrt.in to browse all products.'
+                );
+                return;
+            }
+
+            // Show first 4 products as a sample
+            const featured = catalog.slice(0, 4);
+            let msg = `Here are some of our products:\n\n`;
+            featured.forEach((p, i) => {
+                const price = p.variants?.[0]?.price;
+                const priceStr = price ? ` — Rs.${price}` : '';
+                msg += `${i + 1}. ${p.title}${priceStr}\n`;
+            });
+            msg += `\nWant to know more about any product? Just type the name!`;
+
+            await instagramService.sendQuickReplies(
+                igUserId,
+                msg,
+                featured.map(p => ({
+                    title: p.title.length > 20 ? p.title.substring(0, 18) + '…' : p.title,
+                    payload: `product_pick_${p.id}`
+                }))
+            );
+
+            // Store as candidates so numeric selection works
+            context.pendingProductCandidates = featured.map(p => ({ id: p.id, name: p.title }));
+            await instagramService.setBotState(igUserId, STATES.IDLE, context);
+
+        } catch (error) {
+            console.error('[IG BOT] Product discovery error:', error.message);
+            await instagramService.sendMessage(
+                igUserId,
+                'Please visit offcomfrt.in to browse our full collection. Or type a product name like "Henley" or "Polo" and I\'t tell you more about it.'
+            );
+        }
     }
 
     // ─── Unknown / Fallback ─────────────────────────────────────

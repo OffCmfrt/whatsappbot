@@ -275,6 +275,60 @@ const INTENTS = {
             ['guaranteed profit', 6]
         ],
         description: 'Spam / promotional message'
+    },
+
+    // ── Conversation intelligence intents ─────────────────────
+    // These detect WHAT the customer is communicating rather than
+    // what they want the bot to do. Critical for preventing the bot
+    // from ignoring semantic meaning and blindly re-asking for fields.
+
+    already_raised: {
+        category: 'status',
+        keywords: [
+            ['already raised', 6], ['already raised it', 7], ['already done', 6],
+            ['already requested', 6.5], ['already submitted', 6.5],
+            ['already applied', 6], ['already initiated', 6.5],
+            ['raised within', 5], ['raised it within', 6],
+            ['already have raised', 7], ['have already raised', 7],
+            ['already put in', 5.5], ['already placed', 5],
+            ['done already', 5.5], ['request already', 6],
+            ['i have raised', 5.5], ['i already raised', 6.5],
+            ['i ve raised', 5.5], ['i have already', 5]
+        ],
+        description: 'Customer is saying the action was already completed'
+    },
+
+    support_problem: {
+        category: 'status',
+        keywords: [
+            ['no response', 5.5], ['no reply', 5], ['no one called', 6],
+            ['no contact', 5.5], ['no update', 4.5], ['no admin approval', 7],
+            ['no response on whatsapp', 8], ['no one responded', 6.5],
+            ['no one has called', 6.5], ['no one contacted', 6],
+            ['no contact has done', 7], ['still waiting', 4.5],
+            ['still no response', 7], ['still no reply', 6.5],
+            ['not responding', 5], ['not replying', 5],
+            ['no support', 5], ['whatsapp no response', 7.5],
+            ['no one reached out', 6.5], ['no callback', 5.5],
+            ['ignored', 3.5], ['being ignored', 5.5]
+        ],
+        description: 'Customer is reporting a support/communication problem'
+    },
+
+    product_discovery: {
+        category: 'support',
+        keywords: [
+            ['more products', 5.5], ['other products', 5], ['show products', 5.5],
+            ['browse products', 6], ['tell me about products', 7],
+            ['show me products', 6], ['what products', 5],
+            ['product catalog', 6], ['your products', 4.5],
+            ['all products', 5], ['new products', 5],
+            ['see products', 5], ['collection', 3.5],
+            ['your collection', 4.5], ['full range', 4.5],
+            ['what do you sell', 6], ['what all do you have', 5.5],
+            ['show me more', 4.5], ['anything else', 3]
+        ],
+        description: 'Customer wants to browse/discover products'
     }
 };
 
