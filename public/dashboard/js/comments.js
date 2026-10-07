@@ -220,59 +220,58 @@ window.CommentsCenter = (() => {
         body.innerHTML = `
             <div class="igc-detail-section">
                 <div class="igc-detail-label">Commenter</div>
-                <div class="igc-detail-item">
-                    ${profileLink
+                <div class="igc-detail-grid">
+                    <div class="igc-detail-item"><span class="igc-detail-key">Username</span><span class="igc-detail-val">${profileLink
                         ? `<a class="igc-link" href="${escapeHtml(profileLink)}" target="_blank" rel="noopener">${escapeHtml(username)}</a>`
-                        : escapeHtml(username)}
-                    <span class="igc-time"> · ID ${escapeHtml(c.ig_user_id || '—')}</span>
+                        : escapeHtml(username)}</span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">User ID</span><span class="igc-detail-val igc-mono">${escapeHtml(c.ig_user_id || '—')}</span></div>
                 </div>
             </div>
 
             <div class="igc-detail-section">
                 <div class="igc-detail-label">Comment</div>
                 <div class="igc-detail-quote">${escapeHtml(c.comment_text || '')}</div>
-                <div class="igc-time" style="margin-top:6px;">
-                    Comment ID: ${escapeHtml(c.comment_id || '—')}
-                    ${c.comment_timestamp ? ` · ${formatDate(c.comment_timestamp)}` : ''}
+                <div class="igc-detail-grid" style="margin-top:10px;">
+                    <div class="igc-detail-item"><span class="igc-detail-key">Comment ID</span><span class="igc-detail-val igc-mono">${escapeHtml(c.comment_id || '—')}</span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Posted</span><span class="igc-detail-val">${c.comment_timestamp ? formatDate(c.comment_timestamp) : '—'}</span></div>
                 </div>
             </div>
 
             <div class="igc-detail-section">
                 <div class="igc-detail-label">Post</div>
-                <div class="igc-detail-item">Media ID: ${escapeHtml(c.media_id || '—')}</div>
+                <div class="igc-detail-grid">
+                    <div class="igc-detail-item"><span class="igc-detail-key">Media ID</span><span class="igc-detail-val igc-mono">${escapeHtml(c.media_id || '—')}</span></div>
+                </div>
             </div>
 
             <div class="igc-detail-section">
                 <div class="igc-detail-label">Intelligence</div>
                 <div class="igc-detail-grid">
-                    <div class="igc-detail-item">Intent: <strong>${escapeHtml(intentLabel(c.detected_intent))}</strong></div>
-                    <div class="igc-detail-item">Confidence: <strong>${confidencePct(c.confidence)}</strong></div>
-                    <div class="igc-detail-item">Sentiment: <strong>${escapeHtml(c.sentiment || 'neutral')}</strong></div>
-                    <div class="igc-detail-item">Status: <span class="igc-badge ${status.cls}">${status.label}</span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Intent</span><span class="igc-detail-val"><strong>${escapeHtml(intentLabel(c.detected_intent))}</strong></span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Confidence</span><span class="igc-detail-val"><strong>${confidencePct(c.confidence)}</strong></span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Sentiment</span><span class="igc-detail-val"><strong>${escapeHtml(c.sentiment || 'neutral')}</strong></span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Status</span><span class="igc-detail-val"><span class="igc-badge ${status.cls}">${status.label}</span></span></div>
                 </div>
             </div>
 
             <div class="igc-detail-section">
                 <div class="igc-detail-label">Automation</div>
                 <div class="igc-detail-grid">
-                    <div class="igc-detail-item">Action: <strong>${escapeHtml(c.automation_action || 'none')}</strong></div>
-                    <div class="igc-detail-item">Public reply: <strong>${c.public_reply_sent ? 'Yes' : 'No'}</strong></div>
-                    <div class="igc-detail-item">Private reply: <strong>${c.private_reply_sent ? 'Yes' : 'No'}</strong></div>
-                    <div class="igc-detail-item">DM started: <strong>${c.dm_started ? 'Yes' : 'No'}</strong></div>
-                    <div class="igc-detail-item">Handled by: <strong>${escapeHtml(c.handled_by || '—')}</strong></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Action</span><span class="igc-detail-val"><strong>${escapeHtml(c.automation_action || 'none')}</strong></span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Public reply</span><span class="igc-detail-val"><strong>${c.public_reply_sent ? 'Yes' : 'No'}</strong></span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Private reply</span><span class="igc-detail-val"><strong>${c.private_reply_sent ? 'Yes' : 'No'}</strong></span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">DM started</span><span class="igc-detail-val"><strong>${c.dm_started ? 'Yes' : 'No'}</strong></span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Handled by</span><span class="igc-detail-val"><strong>${escapeHtml(c.handled_by || '—')}</strong></span></div>
                 </div>
             </div>
 
             <div class="igc-detail-section">
                 <div class="igc-detail-label">Linked Records</div>
                 <div class="igc-detail-grid">
-                    <div class="igc-detail-item">
-                        Ticket:
-                        ${c.ticket_number
-                            ? `<strong>${escapeHtml(c.ticket_number)}</strong> (${escapeHtml(c.ticket_status || 'open')})`
-                            : '<strong>None</strong>'}
-                    </div>
-                    <div class="igc-detail-item">Conversation: <strong>${c.conversation_id ? `#${c.conversation_id}` : 'None'}</strong></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Ticket</span><span class="igc-detail-val">${c.ticket_number
+                        ? `<strong>${escapeHtml(c.ticket_number)}</strong> <span class="igc-time">(${escapeHtml(c.ticket_status || 'open')})</span>`
+                        : '<strong>None</strong>'}</span></div>
+                    <div class="igc-detail-item"><span class="igc-detail-key">Conversation</span><span class="igc-detail-val"><strong>${c.conversation_id ? `#${c.conversation_id}` : 'None'}</strong></span></div>
                 </div>
             </div>
         `;
