@@ -499,7 +499,8 @@ class IGSmartEngine {
         if (bestIntent !== 'sensitive_issue' && bestIntent !== 'spam') {
             const supportSignals = this.detectSupportSignals(text);
             if (supportSignals.supportRequired &&
-                ['return', 'exchange', 'refund', 'cancellation'].includes(bestIntent)) {
+                ['return', 'exchange', 'refund', 'cancellation',
+                 'delivery_issue', 'damaged_product', 'wrong_product'].includes(bestIntent)) {
                 bestIntent = 'complaint';
                 bestScore = Math.max(bestScore, 6);
             }

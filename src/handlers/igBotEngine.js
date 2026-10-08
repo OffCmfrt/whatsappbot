@@ -760,20 +760,25 @@ class IGBotEngine {
                 return await this._handleGreeting(igUserId);
 
             case 'order_tracking':
-                // If they already included an order ID, track right away
-                if (result.entities.orderId || result.entities.awb) {
-                    return await this._handleOrderTracking(
-                        igUserId,
-                        result.entities.orderId || result.entities.awb
-                    );
+                // Resolve order ID: explicit entity → pronoun → verifiedOrderId → ask
+                {
+                    const resolvedOrderId = this._resolveKnownOrder(result, context, null);
+                    if (resolvedOrderId) {
+                        return await this._handleOrderTracking(igUserId, resolvedOrderId, context);
+                    }
+                    // Check if we have a verified order and message references it
+                    if (context.verifiedOrderId && /\b(it|the order|this order|my order|that order|same order|status|track)\b/i.test(message)) {
+                        return await this._handleOrderTracking(igUserId, context.verifiedOrderId, context);
+                    }
+                    return await this._askForOrderId(igUserId, 'tracking', context);
                 }
-                return await this._askForOrderId(igUserId, 'tracking');
 
             case 'provide_order_id':
-                return await this._handleOrderTracking(
-                    igUserId,
-                    result.entities.orderId || result.entities.awb || result.entities.bareNumber || message
-                );
+                {
+                    const resolvedId = this._resolveKnownOrder(result, context,
+                        result.entities.orderId || result.entities.awb || result.entities.bareNumber || message);
+                    return await this._handleOrderTracking(igUserId, resolvedId, context);
+                }
 
             case 'return':
                 return await this._handleReturn(igUserId, context);
@@ -870,6 +875,35 @@ What would you like help with?`,
         await instagramService.setBotState(igUserId, STATES.IDLE);
     }
 
+    /**
+     * Resolve the order ID for the current request.
+     * Priority:
+     *   1. Explicit order ID from entity extraction (customer just said it)
+     *   2. Pronoun reference ("it", "the order") → context.verifiedOrderId
+     *   3. Fallback value (raw message text, etc.)
+     *
+     * Returns null if no order reference can be resolved.
+     */
+    _resolveKnownOrder(result, context, fallback) {
+        // 1. Explicit order ID from current message entities
+        const explicitId = result?.entities?.orderId || result?.entities?.awb || result?.entities?.bareNumber;
+        if (explicitId) return explicitId;
+
+        // 2. Pronoun / anaphora resolution — "it", "the order", "this order"
+        //    → use the last verified order from context memory
+        const msg = (fallback || '').toLowerCase().trim();
+        const pronounPatterns = [
+            /\b(it|the order|this order|that order|my order|the same|same order)\b/i,
+            /^(it|this|that|the order|my order)$/i
+        ];
+        if (context?.verifiedOrderId && pronounPatterns.some(re => re.test(msg))) {
+            return context.verifiedOrderId;
+        }
+
+        // 3. Fallback (raw message text — used by some callers)
+        return fallback || null;
+    }
+
     // ─── Order Tracking ─────────────────────────────────────────
 
     async _askForOrderId(igUserId, flow, context = {}) {
@@ -883,7 +917,7 @@ What would you like help with?`,
         await instagramService.setBotState(igUserId, STATES.COLLECTING_ORDER_ID);
     }
 
-    async _handleOrderTracking(igUserId, orderId) {
+    async _handleOrderTracking(igUserId, orderId, context = {}) {
         // Reset state
         await instagramService.setBotState(igUserId, STATES.IDLE);
 
@@ -931,6 +965,9 @@ What would you like help with?`,
 
         // ── 2. If local DB found it, show complete status ──────────
         if (order) {
+            // Store verified order in context for pronoun resolution
+            context.verifiedOrderId = order.order_id;
+            await instagramService.setBotState(igUserId, STATES.IDLE, context);
             await this._sendCompleteOrderStatus(igUserId, order);
             return;
         }
@@ -947,6 +984,9 @@ What would you like help with?`,
                     await this._sendShiprocketOrderStatus(igUserId, srOrder);
                     // Also save to local DB for future fast lookups
                     await this._saveOrderToDB(srOrder);
+                    // Store verified order in context for pronoun resolution
+                    context.verifiedOrderId = srOrderId;
+                    await instagramService.setBotState(igUserId, STATES.IDLE, context);
                     return;
                 }
             }
@@ -1131,6 +1171,11 @@ Item: ${productName}${otherItems}`;
     // ─── Return / Exchange ──────────────────────────────────────
 
     async _handleReturn(igUserId, context = {}) {
+        // If we already have a verified order, skip asking for Order ID
+        if (context.verifiedOrderId) {
+            await this._handleReturnExchange(igUserId, context.verifiedOrderId, { ...context, flow: 'return' });
+            return;
+        }
         // Vary the prompt to avoid repetition
         const prompts = [
             IG_FAQ.return + '\n\nTo start your return, please share your Order ID.',
@@ -1143,6 +1188,11 @@ Item: ${productName}${otherItems}`;
     }
 
     async _handleExchange(igUserId, context = {}) {
+        // If we already have a verified order, skip asking for Order ID
+        if (context.verifiedOrderId) {
+            await this._handleReturnExchange(igUserId, context.verifiedOrderId, { ...context, flow: 'exchange' });
+            return;
+        }
         // Vary the prompt to avoid repetition
         const prompts = [
             IG_FAQ.exchange + '\n\nTo start your exchange, please share your Order ID.',
@@ -1223,6 +1273,10 @@ Item: ${productName}${otherItems}`;
             return;
         }
 
+        // Store verified order in context for pronoun resolution
+        context = { ...(context || {}), verifiedOrderId: order.order_id };
+        await instagramService.setBotState(igUserId, STATES.IDLE, context);
+
         // Show order details first
         await this._sendCompleteOrderStatus(igUserId, order);
 
@@ -1286,6 +1340,12 @@ Need help with the return process? Type "support" and our team will assist you.`
             damaged_product: 'damaged product',
             wrong_product: 'wrong item'
         }[intent] || 'issue';
+
+        // If we already have a verified order, skip asking for Order ID
+        if (context?.verifiedOrderId) {
+            await this._handleProductIssueWithOrder(igUserId, context.verifiedOrderId, context);
+            return;
+        }
 
         await instagramService.sendMessage(
             igUserId,
@@ -1371,7 +1431,8 @@ Please share your Order ID so I can check your order details first.`
         );
 
         // Set state to await description, with product_issue_resolution flow
-        context = { ...context, flow: 'product_issue_resolution' };
+        // Store verified order in context for pronoun resolution
+        context = { ...context, flow: 'product_issue_resolution', verifiedOrderId: cleanOrderId };
         await instagramService.setBotState(igUserId, STATES.AWAITING_SUPPORT_DESCRIPTION, context);
     }
 
@@ -1657,7 +1718,33 @@ They'll respond here shortly. Is there anything else I can help you with right n
                 : `I'm sorry about this experience. I've created ticket ${ticketNumber} so our team can look into it.\n\nThey'll respond here shortly.`
         );
 
+        // Store ticket context so the bot remembers the issue after escalation
+        const issueSummary = this._buildIssueSummary(result, context, message);
+        context = {
+            ...(context || {}),
+            openTicketId: ticketRows?.[0]?.id || null,
+            openTicketNumber: ticketNumber,
+            supportRequired: true,
+            issueStatus: 'escalated',
+            issueSummary: issueSummary,
+            relevantOrderId: context?.verifiedOrderId || null
+        };
+        await instagramService.setBotState(igUserId, STATES.IDLE, context);
+
         console.log(`[IG BOT] Escalation ${ticketNumber} for ${igUserId} (${result.intent}, sentiment: ${result.sentiment}, priority: ${isPriority})`);
+    }
+
+    /**
+     * Build a human-readable issue summary from the escalation context.
+     * Used in ticket acknowledgment and stored in context for continuity.
+     */
+    _buildIssueSummary(result, context, message) {
+        const parts = [];
+        if (context?.verifiedOrderId) parts.push(`Order ${context.verifiedOrderId}`);
+        if (result?.intent) parts.push(result.intent.replace(/_/g, ' '));
+        if (result?.sentiment && result.sentiment !== 'neutral') parts.push(`${result.sentiment} customer`);
+        if (message) parts.push(`"${message.substring(0, 80)}${message.length > 80 ? '...' : ''}"`);
+        return parts.join(' · ') || 'General support issue';
     }
 
     // ─── Creator / Business Flow ────────────────────────────────
@@ -1765,7 +1852,7 @@ They'll review and reply right here within 24-48 hours.`
         await instagramService.setBotState(igUserId, STATES.IDLE, context);
 
         // Check if we have an Order ID in context to check status
-        const orderId = context.entities?.orderId || context.entities?.bareNumber;
+        const orderId = context.verifiedOrderId || context.entities?.orderId || context.entities?.bareNumber;
 
         if (orderId) {
             // We have an Order ID — check the status
@@ -1773,11 +1860,27 @@ They'll review and reply right here within 24-48 hours.`
                 igUserId,
                 `Got it — your request has already been raised. Let me check the latest status for Order ${orderId}.`
             );
-            await this._handleOrderTracking(igUserId, orderId);
+            await this._handleOrderTracking(igUserId, orderId, context);
             return;
         }
 
-        // No Order ID — acknowledge and ask for it to check status
+        // Check for open support ticket
+        const existingTicket = await dbAdapter.query(
+            `SELECT * FROM support_tickets
+             WHERE ig_user_id = ? AND status = 'open'
+             ORDER BY created_at DESC LIMIT 1`,
+            [igUserId]
+        );
+
+        if (existingTicket && existingTicket.length > 0) {
+            await instagramService.sendMessage(
+                igUserId,
+                `I can see your request is already being reviewed under ticket ${existingTicket[0].ticket_number}.\n\nOur team will respond here within 24-48 hours. You don't need to raise it again.`
+            );
+            return;
+        }
+
+        // No Order ID and no ticket — acknowledge and ask for it to check status
         await instagramService.sendMessage(
             igUserId,
             `Got it — your request has already been raised. I can check the latest status for you.
