@@ -426,6 +426,12 @@ class IGBotEngine {
             // ── 5. Intent routing ─────────────────────────────────
             await this._routeIntent(igUserId, cleanMessage, result, context);
 
+            // ── 5b. Multi-intent: handle secondary intent if detected ──
+            // Only fires for safe secondaries (product questions, FAQ).
+            if (result._secondaryIntent) {
+                await this._handleSecondaryIntent(igUserId, cleanMessage, result, context);
+            }
+
         } catch (error) {
             console.error('[IG BOT] processMessage error:', error);
             // Don't let bot errors crash the webhook
@@ -839,6 +845,45 @@ class IGBotEngine {
                 }
                 return await this._handleUnknown(igUserId, message, context);
         }
+
+        // ── Multi-intent: handle secondary intent after primary ──
+        // Only safe secondaries are handled (product questions, FAQ).
+        // Support/escalation secondaries are skipped (primary already handled).
+    }
+
+    /**
+     * Handle a secondary intent detected by the classifier.
+     * Only safe, non-destructive secondaries are handled:
+     *   - product_question / size_question → answer product
+     *   - product_discovery → show products
+     *   - faq → try FAQ match
+     *
+     * Called after the primary intent handler completes.
+     */
+    async _handleSecondaryIntent(igUserId, message, result, context) {
+        const secondary = result._secondaryIntent;
+        if (!secondary) return;
+
+        const SAFE_SECONDARIES = ['product_question', 'size_question', 'product_discovery', 'faq'];
+        if (!SAFE_SECONDARIES.includes(secondary)) return;
+
+        // Small delay so the secondary response doesn't feel instant
+        await new Promise(r => setTimeout(r, 300));
+
+        console.log(`[IG BOT] Secondary intent: ${secondary} (from multi-intent message)`);
+
+        switch (secondary) {
+            case 'product_question':
+            case 'size_question':
+                await this._handleProductQuestion(igUserId, message, result, context);
+                break;
+            case 'product_discovery':
+                await this._handleProductDiscovery(igUserId, message, context);
+                break;
+            case 'faq':
+                await this._tryFAQMatch(message, igUserId);
+                break;
+        }
     }
 
     // ─── Greeting Handler ───────────────────────────────────────
@@ -907,6 +952,11 @@ What would you like help with?`,
     // ─── Order Tracking ─────────────────────────────────────────
 
     async _askForOrderId(igUserId, flow, context = {}) {
+        // Quality gate: if we already have a verified order, don't ask again
+        if (context.verifiedOrderId) {
+            return context.verifiedOrderId;
+        }
+
         const variations = [
             `Please send your Order ID (e.g., 54789) or AWB number.\n\nYou can find it in your order confirmation email.`,
             `Share your Order ID so I can look that up for you.\n\nIt's in your confirmation email — looks like 54789 or an AWB number.`,
@@ -1584,18 +1634,25 @@ Please describe your issue and I'll do my best to resolve it. If I can't, I'll c
 
         await instagramService.sendMessage(
             igUserId,
-            `OFFCOMFRT — SUPPORT
-
-Thank you, ${customerName}.
-
-Your ticket has been created.
-
-Ticket Number: ${ticketNumber}
-
-Our team will respond within 24 hours.
-
-You can continue messaging us here for updates.`
+            `OFFCOMFRT — SUPPORT\n\nThank you, ${customerName}.\n\nYour ticket has been created.\n\nTicket Number: ${ticketNumber}\n\nOur team will respond within 24 hours.\n\nYou can continue messaging us here for updates.`
         );
+
+        // Store ticket context so the bot remembers after ticket creation
+        const issueSummary = this._buildIssueSummary(
+            { intent: context.flow || 'support', sentiment: 'neutral' },
+            context,
+            description
+        );
+        context = {
+            ...(context || {}),
+            openTicketId: ticketRows?.[0]?.id || null,
+            openTicketNumber: ticketNumber,
+            supportRequired: true,
+            issueStatus: 'ticket_created',
+            issueSummary: issueSummary,
+            relevantOrderId: context?.verifiedOrderId || null
+        };
+        await instagramService.setBotState(igUserId, STATES.IDLE, context);
 
         console.log(`[IG BOT] Created support ticket ${ticketNumber} for IG user ${igUserId}`);
     }
@@ -1920,17 +1977,15 @@ They will respond here shortly. In the meantime, I can help you with order track
         }
 
         // No ticket — offer to help directly or create one
-        const orderId = context.entities?.orderId || context.entities?.bareNumber;
+        const orderId = context.verifiedOrderId || context.entities?.orderId || context.entities?.bareNumber;
 
         if (orderId) {
             // We have an Order ID — offer to check status directly
             await instagramService.sendMessage(
                 igUserId,
-                `I'm sorry about the delay. I can help you right now.
-
-Let me check your Order ${orderId} status.`
+                `I'm sorry about the delay. I can help you right now.\n\nLet me check your Order ${orderId} status.`
             );
-            await this._handleOrderTracking(igUserId, orderId);
+            await this._handleOrderTracking(igUserId, orderId, context);
             return;
         }
 

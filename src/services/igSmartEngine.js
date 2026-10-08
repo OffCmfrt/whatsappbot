@@ -46,7 +46,13 @@ const INTENTS = {
             ['track my order', 5.5], ['awb', 4], ['shipment status', 4.5],
             ['delivery status', 4], ['where my order', 5.5],
             ['when will my order', 4.5], ['order update', 3.5],
-            ['still not received', 4], ['not received yet', 4]
+            ['still not received', 4], ['not received yet', 4],
+            // Hinglish variants
+            ['mera order kahan hai', 6], ['order kahan hai', 5.5],
+            ['track karo', 5], ['tracking karo', 5],
+            ['order ka status', 5], ['order nahi mila', 5],
+            ['kab tak milega', 4.5], ['kitna time lagega', 4.5],
+            ['mera packet kahan hai', 5.5], ['parcel kahan hai', 5]
         ],
         description: 'User wants to track an order'
     },
@@ -56,7 +62,10 @@ const INTENTS = {
             ['return', 3], ['returns', 3], ['money back', 4.5],
             ['return policy', 5], ['want to return', 5.5],
             ['initiate return', 5.5], ['send it back', 4],
-            ['send back', 3.5], ['return request', 5]
+            ['send back', 3.5], ['return request', 5],
+            // Hinglish variants
+            ['return karna hai', 5.5], ['wapas karna hai', 5],
+            ['return karo', 5], ['wapasi', 4], ['wapas', 3.5]
         ],
         description: 'User wants to return a product'
     },
@@ -66,7 +75,11 @@ const INTENTS = {
             ['exchange', 3], ['size change', 4.5], ['wrong size', 4.5],
             ['different size', 4], ['swap', 3], ['size exchange', 5],
             ['exchange policy', 5], ['want to exchange', 5.5],
-            ['replace', 2.5], ['replacement', 3]
+            ['replace', 2.5], ['replacement', 3],
+            // Hinglish variants
+            ['exchange karna hai', 5.5], ['badalna hai', 4.5],
+            ['size badalna hai', 5.5], ['exchange karo', 5],
+            ['replace karna hai', 5]
         ],
         description: 'User wants to exchange a product'
     },
@@ -75,7 +88,11 @@ const INTENTS = {
         keywords: [
             ['refund', 4], ['refunded', 4.5], ['money not received', 5],
             ['refund status', 5], ['when refund', 4.5],
-            ['credit not received', 4.5], ['my money', 2]
+            ['credit not received', 4.5], ['my money', 2],
+            // Hinglish variants
+            ['paisa wapas', 5], ['paise wapas', 5], ['refund karo', 5],
+            ['refund nahi aaya', 5.5], ['paisa nahi mila', 5],
+            ['money wapas', 4.5]
         ],
         description: 'User asking about refund status'
     },
@@ -87,7 +104,11 @@ const INTENTS = {
             ['no update', 3], ['where is my package', 6],
             ['package lost', 6], ['lost package', 6], ['missing order', 5.5],
             ['never arrived', 5.5], ['not arrived', 5],
-            ['late', 3], ['order is late', 5], ['too late', 3.5]
+            ['late', 3], ['order is late', 5], ['too late', 3.5],
+            // Hinglish variants
+            ['order nahi aaya', 5.5], ['delivery nahi hui', 5.5],
+            ['packet nahi aaya', 5], ['parcel nahi aaya', 5],
+            ['abhi tak nahi mila', 5], ['der ho gayi', 4.5]
         ],
         description: 'Delivery problem reported'
     },
@@ -117,7 +138,11 @@ const INTENTS = {
             ['shipping', 3], ['shipping cost', 5], ['shipping charge', 5],
             ['delivery time', 5], ['how long', 2.5], ['how many days', 4],
             ['shipping time', 5], ['dispatch', 3.5], ['courier', 2.5],
-            ['delivery charge', 4.5], ['free shipping', 4.5]
+            ['delivery charge', 4.5], ['free shipping', 4.5],
+            // Hinglish variants
+            ['kitne din mein milega', 5.5], ['kab tak aayega', 5],
+            ['shipping kab hogi', 5], ['delivery kab tak', 5],
+            ['kitne din lagenge', 5], ['bhejne mein kitna time', 5]
         ],
         description: 'User asking about shipping'
     },
@@ -136,7 +161,11 @@ const INTENTS = {
         keywords: [
             ['cancel', 4], ['cancellation', 4.5], ['cancel order', 5.5],
             ['cancel my order', 6], ["don't want", 4], ['dont want', 4],
-            ['stop the order', 5]
+            ['stop the order', 5],
+            // Hinglish variants
+            ['cancel karo', 5.5], ['cancel karna hai', 5.5],
+            ['order cancel', 5], ['order mat bhejo', 5],
+            ['cancel chahiye', 5]
         ],
         description: 'User wants to cancel'
     },
@@ -153,7 +182,12 @@ const INTENTS = {
             ['price', 3], ['cost', 3], ['how much', 5],
             ['rate', 2.5], ['mrp', 3.5], ['charges', 2.5],
             ['send link', 4.5], ['product link', 5], ['link', 1.5],
-            ['available in', 3], ['in stock', 3.5], ['stock', 2]
+            ['available in', 3], ['in stock', 3.5], ['stock', 2],
+            // Hinglish variants
+            ['product ka price', 5.5], ['kitne ka hai', 5],
+            ['price kya hai', 5], ['rate kya hai', 5],
+            ['product kaisa hai', 5], ['kapda kaisa hai', 5],
+            ['colour mein kya hai', 5], ['size mein kya hai', 5]
         ],
         description: 'Product detail question'
     },
@@ -239,7 +273,11 @@ const INTENTS = {
             ['support', 2], ['agent', 3.5], ['human', 4], ['real person', 5],
             ['talk to someone', 5.5], ['customer care', 5.5],
             ['customer service', 5.5], ['contact support', 5.5],
-            ['speak to', 3], ['help me', 2.5], ['need help', 3]
+            ['speak to', 3], ['help me', 2.5], ['need help', 3],
+            // Hinglish variants
+            ['madad karo', 5], ['help chahiye', 5], ['madad chahiye', 5],
+            ['koi hai', 4], ['baat karni hai', 4.5],
+            ['insaan se baat', 5.5], ['team se baat', 5]
         ],
         description: 'User wants human support'
     },
@@ -310,7 +348,11 @@ const INTENTS = {
             ['not responding', 5], ['not replying', 5],
             ['no support', 5], ['whatsapp no response', 7.5],
             ['no one reached out', 6.5], ['no callback', 5.5],
-            ['ignored', 3.5], ['being ignored', 5.5]
+            ['ignored', 3.5], ['being ignored', 5.5],
+            // Hinglish variants
+            ['koi jawab nahi', 6.5], ['koi response nahi', 6],
+            ['koi call nahi aaya', 6.5], ['koi baat nahi ki', 6],
+            ['koi madad nahi', 6], ['koi update nahi', 5.5]
         ],
         description: 'Customer is reporting a support/communication problem'
     },
@@ -326,7 +368,11 @@ const INTENTS = {
             ['see products', 5], ['collection', 3.5],
             ['your collection', 4.5], ['full range', 4.5],
             ['what do you sell', 6], ['what all do you have', 5.5],
-            ['show me more', 4.5], ['anything else', 3]
+            ['show me more', 4.5], ['anything else', 3],
+            // Hinglish variants
+            ['aur products', 5.5], ['aur dikhao', 5], ['koi aur product', 5.5],
+            ['saare products', 5], ['aur kya hai', 5],
+            ['kya kya hai', 4.5], ['sab dikhao', 5]
         ],
         description: 'Customer wants to browse/discover products'
     }
@@ -523,7 +569,7 @@ class IGSmartEngine {
             };
         }
 
-        return {
+        const result = {
             intent: bestIntent,
             category: INTENTS[bestIntent]?.category || 'human',
             confidence,
@@ -533,6 +579,73 @@ class IGSmartEngine {
             needsClarification:
                 confidence < CONFIDENCE.MEDIUM && bestIntent === 'unknown'
         };
+
+        // 9. Multi-intent detection — find a secondary intent if present.
+        //    Example: "My order is wrong and I want an exchange. Also is the
+        //    black one available?" → primary: exchange, secondary: product_question
+        const secondary = this._detectSecondaryIntent(text, bestIntent, entities);
+        if (secondary) {
+            result._secondaryIntent = secondary.intent;
+            result._secondaryConfidence = secondary.confidence;
+        }
+
+        return result;
+    }
+
+    /**
+     * Detect a secondary intent in the same message after the primary intent
+     * has been chosen. Strips primary intent keywords and re-scores.
+     *
+     * Only returns a secondary if:
+     *   - Confidence >= MEDIUM
+     *   - Different category from primary (or clearly distinct intent)
+     *   - Not unknown/spam/greeting (those are never useful secondaries)
+     *
+     * @returns {{ intent: string, confidence: number } | null}
+     */
+    _detectSecondaryIntent(text, primaryIntent, primaryEntities) {
+        // Strip primary intent's matched keywords from text to isolate
+        // the remaining semantic content for secondary scoring.
+        const primaryKeywords = INTENTS[primaryIntent]?.keywords || [];
+        let stripped = text;
+        for (const [kw] of primaryKeywords) {
+            stripped = stripped.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), ' ');
+        }
+
+        // Also strip common connector/filler words that don't carry intent
+        stripped = stripped
+            .replace(/\b(also|and|plus|additionally|another|one more|as well|too|moreover|besides)\b/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        // Need at least 4 characters of remaining text to be meaningful
+        if (stripped.length < 4) return null;
+
+        // Re-score the stripped text
+        const scores = this._scoreIntents(stripped);
+
+        // Find the best secondary (excluding the primary and non-useful intents)
+        const EXCLUDE_SECONDARY = new Set([
+            primaryIntent, 'unknown', 'spam', 'greeting', 'positive_message',
+            'sensitive_issue', 'complaint' // complaint is handled by composite override
+        ]);
+
+        let bestSecondary = null;
+        let bestScore = 0;
+        for (const [intentName, score] of Object.entries(scores)) {
+            if (EXCLUDE_SECONDARY.has(intentName)) continue;
+            if (score > bestScore && score >= 2) { // minimum threshold (lowered for multi-word messages)
+                bestScore = score;
+                bestSecondary = intentName;
+            }
+        }
+
+        if (!bestSecondary) return null;
+
+        const conf = this._scoreToConfidence(bestScore, stripped);
+        if (conf < CONFIDENCE.MEDIUM) return null;
+
+        return { intent: bestSecondary, confidence: conf };
     }
 
     // ── Entity Extraction ────────────────────────────────────
