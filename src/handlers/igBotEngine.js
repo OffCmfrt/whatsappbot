@@ -136,6 +136,71 @@ Business Hours:
 We ship across India!`
 };
 
+// ─── Instagram-only Hardcoded FAQ List ─────────────────────────
+// Used by _matchIGFAQ() — does NOT query automation_config table.
+// This ensures Instagram FAQ works even when the table is missing.
+// Content is Instagram-formatted (no WhatsApp markdown asterisks).
+const IG_FAQ_LIST = [
+    {
+        keywords: ['return', 'refund', 'money back', 'return policy'],
+        answer: IG_FAQ.return
+    },
+    {
+        keywords: ['exchange', 'size change', 'wrong size', 'different size', 'size exchange'],
+        answer: IG_FAQ.exchange
+    },
+    {
+        keywords: ['shipping', 'delivery', 'how long', 'when will i get', 'delivery time', 'shipping time'],
+        answer: IG_FAQ.shipping
+    },
+    {
+        keywords: ['payment', 'pay', 'cod', 'cash on delivery', 'payment methods', 'upi'],
+        answer: IG_FAQ.payment
+    },
+    {
+        keywords: ['quality', 'material', 'fabric', 'cotton', 'what is it made of'],
+        answer: IG_FAQ.product_info
+    },
+    {
+        keywords: ['track', 'tracking', 'where is my order', 'order status', 'awb'],
+        answer: `Send your Order ID (e.g., 54789) and I'll show you:\n  • Current status\n  • Location\n  • Courier name\n  • Expected delivery date\n  • Tracking link`
+    },
+    {
+        keywords: ['cancel', 'cancellation', 'cancel order', 'dont want'],
+        answer: IG_FAQ.cancellation
+    },
+    {
+        keywords: ['discount', 'offer', 'coupon', 'promo code', 'sale'],
+        answer: `OFFCOMFRT — CURRENT OFFERS\n\nFirst Order: 10% off (Code: FIRST10)\nOrders above Rs.1999: 15% off\nFree shipping on Rs.999 and above`
+    },
+    {
+        keywords: ['contact', 'customer care', 'phone number', 'support'],
+        answer: `CONTACT SUPPORT\n\nWhatsApp: Available 24/7\nResponse Time: Within 24 hours\nBusiness Hours: Mon-Sat 10 AM to 7 PM IST\n\nI can help with:\n  • Order tracking\n  • Returns & exchanges\n  • Product questions\n  • Size guidance`
+    },
+    {
+        keywords: ['location', 'address', 'where are you', 'where is your store', 'store location', 'shop address', 'where located', 'physical store', 'office address', 'where are u'],
+        answer: IG_FAQ.location
+    }
+];
+
+/**
+ * Match a message against the Instagram-only hardcoded FAQ list.
+ * Does NOT query automation_config — safe even when the table is missing.
+ * @param {string} message
+ * @returns {object|null} matched FAQ entry or null
+ */
+function _matchIGFAQ(message) {
+    const lower = (message || '').toLowerCase();
+    for (const faq of IG_FAQ_LIST) {
+        for (const keyword of faq.keywords) {
+            if (lower.includes(keyword)) {
+                return faq;
+            }
+        }
+    }
+    return null;
+}
+
 // ─── Bot Engine Class ─────────────────────────────────────────
 
 class IGBotEngine {
@@ -290,7 +355,8 @@ class IGBotEngine {
                     'product_question', 'order_tracking', 'provide_order_id',
                     'faq', 'return', 'exchange', 'shipping', 'payment',
                     'cancellation', 'refund', 'greeting', 'positive_message',
-                    'size_question', 'stock_check', 'product_link'
+                    'size_question', 'stock_check', 'product_link',
+                    'already_raised', 'support_problem', 'product_discovery'
                 ];
                 if (AUTOMATABLE_INTENTS.includes(result.intent) || result.intent === 'unknown') {
                     // Automatable intent OR unknown (which may resolve via catalog
@@ -311,10 +377,39 @@ class IGBotEngine {
                             );
                         } catch (e) { /* best-effort */ }
                     }
-                    await instagramService.sendMessage(
-                        igUserId,
-                        'Got it — our team is reviewing your issue and will respond here shortly.'
-                    );
+
+                    // Detect if user is repeating the same question —
+                    // check if the last few summary entries are similar to current message
+                    const recentSummary = (context.summary || []).slice(-3).join(' ').toLowerCase();
+                    const currentLower = cleanMessage.toLowerCase();
+                    const isRepeating = recentSummary.includes(currentLower.substring(0, 20)) ||
+                                        (currentLower.length > 10 && recentSummary.includes(currentLower.substring(0, 15)));
+
+                    // Vary the acknowledgment — never send the same message twice
+                    let ackMessage;
+                    if (isRepeating) {
+                        // User is repeating — politely ask them to wait
+                        const waitMessages = [
+                            `I understand this is important to you. Our team already has your message and is working on it — they'll respond here very soon.`,
+                            `I hear you. Your concern has been shared with our team and they'll get back to you shortly. Thank you for your patience.`,
+                            `Got it — I know you've already shared this. Our team is on it and will update you here shortly.`,
+                            `I understand your frustration. The team has all the details and will respond here soon — we appreciate your patience.`
+                        ];
+                        // Pick based on message count to vary
+                        const msgCount = (context.messageCount || 0) % waitMessages.length;
+                        ackMessage = waitMessages[msgCount];
+                    } else {
+                        const ackVariations = [
+                            `Got it — I've added this to your ticket. Our team will respond here shortly.`,
+                            `Thanks for sharing. I've passed this along — the team will update you here soon.`,
+                            `Noted. Your message has been added to the conversation — someone will be with you shortly.`,
+                            `Understood. Our team has this information and will get back to you here.`
+                        ];
+                        const msgCount = (context.messageCount || 0) % ackVariations.length;
+                        ackMessage = ackVariations[msgCount];
+                    }
+
+                    await instagramService.sendMessage(igUserId, ackMessage);
                     return;
                 }
             }
@@ -377,10 +472,31 @@ class IGBotEngine {
                 } catch (e) { /* best-effort */ }
             }
 
-            await instagramService.sendMessage(
-                igUserId,
-                'Got it — our team has this conversation and will update you right here shortly.'
-            );
+            // Detect repetition — check if user is saying the same thing
+            const recentSummary = (context.summary || []).slice(-3).join(' ').toLowerCase();
+            const currentLower = message.toLowerCase();
+            const isRepeating = recentSummary.includes(currentLower.substring(0, 20)) ||
+                                (currentLower.length > 10 && recentSummary.includes(currentLower.substring(0, 15)));
+
+            // Vary the acknowledgment
+            let ackMessage;
+            if (isRepeating) {
+                const waitMessages = [
+                    `I understand — our team already has this and will respond here very soon.`,
+                    `I hear you. The team is working on it and will update you shortly.`,
+                    `Got it — I know you've shared this. The team will be with you soon.`
+                ];
+                ackMessage = waitMessages[(context.messageCount || 0) % waitMessages.length];
+            } else {
+                const ackVariations = [
+                    `Got it — our team has this conversation and will update you right here shortly.`,
+                    `Thanks for the details. The team will respond here soon.`,
+                    `Noted — I've added this to your ticket. Someone will be with you shortly.`
+                ];
+                ackMessage = ackVariations[(context.messageCount || 0) % ackVariations.length];
+            }
+
+            await instagramService.sendMessage(igUserId, ackMessage);
             return true; // handled — stay waiting
         }
 
@@ -416,7 +532,7 @@ class IGBotEngine {
                 }
                 // New intent detected — switch instead of re-asking
                 if (this._isNewIntent(result)) {
-                    if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId);
+                    if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId, context);
                     await this._routeIntent(igUserId, message, result, context);
                     return true;
                 }
@@ -437,7 +553,7 @@ class IGBotEngine {
                 }
                 // New intent detected — switch instead of re-asking
                 if (this._isNewIntent(result)) {
-                    if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId);
+                    if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId, context);
                     await this._routeIntent(igUserId, message, result, context);
                     return true;
                 }
@@ -455,7 +571,7 @@ class IGBotEngine {
             case STATES.AWAITING_SUPPORT_DESCRIPTION:
                 // New intent detected — switch instead of treating as description
                 if (this._isNewIntent(result)) {
-                    if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId);
+                    if (result.isIntentSwitch) await this._acknowledgeSwitch(igUserId, context);
                     await this._routeIntent(igUserId, message, result, context);
                     return true;
                 }
@@ -508,7 +624,7 @@ class IGBotEngine {
                     const freshContext = { ...context, state: STATES.IDLE };
                     const freshResult = smartEngine.classify(message, freshContext);
                     if (this._isNewIntent(freshResult) && freshResult.intent !== 'provide_creator_info') {
-                        if (freshResult.isIntentSwitch) await this._acknowledgeSwitch(igUserId);
+                        if (freshResult.isIntentSwitch) await this._acknowledgeSwitch(igUserId, context);
                         await this._routeIntent(igUserId, message, freshResult, context);
                         return true;
                     }
@@ -524,9 +640,17 @@ class IGBotEngine {
 
     /**
      * Brief acknowledgment when the user switches topics mid-flow.
+     * Varies the message to avoid repetition.
      */
-    async _acknowledgeSwitch(igUserId) {
-        await instagramService.sendMessage(igUserId, "No problem — let's take care of that instead.");
+    async _acknowledgeSwitch(igUserId, context = {}) {
+        const variations = [
+            "No problem — let's take care of that instead.",
+            "Sure — let me help you with that.",
+            "Understood — switching gears.",
+            "Got it — let's handle that for you."
+        ];
+        const idx = (context.messageCount || 0) % variations.length;
+        await instagramService.sendMessage(igUserId, variations[idx]);
     }
 
     /**
@@ -652,10 +776,10 @@ class IGBotEngine {
                 );
 
             case 'return':
-                return await this._handleReturn(igUserId);
+                return await this._handleReturn(igUserId, context);
 
             case 'exchange':
-                return await this._handleExchange(igUserId);
+                return await this._handleExchange(igUserId, context);
 
             case 'refund':
                 return await this._sendFAQ(igUserId, 'refund');
@@ -748,15 +872,14 @@ What would you like help with?`,
 
     // ─── Order Tracking ─────────────────────────────────────────
 
-    async _askForOrderId(igUserId, flow) {
-        await instagramService.sendMessage(
-            igUserId,
-            `Track Your Order
-
-Please send your Order ID (e.g., ORD-2024-001) or AWB number.
-
-You can also find it in your order confirmation email.`
-        );
+    async _askForOrderId(igUserId, flow, context = {}) {
+        const variations = [
+            `Please send your Order ID (e.g., 54789) or AWB number.\n\nYou can find it in your order confirmation email.`,
+            `Share your Order ID so I can look that up for you.\n\nIt's in your confirmation email — looks like 54789 or an AWB number.`,
+            `I'll need your Order ID to check that.\n\nYou'll find it in your order confirmation email.`
+        ];
+        const idx = (context.messageCount || 0) % variations.length;
+        await instagramService.sendMessage(igUserId, variations[idx]);
         await instagramService.setBotState(igUserId, STATES.COLLECTING_ORDER_ID);
     }
 
@@ -1007,19 +1130,27 @@ Item: ${productName}${otherItems}`;
 
     // ─── Return / Exchange ──────────────────────────────────────
 
-    async _handleReturn(igUserId) {
-        await instagramService.sendMessage(
-            igUserId,
-            IG_FAQ.return + '\n\nTo start a return, please send your Order ID.'
-        );
+    async _handleReturn(igUserId, context = {}) {
+        // Vary the prompt to avoid repetition
+        const prompts = [
+            IG_FAQ.return + '\n\nTo start your return, please share your Order ID.',
+            IG_FAQ.return + '\n\nShare your Order ID and I\'ll get the return started.',
+            IG_FAQ.return + '\n\nWhat\'s your Order ID? I\'ll help you with the return.'
+        ];
+        const idx = (context.messageCount || 0) % prompts.length;
+        await instagramService.sendMessage(igUserId, prompts[idx]);
         await instagramService.setBotState(igUserId, STATES.AWAITING_RETURN_ORDER_ID, { flow: 'return' });
     }
 
-    async _handleExchange(igUserId) {
-        await instagramService.sendMessage(
-            igUserId,
-            IG_FAQ.exchange + '\n\nTo start an exchange, please send your Order ID.'
-        );
+    async _handleExchange(igUserId, context = {}) {
+        // Vary the prompt to avoid repetition
+        const prompts = [
+            IG_FAQ.exchange + '\n\nTo start your exchange, please share your Order ID.',
+            IG_FAQ.exchange + '\n\nShare your Order ID and I\'ll get the exchange started.',
+            IG_FAQ.exchange + '\n\nWhat\'s your Order ID? I\'ll help you with the exchange.'
+        ];
+        const idx = (context.messageCount || 0) % prompts.length;
+        await instagramService.sendMessage(igUserId, prompts[idx]);
         await instagramService.setBotState(igUserId, STATES.AWAITING_RETURN_ORDER_ID, { flow: 'exchange' });
     }
 
@@ -1826,11 +1957,23 @@ If you share your Order ID, I can check the latest status for you. Or if you'd p
     }
 
     /**
-     * Try to match the message against the existing FAQ handler.
-     * Reuses the same FAQ knowledge base as WhatsApp (read-only).
+     * Try to match the message against the Instagram-only FAQ list.
+     * Uses hardcoded IG_FAQ_LIST first (no DB query) — safe even when
+     * automation_config table is missing.
+     *
+     * Only falls back to faqHandler.matchFAQ() if IG list has no match,
+     * and even then, the DB error is caught silently.
      */
     async _tryFAQMatch(message, igUserId) {
         try {
+            // 1. Instagram-only hardcoded FAQ (no DB query)
+            const igMatch = _matchIGFAQ(message);
+            if (igMatch) {
+                await instagramService.sendMessage(igUserId, igMatch.answer);
+                return true;
+            }
+
+            // 2. Fallback to shared FAQ handler (may hit DB — caught if fails)
             const faqHandler = require('./faqHandler');
             const match = await faqHandler.matchFAQ(message);
             if (match) {
@@ -1843,6 +1986,8 @@ If you share your Order ID, I can check the latest status for you. Or if you'd p
             }
             return false;
         } catch (e) {
+            // FAQ handler errors (including automation_config missing) are
+            // caught silently — Instagram FAQ still works via IG_FAQ_LIST above.
             return false;
         }
     }
@@ -2117,9 +2262,31 @@ If you share your Order ID, I can check the latest status for you. Or if you'd p
      * Extract a product name from the customer message.
      * Strips question words and price-related keywords to isolate
      * the product reference.
+     *
+     * IMPORTANT: Generic words (hello, faq, help, return, exchange, etc.)
+     * must NEVER become product entities. They are filtered by the blocklist.
      */
     _extractProductName(message, context) {
         if (!message) return null;
+
+        // ── Blocklist: words that must NEVER be treated as product names ──
+        // These are greetings, meta-words, intent keywords, and generic terms
+        // that should never trigger a Shopify catalog search.
+        const PRODUCT_BLOCKLIST = new Set([
+            // Greetings
+            'hello', 'hi', 'hey', 'hellooo', 'heyy', 'hii', 'hiii', 'yo', 'sup',
+            // FAQ / meta
+            'faq', 'help', 'support', 'menu', 'options', 'start', 'begin',
+            // Intent words (never products)
+            'return', 'exchange', 'refund', 'tracking', 'track', 'cancel', 'cancellation',
+            'shipping', 'delivery', 'payment', 'location', 'address', 'contact',
+            'order', 'orders', 'status', 'issue', 'problem', 'complaint',
+            // Generic conversational
+            'thanks', 'thank', 'ok', 'okay', 'sure', 'yes', 'no', 'nope', 'yep', 'yeah',
+            'please', 'sorry', 'cool', 'great', 'nice', 'good', 'bad', 'worst', 'best',
+            // Question words that might survive stripping
+            'who', 'when', 'where', 'why', 'which', 'what', 'how'
+        ]);
 
         // Strip common question patterns to get the product name
         let cleaned = message
@@ -2142,6 +2309,26 @@ If you share your Order ID, I can check the latest status for you. Or if you'd p
         cleaned = cleaned
             .replace(/\b(check|tell|show|give|find|know|want|need|look|see|get|help|please|kindly|something|any|anyone)\b/gi, '')
             .trim();
+
+        // ── Blocklist check: if the cleaned text is a single blocked word, return null ──
+        const cleanedLower = cleaned.toLowerCase().trim();
+        if (PRODUCT_BLOCKLIST.has(cleanedLower)) {
+            // Fall back to context if available
+            if (context?.lastProduct) {
+                return context.lastProduct.name;
+            }
+            return null;
+        }
+
+        // Also check if the cleaned text is a single word that matches a blocklist entry
+        // (handles cases like "Hello" → "hello" after cleaning)
+        const words = cleanedLower.split(/\s+/).filter(w => w.length > 0);
+        if (words.length === 1 && PRODUCT_BLOCKLIST.has(words[0])) {
+            if (context?.lastProduct) {
+                return context.lastProduct.name;
+            }
+            return null;
+        }
 
         // If nothing meaningful left after stripping, try context
         if (cleaned.length < 2 && context?.lastProduct) {
