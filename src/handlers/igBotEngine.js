@@ -761,6 +761,69 @@ class IGBotEngine {
     async _routeIntent(igUserId, message, result, context) {
         const { intent } = result;
 
+        // ── Composite support override ──────────────────────────
+        // When _supportRequired is true AND the intent is a routine action
+        // (return, exchange, etc.), create/append a support ticket FIRST.
+        // The ticket confirmation becomes the ONE customer response.
+        // This prevents "Return issue and need support team" from just
+        // showing a return policy FAQ without acknowledging the support need.
+        const ROUTINE_INTENTS = [
+            'return', 'exchange', 'refund', 'shipping', 'payment',
+            'cancellation', 'delivery_issue', 'damaged_product',
+            'wrong_product', 'order_tracking'
+        ];
+
+        if (result._supportRequired && ROUTINE_INTENTS.includes(intent)) {
+            // Check for existing ticket first — append if exists
+            const existingTicket = await dbAdapter.query(
+                `SELECT * FROM support_tickets
+                 WHERE ig_user_id = ? AND status = 'open'
+                 ORDER BY created_at DESC LIMIT 1`,
+                [igUserId]
+            );
+
+            if (existingTicket && existingTicket.length > 0) {
+                // Append to existing ticket
+                try {
+                    await dbAdapter.query(
+                        `UPDATE support_tickets
+                         SET message = message || '\n\n---\n' || ?,
+                             is_read = false,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ?`,
+                        [message || `Customer needs help with ${intent}`, existingTicket[0].id]
+                    );
+                } catch (e) { /* best-effort */ }
+
+                await instagramService.sendMessage(
+                    igUserId,
+                    `I understand you need help with your ${intent.replace(/_/g, ' ')} request. Your ticket *${existingTicket[0].ticket_number}* is still open and I've added this to it.\n\nOur team will respond here shortly.`
+                );
+                context = {
+                    ...(context || {}),
+                    openTicketId: existingTicket[0].id,
+                    openTicketNumber: existingTicket[0].ticket_number,
+                    supportRequired: true,
+                    issueStatus: 'ticket_appended'
+                };
+                await instagramService.setBotState(igUserId, STATES.IDLE, context);
+                return;
+            }
+
+            // No existing ticket — create one with context-aware reply
+            const orderRef = context?.verifiedOrderId || context?.relevantOrderId;
+            const description = message || `Customer needs help with ${intent}`;
+            let customReply;
+            if (orderRef) {
+                customReply = `I understand you need help with your ${intent.replace(/_/g, ' ')} for order *${orderRef}*.\n\nI've created a support ticket so our team can look into this. They'll respond here shortly.`;
+            } else {
+                customReply = `I understand you need help with your ${intent.replace(/_/g, ' ')} request.\n\nI've created a support ticket so our team can assist you. They'll respond here shortly.`;
+            }
+
+            await this._createSupportTicket(igUserId, description, context, customReply);
+            return;
+        }
+
         switch (intent) {
             case 'greeting':
                 return await this._handleGreeting(igUserId, context);
@@ -1569,32 +1632,36 @@ Please share your Order ID so I can check your order details first.`
             return;
         }
 
-        // No existing ticket — use context to understand the situation
+        // No existing ticket — check if this is a deterministic support request
+        // result._supportRequired is set by the classifier for ANY explicit
+        // support request (bare "Support", "I need support", etc.) regardless
+        // of confidence or sentiment.
+        const isExplicitSupport = result?._supportRequired === true;
         const verifiedOrderId = context?.verifiedOrderId;
         const lastProduct = context?.lastProduct;
-        const issueSummary = context?.issueSummary;
 
-        // If we have strong context (verified order + complaint/problem signal),
-        // create a ticket immediately — don't make the user repeat themselves
-        const hasOrderContext = verifiedOrderId || context?.relevantOrderId;
-        const hasExplicitNeed = (result?.confidence >= 0.6) ||
-            (result?.sentiment === 'frustrated' || result?.sentiment === 'angry');
-
-        if (hasOrderContext && hasExplicitNeed) {
-            // We know the order and the user clearly needs help — create ticket
+        // ALWAYS create a ticket when support is explicitly requested.
+        // Don't make the user repeat themselves or wait for more context.
+        if (isExplicitSupport) {
             const description = message || 'Customer needs support';
-            await this._createSupportTicket(igUserId, description, context);
-
-            const ticketNum = context?.openTicketNumber || 'being created';
             const orderRef = verifiedOrderId || context?.relevantOrderId;
-            await instagramService.sendMessage(
-                igUserId,
-                `I understand you need help${orderRef ? ` with order *${orderRef}*` : ''}.\n\nI've created a support ticket so our team can look into this personally. They'll respond here shortly.`
-            );
+
+            // Build a context-aware reply that _createSupportTicket will send
+            // (avoids double-reply: _createSupportTicket sends ONE message only)
+            let customReply = null;
+            if (orderRef) {
+                customReply = `I understand you need help with order *${orderRef}*.\n\nI've created a support ticket so our team can look into this personally. They'll respond here shortly.`;
+            } else if (lastProduct?.name) {
+                customReply = `I see you were looking at *${lastProduct.name}*.\n\nI've created a support ticket and our team will follow up with you here shortly.`;
+            }
+
+            // _createSupportTicket handles DB insert + sends ONE customer reply
+            await this._createSupportTicket(igUserId, description, context, customReply);
             return;
         }
 
-        // Check for recent orders to offer quick help
+        // Fallback: low-confidence human_support without _supportRequired flag.
+        // Try to gather context before creating a ticket.
         let recentOrder = null;
         try {
             const customer = await dbAdapter.query(
@@ -1613,20 +1680,17 @@ Please share your Order ID so I can check your order details first.`
         }
 
         if (recentOrder) {
-            // Show recent order and offer quick resolution
             const statusLabel = this._getStatusText(recentOrder.status);
             await instagramService.sendMessage(
                 igUserId,
                 `I'm here to help.\n\nI see your recent order: *${recentOrder.order_id}*\nStatus: ${statusLabel || recentOrder.status || 'Processing'}\n\nIs your issue related to this order? Tell me what's wrong and I'll try to resolve it right away. If you'd rather speak to our team, just say so.`
             );
         } else if (lastProduct?.name) {
-            // We have product context — use it
             await instagramService.sendMessage(
                 igUserId,
                 `I'm here to help.\n\nI see you were looking at *${lastProduct.name}*. Is your issue related to this product?\n\nTell me what's going on and I'll do my best to sort it out.`
             );
         } else {
-            // No context at all — ask warmly
             await instagramService.sendMessage(
                 igUserId,
                 `I'm here to help.\n\nCould you tell me a bit more about what you need? For example:\n• An order issue (tracking, return, refund)\n• A product question\n• Something else\n\nJust describe it in your own words and I'll take care of it.`
@@ -1639,7 +1703,13 @@ Please share your Order ID so I can check your order details first.`
         });
     }
 
-    async _createSupportTicket(igUserId, description, context = {}) {
+    /**
+     * Create a support ticket in the DB and send ONE customer-facing reply.
+     * @param {string} customReply - optional custom message to send instead of
+     *   the generic ticket confirmation. Prevents double-reply when the caller
+     *   would otherwise send its own message after this function.
+     */
+    async _createSupportTicket(igUserId, description, context = {}, customReply = null) {
         // Guard: if user is already escalated, they already have an open ticket.
         // Don't create a duplicate — the escalation handler in processMessage
         // appends follow-ups to the existing ticket.
@@ -1701,10 +1771,10 @@ Please share your Order ID so I can check your order details first.`
             await instagramService.escalateToHuman(igUserId, ticketRows[0].id);
         }
 
-        await instagramService.sendMessage(
-            igUserId,
-            `OFFCOMFRT — SUPPORT\n\nThank you, ${customerName}.\n\nYour ticket has been created.\n\nTicket Number: ${ticketNumber}\n\nOur team will respond within 24 hours.\n\nYou can continue messaging us here for updates.`
-        );
+        // Send ONE customer reply — custom if provided, otherwise generic
+        const replyMessage = customReply ||
+            `OFFCOMFRT — SUPPORT\n\nThank you, ${customerName}.\n\nYour ticket has been created.\n\nTicket Number: ${ticketNumber}\n\nOur team will respond within 24 hours.\n\nYou can continue messaging us here for updates.`;
+        await instagramService.sendMessage(igUserId, replyMessage);
 
         // Store ticket context so the bot remembers after ticket creation
         const issueSummary = this._buildIssueSummary(
@@ -2067,25 +2137,20 @@ Please share the Order ID and I'll look it up right away.`
         // This IS a support issue that needs a ticket.
         const orderId = context?.verifiedOrderId || context?.entities?.orderId || context?.entities?.bareNumber;
 
+        // Create ONE ticket with a context-aware reply.
+        // No separate order-status message — that caused double/triple replies.
+        let customReply;
         if (orderId) {
-            // We have an Order ID — try to help directly with order status
-            await instagramService.sendMessage(
-                igUserId,
-                `I'm sorry about the delay. Let me check your Order *${orderId}* status right now.`
-            );
-            await this._handleOrderTracking(igUserId, orderId, context);
-            // Also create a ticket since they reported a support problem
-            await this._createSupportTicket(igUserId, message || 'Support problem reported', context);
-            return;
+            customReply = `I'm sorry about the delay. I can see your order *${orderId}*.\n\nI've created a support ticket and our team will look into this personally. They'll respond here shortly.`;
+        } else {
+            customReply = `I'm sorry about the experience. I've created a support ticket so our team can follow up with you directly.\n\nThey'll respond here shortly. If you have an Order ID related to this issue, sharing it will help us resolve things faster.`;
         }
 
-        // No ticket, no Order ID — create a ticket for the support problem
-        // The user explicitly reported a communication failure; don't just
-        // ask them to "let me know" — actually create the ticket.
-        await this._createSupportTicket(igUserId, message || 'Customer reported a support problem', context);
-        await instagramService.sendMessage(
+        await this._createSupportTicket(
             igUserId,
-            `I'm sorry about the experience. I've created a support ticket so our team can follow up with you directly.\n\nThey'll respond here shortly. If you have an Order ID related to this issue, sharing it will help us resolve things faster.`
+            message || 'Customer reported a support problem',
+            context,
+            customReply
         );
     }
 
@@ -2215,28 +2280,17 @@ Please share the Order ID and I'll look it up right away.`
      */
     async _tryFAQMatch(message, igUserId) {
         try {
-            // 1. Instagram-only hardcoded FAQ (no DB query)
+            // Instagram-only hardcoded FAQ (no DB query).
+            // The shared faqHandler.matchFAQ() queries automation_config which
+            // doesn't exist — skip it entirely to avoid unnecessary DB errors.
             const igMatch = _matchIGFAQ(message);
             if (igMatch) {
                 await instagramService.sendMessage(igUserId, igMatch.answer);
                 return true;
             }
-
-            // 2. Fallback to shared FAQ handler (may hit DB — caught if fails)
-            const faqHandler = require('./faqHandler');
-            const match = await faqHandler.matchFAQ(message);
-            if (match) {
-                // Convert WhatsApp-formatted answer to Instagram-friendly
-                let igAnswer = match.answer || match.content || '';
-                // Remove WhatsApp markdown asterisks
-                igAnswer = igAnswer.replace(/\*/g, '');
-                await instagramService.sendMessage(igUserId, igAnswer);
-                return true;
-            }
             return false;
         } catch (e) {
-            // FAQ handler errors (including automation_config missing) are
-            // caught silently — Instagram FAQ still works via IG_FAQ_LIST above.
+            // Should not happen with hardcoded FAQ, but catch just in case
             return false;
         }
     }

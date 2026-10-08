@@ -628,6 +628,18 @@ class IGSmartEngine {
             result._secondaryConfidence = secondary.confidence;
         }
 
+        // 10. Deterministic support-required flag —
+        // Fires when the message is an unambiguous support request regardless
+        // of classifier confidence. This ensures "Support" or "I need support"
+        // ALWAYS triggers ticket creation in the bot engine.
+        const explicitSupportReq = this._isExplicitSupportRequest(text);
+        const compositeSupportReq = this.detectSupportSignals(text).supportRequired;
+        const explicitEscalation = this._detectExplicitSupport(text);
+
+        if (explicitSupportReq || compositeSupportReq || explicitEscalation) {
+            result._supportRequired = true;
+        }
+
         return result;
     }
 
@@ -971,7 +983,12 @@ class IGSmartEngine {
             'no response', 'no reply', 'no one called', 'no contact',
             'not responding', 'not replying', 'no one reached',
             'no one contacted', 'ignored', 'being ignored', 'no support',
-            'nobody responded', 'nobody replied', 'no update'
+            'nobody responded', 'nobody replied', 'no update',
+            // Extended: explicit support need phrases
+            'need support', 'support team', 'want support',
+            'need help from team', 'nobody contacted',
+            'still waiting', 'waiting for response', 'hasn\'t replied',
+            'no one responded', 'no one has replied'
         ];
         if (problemKw.some(k => text.includes(k))) signals.problem = true;
 
@@ -1025,7 +1042,11 @@ class IGSmartEngine {
             'speak to someone', 'connect me to support', 'customer service',
             'customer care', 'i need assistance', 'need assistance',
             'reach your team', 'speak to your team', 'talk to your team',
-            'need to talk to', 'want to speak', 'want to talk'
+            'need to talk to', 'want to speak', 'want to talk',
+            // Extended: bare support + team phrases
+            'support team', 'i want support', 'want support', 'want i support',
+            'i want i support', 'need help from team', 'please help me',
+            'please look into this', 'look into this'
         ];
 
         // Complaint/problem/disappointment signals (with typo variants)
@@ -1045,6 +1066,49 @@ class IGSmartEngine {
         // Both must be present — support phrase alone is just a request,
         // complaint alone is just a complaint. Together = explicit escalation.
         return hasSupportPhrase && hasComplaintSignal;
+    }
+
+    /**
+     * Detect bare/unambiguous support requests that should ALWAYS create a
+     * ticket regardless of confidence or sentiment.
+     *
+     * Unlike _detectExplicitSupport (which requires BOTH support phrase AND
+     * complaint signal), this fires for ANY clear support request:
+     *   - "Support"
+     *   - "I need support"
+     *   - "I want support"
+     *   - "contact support"
+     *   - "support team"
+     *   - "need help from team"
+     *
+     * Uses word-boundary matching for short tokens to prevent false positives.
+     */
+    _isExplicitSupportRequest(text) {
+        const t = text.toLowerCase().trim();
+
+        // Multi-word phrases — simple substring match is safe
+        const supportPhrases = [
+            'need support', 'want support', 'contact support', 'i want support',
+            'i need support', 'support team', 'need help from team',
+            'human help', 'contact customer service', 'contact customer care',
+            'talk to someone', 'speak to someone', 'connect me to support',
+            'customer service', 'customer care', 'need assistance',
+            'want to talk to', 'want to speak to', 'reach your team',
+            'please help me', 'please look into this',
+            // Typo variants
+            'i want i support', 'want i support'
+        ];
+
+        for (const phrase of supportPhrases) {
+            if (t.includes(phrase)) return true;
+        }
+
+        // Bare "support" as a standalone word (1-2 word messages)
+        // Word-boundary match prevents "supportive" etc. from matching
+        if (/^\s*support\s*[.!]*$/i.test(t)) return true;
+        if (/^(i\s+)?(want|need|need\s+to)\s+(a\s+)?support/i.test(t)) return true;
+
+        return false;
     }
 
     _isCollectingState(state) {
