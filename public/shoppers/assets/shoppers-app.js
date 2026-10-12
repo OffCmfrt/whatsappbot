@@ -340,23 +340,42 @@ function setupLoginEvents() {
         const usernameInput = document.getElementById('hubUsername');
         const btn = document.querySelector('#shopperLoginForm .btn-primary span');
         const err = document.getElementById('errorMessage');
-        
-        btn.textContent = "VERIFYING...";
+
+        btn.textContent = 'VERIFYING...';
         err.style.display = 'none';
-        
+
         try {
             // Smart login: Operator ID + password, or blank ID + master access code
             localStorage.removeItem('hubIdentity'); // never carry a stale identity
-            const res = await fetch(`${window.location.origin}/api/internal/shoppers/auth`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    username: usernameInput ? usernameInput.value.trim() : '',
-                    password: input.value
-                })
-            });
-            const data = await res.json();
-            
+            const login = async (takeOverSession = false) => {
+                const res = await fetch(`${window.location.origin}/api/internal/shoppers/auth`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: usernameInput ? usernameInput.value.trim() : '',
+                        password: input.value,
+                        takeOverSession
+                    })
+                });
+                return res.json();
+            };
+
+            let data = await login();
+            if (data.sessionActiveElsewhere) {
+                const takeOver = window.confirm(
+                    'You are already logged in on another device or browser.\n\n'
+                    + 'Select OK to log out there and log in here. Select Cancel to keep the other session active.'
+                );
+                if (!takeOver) {
+                    btn.textContent = 'AUTHENTICATE';
+                    err.textContent = 'Login cancelled. Your other session remains active.';
+                    err.style.display = 'block';
+                    return;
+                }
+                btn.textContent = 'LOGGING OUT OTHER SESSION...';
+                data = await login(true);
+            }
+
             if (data.success) {
                 localStorage.setItem('authToken', data.token);
                 // Cache identity so the UI can apply permissions instantly
@@ -369,7 +388,7 @@ function setupLoginEvents() {
                 throw new Error(data.error || 'Invalid credentials');
             }
         } catch (error) {
-            btn.textContent = "AUTHENTICATE";
+            btn.textContent = 'AUTHENTICATE';
             err.textContent = error.message;
             err.style.display = 'block';
         }

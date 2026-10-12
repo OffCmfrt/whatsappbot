@@ -108,7 +108,7 @@ router.post('/send-notification', validateInternalToken, async (req, res) => {
 //   - password only       → legacy master-admin access code
 router.post('/shoppers/auth', async (req, res) => {
     try {
-        const { username, password } = req.body;
+        const { username, password, takeOverSession } = req.body;
         const jwt = require('jsonwebtoken');
         const bcrypt = require('bcryptjs');
         const secret = process.env.JWT_SECRET || 'fallback_secret';
@@ -140,9 +140,20 @@ router.post('/shoppers/auth', async (req, res) => {
 
             const permissions = Array.isArray(operator.permissions) ? operator.permissions : [];
 
+            // Require the operator to explicitly end the existing session before
+            // replacing it. Credentials were verified above, so this lets the
+            // account holder recover access without an administrator.
+            if (operator.active_session_id && takeOverSession !== true) {
+                return res.status(409).json({
+                    success: false,
+                    sessionActiveElsewhere: true,
+                    error: 'This account is already logged in on another device or browser.'
+                });
+            }
+
             // Single-session enforcement: mint a unique session id and store it
-            // on the account. Any previously active session stops working the
-            // moment this login commits (newest login wins). Admin is exempt.
+            // on the account. A confirmed takeover ends any previous session.
+            // Admin is exempt.
             const crypto = require('crypto');
             const sid = crypto.randomBytes(24).toString('hex');
             const token = jwt.sign(
