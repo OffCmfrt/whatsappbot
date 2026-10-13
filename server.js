@@ -241,22 +241,22 @@ app.use('/webhooks/zoho', zohoWebhookRoutes);
 const zohoRoutes = require('./src/routes/zohoRoutes');
 app.use('/api/admin/zoho', zohoRoutes);
 
-// Instagram webhook rate limiter — isolated from the WhatsApp limiter.
+// Instagram webhook rate limiter — DISABLED (Instagram bot turned off)
 // Instagram Graph API allows ~500 calls/hour; 300/min per IP is generous
 // for DM + comment traffic while protecting against burst floods.
-const instagramLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: 'Too many Instagram webhook requests, please slow down.'
-});
-app.use('/webhook/instagram', instagramLimiter);
+// const instagramLimiter = rateLimit({
+//   windowMs: 1 * 60 * 1000, // 1 minute
+//   max: 300,
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   message: 'Too many Instagram webhook requests, please slow down.'
+// });
+// app.use('/webhook/instagram', instagramLimiter);
 
-// Instagram Messaging Webhook (Meta Instagram Login)
+// Instagram Messaging Webhook (Meta Instagram Login) — DISABLED
 // Completely separate from the WhatsApp /webhook endpoint.
-const instagramWebhookRoutes = require('./src/routes/instagramWebhookRoutes');
-app.use(instagramWebhookRoutes);
+// const instagramWebhookRoutes = require('./src/routes/instagramWebhookRoutes');
+// app.use(instagramWebhookRoutes);
 
 // Cron Jobs
 const abandonedCartCron = require('./src/services/abandonedCartCron');
@@ -824,7 +824,7 @@ async function startServer() {
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log(`📡 Server running on port ${PORT}`);
             console.log(`🌐 Webhook URL: ${process.env.WEBHOOK_URL || `http://localhost:${PORT}`}/webhook`);
-            console.log(`📸 IG Webhook: ${process.env.APP_URL || `http://localhost:${PORT}`}/webhook/instagram`);
+            // console.log(`📸 IG Webhook: ${process.env.APP_URL || `http://localhost:${PORT}`}/webhook/instagram`); // Instagram bot disabled
             console.log(`👨‍💼 Admin Dashboard: http://localhost:${PORT}/admin`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('');
