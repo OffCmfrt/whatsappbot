@@ -1799,6 +1799,206 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
     }
 });
 
+// ── Export Support Tickets (with chat) as Excel or CSV ──────────────────────
+router.get('/support-tickets/export', verifyToken, requirePermission('export'), async (req, res) => {
+    try {
+        const { status, date_from, date_to, search, portal, channel, format = 'xlsx', urgent } = req.query;
+        logOperatorActivity(req, 'export', `Support tickets export (status: ${status || 'all'}, format: ${format})`);
+
+        // ── Build WHERE clause (mirrors the list endpoint filters) ──
+        const conditions = [];
+        const params = [];
+
+        if (status) { conditions.push('t.status = ?'); params.push(status); }
+        if (date_from) { conditions.push('t.created_at::date >= ?::date'); params.push(date_from); }
+        if (date_to) { conditions.push('t.created_at::date <= ?::date'); params.push(date_to); }
+        if (channel) { conditions.push('t.channel = ?'); params.push(channel); }
+        if (search && String(search).trim()) {
+            const like = `%${String(search).trim()}%`;
+            conditions.push('(t.ticket_number ILIKE ? OR t.customer_name ILIKE ? OR t.customer_phone ILIKE ? OR t.message ILIKE ?)');
+            params.push(like, like, like, like);
+        }
+        if (portal === 'unassigned') {
+            conditions.push('t.portal_id IS NULL');
+        } else if (portal) {
+            const pid = parseInt(portal, 10);
+            if (Number.isFinite(pid)) { conditions.push('t.portal_id = ?'); params.push(pid); }
+        }
+        const urgentKeywords = String(urgent || '').split(',').map(k => k.trim()).filter(k => k && k.length <= 50).slice(0, 20);
+        if (urgentKeywords.length) {
+            const urgentClause = '(' + urgentKeywords.map(() => 't.message ILIKE ?').join(' OR ') + ')';
+            conditions.push(urgentClause);
+            params.push(...urgentKeywords.map(k => `%${k}%`));
+        }
+
+        const whereSql = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+
+        // ── Fetch tickets (up to 5 000 for export) ──
+        const ticketsSql = `SELECT t.id, t.ticket_number, t.customer_phone, t.customer_name,
+                t.message, t.status, t.is_read, t.portal_id, t.sentiment,
+                t.ai_scenario, t.ai_confidence, t.source, t.channel,
+                t.follow_up_at, t.follow_up_note, t.order_id,
+                t.created_at, t.updated_at
+            FROM support_tickets t${whereSql}
+            ORDER BY t.created_at DESC
+            LIMIT 5000`;
+        const tickets = await dbAdapter.query(ticketsSql, params);
+
+        // Resolve portal names
+        const allPortals = await dbAdapter.query("SELECT id, name FROM support_portals");
+        const portalNameById = {};
+        allPortals.forEach(p => { portalNameById[p.id] = p.name; });
+
+        // ── Collect unique phones → fetch all chat messages in one batch ──
+        const phones = [...new Set(tickets.map(t => t.customer_phone).filter(Boolean))];
+        let messagesByPhone = {};
+        if (phones.length) {
+            const chatRows = await dbAdapter.query(
+                `SELECT customer_phone, message_content, message_type, status, created_at
+                 FROM messages
+                 WHERE customer_phone = ANY(?)
+                 ORDER BY created_at ASC
+                 LIMIT 50000`,
+                [phones]
+            );
+            chatRows.forEach(m => {
+                const phone = m.customer_phone;
+                if (!messagesByPhone[phone]) messagesByPhone[phone] = [];
+                messagesByPhone[phone].push(m);
+            });
+        }
+
+        // ── Helper: status display label ──
+        const statusLabel = (s) => {
+            const map = { open: 'Open', resolved: 'Resolved', closed: 'Closed', follow_up: 'Follow-Up' };
+            return map[s] || (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Open');
+        };
+
+        // ── Sheet 1 — Tickets Summary ──
+        const ticketRows = tickets.map(t => ({
+            'Ticket Number': t.ticket_number || '',
+            'Customer Name': t.customer_name || '',
+            'Customer Phone': t.customer_phone || '',
+            'Status': statusLabel(t.status),
+            'Channel': t.channel || 'whatsapp',
+            'Source': t.source || '',
+            'Sentiment': t.sentiment || '',
+            'AI Scenario': t.ai_scenario || '',
+            'AI Confidence': t.ai_confidence != null ? Math.round(t.ai_confidence * 100) + '%' : '',
+            'Portal': portalNameById[t.portal_id] || 'Unassigned',
+            'Order ID': t.order_id || '',
+            'Follow-Up At': t.follow_up_at ? new Date(t.follow_up_at).toISOString() : '',
+            'Follow-Up Note': t.follow_up_note || '',
+            'First Message': (t.message || '').substring(0, 2000),
+            'Created At (UTC)': t.created_at ? new Date(t.created_at).toISOString() : '',
+            'Updated At (UTC)': t.updated_at ? new Date(t.updated_at).toISOString() : ''
+        }));
+
+        // ── Sheet 2 — Chat History (all messages for exported tickets) ──
+        const chatRows = [];
+        tickets.forEach(t => {
+            const msgs = messagesByPhone[t.customer_phone] || [];
+            if (msgs.length === 0) {
+                chatRows.push({
+                    'Ticket Number': t.ticket_number || '',
+                    'Customer Phone': t.customer_phone || '',
+                    'Customer Name': t.customer_name || '',
+                    'Sender': 'Customer',
+                    'Message': (t.message || '').substring(0, 5000),
+                    'Status': '',
+                    'Timestamp': t.created_at ? new Date(t.created_at).toISOString() : ''
+                });
+            } else {
+                msgs.forEach(m => {
+                    chatRows.push({
+                        'Ticket Number': t.ticket_number || '',
+                        'Customer Phone': t.customer_phone || '',
+                        'Customer Name': t.customer_name || '',
+                        'Sender': m.message_type === 'incoming' ? 'Customer' : 'Agent',
+                        'Message': (m.message_content || '').substring(0, 5000),
+                        'Status': m.status || '',
+                        'Timestamp': m.created_at ? new Date(m.created_at).toISOString() : ''
+                    });
+                });
+            }
+        });
+
+        const istDate = toIST(new Date(), 'date');
+        const filterTag = status || 'all';
+
+        // ── CSV format ──
+        if (format === 'csv') {
+            const XLSX = getXlsx();
+            const ws = XLSX.utils.json_to_sheet(ticketRows);
+            const csv = XLSX.utils.sheet_to_csv(ws);
+            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+            res.setHeader('Content-Disposition', `attachment; filename=support_tickets_${filterTag}_${istDate}.csv`);
+            // BOM for Excel UTF-8 compatibility
+            return res.send(Buffer.concat([Buffer.from('\uFEFF', 'utf8'), Buffer.from(csv, 'utf8')]));
+        }
+
+        // ── Excel format (multi-sheet) ──
+        const XLSX = getXlsx();
+        const wb = XLSX.utils.book_new();
+
+        const wsTickets = XLSX.utils.json_to_sheet(ticketRows);
+        // Set column widths for readability
+        wsTickets['!cols'] = [
+            { wch: 20 }, // Ticket Number
+            { wch: 22 }, // Customer Name
+            { wch: 18 }, // Customer Phone
+            { wch: 12 }, // Status
+            { wch: 12 }, // Channel
+            { wch: 12 }, // Source
+            { wch: 10 }, // Sentiment
+            { wch: 20 }, // AI Scenario
+            { wch: 12 }, // AI Confidence
+            { wch: 18 }, // Portal
+            { wch: 18 }, // Order ID
+            { wch: 20 }, // Follow-Up At
+            { wch: 30 }, // Follow-Up Note
+            { wch: 60 }, // First Message
+            { wch: 22 }, // Created At
+            { wch: 22 }  // Updated At
+        ];
+        XLSX.utils.book_append_sheet(wb, wsTickets, 'Tickets');
+
+        const wsChat = XLSX.utils.json_to_sheet(chatRows);
+        wsChat['!cols'] = [
+            { wch: 20 }, // Ticket Number
+            { wch: 18 }, // Customer Phone
+            { wch: 22 }, // Customer Name
+            { wch: 10 }, // Sender
+            { wch: 80 }, // Message
+            { wch: 12 }, // Status
+            { wch: 22 }  // Timestamp
+        ];
+        XLSX.utils.book_append_sheet(wb, wsChat, 'Chat History');
+
+        // Summary sheet
+        const summaryRows = [{
+            'Export Date': new Date().toISOString(),
+            'Total Tickets': tickets.length,
+            'Total Chat Messages': chatRows.length,
+            'Filters Applied': `status=${filterTag}${date_from ? ', from=' + date_from : ''}${date_to ? ', to=' + date_to : ''}${channel ? ', channel=' + channel : ''}`,
+            'Generated By': req.operator?.name || req.operator?.username || 'Admin'
+        }];
+        const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+        wsSummary['!cols'] = [{ wch: 20 }, { wch: 15 }, { wch: 20 }, { wch: 50 }, { wch: 20 }];
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+        const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        const filename = `support_tickets_${filterTag}_${istDate}.xlsx`;
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+        res.send(buffer);
+    } catch (error) {
+        console.error('Support tickets export error:', error);
+        res.status(500).json({ success: false, error: 'Failed to export support tickets' });
+    }
+});
+
 router.put('/support-tickets/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;

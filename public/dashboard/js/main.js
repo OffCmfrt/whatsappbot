@@ -452,6 +452,70 @@ async function updateTicketStatus(id, status) {
     loadTickets();
 }
 
+// ── Export Tickets with Chat ──────────────────────────────────────────────
+function exportTickets(format) {
+    // Close the dropdown
+    const dropdown = document.getElementById('exportDropdown');
+    if (dropdown) dropdown.style.display = 'none';
+
+    // Build query string from current toolbar filters
+    const params = new URLSearchParams();
+    const status = document.getElementById('ticketStatusFilter')?.value;
+    const portal = document.getElementById('portalFilter')?.value;
+    const search = document.getElementById('ticketSearchInput')?.value.trim();
+    const urgentActive = document.getElementById('urgentFilterBtn')?.classList.contains('active');
+
+    if (format) params.set('format', format);
+    if (status) params.set('status', status);
+    if (portal) params.set('portal', portal);
+    if (search) params.set('search', search);
+    if (currentChannel && currentChannel !== 'all') params.set('channel', currentChannel);
+    if (urgentActive) params.set('urgent', (urgentKeywords || []).join(','));
+
+    // Trigger file download via hidden anchor
+    const url = `${API}/support-tickets/export?${params}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    // Attach auth header via fetch → blob → object URL
+    fetch(url, { headers: { 'Authorization': `Bearer ${authToken}` } })
+        .then(res => {
+            if (res.status === 401) { handleLogout(); throw new Error('Unauthorized'); }
+            if (!res.ok) throw new Error('Export failed');
+            const disposition = res.headers.get('Content-Disposition') || '';
+            const filenameMatch = disposition.match(/filename=(.+)/);
+            const filename = filenameMatch ? filenameMatch[1] : (format === 'csv' ? 'support_tickets.csv' : 'support_tickets.xlsx');
+            return res.blob().then(blob => ({ blob, filename }));
+        })
+        .then(({ blob, filename }) => {
+            const objectUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = objectUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(objectUrl);
+        })
+        .catch(err => {
+            console.error('Export error:', err);
+            alert('Failed to export tickets. Please try again.');
+        });
+}
+
+// Export dropdown toggle
+document.addEventListener('click', function(e) {
+    const btn = document.getElementById('exportTicketsBtn');
+    const dropdown = document.getElementById('exportDropdown');
+    if (!btn || !dropdown) return;
+    if (btn.contains(e.target)) {
+        e.stopPropagation();
+        dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+    } else if (!dropdown.contains(e.target)) {
+        dropdown.style.display = 'none';
+    }
+});
+
 // ===================================
 // Chat Modal
 // ===================================
