@@ -7588,6 +7588,107 @@ router.post('/inventory/bulk-out', verifyToken, async (req, res) => {
     }
 });
 
+// POST /api/admin/inventory/sync-from-shopify - Import new products from Shopify to manual inventory
+// This fetches the Shopify product catalog and adds any products not already in manual_inventory
+router.post('/inventory/sync-from-shopify', verifyToken, async (req, res) => {
+    try {
+        const shopifyService = require('../services/shopifyService');
+        const catalog = await shopifyService.getProductCatalog(true); // Force refresh to get latest products
+        
+        if (!catalog || catalog.length === 0) {
+            return res.status(400).json({ success: false, error: 'No products found in Shopify catalog' });
+        }
+
+        const timestamp = new Date().toISOString();
+        const results = [];
+        let added = 0;
+        let skipped = 0;
+
+        // Process each product and its variants
+        for (const product of catalog) {
+            const variants = product.variants || [];
+            
+            for (const variant of variants) {
+                // Build SKU key: product_handle-variant_title or product_handle if no variant
+                const variantTitle = variant.title && variant.title !== 'Default Title' 
+                    ? variant.title 
+                    : '';
+                const skuKey = variantTitle 
+                    ? `${product.handle}-${variantTitle}`.toLowerCase().replace(/\s+/g, '-')
+                    : product.handle.toLowerCase();
+                
+                // Check if already exists in manual_inventory
+                const existing = await dbAdapter.query(
+                    'SELECT sku_key FROM manual_inventory WHERE sku_key = $1',
+                    [skuKey]
+                );
+
+                if (existing.length > 0) {
+                    skipped++;
+                    continue; // Already exists, skip
+                }
+
+                // Determine category from product type or tags
+                let category = null;
+                const productType = (product.product_type || '').toUpperCase();
+                if (productType.includes('SWEAT') || productType.includes('HOODIE')) {
+                    category = 'SWEAT';
+                } else if (productType.includes('T-SHIRT') || productType.includes('TEE')) {
+                    category = 'T-SHIRT';
+                } else if (productType.includes('PANT') || productType.includes('SHORT') || productType.includes('LOWER')) {
+                    category = 'LOWER';
+                } else if (productType.includes('BUNDLE') || productType.includes('SET')) {
+                    category = 'BUNDLE';
+                }
+
+                // Extract size from variant title
+                const size = variantTitle || 'FREE';
+
+                // Insert new product into manual_inventory with zero quantity
+                await dbAdapter.query(
+                    `INSERT INTO manual_inventory (product_name, category, size, sku_key, quantity, reorder_level, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                    [product.title, category, size, skuKey, 0, 0, timestamp]
+                );
+
+                // Log the sync as an adjustment
+                await dbAdapter.query(
+                    `INSERT INTO inventory_adjustments 
+                     (sku_key, product_name, size, adjustment_type, quantity_change, quantity_before, quantity_after, reference, notes, performed_by, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                    [skuKey, product.title, size, 'sync', 0, 0, 0, 'shopify_sync', `Imported from Shopify catalog`, 'system', timestamp]
+                );
+
+                results.push({
+                    sku_key: skuKey,
+                    product_name: product.title,
+                    size: size,
+                    category: category,
+                    inventory: variant.inventory || 0,
+                    action: 'added'
+                });
+                added++;
+            }
+        }
+
+        // Invalidate inventory cache
+        const { invalidateCache } = require('../utils/cache');
+        invalidateCache();
+
+        res.json({
+            success: true,
+            message: `Synced ${added} new product(s) from Shopify (${skipped} already existed)`,
+            added: added,
+            skipped: skipped,
+            total_products: catalog.length,
+            items: results
+        });
+    } catch (error) {
+        console.error('Shopify sync error:', error);
+        res.status(500).json({ success: false, error: 'Failed to sync from Shopify: ' + error.message });
+    }
+});
+
 // POST /api/admin/inventory/sync - Sync inventory from sheet data (set absolute quantities)
 // This replaces existing quantities with the provided values and logs as 'sync' adjustment
 router.post('/inventory/sync', verifyToken, async (req, res) => {

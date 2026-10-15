@@ -137,6 +137,12 @@ async function syncOrderToZoho(shopifyOrder) {
             is_inclusive_tax: true
         };
 
+        // Log the line item names being sent to Zoho for debugging
+        console.log(`📝 Zoho sync #${orderId}: Line items being sent:`);
+        invoicePayload.line_items.forEach((li, idx) => {
+            console.log(`  ${idx + 1}. Name: "${li.name}" | Item ID: ${li.item_id || 'UNRESOLVED'} | Qty: ${li.quantity} | Rate: ₹${li.rate}`);
+        });
+
         // Ship-to address with state — together with the contact's billing
         // state this is what Zoho Books uses for the place of supply.
         // Zoho rejects empty-string fields (misleading "address < 100 chars"

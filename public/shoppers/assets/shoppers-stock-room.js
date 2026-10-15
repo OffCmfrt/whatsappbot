@@ -105,6 +105,29 @@
         await loadAdjustments();
     }
 
+    /* ── sync from Shopify ── */
+    async function syncFromShopify() {
+        if (!window.confirm('Import new products from Shopify?\n\nThis will add any products from Shopify that are not already in your manual inventory.\n\nExisting items will not be modified.')) return;
+        
+        try {
+            showToast('Syncing products from Shopify...', 'info');
+            const result = await apiFetch('/api/admin/inventory/sync-from-shopify', { method: 'POST' });
+            
+            if (result.success) {
+                showToast(`✓ ${result.message}`, 'success');
+                // Refresh the inventory to show new items
+                SR.loaded = false;
+                await loadInventory(true);
+                await loadAdjustments();
+            } else {
+                showToast(result.error || 'Sync failed', 'error');
+            }
+        } catch (e) {
+            console.error('Shopify sync error:', e);
+            showToast('Sync failed: ' + e.message, 'error');
+        }
+    }
+
     /* ── sorting ── */
     function sortedItems() {
         const items = [...SR.inventory];
@@ -506,6 +529,7 @@
                     </select>
                     <span class="ict-toolbar-count">${num(total)} matching</span>
                     <div style="margin-left:auto;display:flex;gap:6px">
+                        <button class="btn sr-sync-shopify-btn" data-sr="sync-shopify" title="Import new products from Shopify" style="background:linear-gradient(135deg,#1a7f37,#238636);color:#fff;border:none;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 2px 8px rgba(26,127,55,0.3)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.66 0 3-4.03 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4.03-3-9s1.34-9 3-9m-9 9a9 9 0 0 1 9-9"/></svg> Sync Shopify</button>
                         <button class="btn sr-bulk-in-btn" data-sr="bulk-open" title="Add stock to multiple SKUs"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg> Bulk In</button>
                         <button class="btn sr-bulk-out-btn" data-sr="bulk-out-open" title="Remove stock from multiple SKUs"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14"/></svg> Bulk Out</button>
                         <button class="ict-chip" data-sr="refresh" title="Refresh"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
@@ -572,6 +596,8 @@
         if (action === 'sort') {
             const key = el.dataset.key;
             if (key) toggleSort(key);
+        } else if (action === 'sync-shopify') {
+            syncFromShopify();
         } else if (action === 'bulk-open') {
             openBulkModal(false);
         } else if (action === 'bulk-out-open') {
@@ -646,6 +672,7 @@
         openBulkModal,
         closeBulkModal,
         confirmBulkIn,
+        syncFromShopify,
         refresh: refreshAll,
     };
 })();

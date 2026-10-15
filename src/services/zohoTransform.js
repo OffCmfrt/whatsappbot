@@ -416,6 +416,10 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
         const desc = item.variant
             ? `${item.name} (${item.variant})`
             : (item.is_bundle_component ? `(from ${item.parent_bundle_name})` : (item.name || 'Item'));
+        
+        // Log the transformation for debugging
+        console.log(`🔄 Zoho name transform: "${item.name}" + variant "${item.variant || 'none'}" → "${name}"`);
+        
         return {
             name: name,
             description: desc,
