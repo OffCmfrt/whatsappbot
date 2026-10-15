@@ -409,16 +409,17 @@ async function buildZohoInvoicePayload(shopifyOrder, sellerState) {
     // Size/variant goes in BOTH the item name AND the description. Zoho tracks
     // inventory per item name — without the size in the name, stock isn't
     // deducted from the right size SKU. The description mirrors it for display.
+    // Zoho catalog naming pattern: "PRODUCT ( COLOR ) - SIZE"
     const zohoLineItems = correctedItems.map(item => {
         const name = item.variant
-            ? `${item.name} (${item.variant})`
+            ? `${item.name} - ${item.variant}`
             : item.name;
         const desc = item.variant
-            ? `${item.name} (${item.variant})`
+            ? `${item.name} - ${item.variant}`
             : (item.is_bundle_component ? `(from ${item.parent_bundle_name})` : (item.name || 'Item'));
         
         // Log the transformation for debugging
-        console.log(`🔄 Zoho name transform: "${item.name}" + variant "${item.variant || 'none'}" → "${name}"`);
+        console.log(` Zoho name transform: "${item.name}" + variant "${item.variant || 'none'}" → "${name}"`);
         
         return {
             name: name,
