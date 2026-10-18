@@ -15,12 +15,79 @@
  *   5. Fallback: search golden SOP learned examples from learning.js
  */
 
+const crypto = require('crypto');
 const { dbAdapter } = require('../../database/db');
 const { chatCompletion, isConfigured } = require('./aiClient');
 const { findSimilarExamples } = require('./learning');
+const aiStore = require('./aiStore');
+const Settings = require('../../models/Settings');
 
 // Confidence below this → escalate to admin
 const CONFIDENCE_THRESHOLD = 0.6;
+
+// ── Short-message skip ──
+// Messages under 10 chars that don't match any SOP keyword are too trivial
+// to warrant a full LLM call (e.g. "hi", "ok", "thanks", emojis).
+const SOP_KEYWORDS = [
+    // tracking
+    'where', 'track', 'status', 'courier', 'shipped', 'dispatch', 'delivery', 'delivered', 'awb',
+    // delayed
+    'delay', 'late', 'not received', 'haven\'t received', 'not yet received', 'pod',
+    // refund
+    'refund', 'money back', 'return money', 'cashback',
+    // size/exchange
+    'size', 'exchange', 'swap', 'wrong size', 'too small', 'too large', 'bigger', 'smaller',
+    // damaged/wrong
+    'damaged', 'defective', 'wrong product', 'broken', 'torn', 'stain',
+    // address
+    'address', 'change address', 'update address', 'new address',
+    // COD confusion
+    'cod', 'cash on delivery', 'already paid', 'paid online',
+    // cancellation
+    'cancel', 'don\'t want', 'cancel order',
+    // escalation
+    'frustrated', 'angry', 'complaint', 'manager', 'callback', 'supervisor'
+];
+
+function isTrivialMessage(text) {
+    const t = String(text || '').trim();
+    if (t.length >= 10) return false;
+    const lower = t.toLowerCase();
+    return !SOP_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+// ── Result cache (phone + message hash) ──
+// If the same customer sends the same message twice, return the cached result
+// instead of paying for another LLM call. Entries expire after 30 minutes.
+const AUTO_CACHE_TTL_MS = 30 * 60 * 1000;
+const AUTO_CACHE_MAX = 200;
+const autoCache = new Map(); // key -> { result, at }
+
+function autoCacheKey(phone, messageText) {
+    const normalized = String(messageText || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const hash = crypto.createHash('md5').update(normalized).digest('hex').substring(0, 12);
+    return `${String(phone).replace(/\D/g, '').slice(-10)}:${hash}`;
+}
+
+function getCachedResult(phone, messageText) {
+    const key = autoCacheKey(phone, messageText);
+    const entry = autoCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.at > AUTO_CACHE_TTL_MS) {
+        autoCache.delete(key);
+        return null;
+    }
+    return entry.result;
+}
+
+function setCachedResult(phone, messageText, result) {
+    const key = autoCacheKey(phone, messageText);
+    if (autoCache.size >= AUTO_CACHE_MAX) {
+        // Evict oldest entry
+        autoCache.delete(autoCache.keys().next().value);
+    }
+    autoCache.set(key, { result, at: Date.now() });
+}
 
 // ── Language detection heuristic ──
 
@@ -113,6 +180,59 @@ async function processCustomerMessage(phone, messageText, customerName = 'Custom
         const digits = String(phone).replace(/\D/g, '');
         const phonePattern = `%${digits.slice(-10)}`;
 
+        // ── Gate 1: Skip trivial messages ──
+        // Very short messages without SOP keywords don't need AI classification.
+        // Returns handled:false so the caller creates/updates the ticket normally.
+        if (isTrivialMessage(text)) {
+            return {
+                handled: false,
+                reason: 'Trivial message — skipped AI classification',
+                scenario: 'general',
+                confidence: 0,
+                sentiment: 'neutral',
+                skipped: true
+            };
+        }
+
+        // ── Gate 2: Cache hit ──
+        // Same customer + same message text → reuse the previous result.
+        const cached = getCachedResult(digits, text);
+        if (cached) {
+            return { ...cached, cached: true };
+        }
+
+        // ── Gate 3: Daily cap ──
+        // Shared pool (all auto-support calls count under actor 'auto_support').
+        if (isConfigured()) {
+            const dailyLimit = parseInt(await Settings.get(
+                'ai_auto_support_daily_limit',
+                process.env.AI_AUTO_SUPPORT_DAILY_LIMIT || '500'
+            )) || 500;
+            const usedToday = await aiStore.getTodayUsageCount('auto_support', 'auto_support');
+            if (usedToday >= dailyLimit) {
+                console.warn(`[AUTO AI] Daily limit reached (${usedToday}/${dailyLimit}). Falling back to golden examples.`);
+                const examples = await findSimilarExamples(text, 1);
+                if (examples && examples.length > 0 && examples[0].uses >= 5) {
+                    return {
+                        handled: true,
+                        reply: examples[0].a,
+                        scenario: 'golden_sop',
+                        confidence: 0.7,
+                        sentiment: 'neutral',
+                        limitReached: true
+                    };
+                }
+                return {
+                    handled: false,
+                    reason: `Daily AI limit reached (${dailyLimit}/day)`,
+                    scenario: 'general',
+                    confidence: 0,
+                    sentiment: 'neutral',
+                    limitReached: true
+                };
+            }
+        }
+
         // 1. Fetch customer context
         let orders = [];
         let shoppers = [];
@@ -172,7 +292,7 @@ async function processCustomerMessage(phone, messageText, customerName = 'Custom
                     ? `Customer name: ${customerName}\nCustomer message: "${text}"\n\nContext:\n${contextStr}`
                     : `Customer name: ${customerName}\nCustomer message: "${text}"`;
 
-                const { message } = await chatCompletion({
+                const { message, usage, model } = await chatCompletion({
                     messages: [
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: userMessage }
@@ -200,34 +320,37 @@ async function processCustomerMessage(phone, messageText, customerName = 'Custom
                     const scenario = parsed.scenario || 'general';
                     const reply = parsed.reply || '';
 
+                    // Build result, log usage, and cache — all paths share this
+                    let result;
+
                     // Auto-escalate if frustrated or very low confidence
                     if (sentiment === 'frustrated' || confidence < CONFIDENCE_THRESHOLD) {
                         const reason = sentiment === 'frustrated'
                             ? 'Customer is frustrated — auto-escalating to admin'
                             : `Low confidence (${confidence.toFixed(2)}) — needs human review`;
 
-                        // Still provide the reply if we have one, but mark as not handled
                         if (reply && confidence >= 0.3) {
-                            return {
-                                handled: false,
-                                reply,
-                                scenario,
-                                confidence,
-                                sentiment,
-                                reason
-                            };
+                            result = { handled: false, reply, scenario, confidence, sentiment, reason };
+                        } else {
+                            result = { handled: false, scenario, confidence, sentiment, reason };
                         }
-
-                        return { handled: false, scenario, confidence, sentiment, reason };
+                    } else {
+                        result = { handled: true, reply, scenario, confidence, sentiment };
                     }
 
-                    return {
-                        handled: true,
-                        reply,
-                        scenario,
-                        confidence,
-                        sentiment
-                    };
+                    // Log usage for daily cap tracking
+                    await aiStore.logUsage({
+                        actor: 'auto_support',
+                        kind: 'auto_support',
+                        model,
+                        promptTokens: usage?.prompt_tokens || 0,
+                        completionTokens: usage?.completion_tokens || 0
+                    });
+
+                    // Cache the result so the same message from the same customer is free
+                    setCachedResult(digits, text, result);
+
+                    return result;
                 }
             } catch (aiErr) {
                 console.warn('[AUTO AI] LLM classification failed:', aiErr.message);
