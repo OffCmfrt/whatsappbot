@@ -48,14 +48,20 @@ class MessageHandler {
             // Sanitize input
             const cleanMessage = sanitizeInput(message);
 
-            if (!cleanMessage) return;
+            // Allow empty messages through when there's a media attachment
+            // (prevents storing "[image]" text while still saving the attachment)
+            if (!cleanMessage && !attachment) return;
 
             // Ensure customer exists in database (use normalized phone)
             const customer = await Customer.getOrCreate(normalizedPhone, senderName);
 
-            // Log incoming message for analytics/support
-            console.log(`📥 [${normalizedPhone}] ${senderName || 'User'}: "${cleanMessage}"`);
-            await this.logMessage(normalizedPhone, cleanMessage, 'incoming');
+            // Log incoming message for analytics/support (skip for media-only with no caption)
+            if (cleanMessage) {
+                console.log(`📥 [${normalizedPhone}] ${senderName || 'User'}: "${cleanMessage}"`);
+                await this.logMessage(normalizedPhone, cleanMessage, 'incoming');
+            } else if (attachment) {
+                console.log(`📎 [${normalizedPhone}] ${senderName || 'User'}: media attachment (${attachment.fileType})`);
+            }
 
             // Identify shopper template-button clicks (these keep their existing flow)
             const buttonCommandMap = {
@@ -80,11 +86,13 @@ class MessageHandler {
             );
 
             if (activeLock && activeLock.length > 0) {
-                if (!buttonCommand) {
+                if (!buttonCommand && !attachment) {
                     console.log(`[QUIET PERIOD] Blocking automated response for ${normalizedPhone} (locked until ${activeLock[0].conversation_lock_until})`);
                     return;
                 }
-                console.log(`[QUIET PERIOD] Allowing button click: ${cleanMessage} for ${normalizedPhone}`);
+                if (buttonCommand) {
+                    console.log(`[QUIET PERIOD] Allowing button click: ${cleanMessage} for ${normalizedPhone}`);
+                }
             }
 
             // Get conversation state — still needed so the edit-details capture
@@ -96,7 +104,7 @@ class MessageHandler {
             const convState = convRows?.[0]?.state || null;
 
             // Capture edit-details follow-up text after the customer pressed Edit Details
-            if (convState === 'awaiting_edit_details' && !buttonCommand) {
+            if (convState === 'awaiting_edit_details' && !buttonCommand && cleanMessage) {
                 const now = new Date().toISOString();
                 try {
                     const convContextRows = await dbAdapter.query(
@@ -200,31 +208,43 @@ class MessageHandler {
             // Default path: Process AI decision engine to generate suggested reply for Admin Dashboard
             const name = customer.name || senderName || 'Customer';
 
-            // Fetch recent messages for multi-turn context
-            let recentMessages = [];
-            try {
-                const recentRows = await dbAdapter.query(
-                    `SELECT message_content, message_type FROM messages
-                     WHERE customer_phone LIKE ? ORDER BY id DESC LIMIT 6`,
-                    [`%${normalizedPhone.slice(-10)}`]
-                );
-                recentMessages = (recentRows || []).reverse().map(r =>
-                    `${r.message_type === 'incoming' ? 'Customer' : 'Agent'}: ${String(r.message_content || '').substring(0, 150)}`
-                );
-            } catch (e) { /* non-critical */ }
+            let aiSuggestion = null;
+            let scenarioTag = 'general';
+            let aiConfidence = null;
+            let aiSentiment = null;
 
-            const autoResult = await autoSupportAgent.processCustomerMessage(normalizedPhone, cleanMessage, name, { recentMessages });
+            // Skip AI for media-only messages (no text to analyze)
+            if (cleanMessage) {
+                // Fetch recent messages for multi-turn context
+                let recentMessages = [];
+                try {
+                    const recentRows = await dbAdapter.query(
+                        `SELECT message_content, message_type FROM messages
+                         WHERE customer_phone LIKE ? ORDER BY id DESC LIMIT 6`,
+                        [`%${normalizedPhone.slice(-10)}`]
+                    );
+                    recentMessages = (recentRows || []).reverse().map(r =>
+                        `${r.message_type === 'incoming' ? 'Customer' : 'Agent'}: ${String(r.message_content || '').substring(0, 150)}`
+                    );
+                } catch (e) { /* non-critical */ }
 
-            const aiSuggestion = (autoResult && autoResult.reply) ? autoResult.reply : null;
-            const scenarioTag = (autoResult && autoResult.scenario) ? autoResult.scenario : 'general';
-            const aiConfidence = (autoResult && autoResult.confidence != null) ? autoResult.confidence : null;
-            const aiSentiment = (autoResult && autoResult.sentiment) ? autoResult.sentiment : null;
+                const autoResult = await autoSupportAgent.processCustomerMessage(normalizedPhone, cleanMessage, name, { recentMessages });
 
-            if (aiSuggestion) {
-                console.log(`💡 [AI DASHBOARD SUGGESTION] Generated for ${normalizedPhone} (Scenario: ${scenarioTag}, Confidence: ${aiConfidence}, Sentiment: ${aiSentiment}). Routing to Admin Dashboard.`);
+                aiSuggestion = (autoResult && autoResult.reply) ? autoResult.reply : null;
+                scenarioTag = (autoResult && autoResult.scenario) ? autoResult.scenario : 'general';
+                aiConfidence = (autoResult && autoResult.confidence != null) ? autoResult.confidence : null;
+                aiSentiment = (autoResult && autoResult.sentiment) ? autoResult.sentiment : null;
+
+                if (aiSuggestion) {
+                    console.log(`💡 [AI DASHBOARD SUGGESTION] Generated for ${normalizedPhone} (Scenario: ${scenarioTag}, Confidence: ${aiConfidence}, Sentiment: ${aiSentiment}). Routing to Admin Dashboard.`);
+                }
             }
 
             // Create or update Support Ticket for Admin Dashboard (DO NOT send to customer directly)
+            // For media-only messages (empty cleanMessage), use a descriptive placeholder
+            const messageContent = cleanMessage || (attachment ? `[${attachment.fileType} attachment]` : '');
+            if (!messageContent && !attachment) return; // Nothing to ticket
+
             const existingTicket = await dbAdapter.query(
                 'SELECT id, ticket_number FROM support_tickets WHERE customer_phone = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
                 [normalizedPhone, 'open']
@@ -236,8 +256,8 @@ class MessageHandler {
 
                 // Auto-append to existing open ticket with AI suggestion attached
                 const appendContent = aiSuggestion
-                    ? `${cleanMessage}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag} | Confidence: ${aiConfidence} | Sentiment: ${aiSentiment}]\n${aiSuggestion}`
-                    : cleanMessage;
+                    ? `${messageContent}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag} | Confidence: ${aiConfidence} | Sentiment: ${aiSentiment}]\n${aiSuggestion}`
+                    : messageContent;
 
                 await dbAdapter.query(
                     `UPDATE support_tickets
@@ -256,8 +276,8 @@ class MessageHandler {
                 const ticketNumber = await generateUniqueTicketNumber();
                 const portalId = await getPortalIdForNewTicket();
                 const ticketMessage = aiSuggestion
-                    ? `${cleanMessage}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag} | Confidence: ${aiConfidence} | Sentiment: ${aiSentiment}]\n${aiSuggestion}`
-                    : cleanMessage;
+                    ? `${messageContent}\n\n💡 [AI SUGGESTED REPLY - SOP: ${scenarioTag} | Confidence: ${aiConfidence} | Sentiment: ${aiSentiment}]\n${aiSuggestion}`
+                    : messageContent;
 
                 await dbAdapter.query(
                     `INSERT INTO support_tickets (ticket_number, customer_phone, customer_name, message, portal_id, is_read, sentiment, ai_confidence, ai_scenario)

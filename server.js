@@ -422,14 +422,13 @@ app.post('/webhook', (req, res) => {
               try {
                 const mediaService = require('./src/services/mediaService');
                 mediaAttachment = await mediaService.processIncomingMedia(mediaObj, mediaType);
-                // Build a caption as the text body (if any)
+                // Only pass caption text — never store "[image]" as message content
                 const caption = mediaObj.caption || '';
-                const textBody = caption || `[${mediaType}]`;
-                await messageHandler.processMessage(from, textBody, senderName, mediaAttachment);
+                await messageHandler.processMessage(from, caption, senderName, mediaAttachment);
               } catch (mediaErr) {
                 console.error(`❌ Media processing error from ${from}:`, mediaErr.message);
-                // Still process as a text fallback so the ticket isn't lost
-                await messageHandler.processMessage(from, `[Sent a ${mediaType}]`, senderName, null);
+                // Don't store a text fallback — there's no attachment to display
+                await messageHandler.processMessage(from, '', senderName, null);
               }
             });
             return; // Already sent 200

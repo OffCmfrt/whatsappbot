@@ -440,8 +440,12 @@ function focusTab(ticketId) {
         }
     }
 
-    // Render messages for this chat
-    renderChatMessages(chat.messages, true);
+    // Render messages for this chat (merge with attachments for inline media)
+    (async () => {
+        const attachments = await loadAttachmentsForChat(t.phone);
+        const merged = mergeMessagesWithAttachments(chat.messages, attachments);
+        renderChatMessages(merged, true);
+    })();
     renderTabs();
     renderSidebarTickets(getFilteredTickets());
     // Re-inject AI suggest button
@@ -527,10 +531,10 @@ async function loadChatMessages(ticketId, showLoading = true) {
         if (data.success) {
             chat.messages = data.messages || [];
             if (String(ticketId) === activeChatId) {
-                renderChatMessages(chat.messages, showLoading);
-                // Load and render attachments below the chat
+                // Load attachments and merge with messages for inline rendering
                 const attachments = await loadAttachmentsForChat(chat.ticket.phone);
-                renderAttachmentsInChat(attachments);
+                const merged = mergeMessagesWithAttachments(chat.messages, attachments);
+                renderChatMessages(merged, showLoading);
             }
         }
     } catch (error) {
@@ -538,6 +542,37 @@ async function loadChatMessages(ticketId, showLoading = true) {
             document.getElementById('chatMessages').innerHTML = '<div class="chat-loading">Failed to load messages</div>';
         }
     }
+}
+
+/**
+ * Merge messages and attachments into a single chronologically sorted stream.
+ * Messages with media-placeholder content ([image], [video], etc.) are filtered out
+ * since the attachment itself will be rendered inline.
+ */
+function mergeMessagesWithAttachments(messages, attachments) {
+    const stream = [];
+
+    // Add messages, filtering out media-placeholder-only content
+    for (const msg of (messages || [])) {
+        const content = (msg.content || '').trim();
+        // Skip messages that are only media placeholders — the attachment renders instead
+        if (/^\[(image|video|document|audio|sticker|Sent a \w+)\]$/i.test(content)) continue;
+        stream.push({ type: 'message', ...msg });
+    }
+
+    // Add attachments as stream items
+    for (const att of (attachments || [])) {
+        stream.push({ type: 'attachment', ...att });
+    }
+
+    // Sort chronologically
+    stream.sort((a, b) => {
+        const ta = new Date(a.timestamp || a.created_at).getTime();
+        const tb = new Date(b.timestamp || b.created_at).getTime();
+        return ta - tb;
+    });
+
+    return stream;
 }
 
 function renderAttachmentsInChat(attachments) {
@@ -554,31 +589,25 @@ function renderAttachmentsInChat(attachments) {
     container.scrollTop = container.scrollHeight;
 }
 
-function renderChatMessages(messages, isInitialLoad = true) {
+function renderChatMessages(items, isInitialLoad = true) {
     const container = document.getElementById('chatMessages');
-    if (!messages || messages.length === 0) {
+    if (!items || items.length === 0) {
         container.innerHTML = `<div class="chat-loading" style="padding:40px;"><div class="sidebar-empty-text">No messages yet</div></div>`;
         const chat = activeChatId ? openChats.get(String(activeChatId)) : null;
         if (chat) chat.lastMsgCount = 0;
         return;
     }
+
+    // Full render — items is a merged stream of {type:'message',...} and {type:'attachment',...}
+    container.innerHTML = items.map(item => {
+        if (item.type === 'attachment') {
+            return renderAttachment(item);
+        }
+        return renderOneMessage(item);
+    }).join('');
+
     const chat = activeChatId ? openChats.get(String(activeChatId)) : null;
-    const lastCount = chat ? chat.lastMsgCount : 0;
-
-    // Append-only optimization
-    if (!isInitialLoad && messages.length > lastCount && lastCount > 0) {
-        const newMsgs = messages.slice(lastCount);
-        const newHtml = newMsgs.map(msg => renderOneMessage(msg)).join('');
-        container.insertAdjacentHTML('beforeend', newHtml);
-        if (chat) chat.lastMsgCount = messages.length;
-        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
-        if (isNearBottom) container.scrollTop = container.scrollHeight;
-        return;
-    }
-
-    // Full render
-    container.innerHTML = messages.map(msg => renderOneMessage(msg)).join('');
-    if (chat) chat.lastMsgCount = messages.length;
+    if (chat) chat.lastMsgCount = items.length;
     if (isInitialLoad) container.scrollTop = container.scrollHeight;
 }
 

@@ -538,11 +538,20 @@ async function openChat(ticketId, phone, name, channel) {
     modal.classList.add('active');
     document.getElementById('chatMessages').innerHTML = '<div class="chat-loading"><div class="spinner"></div><span>Loading...</span></div>';
 
-    // Load chat history
+    // Load chat history + attachments for inline media rendering
     try {
-        const data = await apiFetch(`/chat/${phone}?limit=200`);
-        if (data?.success) renderChatMessages(data.messages || []);
-        else document.getElementById('chatMessages').innerHTML = '<div class="chat-loading"><span>No messages found</span></div>';
+        const [chatData, attData] = await Promise.all([
+            apiFetch(`/chat/${phone}?limit=200`),
+            apiFetch(`/support-tickets/${encodeURIComponent(phone)}/attachments`).catch(() => ({ success: false, attachments: [] }))
+        ]);
+        if (chatData?.success) {
+            const messages = chatData.messages || [];
+            const attachments = attData?.success ? (attData.attachments || []) : [];
+            const merged = mergeDashMessagesWithAttachments(messages, attachments);
+            renderChatMessages(merged);
+        } else {
+            document.getElementById('chatMessages').innerHTML = '<div class="chat-loading"><span>No messages found</span></div>';
+        }
     } catch {
         document.getElementById('chatMessages').innerHTML = '<div class="chat-loading"><span>Error loading chat</span></div>';
     }
@@ -551,16 +560,58 @@ async function openChat(ticketId, phone, name, channel) {
     prefetchAiSuggestions(phone, ticketId);
 }
 
-function renderChatMessages(messages) {
+function renderChatMessages(items) {
     const container = document.getElementById('chatMessages');
     container.innerHTML = '';
-    messages.forEach(m => {
+    items.forEach(item => {
         const div = document.createElement('div');
-        div.className = `chat-msg ${m.sender === 'customer' ? 'incoming' : 'outgoing'}`;
-        div.innerHTML = `<div>${esc(m.content || '')}</div><div class="chat-msg-time">${formatTime(m.created_at)}</div>`;
+        if (item.type === 'attachment') {
+            div.className = `chat-msg ${item.direction === 'outgoing' ? 'outgoing' : 'incoming'}`;
+            div.innerHTML = renderDashAttachment(item);
+        } else {
+            div.className = `chat-msg ${item.sender === 'customer' ? 'incoming' : 'outgoing'}`;
+            div.innerHTML = `<div>${esc(item.content || '')}</div><div class="chat-msg-time">${formatTime(item.created_at)}</div>`;
+        }
         container.appendChild(div);
     });
     container.scrollTop = container.scrollHeight;
+}
+
+/** Merge messages and attachments chronologically; filter out media-placeholder text */
+function mergeDashMessagesWithAttachments(messages, attachments) {
+    const stream = [];
+    for (const msg of (messages || [])) {
+        const content = (msg.content || '').trim();
+        if (/^\[(image|video|document|audio|sticker|Sent a \w+)\]$/i.test(content)) continue;
+        stream.push({ type: 'message', ...msg });
+    }
+    for (const att of (attachments || [])) {
+        stream.push({ type: 'attachment', ...att });
+    }
+    stream.sort((a, b) => {
+        const ta = new Date(a.timestamp || a.created_at).getTime();
+        const tb = new Date(b.timestamp || b.created_at).getTime();
+        return ta - tb;
+    });
+    return stream;
+}
+
+/** Render a media attachment as inline HTML for the dashboard chat */
+function renderDashAttachment(att) {
+    const isImage = att.file_type === 'image' || (att.mime_type && att.mime_type.startsWith('image/'));
+    const isVideo = att.file_type === 'video' || (att.mime_type && att.mime_type.startsWith('video/'));
+    let html = '';
+    if (isImage) {
+        const url = att.thumbnail_url || att.file_url;
+        html = `<img src="${esc(url)}" alt="attachment" style="max-width:220px;border-radius:8px;display:block;cursor:pointer;" onclick="window.open('${esc(att.file_url)}','_blank')">`;
+    } else if (isVideo) {
+        html = `<video src="${esc(att.file_url)}" controls preload="metadata" style="max-width:220px;border-radius:8px;"></video>`;
+    } else {
+        html = `<a href="${esc(att.file_url)}" target="_blank" style="color:var(--accent);">📎 ${esc(att.file_name || 'File')}</a>`;
+    }
+    if (att.caption) html += `<div style="font-size:12px;margin-top:4px;color:var(--text-secondary);">${esc(att.caption)}</div>`;
+    html += `<div class="chat-msg-time">${formatTime(att.created_at)}</div>`;
+    return html;
 }
 
 async function sendChatMessage() {
