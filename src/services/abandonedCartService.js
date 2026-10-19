@@ -22,7 +22,8 @@ class AbandonedCartService {
 
         } catch (error) {
             // Log but don't throw - webhooks should always return 200
-            if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE constraint'))) {
+            // PostgreSQL: code '23505'; SQLite: SQLITE_CONSTRAINT / 'UNIQUE constraint' in message
+            if (error.code === '23505' || error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE constraint')) || (error.message && error.message.includes('duplicate key'))) {
                 console.log(`⚡ Duplicate checkout ${data?.checkout_id} handled gracefully`);
             } else {
                 console.error('Error processing abandoned checkout:', error);

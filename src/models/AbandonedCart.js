@@ -38,7 +38,8 @@ class AbandonedCart {
             });
         } catch (error) {
             // Handle race condition: another webhook already inserted
-            if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE constraint'))) {
+            // PostgreSQL: code '23505'; SQLite: SQLITE_CONSTRAINT / 'UNIQUE constraint' in message
+            if (error.code === '23505' || error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE constraint')) || (error.message && error.message.includes('duplicate key'))) {
                 console.log(`⚡ Race condition detected for checkout ${cartData.checkout_id} - updating instead`);
                 try {
                     await this.updateStatus(cartData.checkout_id, 'pending', {

@@ -80,7 +80,8 @@ router.post('/checkout/create', verifyShopifyWebhook, async (req, res) => {
         res.status(200).send('OK');
     } catch (error) {
         // Don't fail webhooks for duplicate constraint errors
-        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE constraint'))) {
+        // PostgreSQL: code '23505'; SQLite: SQLITE_CONSTRAINT / 'UNIQUE constraint' in message
+        if (error.code === '23505' || error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE constraint')) || (error.message && error.message.includes('duplicate key'))) {
             console.log(`⚡ Duplicate webhook detected, ignoring gracefully`);
             res.status(200).send('OK'); // Accept but don't process
         } else {
@@ -96,7 +97,8 @@ router.post('/checkout/update', verifyShopifyWebhook, async (req, res) => {
         res.status(200).send('OK');
     } catch (error) {
         // Don't fail webhooks for duplicate constraint errors
-        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE constraint'))) {
+        // PostgreSQL: code '23505'; SQLite: SQLITE_CONSTRAINT / 'UNIQUE constraint' in message
+        if (error.code === '23505' || error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE constraint')) || (error.message && error.message.includes('duplicate key'))) {
             console.log(`⚡ Duplicate webhook detected, ignoring gracefully`);
             res.status(200).send('OK'); // Accept but don't process
         } else {
