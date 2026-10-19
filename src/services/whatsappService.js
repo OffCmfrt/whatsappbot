@@ -253,6 +253,77 @@ class WhatsAppService {
         }
     }
 
+    // Send a video
+    async sendVideo(to, videoUrl, caption = '', logType = 'outgoing') {
+        try {
+            const cleanPhone = this.formatPhoneNumber(to);
+
+            const response = await axios.post(
+                `${this.baseURL}/messages`,
+                {
+                    messaging_product: 'whatsapp',
+                    recipient_type: 'individual',
+                    to: cleanPhone,
+                    type: 'video',
+                    video: {
+                        link: videoUrl,
+                        caption: caption
+                    }
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            console.log(`[OK] Video sent to ${cleanPhone}`);
+            const waMsgId = response.data?.messages?.[0]?.id || null;
+            this._logOutgoing(cleanPhone, caption ? `[Video] ${caption}` : '[Video]', logType, waMsgId);
+            return response.data;
+        } catch (error) {
+            console.error('❌ Error sending WhatsApp video:', error.response?.data || error.message);
+            if (error.response?.data) console.error('Meta API Response Detail:', JSON.stringify(error.response.data, null, 2));
+            throw error;
+        }
+    }
+
+    // Send an audio file
+    async sendAudio(to, audioUrl, logType = 'outgoing') {
+        try {
+            const cleanPhone = this.formatPhoneNumber(to);
+
+            const response = await axios.post(
+                `${this.baseURL}/messages`,
+                {
+                    messaging_product: 'whatsapp',
+                    recipient_type: 'individual',
+                    to: cleanPhone,
+                    type: 'audio',
+                    audio: {
+                        link: audioUrl
+                    }
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            console.log(`[OK] Audio sent to ${cleanPhone}`);
+            const waMsgId = response.data?.messages?.[0]?.id || null;
+            this._logOutgoing(cleanPhone, '[Audio]', logType, waMsgId);
+            return response.data;
+        } catch (error) {
+            console.error('❌ Error sending WhatsApp audio:', error.response?.data || error.message);
+            if (error.response?.data) console.error('Meta API Response Detail:', JSON.stringify(error.response.data, null, 2));
+            throw error;
+        }
+    }
+
     // Send a CTA URL button message (tappable button that opens a URL)
     async sendCtaUrlMessage(to, bodyText, buttonLabel, url, header = null, footerText = null) {
         try {

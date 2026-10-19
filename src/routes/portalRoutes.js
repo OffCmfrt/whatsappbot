@@ -962,4 +962,59 @@ router.post('/:slug/chat/send-image', verifyPortalToken, upload.single('image'),
     }
 });
 
+// Upload & send ANY file type (document, video, audio, image) from the portal
+router.post('/:slug/chat/send-file', verifyPortalToken, upload.single('file'), async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const { phone, caption = '' } = req.body;
+
+        if (slug !== req.portal.slug) return res.status(403).json({ error: 'Portal mismatch' });
+        if (!phone || !req.file) return res.status(400).json({ error: 'Phone and file are required' });
+
+        const hasAccess = await verifyPhoneInPortal(phone, req.portal);
+        if (!hasAccess) return res.status(403).json({ error: 'Phone not associated with this portal' });
+
+        const mediaService = require('../services/mediaService');
+        const mimeType = req.file.mimetype || 'application/octet-stream';
+        const uploaded = await mediaService.uploadFromFilePath(req.file.path, req.file.originalname, mimeType);
+
+        // Cleanup multer temp file
+        try { require('fs').unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+
+        // Send via WhatsApp using the correct media type
+        const cleanPhone = phone.replace(/\D/g, '');
+        const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
+        await mediaService.sendMediaToCustomer(formattedPhone, uploaded.fileUrl, mimeType, uploaded.fileName, caption);
+
+        // Determine file type category for DB record
+        let fileType = 'document';
+        if (mimeType.startsWith('image/')) fileType = 'image';
+        else if (mimeType.startsWith('video/')) fileType = 'video';
+        else if (mimeType.startsWith('audio/')) fileType = 'audio';
+
+        // Save attachment record
+        const ticketRows = await dbAdapter.query(
+            'SELECT id FROM support_tickets WHERE customer_phone = ? AND status != ? ORDER BY created_at DESC LIMIT 1',
+            [phone, 'closed']
+        );
+        await mediaService.saveAttachment({
+            ticketId: ticketRows?.[0]?.id || null,
+            customerPhone: phone,
+            fileUrl: uploaded.fileUrl,
+            thumbnailUrl: uploaded.thumbnailUrl,
+            fileType,
+            fileName: uploaded.fileName,
+            fileSize: uploaded.fileSize,
+            mimeType: uploaded.mimeType,
+            caption,
+            direction: 'outgoing'
+        });
+
+        res.json({ success: true, message: `${fileType} sent`, fileUrl: uploaded.fileUrl });
+    } catch (error) {
+        console.error('Portal send file error:', error);
+        res.status(500).json({ error: 'Failed to send file', details: error.message });
+    }
+});
+
 module.exports = router;

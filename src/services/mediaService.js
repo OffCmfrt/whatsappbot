@@ -116,7 +116,10 @@ function getSharp() {
     return _sharp;
 }
 
-const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const IMAGE_TYPES = new Set([
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+    'image/heic', 'image/heif', 'image/bmp', 'image/tiff'
+]);
 const MAX_IMAGE_DIMENSION = 1920; // Resize images larger than this
 const THUMBNAIL_DIMENSION = 400; // Thumbnail size for chat display
 const JPEG_QUALITY = 82; // Good balance of quality vs size
@@ -398,6 +401,31 @@ async function sendImageToCustomer(to, imageUrl, caption = '') {
 }
 
 /**
+ * Send any media type to a WhatsApp customer — dispatches to the correct
+ * WhatsApp API call based on MIME type / file type.
+ * @param {string} to         - Customer phone number
+ * @param {string} fileUrl    - Public URL of the file (Supabase signed URL)
+ * @param {string} mimeType   - MIME type of the file
+ * @param {string} fileName   - Original filename (for document display)
+ * @param {string} caption    - Optional caption text
+ */
+async function sendMediaToCustomer(to, fileUrl, mimeType, fileName, caption = '') {
+    const whatsappService = require('./whatsappService');
+
+    if (mimeType && mimeType.startsWith('image/')) {
+        return whatsappService.sendImage(to, fileUrl, caption, 'manual_reply');
+    }
+    if (mimeType && mimeType.startsWith('video/')) {
+        return whatsappService.sendVideo(to, fileUrl, caption, 'manual_reply');
+    }
+    if (mimeType && mimeType.startsWith('audio/')) {
+        return whatsappService.sendAudio(to, fileUrl, 'manual_reply');
+    }
+    // Everything else → document (PDF, DOC, XLS, ZIP, etc.)
+    return whatsappService.sendDocument(to, fileUrl, fileName || 'document', caption, 'manual_reply');
+}
+
+/**
  * Upload a file from disk (multer diskStorage path) to Supabase Storage.
  * More memory-efficient than buffer-based upload — no RAM copy of file content.
  * @param {string} filePath - Path to file on disk
@@ -526,26 +554,59 @@ function typeFolder(messageType) {
 
 function mimeToExt(mime, messageType) {
     const map = {
+        // Images
         'image/jpeg': '.jpg',
         'image/png': '.png',
         'image/gif': '.gif',
         'image/webp': '.webp',
+        'image/heic': '.heic',
+        'image/heif': '.heif',
+        'image/bmp': '.bmp',
+        'image/svg+xml': '.svg',
+        'image/tiff': '.tiff',
+        // Video
         'video/mp4': '.mp4',
         'video/3gpp': '.3gp',
+        'video/quicktime': '.mov',
+        'video/x-msvideo': '.avi',
+        'video/webm': '.webm',
+        // Audio
         'audio/aac': '.aac',
         'audio/ogg': '.ogg',
         'audio/mpeg': '.mp3',
+        'audio/mp4': '.m4a',
+        'audio/wav': '.wav',
+        'audio/webm': '.webm',
+        'audio/amr': '.amr',
+        // Documents
         'application/pdf': '.pdf',
         'application/msword': '.doc',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
         'application/vnd.ms-excel': '.xls',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-        'text/plain': '.txt'
+        'application/vnd.ms-powerpoint': '.ppt',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+        'application/rtf': '.rtf',
+        'application/zip': '.zip',
+        'application/x-rar-compressed': '.rar',
+        'application/x-7z-compressed': '.7z',
+        'application/gzip': '.gz',
+        'application/json': '.json',
+        'application/xml': '.xml',
+        'application/vnd.android.package-archive': '.apk',
+        // Text
+        'text/plain': '.txt',
+        'text/csv': '.csv',
+        'text/html': '.html',
+        'text/css': '.css'
     };
     if (map[mime]) return map[mime];
+    // Fallback by message type
     if (messageType === 'image') return '.jpg';
     if (messageType === 'video') return '.mp4';
     if (messageType === 'audio') return '.ogg';
+    if (messageType === 'document') return '.bin';
+    if (messageType === 'sticker') return '.webp';
     return '.bin';
 }
 
@@ -634,6 +695,7 @@ async function getAttachmentsForPhone(customerPhone, limit = 50) {
 module.exports = {
     processIncomingMedia,
     sendImageToCustomer,
+    sendMediaToCustomer,
     uploadFromDashboard,
     uploadFromFilePath,
     saveAttachment,
