@@ -163,9 +163,9 @@ async function optimizeImage(inputPath, originalMime) {
 
         await pipeline.toFile(outputPath);
 
-        // Generate thumbnail for chat display
-        const thumbPath = inputPath.replace(/\.[^.]+$/, `_thumb.webp`);
-        await sharp(inputPath)
+        // Generate thumbnail from optimized output (avoids re-reading original)
+        const thumbPath = outputPath.replace(/\.[^.]+$/, `_thumb.webp`);
+        await sharp(outputPath)
             .resize(THUMBNAIL_DIMENSION, THUMBNAIL_DIMENSION, { fit: 'inside', withoutEnlargement: true })
             .webp({ quality: 75 })
             .toFile(thumbPath);
@@ -193,26 +193,23 @@ async function optimizeImage(inputPath, originalMime) {
 
 /**
  * Upload a file from disk to Supabase Storage.
- * Streams the file instead of buffering entire content in RAM.
+ * Streams via fs.createReadStream — never buffers the full file in RAM.
  */
 async function uploadFileToStorage(filePath, storagePath, contentType) {
-    console.log(`[MEDIA] uploadFileToStorage called:`, { filePath, storagePath, contentType });
     await ensureBucket();
 
-    const fileBuffer = await fs.readFile(filePath);
-    console.log(`[MEDIA] File read, size:`, fileBuffer.length, 'bytes');
-
+    const stat = await fs.stat(filePath);
     const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${storagePath}`;
-    console.log(`[MEDIA] Uploading to:`, uploadUrl);
 
     const uploadResp = await axios.post(
         uploadUrl,
-        fileBuffer,
+        require('fs').createReadStream(filePath),
         {
             headers: {
                 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
                 'apikey': SUPABASE_SERVICE_KEY,
                 'Content-Type': contentType,
+                'Content-Length': stat.size,
                 'x-upsert': 'true'
             },
             maxBodyLength: 52428800,
@@ -220,16 +217,12 @@ async function uploadFileToStorage(filePath, storagePath, contentType) {
             timeout: 60000
         }
     );
-    console.log(`[MEDIA] Upload response status:`, uploadResp.status);
 
     // Generate signed URL (valid for 7 days) - more reliable than public URLs
     try {
-        const signUrl = `${SUPABASE_URL}/storage/v1/object/sign/${STORAGE_BUCKET}/${storagePath}`;
-        console.log(`[MEDIA] Requesting signed URL from:`, signUrl);
-        
-        const { data: signedUrlData, error } = await axios.post(
-            signUrl,
-            { expiresIn: 604800 }, // 7 days in seconds
+        const { data: signedUrlData } = await axios.post(
+            `${SUPABASE_URL}/storage/v1/object/sign/${STORAGE_BUCKET}/${storagePath}`,
+            { expiresIn: 604800 },
             {
                 headers: {
                     'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
@@ -238,58 +231,20 @@ async function uploadFileToStorage(filePath, storagePath, contentType) {
                 },
                 timeout: 10000
             }
-        ).then(r => {
-            console.log(`[MEDIA] Sign response:`, r.status, r.data);
-            return { data: r.data, error: null };
-        }).catch(e => {
-            console.error(`[MEDIA] Sign error:`, e.response?.status, e.response?.data || e.message);
-            return { data: null, error: e };
-        });
+        );
 
         if (signedUrlData?.signedURL || signedUrlData?.signedUrl) {
             const rawSigned = signedUrlData.signedURL || signedUrlData.signedUrl;
-            // Supabase returns relative path like /object/sign/... — need /storage/v1 prefix
-            const fullSignedUrl = rawSigned.startsWith('http') 
-                ? rawSigned 
+            const fullSignedUrl = rawSigned.startsWith('http')
+                ? rawSigned
                 : rawSigned.startsWith('/object/')
                     ? `${SUPABASE_URL}/storage/v1${rawSigned}`
                     : `${SUPABASE_URL}${rawSigned}`;
-            console.log(`[MEDIA] ✓ Signed URL generated:`, fullSignedUrl.substring(0, 100) + '...');
             return fullSignedUrl;
-        } else {
-            console.warn(`[MEDIA] Signed URL response missing field:`, JSON.stringify(signedUrlData));
         }
     } catch (err) {
-        console.warn('[MEDIA] Signed URL generation failed, falling back to public URL:', err.message);
+        // Fall through to public URL
     }
-
-    // Fallback to public URL
-    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
-    console.log(`[MEDIA] Using public URL:`, publicUrl);
-    return publicUrl;
-}
-
-/**
- * Upload a buffer to Supabase Storage (legacy path for small files).
- */
-async function uploadBufferToStorage(buffer, storagePath, contentType) {
-    await ensureBucket();
-
-    await axios.post(
-        `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${storagePath}`,
-        buffer,
-        {
-            headers: {
-                'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-                'apikey': SUPABASE_SERVICE_KEY,
-                'Content-Type': contentType,
-                'x-upsert': 'true'
-            },
-            maxBodyLength: 52428800,
-            maxContentLength: 52428800,
-            timeout: 60000
-        }
-    );
 
     return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
 }
