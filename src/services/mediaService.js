@@ -416,7 +416,20 @@ async function processIncomingMedia(mediaObj, messageType) {
         if (thumbnailPath) await cleanupTempFile(thumbnailPath);
 
         console.error('[MEDIA] Failed to process media:', error.message);
-        if (error.response?.data) console.error('[MEDIA] Error detail:', JSON.stringify(error.response.data).substring(0, 300));
+        // error.response.data may be a stream (downloadMediaToDisk uses responseType:'stream')
+        // — JSON.stringify on a stream dumps internal _readableState/_events garbage.
+        if (error.response) {
+            const status = error.response.status;
+            const statusText = error.response.statusText || '';
+            const data = error.response.data;
+            if (data && typeof data === 'object' && !data._readableState) {
+                // Plain JSON error body (e.g. from Supabase upload)
+                console.error(`[MEDIA] Error detail (${status} ${statusText}):`, JSON.stringify(data).substring(0, 300));
+            } else {
+                // Stream or non-serializable response — log status only
+                console.error(`[MEDIA] Error detail: HTTP ${status} ${statusText}`);
+            }
+        }
         return null;
     }
 }
