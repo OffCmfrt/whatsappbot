@@ -136,49 +136,52 @@ async function prepareAndCreateCreditNote({ shopifyOrder, orderId, returnItems, 
     creditNotePayload.customer_id = fullInvoice?.customer_id || originalInvoice.customer_id || customerId;
     creditNotePayload.invoice_id = originalInvoice.invoice_id;
 
-    // For RTOs where ALL items are returned, include shipping in the credit
-    // note so the invoice balances to zero. Without this, the shipping charge
-    // remains as an outstanding balance on the invoice.
+    // For RTOs where ALL items are returned, include shipping and COD charges
+    // in the credit note so the invoice balances to zero. Without this, those
+    // charges remain as an outstanding balance on the invoice.
     if (returnType === 'rto' && fullInvoice?.line_items?.length > 0) {
-        const invoiceItemLines = fullInvoice.line_items.filter(l =>
-            !l.name.toLowerCase().includes('shipping') &&
-            !l.description?.toLowerCase().includes('shipping')
-        );
-        const shippingLine = fullInvoice.line_items.find(l =>
-            l.name.toLowerCase().includes('shipping') ||
-            l.description?.toLowerCase().includes('shipping')
-        );
+        const isNonProductLine = (l) => {
+            const name = (l.name || '').toLowerCase();
+            const desc = (l.description || '').toLowerCase();
+            return name.includes('shipping') || desc.includes('shipping')
+                || name.includes('cod') || desc.includes('cod')
+                || name.includes('cash on delivery') || desc.includes('cash on delivery');
+        };
 
-        // Check if all invoice items are being returned
+        const invoiceItemLines = fullInvoice.line_items.filter(l => !isNonProductLine(l));
+        const nonProductLines = fullInvoice.line_items.filter(l => isNonProductLine(l));
+
+        // Check if all invoice product items are being returned
         const totalInvoiceQty = invoiceItemLines.reduce((sum, l) => sum + parseFloat(l.quantity || 0), 0);
         const totalReturnQty = returnItems.reduce((sum, l) => sum + parseInt(l.quantity || 1), 0);
 
-        if (shippingLine && totalReturnQty >= totalInvoiceQty && totalInvoiceQty > 0) {
-            // All items returned — add shipping to credit note
-            const shippingCreditLine = {
-                name: shippingLine.name,
-                description: 'RTO Shipping Charge Reversal',
-                quantity: parseFloat(shippingLine.quantity || 1),
-                rate: parseFloat(shippingLine.rate || 0),
-                discount: parseFloat(shippingLine.discount || 0)
-            };
+        if (totalReturnQty >= totalInvoiceQty && totalInvoiceQty > 0) {
+            // All items returned — add shipping/COD lines to credit note
+            for (const extraLine of nonProductLines) {
+                const creditLine = {
+                    name: extraLine.name,
+                    description: `RTO ${extraLine.name} Reversal`,
+                    quantity: parseFloat(extraLine.quantity || 1),
+                    rate: parseFloat(extraLine.rate || 0),
+                    discount: parseFloat(extraLine.discount || 0)
+                };
 
-            // Preserve tax treatment from original shipping line
-            if (shippingLine.taxes) {
-                for (const t of shippingLine.taxes) {
-                    const name = String(t.tax_name || '').toUpperCase();
-                    const rate = parseFloat(t.rate || 0);
-                    if (name.includes('IGST')) shippingCreditLine.igst_rate = rate;
-                    else if (name.includes('CGST')) shippingCreditLine.cgst_rate = rate;
-                    else if (name.includes('SGST')) shippingCreditLine.sgst_rate = rate;
+                // Preserve tax treatment from original line
+                if (extraLine.taxes) {
+                    for (const t of extraLine.taxes) {
+                        const tName = String(t.tax_name || '').toUpperCase();
+                        const tRate = parseFloat(t.rate || 0);
+                        if (tName.includes('IGST')) creditLine.igst_rate = tRate;
+                        else if (tName.includes('CGST')) creditLine.cgst_rate = tRate;
+                        else if (tName.includes('SGST')) creditLine.sgst_rate = tRate;
+                    }
+                } else if (extraLine.tax_percentage) {
+                    creditLine.tax_percentage = parseFloat(extraLine.tax_percentage || 0);
                 }
-            } else if (shippingLine.tax_percentage) {
-                const taxPct = parseFloat(shippingLine.tax_percentage || 0);
-                shippingCreditLine.tax_percentage = taxPct;
-            }
 
-            creditNotePayload.line_items.push(shippingCreditLine);
-            console.log(`📦 Zoho RTO: all items returned, added shipping (₹${shippingCreditLine.rate.toFixed(2)}) to credit note`);
+                creditNotePayload.line_items.push(creditLine);
+                console.log(`📦 Zoho RTO: all items returned, added ${extraLine.name} (₹${creditLine.rate.toFixed(2)}) to credit note`);
+            }
         }
     }
 

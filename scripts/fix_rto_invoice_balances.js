@@ -2,8 +2,8 @@
  * Fix RTO Invoice Balances — September 1, 2026 onwards (BULK OPTIMIZED)
  * ---------------------------------------------------------------------
  * RTO credit notes were created for product amounts only, missing shipping
- * charges. This leaves invoices with non-zero balances even after the RTO
- * credit note is applied.
+ * and COD charges. This leaves invoices with non-zero balances even after
+ * the RTO credit note is applied.
  *
  * OPTIMIZED: Fetches all RTO credit notes in bulk first, then only checks
  * the specific invoices that have RTO credit notes, instead of scanning
@@ -175,54 +175,62 @@ async function applyCreditToInvoice(creditNoteId, invoiceId, amount) {
 }
 
 /**
- * Create an additional credit note for the remaining balance (shipping charge).
+ * Create additional credit notes for remaining non-product charges
+ * (shipping, COD charges, etc.) that were missed in the original RTO credit note.
  */
-async function createShippingCreditNote(invoice, remainingBalance) {
-    // Fetch the full invoice to get shipping line details
+async function createNonProductCreditNotes(invoice, remainingBalance) {
+    // Fetch the full invoice to get all non-product line details
     const fullInvoice = await zohoService.getInvoice(invoice.invoice_id);
-    const shippingLine = (fullInvoice.line_items || []).find(l =>
-        l.name.toLowerCase().includes('shipping') ||
-        l.description?.toLowerCase().includes('shipping')
-    );
 
-    if (!shippingLine) {
-        throw new Error('No shipping line found in invoice');
+    const isNonProductLine = (l) => {
+        const name = (l.name || '').toLowerCase();
+        const desc = (l.description || '').toLowerCase();
+        return name.includes('shipping') || desc.includes('shipping')
+            || name.includes('cod') || desc.includes('cod')
+            || name.includes('cash on delivery') || desc.includes('cash on delivery');
+    };
+
+    const nonProductLines = (fullInvoice.line_items || []).filter(isNonProductLine);
+
+    if (nonProductLines.length === 0) {
+        throw new Error('No shipping/COD lines found in invoice');
     }
 
     // Get the customer_id from the invoice
     const customerId = fullInvoice.customer_id;
 
-    // Build credit note for shipping
+    // Build credit note lines for all non-product charges
+    const creditLines = nonProductLines.map(l => ({
+        name: l.name,
+        description: `RTO ${l.name} Reversal`,
+        quantity: parseFloat(l.quantity || 1),
+        rate: parseFloat(l.rate || 0),
+        discount: parseFloat(l.discount || 0),
+        // Preserve tax treatment from original line
+        ...(l.taxes || []).reduce((acc, t) => {
+            const tName = String(t.tax_name || '').toUpperCase();
+            const tRate = parseFloat(t.rate || 0);
+            if (tName.includes('IGST')) acc.igst_rate = tRate;
+            else if (tName.includes('CGST')) acc.cgst_rate = tRate;
+            else if (tName.includes('SGST')) acc.sgst_rate = tRate;
+            return acc;
+        }, {})
+    }));
+
     const creditNotePayload = {
         customer_id: customerId,
         date: new Date().toISOString().split('T')[0],
-        line_items: [{
-            name: shippingLine.name,
-            description: 'RTO Shipping Charge Reversal',
-            quantity: 1,
-            rate: parseFloat(shippingLine.rate || 0),
-            discount: parseFloat(shippingLine.discount || 0),
-            // Preserve tax treatment from original shipping line
-            ...(shippingLine.taxes || []).reduce((acc, t) => {
-                const name = String(t.tax_name || '').toUpperCase();
-                const rate = parseFloat(t.rate || 0);
-                if (name.includes('IGST')) acc.igst_rate = rate;
-                else if (name.includes('CGST')) acc.cgst_rate = rate;
-                else if (name.includes('SGST')) acc.sgst_rate = rate;
-                return acc;
-            }, {})
-        }],
-        notes: `RTO Shipping Charge Reversal for Invoice ${invoice.invoice_number}`,
-        reference_number: `RTO-SHIP-${invoice.reference_number || invoice.invoice_number}`,
+        line_items: creditLines,
+        notes: `RTO Non-Product Charge Reversal for Invoice ${invoice.invoice_number}`,
+        reference_number: `RTO-MISC-${invoice.reference_number || invoice.invoice_number}`,
         is_inclusive_tax: fullInvoice.is_inclusive_tax || false
     };
 
     // Create credit note linked to the invoice
-    const { invoice_id, ...body } = creditNotePayload;
     const params = { invoice_id: invoice.invoice_id };
 
     const url = `${zohoService.BOOKS_BASE()}/creditnotes`;
-    const result = await zohoService.zohoRequest('post', url, body, params);
+    const result = await zohoService.zohoRequest('post', url, creditNotePayload, params);
 
     return result.creditnote;
 }
@@ -273,16 +281,16 @@ async function fixRtoInvoiceBalances() {
                     summary.appliedCredit++;
                 }
             } else {
-                // Credit note is fully applied, need to create additional credit for shipping
-                const shippingAmount = inv.balance;
-                log(`    → Credit note fully applied, creating additional credit note for ₹${shippingAmount.toFixed(2)} (shipping)`);
+                // Credit note is fully applied, need to create additional credit for non-product charges
+                const missingAmount = inv.balance;
+                log(`    → Credit note fully applied, creating additional credit note for ₹${missingAmount.toFixed(2)} (shipping/COD)`);
 
                 if (APPLY) {
-                    const newCn = await createShippingCreditNote(inv, shippingAmount);
-                    log(`    ✅ Created credit note ${newCn.creditnote_number} for ₹${shippingAmount.toFixed(2)}`);
+                    const newCn = await createNonProductCreditNotes(inv, missingAmount);
+                    log(`    ✅ Created credit note ${newCn.creditnote_number} for ₹${missingAmount.toFixed(2)}`);
                     summary.createdCreditNote++;
                 } else {
-                    log(`    [DRY-RUN] Would create credit note for ₹${shippingAmount.toFixed(2)}`);
+                    log(`    [DRY-RUN] Would create credit note for ₹${missingAmount.toFixed(2)}`);
                     summary.createdCreditNote++;
                 }
             }

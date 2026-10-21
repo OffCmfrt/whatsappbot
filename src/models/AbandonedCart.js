@@ -180,6 +180,37 @@ class AbandonedCart {
             console.error('Error expiring old carts:', error);
         }
     }
+
+    // Find cart by WhatsApp message ID (for webhook status updates)
+    static async findByWamid(wamid) {
+        try {
+            const sql = `
+                SELECT * FROM abandoned_carts 
+                WHERE first_reminder_wamid = ? OR second_reminder_wamid = ?
+                LIMIT 1
+            `;
+            const carts = await dbAdapter.query(sql, [wamid, wamid]);
+            return carts[0] || null;
+        } catch (error) {
+            console.error('Error finding abandoned cart by wamid:', error);
+            return null;
+        }
+    }
+
+    // Update wamid for a reminder
+    static async updateWamid(checkoutId, reminderType, wamid) {
+        try {
+            const columnName = reminderType === 'first_reminder' ? 'first_reminder_wamid' : 'second_reminder_wamid';
+            await dbAdapter.update('abandoned_carts', {
+                [columnName]: wamid,
+                updated_at: new Date().toISOString()
+            }, { checkout_id: checkoutId });
+            return true;
+        } catch (error) {
+            console.error('Error updating abandoned cart wamid:', error);
+            return false;
+        }
+    }
 }
 
 module.exports = AbandonedCart;

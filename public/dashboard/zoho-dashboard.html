@@ -435,6 +435,12 @@
                 <div class="wizard-loading">Loading your Shopify bundles &amp; Zoho catalog...</div>
             </div>
 
+            <!-- Debug: skipped items that didn't match colorway pattern -->
+            <details class="advanced-block" id="skippedItemsBlock" style="display:none">
+                <summary>Debug — Zoho items skipped (no colorway pattern match)</summary>
+                <div id="skippedItemsList" style="padding:12px;font-family:monospace;font-size:13px;color:var(--text-dim)"></div>
+            </details>
+
             <!-- Advanced -->
             <details class="advanced-block">
                 <summary>Advanced — raw SKU mapping &amp; all rows</summary>

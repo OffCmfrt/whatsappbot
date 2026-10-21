@@ -567,6 +567,8 @@ async function initializeAbandonedCartsTable() {
         status VARCHAR(50) DEFAULT 'pending',
         first_reminder_sent_at TIMESTAMP,
         second_reminder_sent_at TIMESTAMP,
+        first_reminder_wamid TEXT,
+        second_reminder_wamid TEXT,
         recovered_at TIMESTAMP,
         expired_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

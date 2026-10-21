@@ -368,13 +368,36 @@ router.get('/config/bundles/wizard', requireAdmin, async (req, res) => {
             if (!batch || batch.length < 200) break;
         }
         const groups = {};
+        const skippedItems = []; // debug: track items that don't match the colorway pattern
         for (const it of items || []) {
             const name = it.name || '';
-            const lastDash = name.lastIndexOf(' - ');
-            const size = lastDash > -1 ? name.slice(lastDash + 3).trim() : '';
-            const rest = lastDash > -1 ? name.slice(0, lastDash) : name;
+            
+            // Normalize black items that use "SIZE / Black" or "SIZE Black" format
+            // e.g. "VEST 001 - S / Black" → "VEST 001 ( BLACK ) - S"
+            let normalizedName = name;
+            const slashBlackMatch = name.match(/^(.+?)\s*-\s*(\S+)\s*\/\s*(BLACK|WHITE|GREY|GRAY|RED|BLUE|GREEN|PINK|NAVY)\s*$/i);
+            if (slashBlackMatch) {
+                const [, basePart, size, color] = slashBlackMatch;
+                normalizedName = `${basePart.trim()} ( ${color.toUpperCase()} ) - ${size}`;
+            } else {
+                const spaceBlackMatch = name.match(/^(.+?)\s*-\s*(\S+)\s+(BLACK|WHITE|GREY|GRAY|RED|BLUE|GREEN|PINK|NAVY)\s*$/i);
+                if (spaceBlackMatch) {
+                    const [, basePart, size, color] = spaceBlackMatch;
+                    normalizedName = `${basePart.trim()} ( ${color.toUpperCase()} ) - ${size}`;
+                }
+            }
+            
+            const lastDash = normalizedName.lastIndexOf(' - ');
+            const size = lastDash > -1 ? normalizedName.slice(lastDash + 3).trim() : '';
+            const rest = lastDash > -1 ? normalizedName.slice(0, lastDash) : normalizedName;
             const pm = rest.match(/^(.*?)\s*\((.*)\)\s*$/);
-            if (!pm) continue; // not a per-colorway single
+            if (!pm) {
+                // Track items that look like they could be colorway singles but don't match the pattern
+                if (/VEST|HENLEY|POLO|SLUB|WAFFLE|RAGLAN|SWEATSHIRT/i.test(name)) {
+                    skippedItems.push({ name, reason: 'no parentheses match' });
+                }
+                continue; // not a per-colorway single
+            }
             const famKey = normFam(pm[1]);
             const colorway = pm[2].trim().toUpperCase();
             groups[famKey] = groups[famKey] || { family: pm[1].trim(), colorways: {} };
@@ -422,7 +445,7 @@ router.get('/config/bundles/wizard', requireAdmin, async (req, res) => {
             };
         });
 
-        res.json({ success: true, suggestions, catalog, configured });
+        res.json({ success: true, suggestions, catalog, configured, skippedItems });
     } catch (err) {
         res.status(500).json({ error: 'Wizard data failed', detail: err.message });
     }

@@ -27,6 +27,14 @@ async function syncOrderToZoho(shopifyOrder) {
         return { success: false, error: 'No order identifier' };
     }
 
+    // Shopify sets cancelled_at when an order is cancelled — never create a
+    // Zoho invoice for a cancelled order (the cancel webhook may have fired
+    // before we got here, or the sync_log guard row may not have been seen).
+    if (shopifyOrder.cancelled_at) {
+        console.log(`🚫 Zoho sync: order #${orderId} is cancelled (cancelled_at=${shopifyOrder.cancelled_at}) — skipping invoice creation`);
+        return { success: true, skipped: 'order_cancelled_on_shopify' };
+    }
+
     // Check if auto-sync is enabled
     if (process.env.ZOHO_AUTO_SYNC === 'false') {
         console.log(`⏸️ Zoho auto-sync disabled, logging order #${orderId} as pending`);
@@ -42,6 +50,18 @@ async function syncOrderToZoho(shopifyOrder) {
     if (existing.length > 0) {
         console.log(`✅ Zoho sync: order #${orderId} already synced (id=${existing[0].id})`);
         return { success: true, alreadySynced: true, logId: existing[0].id };
+    }
+
+    // Race-condition guard: if the cancel webhook fired before we got here,
+    // the sync_log will already be 'cancelled' — creating an invoice now
+    // would leave a live Zoho invoice for a Shopify-cancelled order.
+    const cancelled = await dbAdapter.query(
+        'SELECT id, status FROM zoho_sync_log WHERE shopify_order_id = ? AND status = ?',
+        [orderId, 'cancelled']
+    );
+    if (cancelled.length > 0) {
+        console.log(`🚫 Zoho sync: order #${orderId} was cancelled before sync — skipping invoice creation`);
+        return { success: true, skipped: 'order_cancelled', logId: cancelled[0].id };
     }
 
     // Concurrency guard: another webhook delivery for this order is in progress
@@ -162,6 +182,18 @@ async function syncOrderToZoho(shopifyOrder) {
         if (invoice.place_of_supply) invoicePayload.place_of_supply = invoice.place_of_supply;
 
         // Step 4: Create invoice in Zoho Books
+        // Re-check cancel status right before the API call — the cancel
+        // webhook may have arrived while we were resolving items/customer.
+        const cancelCheck = await dbAdapter.query(
+            'SELECT id FROM zoho_sync_log WHERE shopify_order_id = ? AND status = ?',
+            [orderId, 'cancelled']
+        );
+        if (cancelCheck.length > 0) {
+            console.log(`🚫 Zoho sync: order #${orderId} cancelled during processing — aborting invoice creation`);
+            inFlightSyncs.delete(orderId);
+            return { success: true, skipped: 'order_cancelled_mid_flow' };
+        }
+
         let zohoInvoice;
         try {
             zohoInvoice = await zohoService.createInvoice(invoicePayload);

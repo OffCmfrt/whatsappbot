@@ -491,8 +491,25 @@ async function handleStatusUpdate(statuses) {
         // Common failure codes:
         // 131047: Rate limit hit
         // 131030: Recipient not in allowed list (test numbers)
+        // 131049: Ecosystem engagement protection (spam prevention)
         // 131052: Media download error
         // 131013: Template parameter mismatch
+        
+        // Error 131049: Mark abandoned cart as delivery_blocked
+        if (err.code === 131049) {
+          try {
+            const AbandonedCart = require('./src/models/AbandonedCart');
+            const cart = await AbandonedCart.findByWamid(waMessageId);
+            if (cart) {
+              await AbandonedCart.updateStatus(cart.checkout_id, 'delivery_blocked', {
+                updated_at: new Date().toISOString()
+              });
+              console.log(`🚫 Marked cart ${cart.checkout_id} as delivery_blocked (error 131049 - ecosystem engagement)`);
+            }
+          } catch (cartErr) {
+            console.error(`[STATUS] Failed to update abandoned cart for wamid ${waMessageId}:`, cartErr.message);
+          }
+        }
       }
     }
     

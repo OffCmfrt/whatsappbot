@@ -663,6 +663,18 @@ async function loadWizard() {
 
         renderWizard();
         renderBundleMap(Object.values(data.configured).flat());
+
+        // Show skipped items debug panel
+        const skippedBlock = document.getElementById('skippedItemsBlock');
+        const skippedList = document.getElementById('skippedItemsList');
+        if (data.skippedItems && data.skippedItems.length > 0) {
+            skippedBlock.style.display = '';
+            skippedList.innerHTML = data.skippedItems.map(si =>
+                `<div style="margin-bottom:4px">• ${escHtml(si.name)} <span style="color:var(--warn)">(${escHtml(si.reason)})</span></div>`
+            ).join('');
+        } else {
+            skippedBlock.style.display = 'none';
+        }
     } catch (err) {
         grid.innerHTML = `<div class="wizard-loading">Could not load wizard: ${escHtml(err.message)}</div>`;
     }

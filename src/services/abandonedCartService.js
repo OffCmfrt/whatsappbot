@@ -401,7 +401,13 @@ class AbandonedCartService {
 
             if (String(autoTemplatesEnabled) === 'true') {
                 try {
-                    success = await whatsappService.sendTemplateWithRetry(cart.customer_phone, templateData, 3);
+                    const result = await whatsappService.sendTemplateWithRetry(cart.customer_phone, templateData, 3);
+                    // Capture wamid from successful send
+                    if (result?.data?.messages?.[0]?.id) {
+                        success = result;
+                    } else {
+                        success = true;
+                    }
                 } catch (templateError) {
                     const errDetails = templateError.response?.data?.error?.error_data?.details || '';
                     const defaultLogo = 'https://offcomfrt.in/cdn/shop/files/logo_black_1.png';
@@ -414,7 +420,12 @@ class AbandonedCartService {
                             if (headerComponent && headerComponent.parameters && headerComponent.parameters[0].image) {
                                 headerComponent.parameters[0].image.link = defaultLogo;
                             }
-                            success = await whatsappService.sendTemplateWithRetry(cart.customer_phone, templateData, 3);
+                            const result = await whatsappService.sendTemplateWithRetry(cart.customer_phone, templateData, 3);
+                            if (result?.data?.messages?.[0]?.id) {
+                                success = result;
+                            } else {
+                                success = true;
+                            }
                         } catch (retryError) {
                             console.warn(`[WARN] Template retry with default logo also failed.`);
                             templateFailed = true;
@@ -453,7 +464,7 @@ class AbandonedCartService {
                 const defaultLogo = 'https://offcomfrt.in/cdn/shop/files/logo_black_1.png';
 
                 try {
-                    await whatsappService.sendCtaUrlMessage(
+                    const ctaResult = await whatsappService.sendCtaUrlMessage(
                         cart.customer_phone,
                         bodyLines,
                         'Complete My Order',
@@ -461,14 +472,14 @@ class AbandonedCartService {
                         productImage || defaultLogo,
                         'Offcomfrt | Free shipping on orders Rs.499+'
                     );
-                    success = true;
+                    success = ctaResult || true;
                     console.log(`✅ Rich CTA fallback sent to ${cart.customer_phone}`);
                 } catch (ctaError) {
                     const errDetails = ctaError.response?.data?.error?.error_data?.details || '';
                     if (productImage && (errDetails.includes('media') || errDetails.includes('download') || ctaError.response?.data?.error?.code === 131053)) {
                         console.warn(`⚠️ CTA fallback image failed. Retrying with default logo...`);
                         try {
-                            await whatsappService.sendCtaUrlMessage(
+                            const ctaResult = await whatsappService.sendCtaUrlMessage(
                                 cart.customer_phone,
                                 bodyLines,
                                 'Complete My Order',
@@ -476,7 +487,7 @@ class AbandonedCartService {
                                 defaultLogo,
                                 'Offcomfrt | Free shipping on orders Rs.499+'
                             );
-                            success = true;
+                            success = ctaResult || true;
                             console.log(`✅ Rich CTA fallback (with default logo) sent to ${cart.customer_phone}`);
                         } catch (ctaRetryError) {
                             console.error(`❌ CTA fallback retry also failed for ${cart.customer_phone}:`, ctaRetryError.message);
@@ -500,16 +511,25 @@ class AbandonedCartService {
 
             // ── Update status ─────────────────────────────────────────────────────
             const updateData = {};
+            
+            // Extract wamid from success result (if available)
+            let wamid = null;
+            if (success && typeof success === 'object' && success?.data?.messages?.[0]?.id) {
+                wamid = success.data.messages[0].id;
+            }
+            
             if (type === 'first_reminder') {
                 updateData.first_reminder_sent_at = new Date().toISOString();
                 updateData.status = 'sent_first';
+                if (wamid) updateData.first_reminder_wamid = wamid;
             } else {
                 updateData.second_reminder_sent_at = new Date().toISOString();
                 updateData.status = 'sent_second';
+                if (wamid) updateData.second_reminder_wamid = wamid;
             }
 
             await AbandonedCart.updateStatus(cart.checkout_id, updateData.status, updateData);
-            console.log(`📩 Sent ${type} to ${cart.customer_phone} — status → ${updateData.status}`);
+            console.log(`📩 Sent ${type} to ${cart.customer_phone} — status → ${updateData.status}${wamid ? ` (wamid: ${wamid.substring(0, 20)}...)` : ''}`);
 
         } catch (error) {
             console.error(`Error sending template reminder to ${cart.customer_phone}:`, error);
