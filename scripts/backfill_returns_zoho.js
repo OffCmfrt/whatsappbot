@@ -18,6 +18,16 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABA
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
 const PACE_MS = parseInt((args.find(a => a.startsWith('--pace=')) || '').split('=')[1] || '300', 10);
+
+// Append " - SIZE" to a product title when the size is provided separately
+// and not already present in the title. Zoho Books catalog uses the format
+// "PRODUCT ( COLOR ) - SIZE" so the item resolver can match and deduct stock.
+function withSizeInTitle(title, variant) {
+    if (!title) title = '';
+    if (!variant || variant === 'Same') return title;
+    if (/\s-\s\S+\s*$/.test(title)) return title;
+    return title + ' - ' + variant;
+}
 const CONCURRENCY = parseInt((args.find(a => a.startsWith('--concurrency=')) || '').split('=')[1] || '10', 10);
 
 function log(msg) { console.log(`${APPLY ? '[APPLY]' : '[DRY-RUN]'} ${msg}`); }
@@ -84,7 +94,10 @@ async function processOrder(request, zohoService, axios, BOOKS, h) {
         try {
             const currentLines = invoice.line_items || [];
             const replacementLines = parsedItems.map(i => ({
-                name: i.replacementProductTitle || i.name || i.title || 'Replacement Item',
+                name: withSizeInTitle(
+                    i.replacementProductTitle || i.name || i.title || 'Replacement Item',
+                    i.replacementVariant || i.variant || ''
+                ),
                 description: `Exchange replacement${i.replacementVariant ? ' - ' + i.replacementVariant : ''}`,
                 quantity: parseFloat(i.quantity || 1),
                 rate: 0,

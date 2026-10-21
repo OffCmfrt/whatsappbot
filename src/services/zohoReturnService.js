@@ -12,6 +12,16 @@ const { createItemResolver } = require('./zohoItemResolver');
 const { taxFromInvoiceLine } = require('./zohoTransform');
 const { dbAdapter } = require('../database/db');
 
+// Append " - SIZE" to a product title when the size is provided separately
+// and not already present in the title. Zoho Books catalog uses the format
+// "PRODUCT ( COLOR ) - SIZE" so the item resolver can match and deduct stock.
+function withSizeInTitle(title, variant) {
+    if (!title) title = '';
+    if (!variant || variant === 'Same') return title;
+    if (/\s-\s\S+\s*$/.test(title)) return title;
+    return title + ' - ' + variant;
+}
+
 // ============================================================
 // ZOHO RETURN / RTO HANDLER
 // Creates credit notes in Zoho when returns or RTOs happen.
@@ -242,7 +252,7 @@ async function createExchangeReplacementInvoice({ shopifyOrder, orderId, exchang
 
     const bundleMap = await loadBundleMap();
     const rawItems = exchangedItems.map(i => ({
-        title: i.title || '',
+        title: withSizeInTitle(i.title || '', i.variant || ''),
         sku: i.sku || '',
         quantity: parseInt(i.quantity || 1) || 1,
         price: 0,
@@ -561,7 +571,7 @@ async function correctOriginalInvoiceForExchange({ shopifyOrder, orderId, origin
     // Build new lines: exchanged items replace the matched original lines
     const newLines = [];
     const rawExchanged = exchangedItems.map(i => ({
-        title: i.title || '',
+        title: withSizeInTitle(i.title || '', i.variant || ''),
         sku: i.sku || '',
         quantity: parseInt(i.quantity || 1) || 1,
         price: 0,
