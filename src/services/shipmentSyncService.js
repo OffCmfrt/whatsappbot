@@ -38,18 +38,40 @@ let lastRunAt = null;
  * Map a carrier's live status string to our internal shipment status.
  * Handles Shiprocket labels ("Out For Delivery", "RTO Initiated"...) and
  * Delhivery statuses ("Manifested", "Dispatched", "Returned"...).
+ *
+ * @param {string} rawStatus  – human-readable carrier status string
+ * @param {string} [statusType] – carrier status code (Delhivery: "RT" = RTO,
+ *   "DL" = delivered, "PU" = picked up, "UD" = undelivered, etc.)
  * Returns null when the status carries no useful transition.
  */
-function mapCarrierStatus(rawStatus) {
+function mapCarrierStatus(rawStatus, statusType = null) {
     const s = (rawStatus || '').toLowerCase().trim();
-    if (!s) return null;
+    const st = (statusType || '').toString().toUpperCase().trim();
+    if (!s && !st) return null;
 
     // Order matters: RTO/return and cancellation before the generic checks,
     // and "out for delivery" before "delivered" (both contain 'deliver')
-    if (s.includes('rto') || s.includes('return')) return 'rto';
+
+    // RTO detection — uses specific phrases only; a bare 'return' substring
+    // is NOT enough because carriers report return parcels still in transit
+    // (e.g. "Return In Transit") which must NOT be marked RTO.
+    // Delhivery StatusType 'RT' or 'RTO' is the authoritative RTO signal.
+    const isRto =
+        st === 'RT' || st === 'RTO' ||
+        s.includes('return to origin') ||
+        s.includes('rto initiated') ||
+        s.includes('rto delivered') ||
+        s.includes('rto acknowledged') ||
+        s.includes('rto ndr') ||
+        s.includes('rto out for delivery') ||
+        s.includes('marked rto') ||
+        (s.includes('rto') && s.includes('transit')) ||
+        s === 'rto';
+    if (isRto) return 'rto';
+
     if (s.includes('cancellation requested')) return null; // not cancelled yet
     if (s.includes('cancel')) return 'cancelled';
-    if (s.includes('undeliver') || s.includes('not deliver') || s.includes('failed deliver')) return 'in_transit'; // NDR — still with courier
+    if (s.includes('undeliver') || s.includes('not deliver') || s.includes('failed deliver') || s.includes('unsuccessful')) return 'in_transit'; // NDR — still with courier
     if (s.includes('out for delivery')) return 'out_for_delivery';
     if (s.includes('deliver')) return 'delivered';
     if (s.includes('transit') || s.includes('shipped') || s.includes('picked') ||
@@ -128,8 +150,9 @@ async function syncShipment(shipment) {
 
     const result = await adapter.track(shipment.awb);
     let carrierStatus = result.success ? result.data.currentStatus : null;
+    let carrierStatusType = result.success ? result.data.statusType : null;
     let expectedDelivery = result.success ? result.data.expectedDelivery : null;
-    let mapped = mapCarrierStatus(carrierStatus);
+    let mapped = mapCarrierStatus(carrierStatus, carrierStatusType);
 
     // Shiprocket fallback: fresh AWBs often have zero scans, so AWB tracking
     // says nothing while the order-level status already shows "PICKUP
@@ -140,7 +163,7 @@ async function syncShipment(shipment) {
             const srOrder = await shiprocketService.getOrderStatus(shipment.carrier_order_id || shipment.order_id);
             if (srOrder && srOrder.status) {
                 carrierStatus = String(srOrder.status);
-                mapped = mapCarrierStatus(carrierStatus);
+                mapped = mapCarrierStatus(carrierStatus, null);
                 if (!expectedDelivery) expectedDelivery = srOrder.expectedDelivery || null;
             }
         } catch (error) {

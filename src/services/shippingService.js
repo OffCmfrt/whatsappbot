@@ -552,7 +552,7 @@ async function trackShipment(shipmentId) {
     // Opportunistic status sync from live tracking (same smart mapping +
     // forward-only transitions as the automatic background sync)
     const { mapCarrierStatus, resolveTransition } = require('./shipmentSyncService');
-    const mapped = mapCarrierStatus(result.data.currentStatus);
+    const mapped = mapCarrierStatus(result.data.currentStatus, result.data.statusType);
     const newStatus = resolveTransition(shipment.status, mapped);
     if (newStatus) {
         await dbAdapter.update('shipments', { status: newStatus, updated_at: new Date().toISOString() }, { id: shipment.id });

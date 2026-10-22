@@ -467,6 +467,7 @@ class DelhiveryAdapter extends BaseCarrier {
 
             return this.ok({
                 currentStatus: shipmentData.Status?.Status || 'Unknown',
+                statusType: shipmentData.Status?.StatusType || null,
                 expectedDelivery: shipmentData.ExpectedDeliveryDate || null,
                 timeline: scans
             }, response.data);
