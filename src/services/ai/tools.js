@@ -523,7 +523,7 @@ const tools = [
         summary: (args) => `Book a ${args.carrier} shipment for shopper order ${args.shopperId}`,
         async execute({ shopperId, carrier, courierId }) {
             const shippingService = require('../shippingService');
-            const result = await shippingService.ship({ shopperId, carrier, courierId, shippedBy: 'ai-copilot' });
+            const result = await shippingService.ship({ shopperId, carrier, courierId, shippedBy: 'ai-copilot', notifyCustomer: true });
             return result;
         }
     },
@@ -743,7 +743,7 @@ const tools = [
             const results = { booked: 0, failed: 0, errors: [] };
             for (const shopperId of ids) {
                 try {
-                    await shippingService.ship({ shopperId, carrier, shippedBy: 'ai-copilot-batch' });
+                    await shippingService.ship({ shopperId, carrier, shippedBy: 'ai-copilot-batch', notifyCustomer: true });
                     results.booked++;
                 } catch (e) {
                     results.failed++;

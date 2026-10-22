@@ -5685,7 +5685,7 @@ async function submitShip() {
             courierId: shipState.carrier.capabilities.needsCourierSelection ? shipState.courier.id : undefined,
             packageOverrides: o.packageOverrides,
             consigneeOverrides: o.consigneeOverrides,
-            notifyCustomer: document.getElementById('shipNotifyCustomer').checked,
+            notifyCustomer: true,
             reshipOfShipmentId: shipState.reship?.ofShipmentId || undefined,
             reshipReason: shipState.reship?.reason || undefined
         });
@@ -6255,7 +6255,7 @@ async function startBulkShip() {
                 carrier,
                 courierId: 'auto',
                 packageOverrides,
-                notifyCustomer: false
+                notifyCustomer: true
             };
             if (currentBatchId) shipPayload.batchId = currentBatchId;
 
