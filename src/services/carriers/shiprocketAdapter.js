@@ -1181,11 +1181,14 @@ class ShiprocketAdapter extends BaseCarrier {
             }));
 
             // Fresh shipments often have zero scans — fall back to Shiprocket's
-            // numeric shipment_status code so the status sync still works pre-pickup
+            // numeric shipment_status code so the status sync still works pre-pickup.
+            // IMPORTANT: codeStatus (from shipment_status) takes priority over
+            // timeline[0] because the timeline can contain a stale RTO scan while
+            // the shipment has since resumed transit.
             const codeStatus = SR_SHIPMENT_STATUS_CODES[Number(td.shipment_status)] || null;
 
             return this.ok({
-                currentStatus: td.shipment_track?.[0]?.current_status || timeline[0]?.status || codeStatus || 'Unknown',
+                currentStatus: td.shipment_track?.[0]?.current_status || codeStatus || timeline[0]?.status || 'Unknown',
                 expectedDelivery: td.etd || null,
                 timeline
             }, trackingData);

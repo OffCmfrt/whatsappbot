@@ -157,14 +157,24 @@ async function syncShipment(shipment) {
     // Shiprocket fallback: fresh AWBs often have zero scans, so AWB tracking
     // says nothing while the order-level status already shows "PICKUP
     // SCHEDULED" / "PICKED UP". Use that so Ready to Ship drains properly.
+    // IMPORTANT: this fallback uses the ORDER-level status which can be stale
+    // (e.g. "RTO Initiated" from a temporary NDR that has since resolved).
+    // Only accept non-terminal statuses from the fallback — never let it
+    // mark a shipment as RTO or cancelled.
     if (!mapped && shipment.carrier === 'shiprocket') {
         try {
             const shiprocketService = require('./shiprocketService');
             const srOrder = await shiprocketService.getOrderStatus(shipment.carrier_order_id || shipment.order_id);
             if (srOrder && srOrder.status) {
                 carrierStatus = String(srOrder.status);
-                mapped = mapCarrierStatus(carrierStatus, null);
-                if (!expectedDelivery) expectedDelivery = srOrder.expectedDelivery || null;
+                const fallbackMapped = mapCarrierStatus(carrierStatus, null);
+                // Only accept the fallback if it's a non-terminal status;
+                // terminal statuses (rto, cancelled) must come from the
+                // tracking API, not the stale order-level status.
+                if (fallbackMapped && fallbackMapped !== 'rto' && fallbackMapped !== 'cancelled') {
+                    mapped = fallbackMapped;
+                    if (!expectedDelivery) expectedDelivery = srOrder.expectedDelivery || null;
+                }
             }
         } catch (error) {
             console.warn(`⚠️ Shiprocket order-status fallback failed for ${shipment.order_id}:`, error.message);
