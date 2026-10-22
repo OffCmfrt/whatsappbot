@@ -323,9 +323,67 @@ class DelhiveryAdapter extends BaseCarrier {
             if (!response.data?.success || !awb || /fail/i.test(String(pkg?.status || ''))) {
                 const reason = this.extractReason(response.data);
                 // "Duplicate order id" means Delhivery already has this consignment —
-                // adopt the existing AWB instead of failing (the waybill is still in the response)
+                // check if the existing AWB is still active before adopting it
                 if (/duplicate\s+order\s*id/i.test(reason) && awb) {
-                    console.log(`📦 Delhivery: order ${orderId} already exists — adopting existing AWB ${awb}`);
+                    console.log(`📦 Delhivery: order ${orderId} already exists — checking AWB ${awb} status before adoption`);
+                    
+                    // Verify the existing AWB is not cancelled
+                    const trackingResult = await this.track(awb);
+                    const currentStatus = trackingResult.data?.currentStatus || '';
+                    const statusType = trackingResult.data?.statusType || '';
+                    const isCancelled = /cancel/i.test(currentStatus) || statusType === 'CN';
+                    
+                    if (isCancelled) {
+                        console.log(`⚠️ Delhivery: order ${orderId} has cancelled AWB ${awb} — retrying with modified order ID`);
+                        
+                        // Retry with a modified order ID to avoid the duplicate conflict
+                        const retryOrderId = `${orderId}-c`;
+                        console.log(`🔄 Delhivery: re-creating order as ${retryOrderId}`);
+                        
+                        // Update the consignment with the new order ID
+                        consignment.order = retryOrderId;
+                        consignment.seller_inv = retryOrderId;
+                        consignment.products.forEach(p => p.order = retryOrderId);
+                        
+                        // Retry the CMU create call
+                        const retryPayload = new URLSearchParams({
+                            format: 'json',
+                            data: JSON.stringify(cmuPayload)
+                        });
+                        
+                        try {
+                            const retryResponse = await axios.post(`${this.baseURL}/api/cmu/create.json`, retryPayload.toString(), {
+                                headers: { ...this.authHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' },
+                                timeout: 30000
+                            });
+                            
+                            const retryPkg = retryResponse.data?.packages?.[0];
+                            const retryAwb = retryPkg?.waybill ? String(retryPkg.waybill) : '';
+                            
+                            if (retryResponse.data?.success && retryAwb && !/fail/i.test(String(retryPkg?.status || ''))) {
+                                console.log(`✅ Delhivery: successfully created new shipment ${retryAwb} for order ${retryOrderId}`);
+                                return this.ok({
+                                    awb: retryAwb,
+                                    courierName: 'Delhivery',
+                                    carrierShipmentId: retryAwb,
+                                    carrierOrderId: retryOrderId,
+                                    freightCharge: null,
+                                    trackingUrl: `https://www.delhivery.com/track/package/${retryAwb}`,
+                                    reusedSyncedOrder: false,
+                                    requestPayload: { orderId: retryOrderId, source: 'duplicate_retry_after_cancel', originalOrderId: orderId }
+                                }, retryResponse.data);
+                            } else {
+                                const retryReason = this.extractReason(retryResponse.data);
+                                console.error(`❌ Delhivery: retry with order ${retryOrderId} also failed:`, retryReason);
+                                return this.fail(`Retry with modified order ID ${retryOrderId} failed: ${retryReason}`, retryResponse.data);
+                            }
+                        } catch (retryError) {
+                            console.error(`❌ Delhivery: retry request failed:`, this.describeAxiosError(retryError));
+                            return this.fail(`Retry shipment creation failed: ${this.describeAxiosError(retryError)}`, retryError.response?.data);
+                        }
+                    }
+                    
+                    console.log(`📦 Delhivery: adopting existing active AWB ${awb} for order ${orderId} (status: ${currentStatus})`);
                     return this.ok({
                         awb,
                         courierName: 'Delhivery',
@@ -334,7 +392,7 @@ class DelhiveryAdapter extends BaseCarrier {
                         freightCharge: null,
                         trackingUrl: `https://www.delhivery.com/track/package/${awb}`,
                         reusedSyncedOrder: true,
-                        requestPayload: { orderId, source: 'duplicate_adoption' }
+                        requestPayload: { orderId, source: 'duplicate_adoption', existingStatus: currentStatus }
                     }, response.data);
                 }
                 console.error(`❌ Delhivery CMU create rejected for order ${orderId}:`, JSON.stringify(response.data || {}).substring(0, 600));

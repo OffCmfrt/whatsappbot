@@ -126,11 +126,12 @@ class BaseCarrier {
         if (!payload || typeof payload !== 'object') return flatten(payload) || fallback;
 
         const candidates = [
-            payload.remark, payload.remarks, payload.rmk, payload.reason,
+            payload.packages?.[0]?.remarks, payload.packages?.[0]?.remark,
+            payload.remark, payload.remarks, payload.reason,
             payload.error, payload.errors, payload.error_message,
             payload.message, payload.msg,
-            payload.packages?.[0]?.remarks, payload.packages?.[0]?.remark,
-            payload.data?.[0]?.remark, payload.data?.[0]?.remarks, payload.data?.remark
+            payload.data?.[0]?.remark, payload.data?.[0]?.remarks, payload.data?.remark,
+            payload.rmk
         ];
         for (const candidate of candidates) {
             const text = flatten(candidate);
