@@ -55,7 +55,9 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     // RTO detection — comprehensive but safe.
     //
     // Carriers report RTO in many forms:
-    //   • Delhivery: StatusType 'RT'/'RTO', status 'RTO', 'Returned'
+    //   • Delhivery: StatusType 'RT'/'RTO' + status 'RTO'/'Returned',
+    //     BUT StatusType 'RT' + status 'Delivered' = DTO (return parcel
+    //     delivered back to warehouse) — that's a successful delivery, NOT RTO.
     //   • Shiprocket: 'RTO Initiated', 'RTO Delivered', 'RTO In-Transit',
     //     'RTO Acknowledged', 'RTO NDR', 'RTO Out For Delivery'
     //   • Ekart: 'Marked RTO', 'RTO Delivered'
@@ -66,15 +68,19 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     // pickup, not a forward RTO).  We detect those by the combination of
     // 'return' + a transit/pickup keyword and exclude them.
     //
-    // Delhivery StatusType 'RT' or 'RTO' is always RTO regardless of the
-    // human-readable status string.
+    // Delhivery StatusType 'RT'/'RTO' means RTO ONLY when the status
+    // string does not say 'delivered'.  'Delivered' + StatusType 'RT' =
+    // DTO (return parcel reached warehouse) = delivered, not RTO.
 
     const inTransitReturn = s.includes('return') &&
         (s.includes('in transit') || s.includes('in-transit') ||
          s.includes('pickup') || s.includes('dto'));
 
+    // StatusType RT/RTO = RTO only when the status is NOT a delivery scan
+    const stIsRto = (st === 'RT' || st === 'RTO') && !s.includes('deliver');
+
     const isRto =
-        st === 'RT' || st === 'RTO' ||
+        stIsRto ||
         (s.includes('return') && !inTransitReturn) ||
         s.includes('rto');
     if (isRto) return 'rto';
