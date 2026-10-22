@@ -52,21 +52,31 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     // Order matters: RTO/return and cancellation before the generic checks,
     // and "out for delivery" before "delivered" (both contain 'deliver')
 
-    // RTO detection — uses specific phrases only; a bare 'return' substring
-    // is NOT enough because carriers report return parcels still in transit
-    // (e.g. "Return In Transit") which must NOT be marked RTO.
-    // Delhivery StatusType 'RT' or 'RTO' is the authoritative RTO signal.
+    // RTO detection — comprehensive but safe.
+    //
+    // Carriers report RTO in many forms:
+    //   • Delhivery: StatusType 'RT'/'RTO', status 'RTO', 'Returned'
+    //   • Shiprocket: 'RTO Initiated', 'RTO Delivered', 'RTO In-Transit',
+    //     'RTO Acknowledged', 'RTO NDR', 'RTO Out For Delivery'
+    //   • Ekart: 'Marked RTO', 'RTO Delivered'
+    //   • Compound: 'Delivered - Return to Origin', 'Returned to Sender'
+    //
+    // The ONLY 'return'-containing statuses that are NOT RTO are active
+    // return-pickup-in-transit (the parcel is moving but as a return
+    // pickup, not a forward RTO).  We detect those by the combination of
+    // 'return' + a transit/pickup keyword and exclude them.
+    //
+    // Delhivery StatusType 'RT' or 'RTO' is always RTO regardless of the
+    // human-readable status string.
+
+    const inTransitReturn = s.includes('return') &&
+        (s.includes('in transit') || s.includes('in-transit') ||
+         s.includes('pickup') || s.includes('dto'));
+
     const isRto =
         st === 'RT' || st === 'RTO' ||
-        s.includes('return to origin') ||
-        s.includes('rto initiated') ||
-        s.includes('rto delivered') ||
-        s.includes('rto acknowledged') ||
-        s.includes('rto ndr') ||
-        s.includes('rto out for delivery') ||
-        s.includes('marked rto') ||
-        (s.includes('rto') && s.includes('transit')) ||
-        s === 'rto';
+        (s.includes('return') && !inTransitReturn) ||
+        s.includes('rto');
     if (isRto) return 'rto';
 
     if (s.includes('cancellation requested')) return null; // not cancelled yet
