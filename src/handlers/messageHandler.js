@@ -5,6 +5,7 @@ const Customer = require('../models/Customer');
 const { dbAdapter } = require('../database/db');
 const { sanitizeInput, normalizePhone, getPhoneVariations } = require('../utils/validators');
 const { getPortalIdForNewTicket } = require('../utils/portalAssignment');
+const { invalidateCache } = require('../utils/cache');
 
 const autoSupportAgent = require('../services/ai/autoSupportAgent');
 
@@ -464,6 +465,9 @@ class MessageHandler {
                     [now, confirmMsg, now, targetOrderId]
                 );
                 
+                // Clear shoppers cache so the confirmed status shows immediately in the hub
+                invalidateCache('shoppers');
+                
                 // Update follow-up recipients if this was from a follow-up campaign
                 await this.updateFollowUpResponse(phone, 'confirmed');
                 
@@ -506,6 +510,9 @@ class MessageHandler {
                     [now, cancelMsg, now, targetOrderId]
                 );
                 
+                // Clear shoppers cache so the cancelled status shows immediately in the hub
+                invalidateCache('shoppers');
+                
                 // Update follow-up recipients if this was from a follow-up campaign
                 await this.updateFollowUpResponse(phone, 'cancelled');
                 
@@ -529,6 +536,8 @@ class MessageHandler {
 
                 if (targetShopperId) {
                     await dbAdapter.update('store_shoppers', { status: 'edit_details', updated_at: new Date().toISOString(), confirmed_by: 'whatsapp' }, { id: targetShopperId });
+                    // Clear shoppers cache so the edit status shows immediately in the hub
+                    invalidateCache('shoppers');
                 }
                 
                 // Update follow-up recipients if this was from a follow-up campaign
