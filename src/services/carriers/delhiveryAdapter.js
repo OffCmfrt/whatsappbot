@@ -322,6 +322,21 @@ class DelhiveryAdapter extends BaseCarrier {
 
             if (!response.data?.success || !awb || /fail/i.test(String(pkg?.status || ''))) {
                 const reason = this.extractReason(response.data);
+                // "Duplicate order id" means Delhivery already has this consignment —
+                // adopt the existing AWB instead of failing (the waybill is still in the response)
+                if (/duplicate\s+order\s*id/i.test(reason) && awb) {
+                    console.log(`📦 Delhivery: order ${orderId} already exists — adopting existing AWB ${awb}`);
+                    return this.ok({
+                        awb,
+                        courierName: 'Delhivery',
+                        carrierShipmentId: awb,
+                        carrierOrderId: orderId,
+                        freightCharge: null,
+                        trackingUrl: `https://www.delhivery.com/track/package/${awb}`,
+                        reusedSyncedOrder: true,
+                        requestPayload: { orderId, source: 'duplicate_adoption' }
+                    }, response.data);
+                }
                 console.error(`❌ Delhivery CMU create rejected for order ${orderId}:`, JSON.stringify(response.data || {}).substring(0, 600));
                 return this.fail(`Delhivery rejected the shipment: ${reason}`, response.data);
             }
