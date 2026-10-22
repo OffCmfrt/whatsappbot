@@ -609,6 +609,28 @@ app.get('/testbot', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'widget', 'testbot.html'));
 });
 
+// ─── Tracking redirect: /track/:awb → carrier tracking URL ────────────────
+// Used by the order_shipped_v2 WhatsApp template's "Track Your Order" button.
+// Looks up the live tracking_url from the shipments table and 302-redirects.
+app.get('/track/:awb', async (req, res) => {
+    try {
+        const { dbAdapter } = require('./src/database/db');
+        const awb = req.params.awb;
+        const rows = await dbAdapter.query(
+            `SELECT tracking_url FROM shipments WHERE awb = ? AND tracking_url IS NOT NULL AND tracking_url <> '' ORDER BY created_at DESC LIMIT 1`,
+            [awb]
+        );
+        if (rows && rows[0] && rows[0].tracking_url) {
+            return res.redirect(302, rows[0].tracking_url);
+        }
+        // Fallback: no tracking URL found — redirect to the store
+        return res.redirect(302, 'https://offcomfrt.in');
+    } catch (err) {
+        console.error('[TRACK] Redirect failed:', err.message);
+        return res.redirect(302, 'https://offcomfrt.in');
+    }
+});
+
 // 404 handler
 app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });

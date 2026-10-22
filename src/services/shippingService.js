@@ -356,17 +356,17 @@ async function syncOrderRow(ctx, data, shopper) {
 
 async function notifyCustomerShipped(shopper, data, { isReship = false, reason = null } = {}) {
     const whatsappService = require('./whatsappService');
-    const trackingLine = data.trackingUrl ? `\n\n📍 Track your order: ${data.trackingUrl}` : '';
-    const message = isReship
-        ? `🔄 Update on your order, ${shopper.name || 'there'}!\n\n` +
-          `We've re-shipped your OFFCOMFRT order *${shopper.order_id}*${reason ? ` (${reason.toLowerCase()})` : ''} — a fresh shipment is on its way via *${data.courierName}*.\n\n` +
-          `📦 New Tracking Number (AWB): *${data.awb}*${trackingLine}\n\n` +
-          `Sorry for the wait — thank you for your patience! 🖤`
-        : `🎉 Great news, ${shopper.name || 'there'}!\n\n` +
-          `Your OFFCOMFRT order *${shopper.order_id}* has been shipped via *${data.courierName}*.\n\n` +
-          `📦 Tracking Number (AWB): *${data.awb}*${trackingLine}\n\n` +
-          `Thank you for shopping with us! 🖤`;
-    await whatsappService.sendMessage(shopper.phone, message, 'shipping_confirmation');
+    // Send the order_shipped_v2 template with a "Track Your Order" URL button.
+    // Falls back to plain text automatically if the template is not yet approved by Meta.
+    await whatsappService.sendOrderShippedTemplate(
+        shopper.phone,
+        shopper.name,
+        shopper.order_id,
+        data.courierName,
+        data.awb,
+        data.trackingUrl || null,
+        { isReship, reason }
+    );
 }
 
 // ==========================================

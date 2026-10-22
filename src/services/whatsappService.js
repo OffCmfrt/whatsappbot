@@ -718,6 +718,96 @@ class WhatsAppService {
     }
 
     /**
+     * Send "Order Shipped" notification with tracking link button.
+     * Uses Meta-approved template: order_shipped_v2
+     * Falls back to the existing plain-text message if the template is not yet approved.
+     *
+     * Body parameters:
+     *   {{1}} = Customer Name
+     *   {{2}} = Order ID
+     *   {{3}} = Carrier / Courier Name
+     *   {{4}} = AWB / Tracking Number
+     * Button URL {{1}} = full tracking URL (dynamic, carrier-agnostic)
+     *
+     * @param {string} to          - Customer phone number
+     * @param {string} name        - Customer name
+     * @param {string} orderId     - Order number
+     * @param {string} carrierName - Courier / carrier display name
+     * @param {string} awb         - AWB / tracking number
+     * @param {string} trackingUrl - Full tracking URL for the button
+     * @param {boolean} isReship   - Whether this is a re-shipment
+     * @param {string} reshipReason - Reason for re-shipment (optional)
+     */
+    async sendOrderShippedTemplate(to, name, orderId, carrierName, awb, trackingUrl, { isReship = false, reason = null } = {}) {
+        try {
+            const cleanPhone = this.formatPhoneNumber(to);
+            console.log(`[SHIP] Sending order_shipped_v2 template to ${cleanPhone} for order ${orderId}`);
+
+            const firstName = name ? name.split(' ')[0] : 'Customer';
+            const displayOrderId = orderId || 'N/A';
+            const displayCarrier = carrierName || 'Our courier partner';
+            const displayAwb = awb || 'N/A';
+
+            // Build template payload: body params + URL button with AWB as path suffix
+            // Button URL: https://whatsappbot-4l4b.onrender.com/track/{{1}} where {{1}} = AWB
+            const components = [
+                {
+                    type: 'body',
+                    parameters: [
+                        { type: 'text', text: firstName },
+                        { type: 'text', text: displayOrderId },
+                        { type: 'text', text: displayCarrier },
+                        { type: 'text', text: displayAwb }
+                    ]
+                }
+            ];
+
+            // Add URL button parameter (AWB as the path suffix)
+            if (awb) {
+                components.push({
+                    type: 'button',
+                    sub_type: 'url',
+                    index: '0',
+                    parameters: [
+                        { type: 'text', text: String(awb) }
+                    ]
+                });
+            }
+
+            const templateData = {
+                name: 'order_shipped_v2',
+                language: { code: 'en' },
+                components
+            };
+
+            const result = await this.sendTemplate(to, templateData, 'shipping_confirmation');
+            console.log(`[SHIP] Template sent successfully to ${cleanPhone}`);
+            return result;
+        } catch (error) {
+            console.warn(`[SHIP] Template send failed (may be pending Meta approval): ${error.message}`);
+            // Fallback: plain-text message with tracking link inline
+            try {
+                const trackingLine = trackingUrl ? `\n\n📍 Track your order: ${trackingUrl}` : '';
+                const message = isReship
+                    ? `\ud83d\udd04 Update on your order, ${name || 'there'}!\n\n` +
+                      `We've re-shipped your OFFCOMFRT order *${orderId}*${reason ? ` (${reason.toLowerCase()})` : ''} \u2014 a fresh shipment is on its way via *${carrierName}*.\n\n` +
+                      `\ud83d\udce6 New Tracking Number (AWB): *${awb}*${trackingLine}\n\n` +
+                      `Sorry for the wait \u2014 thank you for your patience! \ud83d\udd96`
+                    : `\ud83c\udf89 Great news, ${name || 'there'}!\n\n` +
+                      `Your OFFCOMFRT order *${orderId}* has been shipped via *${carrierName}*.\n\n` +
+                      `\ud83d\udce6 Tracking Number (AWB): *${awb}*${trackingLine}\n\n` +
+                      `Thank you for shopping with us! \ud83d\udd96`;
+                await this.sendMessage(to, message, 'shipping_confirmation');
+                console.log(`[SHIP] Fallback plain message sent to ${to}`);
+                return true;
+            } catch (fallbackErr) {
+                console.error(`[SHIP] Fallback also failed for ${to}:`, fallbackErr.message);
+                return false;
+            }
+        }
+    }
+
+    /**
      * Send an order-cancellation notice with the reason entered by the operator.
      * Used ONLY for manual cancellations from Shoppers Hub — customer-initiated
      * ("AUTO") cancellations never trigger this. Uses Meta-approved template
