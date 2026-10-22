@@ -84,55 +84,52 @@ async function findUnbalancedInvoices(rtoCreditNotes) {
     log(`Checking ${rtoCreditNotes.length} RTO credit notes for unbalanced invoices...`);
 
     const unbalanced = [];
+    const BATCH = 5;
+    const DELAY_MS = 1200; // ~3 req/sec to stay under Zoho rate limits
 
-    // Process in batches to avoid rate limits
-    for (let i = 0; i < rtoCreditNotes.length; i += 50) {
-        const batch = rtoCreditNotes.slice(i, i + 50);
+    // Process sequentially in small batches to avoid rate limits
+    for (let i = 0; i < rtoCreditNotes.length; i += BATCH) {
+        const batch = rtoCreditNotes.slice(i, i + BATCH);
 
-        // Fetch invoice details for each credit note
-        const checks = await Promise.all(
-            batch.map(async (cn) => {
-                try {
-                    // Get the invoice_id from the credit note's invoices
-                    const cnFull = await zohoService.getCreditNote(cn.creditnote_id);
-                    const invoices = cnFull.invoices || [];
+        for (const cn of batch) {
+            try {
+                const cnFull = await zohoService.getCreditNote(cn.creditnote_id);
+                const invoices = cnFull.invoices || [];
+                if (invoices.length === 0) continue;
 
-                    if (invoices.length === 0) return null;
+                const invoiceId = invoices[0].invoice_id;
+                const amountApplied = parseFloat(invoices[0].amount_applied || 0);
+                const invoice = await zohoService.getInvoice(invoiceId);
+                const balance = parseFloat(invoice.balance || 0);
 
-                    const invoiceId = invoices[0].invoice_id;
-                    const amountApplied = parseFloat(invoices[0].amount_applied || 0);
-
-                    // Fetch the invoice to check balance
-                    const invoice = await zohoService.getInvoice(invoiceId);
-                    const balance = parseFloat(invoice.balance || 0);
-
-                    if (balance > 0.01) {
-                        return {
-                            invoice_id: invoiceId,
-                            invoice_number: invoice.invoice_number,
-                            reference_number: invoice.reference_number,
-                            total: parseFloat(invoice.total || 0),
-                            balance,
-                            credits_applied: parseFloat(invoice.credits_applied || 0),
-                            rto_credit_note_id: cn.creditnote_id,
-                            rto_credit_note_number: cn.creditnote_number,
-                            rto_credit_amount: amountApplied,
-                            customer_name: invoice.customer_name
-                        };
-                    }
-
-                    return null;
-                } catch (e) {
-                    return null;
+                if (balance > 0.01) {
+                    unbalanced.push({
+                        invoice_id: invoiceId,
+                        invoice_number: invoice.invoice_number,
+                        reference_number: invoice.reference_number,
+                        total: parseFloat(invoice.total || 0),
+                        balance,
+                        credits_applied: parseFloat(invoice.credits_applied || 0),
+                        rto_credit_note_id: cn.creditnote_id,
+                        rto_credit_note_number: cn.creditnote_number,
+                        rto_credit_amount: amountApplied,
+                        customer_name: invoice.customer_name
+                    });
                 }
-            })
-        );
-
-        unbalanced.push(...checks.filter(Boolean));
+            } catch (e) {
+                // skip individual failures
+            }
+        }
 
         // Progress logging
-        if ((i + 50) % 200 === 0) {
-            log(`  Checked ${i + 50}/${rtoCreditNotes.length} credit notes...`);
+        const done = Math.min(i + BATCH, rtoCreditNotes.length);
+        if (done % 100 === 0 || done === rtoCreditNotes.length) {
+            log(`  Checked ${done}/${rtoCreditNotes.length} credit notes... (${unbalanced.length} unbalanced so far)`);
+        }
+
+        // Delay between batches
+        if (i + BATCH < rtoCreditNotes.length) {
+            await new Promise(r => setTimeout(r, DELAY_MS));
         }
     }
 
