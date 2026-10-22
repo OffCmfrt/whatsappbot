@@ -101,12 +101,21 @@ function mapCarrierStatus(rawStatus, statusType = null) {
  * Decide the status to persist for a shipment given the mapped live status.
  * Terminal overrides (rto/cancelled) always win unless already delivered;
  * pipeline statuses only ever move forward.
+ *
+ * Exception: 'delivered' CAN override 'rto' — this handles the DTO case
+ * where an order was marked RTO (return in progress) but the carrier
+ * later confirmed the return parcel was delivered back to warehouse.
  */
 function resolveTransition(currentStatus, mappedStatus) {
     if (!mappedStatus || mappedStatus === currentStatus) return null;
     if (currentStatus === 'delivered') return null; // delivered is final
     if (mappedStatus === 'rto' || mappedStatus === 'cancelled') return mappedStatus;
-    if (currentStatus === 'rto') return null; // only cancelled/failed can follow RTO (manual)
+    if (currentStatus === 'rto') {
+        // Only delivered can override RTO (DTO — return parcel reached warehouse).
+        // Pipeline statuses (in_transit, out_for_delivery) cannot regress from RTO.
+        if (mappedStatus === 'delivered') return mappedStatus;
+        return null;
+    }
     const from = STATUS_RANK[currentStatus] ?? 0;
     const to = STATUS_RANK[mappedStatus] ?? 0;
     return to > from ? mappedStatus : null;
@@ -217,7 +226,10 @@ async function syncShipment(shipment) {
     console.log(`📦 Shipment #${shipment.id} (${shipment.order_id}, AWB ${shipment.awb}): ${shipment.status} → ${newStatus} [carrier: "${carrierStatus}"]`);
 
     // Zoho middleware hook — auto COD reconciliation + RTO credit notes
-    if (newStatus === 'delivered' || newStatus === 'rto') {
+    // Skip when transitioning from RTO → delivered (DTO): the RTO credit note
+    // was already created; creating a COD payment on top would double-reverse.
+    const prevStatus = shipment.status;
+    if ((newStatus === 'delivered' || newStatus === 'rto') && !(prevStatus === 'rto' && newStatus === 'delivered')) {
         try {
             require('./zohoShipmentHook').onShipmentTerminal(shipment, newStatus, deliveredAt)
                 .catch(e => console.warn(`⚠️ Zoho shipment hook failed for ${shipment.order_id}:`, e.message));
