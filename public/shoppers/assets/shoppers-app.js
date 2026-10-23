@@ -6088,7 +6088,27 @@ async function openBulkShipModal() {
         showShipToast('No eligible orders selected — only confirmed, un-shipped orders can be bulk shipped', true);
         return;
     }
-    if (eligible.length > MAX_BULK_SHIP) {
+
+    // Deduplicate by order_id — store_shoppers can have multiple rows for the
+    // same order (sync duplicates, GoKwik merges). Ship each order only once.
+    const seenOrderIds = new Set();
+    const deduped = [];
+    for (const s of eligible) {
+        const oid = String(s.order_id || '').trim();
+        if (!oid || seenOrderIds.has(oid)) continue;
+        seenOrderIds.add(oid);
+        deduped.push(s);
+    }
+    const skippedDuplicates = eligible.length - deduped.length;
+    if (deduped.length === 0) {
+        showShipToast('All selected orders are duplicates — nothing new to ship', true);
+        return;
+    }
+    if (skippedDuplicates > 0) {
+        console.log(`📦 Bulk ship: skipped ${skippedDuplicates} duplicate order_id rows (shipping ${deduped.length} unique orders)`);
+    }
+
+    if (deduped.length > MAX_BULK_SHIP) {
         showShipToast(`Bulk ship is capped at ${MAX_BULK_SHIP} orders per run — narrow the filters and split the batch`, true);
         return;
     }
@@ -6098,8 +6118,8 @@ async function openBulkShipModal() {
 
     document.getElementById('bulkShipCarrier').innerHTML =
         carriers.map(c => `<option value="${c.key}">${escapeHtml(c.name)}${c.capabilities.needsCourierSelection ? ' (auto-assigns cheapest courier)' : ''}</option>`).join('');
-    document.getElementById('bulkShipCount').textContent = `${eligible.length} orders`;
-    document.getElementById('bulkShipProgress').innerHTML = eligible.map(s => `
+    document.getElementById('bulkShipCount').textContent = `${deduped.length} orders`;
+    document.getElementById('bulkShipProgress').innerHTML = deduped.map(s => `
         <div class="bulk-ship-line" id="bs-line-${s.id}">
             <span class="bs-order">#${s.order_id} · ${escapeHtml(s.name || 'Customer')}</span>
             <span class="bs-result" id="bs-result-${s.id}">Queued</span>
@@ -6107,7 +6127,7 @@ async function openBulkShipModal() {
     const startBtn = document.getElementById('bulkShipStartBtn');
     startBtn.disabled = false;
     startBtn.textContent = 'Start Shipping';
-    document.getElementById('bulkShipModal').dataset.ids = JSON.stringify(eligible.map(s => s.id));
+    document.getElementById('bulkShipModal').dataset.ids = JSON.stringify(deduped.map(s => s.id));
     // Reset pause/minimize buttons
     document.getElementById('bulkShipPauseBtn').style.display = 'none';
     document.getElementById('bulkShipMinimizeBtn').style.display = 'none';

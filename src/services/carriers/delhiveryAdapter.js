@@ -324,21 +324,65 @@ class DelhiveryAdapter extends BaseCarrier {
                 const reason = this.extractReason(response.data);
                 // "Duplicate order id" means Delhivery already has this consignment —
                 // check if the existing AWB is still active before adopting it
-                if (/duplicate\s+order\s*id/i.test(reason) && awb) {
-                    console.log(`📦 Delhivery: order ${orderId} already exists — checking AWB ${awb} status before adoption`);
+                if (/duplicate\s+order\s*id/i.test(reason)) {
+                    // If the response didn't include the existing AWB, recover it via lookup
+                    let existingAwb = awb || null;
+                    if (!existingAwb) {
+                        console.log(`📦 Delhivery: duplicate order id for ${orderId} but no AWB in response — recovering via findSyncedOrder`);
+                        const recovered = await this.findSyncedOrder(orderId);
+                        if (recovered?.awb) {
+                            existingAwb = recovered.awb;
+                            console.log(`✅ Delhivery: recovered existing AWB ${existingAwb} for order ${orderId}`);
+                        }
+                    }
+
+                    if (!existingAwb) {
+                        // Cannot recover — fail clearly instead of silently creating a duplicate
+                        console.error(`❌ Delhivery: duplicate order id for ${orderId} but could not recover existing AWB`);
+                        return this.fail(`Delhivery reports duplicate order id for ${orderId} but no existing waybill could be recovered. Please check the Delhivery panel manually.`, response.data);
+                    }
+
+                    console.log(`📦 Delhivery: order ${orderId} already exists — checking AWB ${existingAwb} status before adoption`);
                     
                     // Verify the existing AWB is not cancelled
-                    const trackingResult = await this.track(awb);
+                    const trackingResult = await this.track(existingAwb);
                     const currentStatus = trackingResult.data?.currentStatus || '';
                     const statusType = trackingResult.data?.statusType || '';
                     const isCancelled = /cancel/i.test(currentStatus) || statusType === 'CN';
                     
                     if (isCancelled) {
-                        console.log(`⚠️ Delhivery: order ${orderId} has cancelled AWB ${awb} — retrying with modified order ID`);
+                        console.log(`⚠️ Delhivery: order ${orderId} has cancelled AWB ${existingAwb} — checking for retry variant`);
                         
-                        // Retry with a modified order ID to avoid the duplicate conflict
+                        // Before retrying with -c suffix, check if that variant already exists
                         const retryOrderId = `${orderId}-c`;
-                        console.log(`🔄 Delhivery: re-creating order as ${retryOrderId}`);
+                        const existingRetry = await this.findSyncedOrder(retryOrderId);
+                        
+                        if (existingRetry?.awb) {
+                            // The -c variant already exists — check its status
+                            const retryTracking = await this.track(existingRetry.awb);
+                            const retryStatus = retryTracking.data?.currentStatus || '';
+                            const retryStatusType = retryTracking.data?.statusType || '';
+                            const isRetryCancelled = /cancel/i.test(retryStatus) || retryStatusType === 'CN';
+                            
+                            if (!isRetryCancelled) {
+                                console.log(`✅ Delhivery: retry variant ${retryOrderId} already exists with active AWB ${existingRetry.awb} — adopting it`);
+                                return this.ok({
+                                    awb: existingRetry.awb,
+                                    courierName: 'Delhivery',
+                                    carrierShipmentId: existingRetry.awb,
+                                    carrierOrderId: retryOrderId,
+                                    freightCharge: null,
+                                    trackingUrl: `https://www.delhivery.com/track/package/${existingRetry.awb}`,
+                                    reusedSyncedOrder: true,
+                                    requestPayload: { orderId: retryOrderId, source: 'duplicate_retry_already_exists', originalOrderId: orderId }
+                                }, existingRetry);
+                            } else {
+                                console.log(`⚠️ Delhivery: retry variant ${retryOrderId} also has cancelled AWB ${existingRetry.awb} — cannot auto-recover`);
+                                return this.fail(`Order ${orderId} and its retry variant ${retryOrderId} both have cancelled AWBs. Please create a new order manually with a different order ID.`, null);
+                            }
+                        }
+                        
+                        console.log(`🔄 Delhivery: retrying with modified order ID ${retryOrderId}`);
                         
                         // Update the consignment with the new order ID
                         consignment.order = retryOrderId;
@@ -383,14 +427,14 @@ class DelhiveryAdapter extends BaseCarrier {
                         }
                     }
                     
-                    console.log(`📦 Delhivery: adopting existing active AWB ${awb} for order ${orderId} (status: ${currentStatus})`);
+                    console.log(`📦 Delhivery: adopting existing active AWB ${existingAwb} for order ${orderId} (status: ${currentStatus})`);
                     return this.ok({
-                        awb,
+                        awb: existingAwb,
                         courierName: 'Delhivery',
-                        carrierShipmentId: awb,
+                        carrierShipmentId: existingAwb,
                         carrierOrderId: orderId,
                         freightCharge: null,
-                        trackingUrl: `https://www.delhivery.com/track/package/${awb}`,
+                        trackingUrl: `https://www.delhivery.com/track/package/${existingAwb}`,
                         reusedSyncedOrder: true,
                         requestPayload: { orderId, source: 'duplicate_adoption', existingStatus: currentStatus }
                     }, response.data);
