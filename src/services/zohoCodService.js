@@ -73,13 +73,31 @@ async function handleCodDelivery(orderId, { amount, carrier, awb, deliveryDate, 
             throw new Error(`No Zoho invoice found for order #${orderId}. Sync the order first.`);
         }
 
-        const zohoInvoice = invoices[0];
+        // When the same order has multiple Zoho invoices (middleware +
+        // native Shopify integration), prefer the one that still carries
+        // a balance — the native duplicate is usually already paid.
+        const zohoInvoice = invoices.find(inv => parseFloat(inv.balance) > 0) || invoices[0];
         const invoiceId = zohoInvoice.invoice_id;
-        // 'total' is the invoice grand total; 'amount' in the list API is
-        // the remaining balance, which can be 0 → never record a ₹0 payment
-        const invoiceAmount = parseFloat(zohoInvoice.total || zohoInvoice.amount || amount || 0);
+        // 'balance' is the remaining amount due on the invoice (the list
+        // API returns it). 'total' is the grand total, which can be
+        // larger than the balance when partial payments or credit notes
+        // have been applied — paying the total in that case makes Zoho
+        // reject with "amount more than balance due". Fall back to total
+        // only if balance is absent.
+        const balance = parseFloat(zohoInvoice.balance);
+        const invoiceAmount = parseFloat(
+            !isNaN(balance) && balance > 0
+                ? balance
+                : (zohoInvoice.total || zohoInvoice.amount || amount || 0)
+        );
         if (invoiceAmount <= 0) {
-            throw new Error(`Invoice ${invoiceId} has no payable amount (total=${invoiceAmount}) — nothing to reconcile`);
+            console.log(`ℹ️ Zoho COD: invoice ${invoiceId} balance is 0 — nothing to reconcile`);
+            await dbAdapter.run(
+                `UPDATE zoho_cod_payments SET payment_status = ?, zoho_invoice_id = ?, reconciled_at = NOW() WHERE id = ?`,
+                ['reconciled', invoiceId, logResult.lastInsertRowid]
+            );
+            await markShopifyPaid(orderId);
+            return { success: true, alreadyPaid: true, zeroBalance: true };
         }
 
         // Step 2: Check if payment already recorded in Zoho
