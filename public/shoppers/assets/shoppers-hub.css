@@ -4612,6 +4612,31 @@ body.dark-theme {
 .ict-btn-ghost:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
 .ict-btn-ghost:disabled { opacity: 0.35; cursor: default; }
 
+/* ------------------- name-alias mapping (unmatched items) ------------------- */
+.ict-untracked-line {
+    display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex: 1;
+}
+.ict-alias-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.ict-alias-picker {
+    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    width: 100%; padding: 0.5rem 0 0.15rem;
+}
+.ict-alias-picker .ict-input { min-width: 180px; flex: 1; }
+.ict-btn-primary {
+    appearance: none; cursor: pointer; border: none; border-radius: 8px;
+    background: #fff; color: #0a0a0a; padding: 0.45rem 0.9rem;
+    font-size: 0.74rem; font-weight: 700; font-family: 'Inter', sans-serif;
+    transition: opacity 0.2s ease;
+}
+.ict-btn-primary:hover { opacity: 0.85; }
+.ict-alias-msg { width: 100%; font-size: 0.72rem; padding-top: 0.25rem; }
+.ict-alias-msg.ok { color: #34d399; }
+.ict-alias-msg.err { color: #f87171; }
+.ict-alias-saved-head {
+    margin-top: 0.9rem; font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: rgba(255,255,255,0.4); padding: 0.3rem 0;
+}
+
 .ict-input {
     background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);
     color: #fff; padding: 0.5rem 0.8rem; border-radius: 9px; outline: none;

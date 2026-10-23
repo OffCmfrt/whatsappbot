@@ -7098,11 +7098,35 @@ router.get('/inventory', verifyToken, async (req, res) => {
                 if (v.sku) skuIndex.set(norm(v.sku), { p, v });
             }
         }
+        // Direct id lookups — used by the alias index below
+        const variantById = new Map();
+        for (const p of activeCatalog) {
+            for (const v of (p.variants || [])) variantById.set(String(v.id), { p, v });
+        }
+
+        // Human-confirmed name aliases (inventory_name_aliases): order items
+        // whose stored name no longer matches the catalog (product renamed,
+        // GoKwik/manual source names).  Admins map them once in the UI and
+        // every future resolution uses the mapping.  Highest priority.
+        let aliasIndex = new Map();
+        try {
+            const aliasRows = await dbAdapter.query(`SELECT raw_name, raw_size, variant_id FROM inventory_name_aliases`);
+            for (const a of aliasRows) {
+                aliasIndex.set(`${norm(a.raw_name)}|${norm(a.raw_size)}`, String(a.variant_id));
+            }
+        } catch (_) { /* table not migrated yet — fall through to normal matching */ }
 
         // Resolve a raw line item ({title|product_name|name, sku, variant|variant_title|size, quantity})
         // to a catalog variant. Returns { p, v } or null.
         const resolveItem = (item) => {
             if (!item || typeof item !== 'object') return null;
+
+            // Strategy 0: human-confirmed alias mapping
+            const aliasVariantId = aliasIndex.get(
+                `${norm(item.title || item.product_name || item.name)}|${norm(extractItemSize(item))}`);
+            const aliasHit = aliasVariantId ? variantById.get(aliasVariantId) : null;
+            if (aliasHit) return aliasHit;
+
             const sku = norm(item.sku);
             if (sku && skuIndex.has(sku)) return skuIndex.get(sku);
 
@@ -7553,6 +7577,83 @@ router.get('/inventory', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Inventory intelligence error:', error);
         res.status(500).json({ success: false, error: 'Failed to compute inventory intelligence' });
+    }
+});
+
+// ── Inventory Name Aliases (admin) ──
+// Human-confirmed mappings between order-item names and the real Shopify
+// catalog variant.  Fixes "0 selling" SKUs whose stored order names no
+// longer match the catalog.  Both /inventory and /inventory/movements
+// consult these mappings with the highest priority.
+
+// Drop cached inventory intelligence so a new/changed alias takes effect
+const invalidateInventoryIntelCache = () => {
+    for (const k of caches.stats.keys()) {
+        if (String(k).startsWith('inventory_intel')) caches.stats.delete(k);
+    }
+};
+
+router.get('/inventory/name-aliases', verifyToken, async (req, res) => {
+    try {
+        const rows = await dbAdapter.query(
+            `SELECT id, raw_name, raw_size, product_id, variant_id, created_by, created_at
+             FROM inventory_name_aliases ORDER BY created_at DESC`);
+        // Resolve display titles from the live catalog (skips stale rows)
+        const shopifyService = require('../services/shopifyService');
+        const catalog = await shopifyService.getProductCatalog(false);
+        const vById = new Map();
+        for (const p of catalog) {
+            for (const v of (p.variants || [])) vById.set(String(v.id), { p, v });
+        }
+        const aliases = rows.map(a => {
+            const hit = vById.get(String(a.variant_id));
+            return {
+                ...a,
+                product_title: hit ? hit.p.title : null,
+                variant_title: hit ? hit.v.title : null,
+                stale: !hit
+            };
+        });
+        res.json({ success: true, aliases });
+    } catch (error) {
+        console.error('Name aliases fetch error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch name aliases' });
+    }
+});
+
+router.post('/inventory/name-aliases', verifyToken, async (req, res) => {
+    try {
+        const { raw_name, raw_size, product_id, variant_id } = req.body;
+        if (!raw_name || !product_id || !variant_id) {
+            return res.status(400).json({ success: false, error: 'raw_name, product_id and variant_id are required' });
+        }
+        const performedBy = req.admin?.username || 'admin';
+        await dbAdapter.query(
+            `INSERT INTO inventory_name_aliases (raw_name, raw_size, product_id, variant_id, created_by)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (raw_name, raw_size)
+             DO UPDATE SET product_id = EXCLUDED.product_id,
+                           variant_id = EXCLUDED.variant_id,
+                           created_by = EXCLUDED.created_by,
+                           created_at = NOW()`,
+            [String(raw_name).trim(), String(raw_size || '').trim(), product_id, variant_id, performedBy]
+        );
+        invalidateInventoryIntelCache();
+        res.json({ success: true, message: `Mapped "${raw_name}" — inventory will refresh on next load` });
+    } catch (error) {
+        console.error('Name alias save error:', error);
+        res.status(500).json({ success: false, error: 'Failed to save name alias' });
+    }
+});
+
+router.delete('/inventory/name-aliases/:id', verifyToken, async (req, res) => {
+    try {
+        await dbAdapter.query('DELETE FROM inventory_name_aliases WHERE id = $1', [req.params.id]);
+        invalidateInventoryIntelCache();
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Name alias delete error:', error);
+        res.status(500).json({ success: false, error: 'Failed to delete name alias' });
     }
 });
 
@@ -8090,14 +8191,31 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
         const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
         const skuIndex = new Map();
         const titleIndex = new Map();
+        const variantById = new Map();
         for (const p of catalog) {
             titleIndex.set(norm(p.title), p);
             for (const v of (p.variants || [])) {
                 if (v.sku) skuIndex.set(norm(v.sku), { p, v });
+                variantById.set(String(v.id), { p, v });
             }
         }
+        // Human-confirmed alias mappings (see /inventory endpoint)
+        let aliasIndex = new Map();
+        try {
+            const aliasRows = await dbAdapter.query(`SELECT raw_name, raw_size, variant_id FROM inventory_name_aliases`);
+            for (const a of aliasRows) {
+                aliasIndex.set(`${norm(a.raw_name)}|${norm(a.raw_size)}`, String(a.variant_id));
+            }
+        } catch (_) { /* table not migrated yet */ }
         const resolveItem = (item) => {
             if (!item || typeof item !== 'object') return null;
+
+            // Strategy 0: human-confirmed alias mapping (highest priority)
+            const aliasVariantId = aliasIndex.get(
+                `${norm(item.title || item.product_name || item.name)}|${norm(extractItemSize(item))}`);
+            const aliasHit = aliasVariantId ? variantById.get(aliasVariantId) : null;
+            if (aliasHit) return aliasHit;
+
             const sku = norm(item.sku);
             if (sku && skuIndex.has(sku)) return skuIndex.get(sku);
             const title = norm(item.title || item.product_name || item.name);

@@ -95,6 +95,15 @@
         sample: null,        // { pos, prod, rawMaterials, suppliers, campaigns }
         movements: null,     // date-wise movement data
         movementsLoading: false,
+        // Name-alias mapping (unmatched item → real catalog variant)
+        aliasPicker: null,       // key "title|size" currently open for mapping
+        aliasCatalog: null,      // Shopify products (lazy)
+        aliasCatalogLoading: false,
+        aliases: null,           // saved aliases (lazy)
+        aliasesLoading: false,
+        aliasProductId: null,    // picker selection state
+        aliasVariantId: null,
+        aliasMsg: null,          // { tone: 'ok'|'err', text }
         tab: 'home',
         windowDays: 90,
         loading: false,
@@ -906,6 +915,112 @@
             </div>`;
     }
 
+    /* --------------------- name-alias mapping (unmatched items) --------------------- */
+    async function ensureAliasData() {
+        if (typeof apiCall !== 'function') return;
+        if (!ICT.aliases && !ICT.aliasesLoading) {
+            ICT.aliasesLoading = true;
+            try {
+                const data = await apiCall('/inventory/name-aliases');
+                ICT.aliases = (data && data.aliases) || [];
+            } catch (_) { ICT.aliases = []; }
+            ICT.aliasesLoading = false;
+            renderCurrentTab();
+        }
+        if (!ICT.aliasCatalog && !ICT.aliasCatalogLoading) {
+            ICT.aliasCatalogLoading = true;
+            try {
+                const data = await apiCall('/shopify/products');
+                ICT.aliasCatalog = (data && data.products) || [];
+            } catch (_) { ICT.aliasCatalog = []; }
+            ICT.aliasCatalogLoading = false;
+            renderCurrentTab();
+        }
+    }
+
+    function aliasPickerHtml(u) {
+        const key = `${u.title}|${u.size || ''}`;
+        const isOpen = ICT.aliasPicker === key;
+        const mapBtn = `<button class="ict-btn-ghost" data-ict="alias-map" data-key="${esc(key)}" data-raw="${esc(u.title)}" data-size="${esc(u.size || '')}">${isOpen ? 'Close' : 'Map to product'}</button>`;
+        if (!isOpen) return mapBtn;
+
+        const products = ICT.aliasCatalog || [];
+        if (!products.length) {
+            return `${mapBtn}<span class="ict-dim">${ICT.aliasCatalogLoading ? 'Loading catalog…' : 'Catalog unavailable'}</span>`;
+        }
+        const selectedProduct = ICT.aliasProductId || String(products[0].id);
+        const product = products.find((p) => String(p.id) === selectedProduct) || products[0];
+        const variants = (product.variants || []).map((v) =>
+            `<option value="${v.id}" ${String(ICT.aliasVariantId) === String(v.id) ? 'selected' : ''}>${esc(v.title || 'Default')}${v.sku ? ' · ' + esc(v.sku) : ''}</option>`).join('');
+        return `
+            ${mapBtn}
+            <div class="ict-alias-picker">
+                <select class="ict-input" data-ict-input="alias-product" data-key="${esc(key)}">
+                    ${products.map((p) => `<option value="${p.id}" ${String(p.id) === selectedProduct ? 'selected' : ''}>${esc(p.title)}</option>`).join('')}
+                </select>
+                <select class="ict-input" data-ict-input="alias-variant">${variants}</select>
+                <button class="ict-btn-primary" data-ict="alias-save" data-key="${esc(key)}" data-raw="${esc(u.title)}" data-size="${esc(u.size || '')}" data-product="${esc(product.id)}">Save mapping</button>
+            </div>
+            ${ICT.aliasMsg ? `<div class="ict-alias-msg ${ICT.aliasMsg.tone === 'ok' ? 'ok' : 'err'}">${esc(ICT.aliasMsg.text)}</div>` : ''}`;
+    }
+
+    async function saveAlias(raw, size, productId) {
+        const variantId = ICT.aliasVariantId
+            || ((ICT.aliasCatalog || []).find((p) => String(p.id) === String(productId))?.variants || [])[0]?.id;
+        if (!variantId) { ICT.aliasMsg = { tone: 'err', text: 'Pick a variant first.' }; renderCurrentTab(); return; }
+        try {
+            const data = await apiCall('/inventory/name-aliases', 'POST', {
+                raw_name: raw, raw_size: size || '', product_id: Number(productId), variant_id: Number(variantId)
+            });
+            if (!data || data.success === false) throw new Error((data && data.error) || 'Save failed');
+            ICT.aliasMsg = { tone: 'ok', text: `Mapped "${raw}" — reloading inventory…` };
+            ICT.aliases = null; // force reload of alias list
+            await loadTower(true);
+        } catch (err) {
+            ICT.aliasMsg = { tone: 'err', text: err.message || 'Save failed' };
+            renderCurrentTab();
+        }
+    }
+
+    async function removeAlias(id) {
+        try {
+            await apiCall(`/inventory/name-aliases/${id}`, 'DELETE');
+            ICT.aliases = null;
+            await loadTower(true);
+        } catch (err) {
+            ICT.aliasMsg = { tone: 'err', text: err.message || 'Delete failed' };
+            renderCurrentTab();
+        }
+    }
+
+    function untrackedSection() {
+        const untracked = (ICT.data.untracked || []);
+        if (!untracked.length && !(ICT.aliases || []).length) return '';
+        const rows = untracked.map((u) => {
+            const key = `${u.title}|${u.size || ''}`;
+            return `<div class="ict-untracked-item">
+                <div class="ict-untracked-line">
+                    <span>${esc(u.title)}${u.size ? ' — ' + esc(u.size) : ''}</span>
+                    <span class="ict-dim">${[
+                        u.in_circulation ? `${u.in_circulation} in transit` : null, u.rto_incoming ? `${u.rto_incoming} RTO` : null,
+                        u.return_incoming ? `${u.return_incoming} returns` : null, u.exchange_incoming ? `${u.exchange_incoming} exch-in` : null,
+                        u.exchange_outgoing ? `${u.exchange_outgoing} exch-out` : null].filter(Boolean).join(' · ')}</span>
+                </div>
+                <div class="ict-alias-row">${aliasPickerHtml(u)}</div>
+            </div>`;
+        }).join('');
+        const savedAliases = (ICT.aliases || []).map((a) =>
+            `<div class="ict-untracked-item">
+                <div class="ict-untracked-line">
+                    <span>${esc(a.raw_name)}${a.raw_size ? ' — ' + esc(a.raw_size) : ''}</span>
+                    <span class="ict-dim">→ ${esc(a.product_title || '(deleted product)')}${a.variant_title ? ' · ' + esc(a.variant_title) : ''}${a.stale ? ' · stale' : ''}</span>
+                </div>
+                <button class="ict-btn-ghost" data-ict="alias-remove" data-id="${a.id}" title="Remove mapping">✕</button>
+            </div>`).join('');
+        return sectionCard('Unmatched items', 'Order/return items whose names don\'t match any catalog variant — map them to the real product so their sales count',
+            `<div class="ict-untracked">${rows}${savedAliases ? `<div class="ict-alias-saved-head">Saved mappings (${savedAliases ? (ICT.aliases || []).length : 0})</div>${savedAliases}` : ''}</div>`);
+    }
+
     function renderMaster() {
         const { skus } = ICT;
         const m = ICT.ui.master;
@@ -967,13 +1082,8 @@
             </tr>${isOpen ? detailRow(s) : ''}`;
         }).join('');
 
-        const untracked = (ICT.data.untracked || []);
-        const untrackedHtml = untracked.length ? sectionCard('Unmatched items', 'Line items from orders/returns/exchanges that could not be matched to a Shopify catalog variant',
-            `<div class="ict-untracked">${untracked.map((u) =>
-                `<div class="ict-untracked-item"><span>${esc(u.title)}${u.size ? ' — ' + esc(u.size) : ''}</span><span class="ict-dim">${[
-                    u.in_circulation ? `${u.in_circulation} in transit` : null, u.rto_incoming ? `${u.rto_incoming} RTO` : null,
-                    u.return_incoming ? `${u.return_incoming} returns` : null, u.exchange_incoming ? `${u.exchange_incoming} exch-in` : null,
-                    u.exchange_outgoing ? `${u.exchange_outgoing} exch-out` : null].filter(Boolean).join(' · ')}</span></div>`).join('')}</div>`) : '';
+        ensureAliasData();
+        const untrackedHtml = untrackedSection();
 
         return `
             <div class="ict-page-head">
@@ -1708,6 +1818,15 @@
             ICT.ui.master.dateFrom = ''; ICT.ui.master.dateTo = ''; ICT.ui.master.datePreset = ''; ICT.movements = null; renderCurrentTab();
         } else if (action === 'export-movements') {
             exportMovementsCsv();
+        } else if (action === 'alias-map') {
+            const key = el.dataset.key;
+            ICT.aliasPicker = ICT.aliasPicker === key ? null : key;
+            ICT.aliasProductId = null; ICT.aliasVariantId = null; ICT.aliasMsg = null;
+            renderCurrentTab();
+        } else if (action === 'alias-save') {
+            saveAlias(el.dataset.raw, el.dataset.size, el.dataset.product);
+        } else if (action === 'alias-remove') {
+            removeAlias(el.dataset.id);
         }
     });
 
@@ -1730,6 +1849,8 @@
         else if (key === 'mv-to') { ICT.ui.master.dateTo = el.value; ICT.ui.master.datePreset = 'custom'; }
         else if (key === 'forecast-product') { ICT.ui.forecast.productId = el.value; }
         else if (key === 'size-product') { ICT.ui.size.productId = el.value; }
+        else if (key === 'alias-product') { ICT.aliasProductId = el.value; ICT.aliasVariantId = null; renderCurrentTab(); return; }
+        else if (key === 'alias-variant') { ICT.aliasVariantId = el.value; return; }
         else return;
         renderCurrentTab();
     });
