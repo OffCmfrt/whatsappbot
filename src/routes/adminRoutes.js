@@ -7159,7 +7159,10 @@ router.get('/inventory', verifyToken, async (req, res) => {
                     const vt = norm(v.title);
                     if (!vt) return false;
                     const vtTokens = vt.split(' ').filter(Boolean);
-                    return wanted.every(t => vtTokens.includes(t) || vt.includes(t));
+                    // Token equality ONLY — a substring check here silently
+                    // attributed size-S sales to XS ("xs" contains "s") when
+                    // XS precedes S in the variants array, and L to XL likewise.
+                    return wanted.every(t => vtTokens.includes(t));
                 });
                 if (hit) return { p: product, v: hit };
             }
