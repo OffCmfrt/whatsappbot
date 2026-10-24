@@ -7298,6 +7298,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
         const VEL_DAYS = 84;
         const nowTs = Date.now();
         const salesByVariant = new Map(); // variantKey -> { days: number[84], lastSaleTs }
+        const forecastSource = { history_days: VEL_DAYS, matched_units: 0, unmatched_units: 0, order_rows: salesRows.length };
         for (const row of salesRows) {
             const ts = new Date(row.created_at).getTime();
             if (!ts || isNaN(ts)) continue;
@@ -7306,7 +7307,11 @@ router.get('/inventory', verifyToken, async (req, res) => {
             for (const item of expandBundleItems(parseItems(row.items_json))) {
                 const qty = Math.max(1, parseInt(item.quantity ?? item.qty, 10) || 1);
                 const resolved = resolveItem(item);
-                if (!resolved || !resolved.v) continue; // unattributable units can't feed SKU velocity
+                if (!resolved || !resolved.v) {
+                    forecastSource.unmatched_units += qty;
+                    continue; // unattributable units can't feed SKU velocity
+                }
+                forecastSource.matched_units += qty;
                 const key = variantKey(resolved.p, resolved.v);
                 if (!salesByVariant.has(key)) salesByVariant.set(key, { days: new Array(VEL_DAYS).fill(0), lastSaleTs: 0 });
                 const entry = salesByVariant.get(key);
@@ -7559,6 +7564,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
             success: true,
             window_days: windowDays,
             generated_at: new Date().toISOString(),
+            forecast_source: { ...forecastSource, as_of: new Date(nowTs).toISOString(), demand_statuses: ['shipped', 'delivered'], date_basis: 'order_created_at' },
             summary,
             products,
             untracked: untrackedList,

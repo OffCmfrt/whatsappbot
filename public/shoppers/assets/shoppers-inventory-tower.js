@@ -68,24 +68,7 @@
     const PROD_STAGES = ['Cutting', 'Stitching', 'Finishing', 'QC', 'Packing', 'Dispatched'];
     const PO_STATUS_TONE = { 'Open': 'info', 'Partially Received': 'attention', 'Fully Received': 'healthy', 'Delayed': 'critical', 'Cancelled': 'neutral' };
     const DEAD_STATUS_TONE = { Identified: 'info', Review: 'attention', 'Action Required': 'critical', Clearance: 'attention', Markdown: 'attention', 'Write-off': 'critical' };
-    const ABCXYZ_STRATEGY = {
-        AX: 'High value, predictable – replenish aggressively, tightest reorder discipline.',
-        AY: 'High value, some swings – keep close watch, moderate safety stock.',
-        AZ: 'High value, unpredictable – forecast carefully, protect with safety stock.',
-        BX: 'Steady mid-tier – standard replenishment cadence.',
-        BY: 'Mid-tier, variable – review monthly, adjust safety stock.',
-        BZ: 'Mid-tier, erratic – buy conservatively, expect surprises.',
-        CX: 'Low value, predictable – simple, infrequent reordering.',
-        CY: 'Low value, some variability – light-touch monitoring only.',
-        CZ: 'Low value, unpredictable – avoid tying up capital here.',
-    };
     const AGE_BUCKETS = ['0-30', '31-60', '61-90', '91-120', '121-180', '180+'];
-    const SCENARIOS = {
-        Base: { mult: 1, label: 'Base case' },
-        Upside: { mult: 1.25, label: 'Upside' },
-        Downside: { mult: 0.78, label: 'Downside' },
-        Campaign: { mult: 1.3, label: 'Campaign (+30%)' },
-    };
 
     /* --------------------------------- state -------------------------------- */
     const ICT = {
@@ -113,8 +96,6 @@
             repFilter: 'BUY NOW',
             poFilter: 'All',
             master: { q: '', product: 'All', status: 'All', abc: 'All', page: 0, expanded: null, dateFrom: '', dateTo: '', datePreset: '', showMovements: false },
-            forecast: { productId: '__all', horizon: 30, scenario: 'Base' },
-            size: { productId: null },
             feQty: 1000,
             sort: {},        // tableId -> { key, dir }
         },
@@ -133,14 +114,19 @@
             const mfg = mfgFor(p.id);
             for (const v of (p.variants || [])) {
                 const parts = String(v.title || '').split('/').map((x) => x.trim()).filter(Boolean);
-                const color = parts[0] || 'Default';
-                const size = parts.slice(1).join(' / ') || '';
+                const sizeToken = /^(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|[2-6]XL|FREE|ONE SIZE|\d{2})$/i;
+                const sizePart = parts.find((part) => sizeToken.test(part));
+                const size = sizePart || parts.slice(1).join(' / ') || '';
+                const titleColor = String(p.title || '').match(/\(\s*([^()]+)\s*\)/);
+                const color = parts.filter((part) => part !== sizePart).join(' / ') || (titleColor ? titleColor[1].trim() : 'Unspecified');
                 const cover = v.days_of_cover;
                 const stockoutEta = (v.velocity > 0.05 && cover !== 999)
                     ? new Date(Date.now() + Math.floor(cover) * 86400000) : null;
                 skus.push({
                     seq: seq++,
                     sku: v.sku_code || v.sku || `#${v.id}`,
+                    variantId: `${p.id}:${v.id}`,
+                    variantTitle: v.title || 'Default',
                     productId: String(p.id),
                     product: p.title,
                     productImage: p.image,
@@ -1317,124 +1303,11 @@
     }
 
     /* ============================ TAB 5 — FORECAST ============================ */
-    const weightedMovingForecast = (weeks) => {
-        const recent = weeks.slice(6, 11);
-        const weights = [1, 1.2, 1.5, 1.8, 2.2];
-        const wsum = weights.reduce((a, b) => a + b, 0);
-        return recent.reduce((a, v, i) => a + v * weights[i], 0) / wsum;
-    };
-
-    function buildForecastSeries(rows, horizonDays, scenarioKey) {
-        const weeks = Array.from({ length: 12 }, (_, i) => ({
-            idx: i - 11, label: `W${i - 11}`,
-            actual: rows.reduce((a, s) => a + (s.weeklySales[i] || 0), 0),
-            forecast: null,
-        }));
-        const lastActual = weeks[weeks.length - 1].actual;
-        const baseWeeklyForecast = rows.reduce((a, s) => a + weightedMovingForecast(s.weeklySales || new Array(12).fill(0)), 0);
-        const mult = SCENARIOS[scenarioKey].mult;
-        const horizonWeeks = Math.max(1, Math.ceil(horizonDays / 7));
-        weeks[weeks.length - 1] = { ...weeks[weeks.length - 1], forecast: lastActual };
-        const future = Array.from({ length: horizonWeeks }, (_, i) => ({
-            idx: i + 1, label: `W+${i + 1}`, actual: null,
-            forecast: Math.round(baseWeeklyForecast * mult),
-        }));
-        return [...weeks, ...future];
-    }
-
-    function forecastChartSection() {
-        const f = ICT.ui.forecast;
-        const products = [...new Map(ICT.skus.map((s) => [s.productId, s.product])).entries()];
-        if (!products.some(([id]) => id === f.productId)) f.productId = '__all';
-        const rows = f.productId === '__all' ? ICT.skus : ICT.skus.filter((s) => s.productId === f.productId);
-        const series = buildForecastSeries(rows, f.horizon, f.scenario);
-        const horizonUnits = series.filter((w) => w.actual === null).reduce((a, w) => a + (w.forecast || 0), 0);
-        const stockoutNote = rows.some((s) => s.currentStock === 0);
-
-        return `
-            <div class="ict-toolbar">
-                <select class="ict-input" data-ict-input="forecast-product">
-                    <option value="__all" ${f.productId === '__all' ? 'selected' : ''}>All products</option>
-                    ${products.map(([id, name]) => `<option value="${esc(id)}" ${f.productId === id ? 'selected' : ''}>${esc(name)}</option>`).join('')}
-                </select>
-                <span class="ict-chip-row">${[7, 14, 30, 60, 90].map((h) =>
-                    `<button class="ict-chip ${f.horizon === h ? 'active' : ''}" data-ict="forecast-horizon" data-value="${h}">${h}D</button>`).join('')}</span>
-                <span class="ict-chip-row ict-chip-row-right">${Object.keys(SCENARIOS).map((s) =>
-                    `<button class="ict-chip ${f.scenario === s ? 'active' : ''}" data-ict="forecast-scenario" data-value="${s}">${SCENARIOS[s].label}</button>`).join('')}</span>
-            </div>
-            ${lineChartSvg(series)}
-            <div class="ict-chart-note">
-                <span><b class="ict-mono">${num(horizonUnits)}</b> units forecast over next ${f.horizon}d under ${SCENARIOS[f.scenario].label.toLowerCase()} · weighted off last 5 weeks</span>
-                ${stockoutNote ? '<span class="ict-attention-text">Note: demand includes zero-stock variants — treat depletion dates as upper bounds.</span>' : ''}
-            </div>`;
-    }
-
-    function abcXyzSection() {
-        const cells = {};
-        ['A', 'B', 'C'].forEach((a) => ['X', 'Y', 'Z'].forEach((x) => { cells[a + x] = { count: 0, value: 0 }; }));
-        ICT.skus.forEach((s) => { const c = cells[s.abc + s.xyz]; if (c) { c.count += 1; c.value += s.currentStock * s.landedCost; } });
-        const toneMap = { AX: 'healthy', AY: 'info', AZ: 'attention', BX: 'info', BY: 'neutral', BZ: 'attention', CX: 'neutral', CY: 'neutral', CZ: 'critical' };
-        return `
-            <div class="ict-matrix">${['A', 'B', 'C'].map((r) => ['X', 'Y', 'Z'].map((c) => {
-                const key = r + c, cell = cells[key], tone = TONES[toneMap[key]];
-                return `<div class="ict-matrix-cell ${tone}">
-                    <div class="ict-matrix-key">${key}</div>
-                    <div class="ict-matrix-count">${cell.count} <span>SKUs</span></div>
-                    <div class="ict-matrix-value">${fmtInr(cell.value)}</div>
-                    <div class="ict-matrix-strategy">${ABCXYZ_STRATEGY[key]}</div>
-                </div>`;
-            }).join('')).join('')}</div>
-            <p class="ict-foot-note">Rows: revenue contribution (A = highest). Columns: demand predictability (X = stable, Z = erratic).</p>`;
-    }
-
-    function sizeCurveSection() {
-        const products = [...new Map(ICT.skus.map((s) => [s.productId, s.product])).entries()];
-        const withSizes = ICT.skus.filter((s) => s.size);
-        if (!withSizes.length) return emptyState('No size-wise variants found in the catalog.');
-        const st = ICT.ui.size;
-        if (!st.productId || !products.some(([id]) => id === st.productId)) st.productId = products[0][0];
-        const rows = ICT.skus.filter((s) => s.productId === st.productId && s.size);
-        const orderRef = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
-        const sizes = [...new Set(rows.map((s) => s.size))].sort((a, b) => orderRef.indexOf(a) - orderRef.indexOf(b));
-        const totalStock = rows.reduce((a, s) => a + s.currentStock, 0) || 1;
-        const totalSales = rows.reduce((a, s) => a + s.sales30, 0) || 1;
-        const data = sizes.map((size) => {
-            const stock = rows.filter((s) => s.size === size).reduce((a, s) => a + s.currentStock, 0);
-            const sales = rows.filter((s) => s.size === size).reduce((a, s) => a + s.sales30, 0);
-            const stockPct = +((stock / totalStock) * 100).toFixed(0);
-            const salesPct = +((sales / totalSales) * 100).toFixed(0);
-            return { size, stockPct, salesPct, mismatch: Math.abs(stockPct - salesPct) };
-        });
-        const worst = [...data].sort((a, b) => b.mismatch - a.mismatch)[0];
-        const groups = data.map((d) => ({
-            label: d.size,
-            bars: [
-                { value: d.stockPct, cls: 'bar-muted', name: 'Stock mix %' },
-                { value: d.salesPct, cls: 'bar-brand', name: 'Sales mix %' },
-            ],
-        }));
-        return `
-            <div class="ict-toolbar">
-                <select class="ict-input" data-ict-input="size-product">
-                    ${products.map(([id, name]) => `<option value="${esc(id)}" ${st.productId === id ? 'selected' : ''}>${esc(name)}</option>`).join('')}
-                </select>
-                <span class="ict-legend"><span class="ict-legend-swatch bar-muted"></span>Stock mix % <span class="ict-legend-swatch bar-brand"></span>Sales mix %</span>
-            </div>
-            ${groupedBarsSvg(groups)}
-            ${worst && worst.mismatch >= 6 ? `<div class="ict-flag">Size mismatch flagged: <b>${esc(worst.size)}</b> is ${worst.salesPct > worst.stockPct ? 'under-bought' : 'over-bought'} vs demand (${worst.stockPct}% of stock vs ${worst.salesPct}% of sales). Skew the next buy toward the sizes with the biggest gap.</div>` : ''}`;
-    }
-
     function renderForecast() {
-        return `
-            <div class="ict-page-head">
-                <h2>Forecast &amp; segmentation</h2>
-                <p>What will we need — and which SKUs deserve the tightest management.</p>
-            </div>
-            ${sectionCard('Demand forecast', 'Weighted off the last 5 weeks so one unusual week can\'t swing the number · real order history', forecastChartSection())}
-            <div class="ict-grid-2">
-                ${sectionCard('ABC × XYZ segmentation', 'Value contribution × demand predictability', abcXyzSection())}
-                ${sectionCard('Size curve mismatch', 'Stock mix vs. sales mix by size', sizeCurveSection())}
-            </div>`;
+        if (!window.ForecastWorkspace) return emptyState('Forecast module unavailable. Reload the page to load the updated assets.');
+        return window.ForecastWorkspace.render(ICT.skus, ICT.data, () => {
+            if (ICT.tab === 'forecast') renderCurrentTab();
+        });
     }
 
     /* ============================ TAB 6 — AGEING & CASH ============================ */
@@ -1786,6 +1659,7 @@
         const el = e.target.closest('[data-ict]');
         if (!el || !ICT.data) return;
         const action = el.dataset.ict;
+        if (window.ForecastWorkspace?.action(action, el)) return;
 
         if (action === 'sort') {
             const tableId = el.dataset.table, key = el.dataset.key;
@@ -1800,10 +1674,6 @@
             ICT.ui.attention = el.dataset.value; renderCurrentTab();
         } else if (action === 'rep-section') {
             ICT.ui.rep = el.dataset.value; renderCurrentTab();
-        } else if (action === 'forecast-horizon') {
-            ICT.ui.forecast.horizon = parseInt(el.dataset.value, 10) || 30; renderCurrentTab();
-        } else if (action === 'forecast-scenario') {
-            ICT.ui.forecast.scenario = el.dataset.value; renderCurrentTab();
         } else if (action === 'expand') {
             const sku = el.dataset.sku;
             ICT.ui.master.expanded = ICT.ui.master.expanded === sku ? null : sku;
@@ -1834,6 +1704,7 @@
         const el = e.target.closest('[data-ict-input]');
         if (!el || !ICT.data) return;
         const key = el.dataset.ictInput;
+        if (window.ForecastWorkspace?.input(key, el, 'input')) return;
         if (key === 'master-q') { ICT.ui.master.q = el.value; ICT.ui.master.page = 0; renderCurrentTab(); const input = document.getElementById('ictMasterSearch'); if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } }
         else if (key === 'fe-qty') { ICT.ui.feQty = Math.max(0, parseInt(el.value, 10) || 0); renderCurrentTab(); const numInput = document.querySelector('[data-ict-input="fe-qty"]'); if (numInput) numInput.focus(); }
     });
@@ -1842,13 +1713,12 @@
         const el = e.target.closest('[data-ict-input]');
         if (!el || !ICT.data) return;
         const key = el.dataset.ictInput;
+        if (window.ForecastWorkspace?.input(key, el, 'change')) return;
         if (key === 'master-product') { ICT.ui.master.product = el.value; ICT.ui.master.page = 0; }
         else if (key === 'master-status') { ICT.ui.master.status = el.value; ICT.ui.master.page = 0; }
         else if (key === 'master-abc') { ICT.ui.master.abc = el.value; ICT.ui.master.page = 0; }
         else if (key === 'mv-from') { ICT.ui.master.dateFrom = el.value; ICT.ui.master.datePreset = 'custom'; ICT.ui.master.page = 0; }
         else if (key === 'mv-to') { ICT.ui.master.dateTo = el.value; ICT.ui.master.datePreset = 'custom'; }
-        else if (key === 'forecast-product') { ICT.ui.forecast.productId = el.value; }
-        else if (key === 'size-product') { ICT.ui.size.productId = el.value; }
         else if (key === 'alias-product') { ICT.aliasProductId = el.value; ICT.aliasVariantId = null; renderCurrentTab(); return; }
         else if (key === 'alias-variant') { ICT.aliasVariantId = el.value; return; }
         else return;
