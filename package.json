@@ -42,5 +42,8 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }
