@@ -6472,3 +6472,39 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
     background: rgba(108, 117, 125, 0.4);
     border-color: #6c757d;
 }
+
+/* ==========================================
+   URGENT NOTICE TOAST ANIMATIONS
+   ========================================== */
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideOutRight {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+}
+
+/* Notice button hover effect */
+.btn-notice-hub:hover {
+    background: rgba(245, 158, 11, 0.1) !important;
+    color: #f59e0b !important;
+}
+
+/* Notice modal backdrop blur */
+#noticeModal {
+    backdrop-filter: blur(4px);
+}

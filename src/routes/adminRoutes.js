@@ -3718,6 +3718,198 @@ router.post('/chat/mark-read/:phone', verifyToken, async (req, res) => {
     }
 });
 
+// ============================================
+// Template Messaging Endpoints
+// ============================================
+
+// GET /api/admin/templates - Fetch all approved WhatsApp templates from Meta
+router.get('/templates', verifyToken, async (req, res) => {
+    try {
+        // Use cache to avoid hitting Meta API on every request (5 min TTL)
+        const cacheKey = 'waba_templates_all';
+        const cached = getCached(cacheKey);
+        if (cached) {
+            return res.json(cached);
+        }
+
+        const result = await whatsappService.getTemplates();
+        const templates = result.data || [];
+
+        // Filter only APPROVED templates (Meta returns templates with various statuses)
+        const approvedTemplates = templates.filter(t => {
+            // Check if template has at least one approved language component
+            if (t.components && t.components.length > 0) {
+                return true; // Has components, likely approved
+            }
+            return t.status === 'APPROVED';
+        });
+
+        // Extract useful info from each template
+        const formattedTemplates = approvedTemplates.map(t => {
+            const bodyComponent = t.components?.find(c => c.type === 'BODY');
+            const headerComponent = t.components?.find(c => c.type === 'HEADER');
+            const buttonComponents = t.components?.filter(c => c.type === 'BUTTONS') || [];
+
+            // Extract body text and count parameters ({{1}}, {{2}}, etc.)
+            const bodyText = bodyComponent?.text || '';
+            const paramMatches = bodyText.match(/\{\{\d+\}\}/g) || [];
+            const paramCount = paramMatches.length;
+
+            // Extract button info
+            const buttons = buttonComponents.map(btn => ({
+                type: btn.buttons?.[0]?.type || 'unknown',
+                text: btn.buttons?.[0]?.text || ''
+            }));
+
+            return {
+                name: t.name,
+                language: t.language || 'en',
+                status: t.status || 'APPROVED',
+                category: t.category || 'UTILITY',
+                body: bodyText,
+                header: headerComponent?.text || null,
+                parameterCount: paramCount,
+                parameters: paramMatches,
+                buttons: buttons,
+                components: t.components
+            };
+        });
+
+        const response = {
+            success: true,
+            templates: formattedTemplates,
+            total: formattedTemplates.length,
+            fetchedAt: new Date().toISOString()
+        };
+
+        // Cache for 5 minutes
+        setCache(cacheKey, response, 'templates', 5 * 60 * 1000);
+
+        res.json(response);
+    } catch (error) {
+        console.error('Templates fetch error:', error);
+        res.status(500).json({
+            error: 'Failed to fetch templates',
+            details: error.message
+        });
+    }
+});
+
+// POST /api/admin/chat/send-template - Send a template message with variable inputs
+router.post('/chat/send-template', verifyToken, requirePermission('send_messages'), async (req, res) => {
+    try {
+        const {
+            phone,
+            templateName,
+            language = 'en',
+            variables = [],
+            buttonParams = []
+        } = req.body;
+
+        if (!phone || !templateName) {
+            return res.status(400).json({
+                error: 'Phone number and template name are required'
+            });
+        }
+
+        if (!Array.isArray(variables) || variables.length === 0) {
+            return res.status(400).json({
+                error: 'At least one variable value is required'
+            });
+        }
+
+        logOperatorActivity(req, 'template_message', `Sent template ${templateName} to ${phone}`);
+
+        // Normalize phone number
+        const cleanPhone = phone.replace(/\D/g, '');
+        const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
+
+        // Build template components
+        const components = [];
+
+        // Body parameters
+        if (variables.length > 0) {
+            components.push({
+                type: 'body',
+                parameters: variables.map((val, idx) => ({
+                    type: 'text',
+                    text: String(val || '')
+                }))
+            });
+        }
+
+        // Button parameters (for URL buttons, etc.)
+        if (buttonParams.length > 0) {
+            buttonParams.forEach((btn, idx) => {
+                components.push({
+                    type: 'button',
+                    sub_type: btn.type || 'url',
+                    index: String(idx),
+                    parameters: [{
+                        type: 'text',
+                        text: String(btn.value || '')
+                    }]
+                });
+            });
+        }
+
+        const templateData = {
+            name: templateName,
+            language: { code: language },
+            components: components
+        };
+
+        console.log(`[TEMPLATE] Sending template '${templateName}' to ${formattedPhone} with ${variables.length} variables`);
+
+        // Send template via WhatsApp service
+        const result = await whatsappService.sendTemplate(formattedPhone, templateData, 'manual_reply');
+
+        // Update shopper record
+        await dbAdapter.query(
+            `UPDATE store_shoppers
+             SET last_response_at = ?,
+                 response_count = COALESCE(response_count, 0) + 1
+             WHERE phone = ? OR phone = ?`,
+            [new Date().toISOString(), formattedPhone, cleanPhone]
+        );
+
+        res.json({
+            success: true,
+            message: 'Template sent successfully',
+            messageId: result?.messages?.[0]?.id || null,
+            templateName: templateName
+        });
+    } catch (error) {
+        console.error('Template send error:', error);
+
+        // Check for specific Meta API errors
+        const metaError = error.response?.data?.error;
+        if (metaError) {
+            // Template not approved or doesn't exist
+            if (metaError.code === 132000 || metaError.error_subcode === 132000) {
+                return res.status(400).json({
+                    error: 'Template not approved or does not exist',
+                    details: metaError.message,
+                    fallback: true
+                });
+            }
+            // Parameter count mismatch
+            if (metaError.code === 132005) {
+                return res.status(400).json({
+                    error: 'Invalid number of parameters for this template',
+                    details: metaError.message,
+                    fallback: true
+                });
+            }
+        }
+
+        res.status(500).json({
+            error: 'Failed to send template',
+            details: error.message
+        });
+    }
+});
+
 // Get recently confirmed orders
 router.get('/shoppers/recent-confirmed', verifyToken, async (req, res) => {
     try {

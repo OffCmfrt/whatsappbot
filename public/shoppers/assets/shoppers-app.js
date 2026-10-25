@@ -1023,6 +1023,31 @@ function setupChatEvents() {
         });
     }
 
+    // ── Notice button ──
+    const hubNoticeBtn = document.getElementById('hubNoticeBtn');
+    if (hubNoticeBtn) {
+        hubNoticeBtn.addEventListener('click', openNoticeModal);
+    }
+
+    // ── Notice modal buttons ──
+    const sendNoticeBtn = document.getElementById('sendNoticeBtn');
+    const cancelNoticeBtn = document.getElementById('cancelNoticeBtn');
+    const noticeType = document.getElementById('noticeType');
+    const noticeMessage = document.getElementById('noticeMessage');
+    
+    if (sendNoticeBtn) {
+        sendNoticeBtn.addEventListener('click', sendNotice);
+    }
+    if (cancelNoticeBtn) {
+        cancelNoticeBtn.addEventListener('click', closeNoticeModal);
+    }
+    if (noticeType) {
+        noticeType.addEventListener('change', updateNoticePreview);
+    }
+    if (noticeMessage) {
+        noticeMessage.addEventListener('input', updateNoticePreview);
+    }
+
     if (markResolvedBtn) {
         markResolvedBtn.addEventListener('click', async () => {
             if (!currentChatPhone) return;
@@ -3325,6 +3350,227 @@ async function sendChatMessage() {
         const metaDiv = msgDiv.querySelector('.msg-meta');
         if (metaDiv) metaDiv.innerHTML += '<span class="msg-error">Failed</span>';
     }
+}
+
+// ==========================================
+// Urgent Notice Functions
+// ==========================================
+
+// Open the notice modal
+function openNoticeModal() {
+    if (!currentChatPhone) {
+        alert('No customer selected');
+        return;
+    }
+    
+    const modal = document.getElementById('noticeModal');
+    const messageInput = document.getElementById('noticeMessage');
+    const typeSelect = document.getElementById('noticeType');
+    const preview = document.getElementById('noticePreview');
+    
+    // Reset form
+    messageInput.value = '';
+    typeSelect.value = 'urgent';
+    preview.style.display = 'none';
+    
+    // Show modal
+    modal.style.display = 'flex';
+    
+    // Focus on message input
+    setTimeout(() => messageInput.focus(), 100);
+}
+
+// Close the notice modal
+function closeNoticeModal() {
+    const modal = document.getElementById('noticeModal');
+    modal.style.display = 'none';
+}
+
+// Update notice preview
+function updateNoticePreview() {
+    const type = document.getElementById('noticeType').value;
+    const message = document.getElementById('noticeMessage').value.trim();
+    const preview = document.getElementById('noticePreview');
+    const previewContent = document.getElementById('noticePreviewContent');
+    
+    if (!message) {
+        preview.style.display = 'none';
+        return;
+    }
+    
+    // Format based on type (clean format without emojis)
+    let formattedMessage = '';
+    const customerName = document.getElementById('chatCustomerName')?.textContent || 'Customer';
+    
+    // All types use the same clean template format
+    formattedMessage = `Dear ${customerName},\n\n${message}\n\nPlease respond at your earliest convenience.\n\nOFFCOMFRT Support Team`;
+    
+    previewContent.textContent = formattedMessage;
+    preview.style.display = 'block';
+}
+
+// Send the notice message
+async function sendNotice() {
+    const type = document.getElementById('noticeType').value;
+    const customMessage = document.getElementById('noticeMessage').value.trim();
+    
+    if (!customMessage) {
+        alert('Please enter a message');
+        return;
+    }
+    
+    if (!currentChatPhone) {
+        alert('No customer selected');
+        return;
+    }
+    
+    // Get customer name for template variable
+    const customerName = document.getElementById('chatCustomerName')?.textContent || 'Customer';
+    
+    // Close modal
+    closeNoticeModal();
+    
+    // Add to UI immediately (optimistic update)
+    const chatMessages = document.getElementById('chatMessages');
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'chat-message agent';
+    const now = new Date();
+    const istOffsetMs = 5.5 * 60 * 60 * 1000;
+    const istDate = new Date(now.getTime() + istOffsetMs);
+    let istHours = istDate.getUTCHours();
+    const istMinutes = istDate.getUTCMinutes().toString().padStart(2, '0');
+    const istAmpm = istHours >= 12 ? 'PM' : 'AM';
+    istHours = istHours % 12;
+    istHours = istHours ? istHours : 12;
+    const istTimeStr = `${istHours}:${istMinutes} ${istAmpm}`;
+    
+    // Notice badge based on type
+    let noticeBadge = '';
+    let badgeColor = '#f59e0b';
+    switch (type) {
+        case 'urgent':
+            noticeBadge = '<span class="msg-type-badge" style="background:rgba(239,68,68,0.2);color:#ef4444;border:1px solid rgba(239,68,68,0.3);">⚠️ URGENT</span>';
+            badgeColor = '#ef4444';
+            break;
+        case 'important':
+            noticeBadge = '<span class="msg-type-badge" style="background:rgba(245,158,11,0.2);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);">📢 IMPORTANT</span>';
+            break;
+        case 'info':
+            noticeBadge = '<span class="msg-type-badge" style="background:rgba(59,130,246,0.2);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);">ℹ️ INFO</span>';
+            badgeColor = '#3b82f6';
+            break;
+        case 'custom':
+            noticeBadge = '<span class="msg-type-badge" style="background:rgba(139,92,246,0.2);color:#8b5cf6;border:1px solid rgba(139,92,246,0.3);">✏️ NOTICE</span>';
+            badgeColor = '#8b5cf6';
+            break;
+    }
+    
+    // Preview what will be sent (template format)
+    const previewText = `Dear ${customerName},\n\n${customMessage}\n\nPlease respond at your earliest convenience.\n\nOFFCOMFRT Support Team`;
+    const contentHtml = escapeHtml(previewText).replace(/\n/g, '<br>');
+    
+    msgDiv.innerHTML = `
+        <div class="msg-bubble" style="border-left:3px solid ${badgeColor};">
+            <div class="msg-content">${contentHtml}</div>
+            <div class="msg-meta">
+                ${noticeBadge}
+                <span class="msg-time">${istTimeStr}</span>
+                <span class="msg-check msg-sending">&#10003;</span>
+            </div>
+        </div>
+    `;
+    chatMessages.appendChild(msgDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    try {
+        // Send via template API
+        const data = await apiCall('/chat/send-template', 'POST', {
+            phone: currentChatPhone,
+            templateName: 'urgent_notice',
+            language: 'en',
+            variables: [customerName, customMessage]
+        });
+        
+        if (data.success) {
+            // Update check mark to sent
+            const sendingCheck = msgDiv.querySelector('.msg-sending');
+            if (sendingCheck) sendingCheck.classList.remove('msg-sending');
+            
+            // Show success toast
+            showToast('Notice sent successfully via template', 'success');
+        } else {
+            // Mark as failed
+            msgDiv.classList.add('msg-failed');
+            const metaDiv = msgDiv.querySelector('.msg-meta');
+            if (metaDiv) metaDiv.innerHTML += '<span class="msg-error">Failed</span>';
+            showToast('Failed to send notice', 'error');
+        }
+    } catch (err) {
+        console.error('Template send error:', err);
+        
+        // Check if template is not approved yet
+        if (err.message && err.message.includes('not approved')) {
+            // Fallback: send as plain text
+            const fallbackMessage = `Dear ${customerName},\n\n${customMessage}\n\nPlease respond at your earliest convenience.\n\nOFFCOMFRT Support Team`;
+            
+            try {
+                const fallbackData = await apiCall('/chat/send', 'POST', {
+                    phone: currentChatPhone,
+                    message: fallbackMessage,
+                    type: 'text'
+                });
+                
+                if (fallbackData.success) {
+                    const sendingCheck = msgDiv.querySelector('.msg-sending');
+                    if (sendingCheck) sendingCheck.classList.remove('msg-sending');
+                    showToast('Notice sent (template pending approval, sent as text)', 'success');
+                } else {
+                    msgDiv.classList.add('msg-failed');
+                    const metaDiv = msgDiv.querySelector('.msg-meta');
+                    if (metaDiv) metaDiv.innerHTML += '<span class="msg-error">Failed</span>';
+                    showToast('Failed to send notice', 'error');
+                }
+            } catch (fallbackErr) {
+                msgDiv.classList.add('msg-failed');
+                const metaDiv = msgDiv.querySelector('.msg-meta');
+                if (metaDiv) metaDiv.innerHTML += '<span class="msg-error">Failed</span>';
+                showToast('Failed to send notice', 'error');
+            }
+        } else {
+            // Other error
+            msgDiv.classList.add('msg-failed');
+            const metaDiv = msgDiv.querySelector('.msg-meta');
+            if (metaDiv) metaDiv.innerHTML += '<span class="msg-error">Failed</span>';
+            showToast('Failed to send notice', 'error');
+        }
+    }
+}
+
+// Simple toast notification helper
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 16px 24px;
+        background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
+        color: white;
+        border-radius: 8px;
+        font-family: 'Inter', sans-serif;
+        font-size: 14px;
+        font-weight: 500;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        z-index: 10000;
+        animation: slideInRight 0.3s ease;
+    `;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.animation = 'slideOutRight 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
 }
 
 // ==========================================

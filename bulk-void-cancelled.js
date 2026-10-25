@@ -1,6 +1,7 @@
 /**
  * Bulk void Zoho invoices for cancelled Shopify orders.
- * Processes invoices in parallel batches for speed.
+ * Uses list-scan approach: paginates ALL invoices (~60 calls at 200/page)
+ * then cross-references cancelled orders in memory — avoids per-order API calls.
  * 
  * Usage:
  *   node bulk-void-cancelled.js [--dry-run]
@@ -11,61 +12,84 @@ const zohoService = require('./src/services/zohoService');
 const { dbAdapter, pool } = require('./src/database/db');
 
 const DRY_RUN = process.argv.includes('--dry-run');
-const BATCH_SIZE = 10; // Process 10 invoices at a time
 
 async function main() {
     console.log(`\n🔍 Bulk void: Finding cancelled orders...${DRY_RUN ? ' [DRY RUN]' : ''}\n`);
 
-    // Get all cancelled orders
+    // Get all cancelled order IDs from DB
     const cancelledOrders = await dbAdapter.query(`
         SELECT DISTINCT order_id
         FROM store_shoppers
         WHERE shopify_cancelled_at IS NOT NULL
     `);
 
-    console.log(`📋 Found ${cancelledOrders.length} cancelled orders\n`);
+    const cancelledSet = new Set(cancelledOrders.map(r => r.order_id.replace(/^#/, '')));
+    console.log(`📋 Found ${cancelledSet.size} cancelled orders in DB\n`);
 
-    if (cancelledOrders.length === 0) {
+    if (cancelledSet.size === 0) {
         console.log('✅ No cancelled orders. Nothing to do.');
         await pool.end();
         return;
     }
 
-    // Step 1: Collect all invoices that need voiding (skip paid ones)
-    console.log('🔍 Collecting invoices to void...');
+    // Step 1: Paginate ALL invoices from Zoho and find matches (list-scan approach)
+    console.log('🔍 Scanning all Zoho invoices (list-scan, ~200/page)...');
     const invoicesToVoid = [];
     const invoicesToSkip = [];
-    let searched = 0;
+    let page = 1;
+    let totalScanned = 0;
+    let hasMore = true;
 
-    for (const order of cancelledOrders) {
-        const orderId = order.order_id.replace(/^#/, '');
-        searched++;
-        
-        if (searched % 100 === 0) {
-            process.stdout.write(`  Searched ${searched}/${cancelledOrders.length} orders...\n`);
-        }
-
+    while (hasMore) {
+        let invoices;
         try {
-            const invoices = await zohoService.searchInvoice({ reference_number: orderId });
+            invoices = await zohoService.searchInvoice({ page, per_page: 200 });
             
+            if (invoices.length === 0) {
+                hasMore = false;
+                break;
+            }
+            
+            totalScanned += invoices.length;
+            
+            // Check each invoice against cancelled orders
             for (const inv of invoices) {
+                const refNum = inv.reference_number;
+                if (!refNum || !cancelledSet.has(refNum)) continue;
+                
                 if (inv.status === 'void' || inv.status === 'deleted') {
                     continue; // Already voided
                 }
                 
                 if (inv.status === 'paid' || inv.status === 'partially_paid') {
-                    invoicesToSkip.push({ orderId, invoiceId: inv.invoice_id, status: inv.status });
-                    continue; // Skip paid invoices
+                    invoicesToSkip.push({ orderId: refNum, invoiceId: inv.invoice_id, status: inv.status });
+                    continue; // Skip paid
                 }
                 
-                invoicesToVoid.push({ orderId, invoiceId: inv.invoice_id, status: inv.status });
+                invoicesToVoid.push({ orderId: refNum, invoiceId: inv.invoice_id, invoiceNumber: inv.invoice_number, status: inv.status });
+            }
+            
+            if (invoices.length < 200) {
+                hasMore = false;
+            } else {
+                page++;
+            }
+            
+            if (page % 10 === 0) {
+                process.stdout.write(`  Scanned page ${page} (${totalScanned} invoices so far)...\n`);
             }
         } catch (err) {
-            console.error(`  ⚠️  Error searching order #${orderId}: ${err.message}`);
+            console.error(`  ⚠️  Error on page ${page}: ${err.message}`);
+            if (err.message.includes('429') || err.message.includes('rate')) {
+                console.log('  ⏳ Rate limited, waiting 30s...');
+                await new Promise(r => setTimeout(r, 30000));
+                continue; // Retry same page
+            }
+            hasMore = false;
         }
     }
 
-    console.log(`\n📊 Collection complete:`);
+    console.log(`\n📊 Scan complete: ${totalScanned} invoices scanned across ${page} pages`);
     console.log(`   Invoices to void: ${invoicesToVoid.length}`);
     console.log(`   Invoices to skip (paid): ${invoicesToSkip.length}`);
     console.log();
@@ -76,7 +100,7 @@ async function main() {
         return;
     }
 
-    // Step 2: Void invoices in batches
+    // Step 2: Void invoices
     if (DRY_RUN) {
         console.log('[DRY RUN] Would void these invoices:');
         invoicesToVoid.slice(0, 20).forEach(({ orderId, invoiceId, status }) => {
@@ -86,74 +110,59 @@ async function main() {
             console.log(`  ... and ${invoicesToVoid.length - 20} more`);
         }
     } else {
-        console.log(`⚡ Voiding ${invoicesToVoid.length} invoices in batches of ${BATCH_SIZE}...`);
+        console.log(`⚡ Voiding ${invoicesToVoid.length} invoices...`);
         let voided = 0;
         let failed = 0;
 
-        for (let i = 0; i < invoicesToVoid.length; i += BATCH_SIZE) {
-            const batch = invoicesToVoid.slice(i, i + BATCH_SIZE);
-            const results = await Promise.allSettled(
-                batch.map(({ orderId, invoiceId }) => 
-                    zohoService.voidInvoice(invoiceId).catch(err => {
-                        throw new Error(`Order #${orderId} invoice ${invoiceId}: ${err.message}`);
-                    })
-                )
-            );
-
-            results.forEach((result, idx) => {
-                if (result.status === 'fulfilled') {
-                    voided++;
-                } else {
-                    failed++;
-                    console.error(`  ❌ ${result.reason.message}`);
-                }
-            });
-
-            const progress = Math.min(i + BATCH_SIZE, invoicesToVoid.length);
-            process.stdout.write(`\r  Progress: ${progress}/${invoicesToVoid.length} voided (${voided} success, ${failed} failed)`);
-        }
-
-        console.log(`\n\n✅ Voiding complete: ${voided} succeeded, ${failed} failed\n`);
-    }
-
-    // Step 3: Update sync_log for all voided orders
-    if (!DRY_RUN) {
-        console.log('📝 Updating sync_log...');
-        const orderIds = [...new Set(invoicesToVoid.map(inv => inv.orderId))];
-        
-        for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
-            const batch = orderIds.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(orderId => 
-                dbAdapter.run(`
+        for (const { orderId, invoiceId } of invoicesToVoid) {
+            try {
+                await zohoService.voidInvoice(invoiceId);
+                voided++;
+                
+                // Update sync_log
+                await dbAdapter.run(`
                     UPDATE zoho_sync_log
                     SET status = 'cancelled',
                         error_message = 'Order cancelled — invoice voided (bulk)',
                         updated_at = NOW()
                     WHERE shopify_order_id = ?
                       AND status NOT IN ('cancelled')
-                `, [orderId]).catch(() => {})
-            ));
-            
-            // Insert cancel guard rows for orders not in sync_log
-            await Promise.all(batch.map(orderId =>
-                dbAdapter.run(`
-                    INSERT INTO zoho_sync_log (shopify_order_id, status, error_message, created_at, updated_at)
-                    SELECT ?, 'cancelled', 'Order cancelled — invoice voided (bulk)', NOW(), NOW()
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM zoho_sync_log WHERE shopify_order_id = ?
-                    )
-                `, [orderId, orderId]).catch(() => {})
-            ));
-            
-            process.stdout.write(`\r  Updated ${Math.min(i + BATCH_SIZE, orderIds.length)}/${orderIds.length} sync_log entries`);
+                `, [orderId]).catch(() => {});
+                
+                // Insert cancel guard row if not exists
+                const existing = await dbAdapter.query(
+                    'SELECT id FROM zoho_sync_log WHERE shopify_order_id = ?',
+                    [orderId]
+                );
+                if (existing.length === 0) {
+                    await dbAdapter.run(`
+                        INSERT INTO zoho_sync_log (shopify_order_id, status, error_message, created_at, updated_at)
+                        VALUES (?, 'cancelled', 'Order cancelled — invoice voided (bulk)', NOW(), NOW())
+                    `, [orderId]).catch(() => {});
+                }
+                
+                if (voided % 50 === 0) {
+                    process.stdout.write(`\r  Progress: ${voided}/${invoicesToVoid.length} voided (${failed} failed)`);
+                }
+            } catch (err) {
+                failed++;
+                console.error(`\n  ❌ Order #${orderId} invoice ${invoiceId}: ${err.message}`);
+                
+                if (err.message.includes('429') || err.message.includes('rate')) {
+                    console.log('  ⏳ Rate limited, waiting 60s...');
+                    await new Promise(r => setTimeout(r, 60000));
+                }
+            }
         }
-        console.log('\n');
+
+        console.log(`\n\n✅ Voiding complete: ${voided} succeeded, ${failed} failed\n`);
     }
 
     // Summary
     console.log('='.repeat(60));
     console.log('📊 FINAL SUMMARY:');
-    console.log(`   Total cancelled orders: ${cancelledOrders.length}`);
+    console.log(`   Total cancelled orders: ${cancelledSet.size}`);
+    console.log(`   Total Zoho invoices scanned: ${totalScanned}`);
     console.log(`   Invoices ${DRY_RUN ? 'to void' : 'voided'}: ${invoicesToVoid.length}`);
     console.log(`   Invoices skipped (paid): ${invoicesToSkip.length}`);
     console.log('='.repeat(60));
@@ -164,7 +173,7 @@ async function main() {
             console.log(`   Order #${orderId} → Invoice ${invoiceId} (${status})`);
         });
         if (invoicesToSkip.length > 30) {
-            console.log(`   ... and ${invoicesToSkip.length - 30} more (see full list in logs)`);
+            console.log(`   ... and ${invoicesToSkip.length - 30} more`);
         }
         console.log();
     }
