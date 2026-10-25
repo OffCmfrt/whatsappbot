@@ -49,6 +49,91 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     const st = (statusType || '').toString().toUpperCase().trim();
     if (!s && !st) return null;
 
+    // Handle Shiprocket numeric status codes (from API docs)
+    // These are returned as strings but can be parsed as numbers
+    const codeNum = parseInt(s, 10);
+    if (!isNaN(codeNum)) {
+        // Shiprocket status code mapping
+        switch (codeNum) {
+            case 6: return 'in_transit'; // Shipped
+            case 7: return 'delivered'; // Delivered
+            case 8: return 'cancelled'; // Canceled
+            case 9: return 'rto_initiated'; // RTO Initiated
+            case 10: return 'rto_delivered'; // RTO Delivered
+            case 12: return 'failed'; // Lost
+            case 13: return 'in_transit'; // Pickup Error
+            case 14: return 'rto_initiated'; // RTO Acknowledged
+            case 15: return 'pickup_scheduled'; // Pickup Rescheduled
+            case 16: return null; // Cancellation Requested (not yet cancelled)
+            case 17: return 'out_for_delivery'; // Out For Delivery
+            case 18: return 'in_transit'; // In Transit
+            case 19: return 'pickup_scheduled'; // Out For Pickup
+            case 20: return 'in_transit'; // Pickup Exception
+            case 21: return 'in_transit'; // Undelivered (NDR)
+            case 22: return 'in_transit'; // Delayed
+            case 23: return 'delivered'; // Partial_Delivered
+            case 24: return 'failed'; // DESTROYED
+            case 25: return 'failed'; // DAMAGED
+            case 26: return 'delivered'; // FULFILLED
+            case 27: return 'pickup_scheduled'; // Pickup Booked
+            case 38: return 'in_transit'; // REACHED AT DESTINATION HUB
+            case 39: return 'in_transit'; // MISROUTED
+            case 40: return 'rto_initiated'; // RTO_NDR
+            case 41: return 'rto_initiated'; // RTO_OFD
+            case 42: return 'in_transit'; // PICKED UP
+            case 43: return 'delivered'; // SELF FULFILLED
+            case 44: return 'failed'; // DISPOSED OFF
+            case 45: return 'cancelled'; // CANCELLED_BEFORE_DISPATCHED
+            case 46: return 'rto'; // RTO IN INTRANSIT
+            case 47: return 'failed'; // QC FAILED
+            case 48: return 'in_transit'; // Reached Warehouse
+            case 49: return 'in_transit'; // Custom Cleared
+            case 50: return 'in_transit'; // In Flight
+            case 51: return 'in_transit'; // Handover to Courier
+            case 52: return 'in_transit'; // Shipment Booked
+            case 54: return 'in_transit'; // In Transit Overseas
+            case 55: return 'in_transit'; // Connection Aligned
+            case 56: return 'in_transit'; // Reached Overseas Warehouse
+            case 57: return 'in_transit'; // Custom Cleared Overseas
+            case 59: return 'in_transit'; // Box Packing
+            case 68: return 'in_transit'; // PROCESSED AT WAREHOUSE
+            case 60: return 'in_transit'; // FC Allocated
+            case 61: return 'in_transit'; // Picklist Generated
+            case 62: return 'in_transit'; // Ready To Pack
+            case 63: return 'in_transit'; // Packed
+            case 67: return 'in_transit'; // FC MANIFEST GENERATED
+            case 71: return 'in_transit'; // HANDOVER EXCEPTION
+            case 72: return 'in_transit'; // PACKED EXCEPTION
+            case 75: return 'rto_initiated'; // RTO_LOCK
+            case 76: return 'untrackable'; // UNTRACEABLE
+            case 77: return 'in_transit'; // ISSUE_RELATED_TO_THE_RECIPIENT
+            case 78: return 'rto'; // REACHED_BACK_AT_SELLER_CITY
+            default: break; // Not a numeric code, continue with string matching
+        }
+    }
+
+    // Handle Delhivery B2B API statuses (from API docs)
+    const upper = s.toUpperCase();
+    const delhiveryB2BStatuses = {
+        'MANIFESTED': 'in_transit',
+        'PICKED_UP': 'in_transit',
+        'LEFT_ORIGIN': 'in_transit',
+        'REACH_DESTINATION': 'in_transit',
+        'UNDEL_REATTEMPT': 'in_transit', // NDR
+        'PART_DEL': 'delivered',
+        'OFD': 'out_for_delivery',
+        'DELIVERED': 'delivered',
+        'RETURNED_INTRANSIT': 'rto', // Return in transit to return center
+        'RECEIVED_AT_RETURN_CENTER': 'rto_delivered', // Received at return center
+        'RETURN_OFD': 'rto_initiated', // Return out for delivery
+        'RETURN_DELIVERED': 'rto_delivered', // Return delivered
+        'NOT_PICKED': 'failed',
+        'LOST': 'failed'
+    };
+    if (delhiveryB2BStatuses[upper]) {
+        return delhiveryB2BStatuses[upper];
+    }
+
     // Order matters: RTO/return and cancellation before the generic checks,
     // and "out for delivery" before "delivered" (both contain 'deliver')
 
@@ -57,20 +142,18 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     // Carriers report RTO in many forms:
     //   • Delhivery: StatusType 'RT'/'RTO' + status 'RTO'/'Returned',
     //     BUT StatusType 'RT' + status 'Delivered' = DTO (return parcel
-    //     delivered back to warehouse) — that's a successful delivery, NOT RTO.
+    //     delivered back to warehouse) — that's a failure case, NOT success.
     //   • Shiprocket: 'RTO Initiated', 'RTO Delivered', 'RTO In-Transit',
     //     'RTO Acknowledged', 'RTO NDR', 'RTO Out For Delivery'
-    //   • Ekart: 'Marked RTO', 'RTO Delivered'
+    //   • Ekart: 'Marked RTO', 'RTO Delivered', 'RTO'
     //   • Compound: 'Delivered - Return to Origin', 'Returned to Sender'
     //
     // The ONLY 'return'-containing statuses that are NOT RTO are active
     // return-pickup-in-transit (the parcel is moving but as a return
-    // pickup, not a forward RTO).  We detect those by the combination of
+    // pickup, not a forward RTO). We detect those by the combination of
     // 'return' + a transit/pickup keyword and exclude them.
     //
-    // Delhivery StatusType 'RT'/'RTO' means RTO ONLY when the status
-    // string does not say 'delivered'.  'Delivered' + StatusType 'RT' =
-    // DTO (return parcel reached warehouse) = delivered, not RTO.
+    // Delhivery StatusType 'RT'/'RTO' means RTO always (DTO is also a failure case)
 
     const inTransitReturn = s.includes('return') &&
         (s.includes('in transit') || s.includes('in-transit') ||
@@ -80,11 +163,14 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     const stIsRto = (st === 'RT' || st === 'RTO');
 
     // More specific RTO detection: check for 'rto' as a word or in specific phrases,
-    // not as a substring (to avoid false positives like "rto risk" in transit statuses)
-    const hasRtoWord = /\brto\b/i.test(s) || s.includes('rto initiated') || 
+    // not as a substring (to avoid false positives)
+    // Exact matches for Ekart "RTO" status
+    const isExactRto = s === 'rto';
+    const hasRtoWord = isExactRto || /\brto\b/i.test(s) || s.includes('rto initiated') || 
                        s.includes('rto delivered') || s.includes('rto in-transit') ||
-                       s.includes('rto acknowledged') || s.includes('rto ndr') ||
-                       s.includes('marked rto');
+                       s.includes('rto in intransit') || s.includes('rto acknowledged') || 
+                       s.includes('rto ndr') || s.includes('rto ofd') || s.includes('rto lock') ||
+                       s.includes('marked rto') || s.includes('reached_back_at_seller_city');
 
     const isRto =
         stIsRto ||
@@ -93,23 +179,49 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     
     if (isRto) {
         // Sub-classify RTO into more specific statuses
-        if (s.includes('delivered') || s.includes('dto')) {
+        if (s.includes('delivered') || s.includes('dto') || s.includes('received_at_return_center')) {
             return 'rto_delivered'; // RTO parcel delivered back to origin
-        } else if (s.includes('initiated') || s.includes('marked') || s.includes('acknowledged')) {
+        } else if (s.includes('initiated') || s.includes('marked') || s.includes('acknowledged') || 
+                   s.includes('lock') || s.includes('ofd') || s.includes('ndr')) {
             return 'rto_initiated'; // RTO just initiated/acknowledged
         }
         return 'rto'; // Generic RTO
     }
 
-    if (s.includes('cancellation requested')) return null; // not cancelled yet
-    if (s.includes('cancel')) return 'cancelled';
-    if (s.includes('undeliver') || s.includes('not deliver') || s.includes('failed deliver') || s.includes('unsuccessful')) return 'in_transit'; // NDR — still with courier
-    if (s.includes('out for delivery')) return 'out_for_delivery';
-    if (s.includes('deliver')) return 'delivered';
+    // Cancellation detection
+    if (s.includes('cancellation requested') || s.includes('cancel requested')) return null; // not cancelled yet
+    if (s.includes('cancel') || s.includes('cancelled')) return 'cancelled';
+    
+    // NDR / Undelivered - still with courier
+    if (s.includes('undeliver') || s.includes('not deliver') || s.includes('failed deliver') || 
+        s.includes('unsuccessful') || s.includes('reattempt')) return 'in_transit';
+    
+    // Out for delivery (must come before delivered check)
+    if (s.includes('out for delivery') || s.includes('out_for_delivery') || s.includes('ofd')) return 'out_for_delivery';
+    
+    // Delivered
+    if (s.includes('deliver') || s.includes('fulfilled')) return 'delivered';
+    
+    // In transit - comprehensive list
     if (s.includes('transit') || s.includes('shipped') || s.includes('picked') ||
         s.includes('dispatch') || s.includes('reached') || s.includes('arrived') ||
-        s.includes('bagged') || s.includes('received at') || s.includes('pending')) return 'in_transit';
-    if (s.includes('pickup') || s.includes('manifest') || s.includes('scheduled')) return 'pickup_scheduled';
+        s.includes('bagged') || s.includes('received at') || s.includes('pending') ||
+        s.includes('manifest') || s.includes('booked') || s.includes('picked up') ||
+        s.includes('warehouse') || s.includes('custom cleared') || s.includes('in flight') ||
+        s.includes('handover') || s.includes('processed') || s.includes('allocated') ||
+        s.includes('picklist') || s.includes('packed') || s.includes('misrouted') ||
+        s.includes('delayed') || s.includes('exception') || s.includes('overseas')) return 'in_transit';
+    
+    // Pickup scheduled
+    if (s.includes('pickup') || s.includes('scheduled') || s.includes('out for pickup')) return 'pickup_scheduled';
+    
+    // Failed / Lost
+    if (s.includes('lost') || s.includes('destroyed') || s.includes('damaged') || 
+        s.includes('disposed') || s.includes('qc failed') || s.includes('not picked')) return 'failed';
+    
+    // Untrackable
+    if (s.includes('untraceable') || s.includes('untrackable')) return 'untrackable';
+    
     return null;
 }
 
