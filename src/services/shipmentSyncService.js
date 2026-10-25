@@ -83,7 +83,16 @@ function mapCarrierStatus(rawStatus, statusType = null) {
         stIsRto ||
         (s.includes('return') && !inTransitReturn) ||
         s.includes('rto');
-    if (isRto) return 'rto';
+    
+    if (isRto) {
+        // Sub-classify RTO into more specific statuses
+        if (s.includes('delivered') || s.includes('dto')) {
+            return 'rto_delivered'; // RTO parcel delivered back to origin
+        } else if (s.includes('initiated') || s.includes('marked') || s.includes('acknowledged')) {
+            return 'rto_initiated'; // RTO just initiated/acknowledged
+        }
+        return 'rto'; // Generic RTO
+    }
 
     if (s.includes('cancellation requested')) return null; // not cancelled yet
     if (s.includes('cancel')) return 'cancelled';
@@ -107,8 +116,13 @@ function mapCarrierStatus(rawStatus, statusType = null) {
 function resolveTransition(currentStatus, mappedStatus) {
     if (!mappedStatus || mappedStatus === currentStatus) return null;
     if (currentStatus === 'delivered') return null; // delivered is final
-    if (mappedStatus === 'rto' || mappedStatus === 'cancelled') return mappedStatus;
-    if (currentStatus === 'rto') return null; // RTO is final — DTO is also a failure case
+    
+    // All RTO variants (rto, rto_initiated, rto_delivered) are terminal
+    const isRtoVariant = (status) => status === 'rto' || (status && status.startsWith('rto_'));
+    
+    if (isRtoVariant(mappedStatus) || mappedStatus === 'cancelled') return mappedStatus;
+    if (isRtoVariant(currentStatus)) return null; // RTO is final — DTO is also a failure case
+    
     const from = STATUS_RANK[currentStatus] ?? 0;
     const to = STATUS_RANK[mappedStatus] ?? 0;
     return to > from ? mappedStatus : null;
@@ -139,10 +153,11 @@ async function syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliver
                 `UPDATE orders SET status = 'delivered', delivered_at = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
                 [deliveredAt || new Date().toISOString(), shipment.order_id, shipment.awb]
             );
-        } else if (newStatus === 'rto') {
+        } else if (newStatus === 'rto' || (newStatus && newStatus.startsWith('rto_'))) {
+            // All RTO variants (rto, rto_initiated, rto_delivered) mirror to orders
             await dbAdapter.query(
-                `UPDATE orders SET status = 'rto', updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
-                [shipment.order_id, shipment.awb]
+                `UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
+                [newStatus, shipment.order_id, shipment.awb]
             );
         } else if (newStatus === 'cancelled') {
             // Cancelled at the carrier: free the order so it's re-shippable from the hub
@@ -220,7 +235,8 @@ async function syncShipment(shipment) {
 
     // Zoho middleware hook — auto COD reconciliation + RTO credit notes
     const prevStatus = shipment.status;
-    if (newStatus === 'delivered' || newStatus === 'rto') {
+    const isRtoVariant = (status) => status === 'rto' || (status && status.startsWith('rto_'));
+    if (newStatus === 'delivered' || isRtoVariant(newStatus)) {
         try {
             require('./zohoShipmentHook').onShipmentTerminal(shipment, newStatus, deliveredAt)
                 .catch(e => console.warn(`⚠️ Zoho shipment hook failed for ${shipment.order_id}:`, e.message));

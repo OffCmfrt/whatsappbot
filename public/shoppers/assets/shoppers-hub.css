@@ -6431,3 +6431,44 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
     .fc-decision > span:last-child { text-align: left; }
     .fc-facts > div { font-size: 0.7rem; }
 }
+
+/* RTO Sub-Filters */
+#rto-sub-filters {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    padding: 0.5rem 0;
+}
+
+#rto-sub-filters .so-status-pill.rto-sub {
+    font-size: 0.75rem;
+    padding: 0.4rem 0.8rem;
+    background: rgba(195, 155, 211, 0.15);
+    border: 1px solid rgba(195, 155, 211, 0.3);
+}
+
+#rto-sub-filters .so-status-pill.rto-sub:hover {
+    background: rgba(195, 155, 211, 0.25);
+    border-color: rgba(195, 155, 211, 0.5);
+}
+
+#rto-sub-filters .so-status-pill.rto-sub.active {
+    background: rgba(195, 155, 211, 0.4);
+    border-color: #c39bd3;
+    color: #fff;
+}
+
+#rto-sub-filters .so-status-pill.rto-sub[data-so-status="rto_delivered"].active {
+    background: rgba(255, 107, 122, 0.4);
+    border-color: #ff6b7a;
+}
+
+#rto-sub-filters .so-status-pill.rto-sub[data-so-status="rto_initiated"].active {
+    background: rgba(255, 165, 2, 0.4);
+    border-color: #ffa502;
+}
+
+#rto-sub-filters .so-status-pill.rto-sub[data-so-status="untrackable"].active {
+    background: rgba(108, 117, 125, 0.4);
+    border-color: #6c757d;
+}

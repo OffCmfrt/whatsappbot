@@ -1154,6 +1154,12 @@
                     <button class="so-status-pill" data-so-status="rto">RTO<span class="pill-count" id="soCountRto"></span></button>
                     <button class="so-status-pill" data-so-status="cancelled">Cancelled<span class="pill-count" id="soCountCancelled"></span></button>
                 </div>
+                <div id="rto-sub-filters" style="display:none; margin-top:0.5rem; gap:0.5rem; flex-wrap:wrap;">
+                    <button class="so-status-pill rto-sub" data-so-status="rto">All RTO<span class="pill-count" id="soCountRtoAll"></span></button>
+                    <button class="so-status-pill rto-sub" data-so-status="rto_initiated">RTO Initiated<span class="pill-count" id="soCountRtoInitiated"></span></button>
+                    <button class="so-status-pill rto-sub" data-so-status="rto_delivered">RTO Delivered<span class="pill-count" id="soCountRtoDelivered"></span></button>
+                    <button class="so-status-pill rto-sub" data-so-status="untrackable">Untrackable<span class="pill-count" id="soCountUntrackable"></span></button>
+                </div>
 
                 <div class="filter-dropdown">
                     <select id="soCarrierFilter" class="so-select">

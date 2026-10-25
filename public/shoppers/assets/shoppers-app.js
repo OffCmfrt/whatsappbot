@@ -5257,7 +5257,7 @@ let shipCarriersCache = null;  // configured carriers (cached per session)
 
 // Terminal shipment states — mirror the backend/DB "one open shipment per
 // order" rule. Delivered/RTO are terminal too, so those orders can be re-shipped.
-const SHIP_TERMINAL_STATUSES = ['cancelled', 'failed', 'delivered', 'rto'];
+const SHIP_TERMINAL_STATUSES = ['cancelled', 'failed', 'delivered', 'rto', 'rto_initiated', 'rto_delivered', 'untrackable'];
 function isTerminalShipStatus(status) { return SHIP_TERMINAL_STATUSES.includes(status); }
 
 function showShipToast(message, isError = false) {
@@ -6710,6 +6710,24 @@ function renderShippedOrders(data) {
     setCount('soCountDelivered', stats.delivered);
     setCount('soCountRto', stats.rto);
     setCount('soCountCancelled', stats.cancelled);
+    
+    // RTO sub-filter counts
+    setCount('soCountRtoAll', stats.rto);
+    setCount('soCountRtoInitiated', stats.rto_initiated);
+    setCount('soCountRtoDelivered', stats.rto_delivered);
+    setCount('soCountUntrackable', stats.untrackable);
+    
+    // Show/hide RTO sub-filters based on current status
+    const rtoSubFilters = document.getElementById('rto-sub-filters');
+    if (rtoSubFilters) {
+        const isRtoSelected = soStatus === 'rto' || soStatus === 'rto_initiated' || soStatus === 'rto_delivered' || soStatus === 'untrackable';
+        rtoSubFilters.style.display = isRtoSelected ? 'flex' : 'none';
+        
+        // Update active state for RTO sub-pills
+        document.querySelectorAll('.rto-sub').forEach(pill => {
+            pill.classList.toggle('active', pill.dataset.soStatus === soStatus);
+        });
+    }
 
     // Carrier dropdown (populate once from server list, preserve selection)
     const carrierSel = document.getElementById('soCarrierFilter');
@@ -6827,11 +6845,22 @@ function renderSoActiveFilters() {
     const wrap = document.getElementById('soActiveFilters');
     if (!wrap) return;
     const tags = [];
-    const statusLabels = { ready: 'Ready', pickup_scheduled: 'Pickup Scheduled', in_transit: 'In Transit', out_for_delivery: 'Out for Delivery', delivered: 'Delivered', cancelled: 'Cancelled', rto: 'RTO' };
+    const statusLabels = { 
+        ready: 'Ready', 
+        pickup_scheduled: 'Pickup Scheduled', 
+        in_transit: 'In Transit', 
+        out_for_delivery: 'Out for Delivery', 
+        delivered: 'Delivered', 
+        cancelled: 'Cancelled', 
+        rto: 'RTO',
+        rto_initiated: 'RTO Initiated',
+        rto_delivered: 'RTO Delivered',
+        untrackable: 'Untrackable'
+    };
     if (soStatus) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('status')">${statusLabels[soStatus] || soStatus} <span class="tag-close">×</span></span>`);
     if (soCarrier) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('carrier')">${escapeHtml(soCarrier)} <span class="tag-close">×</span></span>`);
     if (soPayment) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('payment')">${escapeHtml(soPayment)} <span class="tag-close">×</span></span>`);
-    if (soSearchQuery) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('search')">“${escapeHtml(soSearchQuery)}” <span class="tag-close">×</span></span>`);
+    if (soSearchQuery) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('search')">"${escapeHtml(soSearchQuery)}" <span class="tag-close">×</span></span>`);
     if (soStartDate || soEndDate) tags.push(`<span class="so-filter-tag" onclick="soRemoveFilter('dates')">${soStartDate || '…'} → ${soEndDate || '…'} <span class="tag-close">×</span></span>`);
     wrap.innerHTML = tags.join('');
 }

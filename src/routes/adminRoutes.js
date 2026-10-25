@@ -6105,6 +6105,9 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
             // Grouped filter: 'in_transit' covers shipped + in_transit, 'rto' covers rto, 'cancelled' covers cancelled + failed
             if (status === 'in_transit') where += ` AND s.status IN ('shipped', 'in_transit', 'out_for_delivery')`;
             else if (status === 'rto') where += ` AND (s.status = 'rto' OR s.status LIKE 'rto_%')`;
+            else if (status === 'rto_initiated') where += ` AND s.status = 'rto_initiated'`;
+            else if (status === 'rto_delivered') where += ` AND s.status = 'rto_delivered'`;
+            else if (status === 'untrackable') where += ` AND s.status = 'untrackable'`;
             else if (status === 'cancelled') where += ` AND s.status IN ('cancelled', 'failed')`;
             else if (status === 'ready') where += ` AND s.status IN ('created', 'awb_assigned')`;
             else { where += ' AND s.status = ?'; params.push(status); }
@@ -6158,6 +6161,10 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
                        COUNT(*) FILTER (WHERE s.status IN ('shipped', 'in_transit', 'out_for_delivery'))::int AS in_transit,
                        COUNT(*) FILTER (WHERE s.status = 'delivered')::int AS delivered,
                        COUNT(*) FILTER (WHERE s.status = 'rto' OR s.status LIKE 'rto_%')::int AS rto,
+                       COUNT(*) FILTER (WHERE s.status = 'rto_initiated')::int AS rto_initiated,
+                       COUNT(*) FILTER (WHERE s.status = 'rto_delivered')::int AS rto_delivered,
+                       COUNT(*) FILTER (WHERE s.status = 'rto' AND s.status NOT LIKE 'rto_%')::int AS rto_generic,
+                       COUNT(*) FILTER (WHERE s.status = 'untrackable')::int AS untrackable,
                        COUNT(*) FILTER (WHERE s.status IN ('cancelled', 'failed'))::int AS cancelled,
                        COUNT(*) FILTER (WHERE s.payment_mode = 'COD')::int AS cod_count,
                        COALESCE(SUM(s.cod_amount) FILTER (WHERE s.payment_mode = 'COD' AND s.status NOT IN ('cancelled', 'failed', 'rto')), 0)::float AS cod_value,
