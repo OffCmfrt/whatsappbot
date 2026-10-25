@@ -79,10 +79,17 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     // StatusType RT/RTO = RTO always (DTO is also a failure case, not success)
     const stIsRto = (st === 'RT' || st === 'RTO');
 
+    // More specific RTO detection: check for 'rto' as a word or in specific phrases,
+    // not as a substring (to avoid false positives like "rto risk" in transit statuses)
+    const hasRtoWord = /\brto\b/i.test(s) || s.includes('rto initiated') || 
+                       s.includes('rto delivered') || s.includes('rto in-transit') ||
+                       s.includes('rto acknowledged') || s.includes('rto ndr') ||
+                       s.includes('marked rto');
+
     const isRto =
         stIsRto ||
         (s.includes('return') && !inTransitReturn) ||
-        s.includes('rto');
+        hasRtoWord;
     
     if (isRto) {
         // Sub-classify RTO into more specific statuses
