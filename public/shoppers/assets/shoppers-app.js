@@ -3398,12 +3398,29 @@ function updateNoticePreview() {
         return;
     }
     
+    // Create notice subject based on type
+    let noticeSubject = '';
+    switch (type) {
+        case 'urgent':
+            noticeSubject = 'Urgent Notice';
+            break;
+        case 'important':
+            noticeSubject = 'Important Update';
+            break;
+        case 'info':
+            noticeSubject = 'Information';
+            break;
+        case 'custom':
+            noticeSubject = 'Notice';
+            break;
+    }
+    
     // Format based on type (clean format without emojis)
     let formattedMessage = '';
     const customerName = document.getElementById('chatCustomerName')?.textContent || 'Customer';
     
     // All types use the same clean template format
-    formattedMessage = `Dear ${customerName},\n\n${message}\n\nPlease respond at your earliest convenience.\n\nOFFCOMFRT Support Team`;
+    formattedMessage = `Dear ${customerName},\n\n${noticeSubject}\n\n${message}\n\nIf you have any questions, please reply to this message.\n\nThank you,\nOFFCOMFRT Support Team`;
     
     previewContent.textContent = formattedMessage;
     preview.style.display = 'block';
@@ -3426,6 +3443,23 @@ async function sendNotice() {
     
     // Get customer name for template variable
     const customerName = document.getElementById('chatCustomerName')?.textContent || 'Customer';
+    
+    // Create notice subject based on type
+    let noticeSubject = '';
+    switch (type) {
+        case 'urgent':
+            noticeSubject = 'Urgent Notice';
+            break;
+        case 'important':
+            noticeSubject = 'Important Update';
+            break;
+        case 'info':
+            noticeSubject = 'Information';
+            break;
+        case 'custom':
+            noticeSubject = 'Notice';
+            break;
+    }
     
     // Close modal
     closeNoticeModal();
@@ -3466,7 +3500,7 @@ async function sendNotice() {
     }
     
     // Preview what will be sent (template format)
-    const previewText = `Dear ${customerName},\n\n${customMessage}\n\nPlease respond at your earliest convenience.\n\nOFFCOMFRT Support Team`;
+    const previewText = `Dear ${customerName},\n\n${noticeSubject}\n\n${customMessage}\n\nIf you have any questions, please reply to this message.\n\nThank you,\nOFFCOMFRT Support Team`;
     const contentHtml = escapeHtml(previewText).replace(/\n/g, '<br>');
     
     msgDiv.innerHTML = `
@@ -3486,9 +3520,9 @@ async function sendNotice() {
         // Send via template API
         const data = await apiCall('/chat/send-template', 'POST', {
             phone: currentChatPhone,
-            templateName: 'urgent_notice',
+            templateName: 'customer_support_notice',
             language: 'en',
-            variables: [customerName, customMessage]
+            variables: [customerName, noticeSubject, customMessage]
         });
         
         if (data.success) {
@@ -3510,8 +3544,8 @@ async function sendNotice() {
         
         // Check if template is not approved yet
         if (err.message && err.message.includes('not approved')) {
-            // Fallback: send as plain text
-            const fallbackMessage = `Dear ${customerName},\n\n${customMessage}\n\nPlease respond at your earliest convenience.\n\nOFFCOMFRT Support Team`;
+            // Fallback: send as plain text (only works within 24-hour window)
+            const fallbackMessage = `Dear ${customerName},\n\n${noticeSubject}\n\n${customMessage}\n\nIf you have any questions, please reply to this message.\n\nThank you,\nOFFCOMFRT Support Team`;
             
             try {
                 const fallbackData = await apiCall('/chat/send', 'POST', {
@@ -3523,7 +3557,7 @@ async function sendNotice() {
                 if (fallbackData.success) {
                     const sendingCheck = msgDiv.querySelector('.msg-sending');
                     if (sendingCheck) sendingCheck.classList.remove('msg-sending');
-                    showToast('Notice sent (template pending approval, sent as text)', 'success');
+                    showToast('Notice sent as plain text (template pending approval)', 'success');
                 } else {
                     msgDiv.classList.add('msg-failed');
                     const metaDiv = msgDiv.querySelector('.msg-meta');

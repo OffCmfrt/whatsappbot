@@ -27,13 +27,22 @@ async function createUrgentNoticeTemplate() {
         console.log(`WABA ID: ${WABA_ID}`);
 
         const templateData = {
-            name: 'urgent_notice',
+            name: 'customer_support_notice',
             language: 'en',
             category: 'UTILITY',
             components: [
                 {
                     type: 'BODY',
-                    text: 'Dear {{1}},\n\n{{2}}\n\nPlease respond at your earliest convenience.\n\nOFFCOMFRT Support Team'
+                    text: 'Dear {{1}},\n\n{{2}}\n\n{{3}}\n\nIf you have any questions, please reply to this message.\n\nThank you,\nOFFCOMFRT Support Team',
+                    example: {
+                        body_text: [
+                            [
+                                'Priya',
+                                'Important Update About Your Order',
+                                'Your order #12345 has been delayed by 1 day due to high demand. We apologize for the inconvenience and appreciate your patience.'
+                            ]
+                        ]
+                    }
                 }
             ]
         };
@@ -56,10 +65,11 @@ async function createUrgentNoticeTemplate() {
         console.log('2. Once approved, you can use it from Shoppers Hub chat interface');
         console.log('3. The template will appear in the notice modal');
         console.log('\n📋 Template details:');
-        console.log('Name: urgent_notice');
+        console.log('Name: customer_support_notice');
         console.log('Variables:');
         console.log('  {{1}} = Customer name (auto-filled)');
-        console.log('  {{2}} = Your custom message (you type this)');
+        console.log('  {{2}} = Notice subject (e.g., "Urgent Notice", "Important Update")');
+        console.log('  {{3}} = Your custom message (you type this)');
 
     } catch (error) {
         console.error('❌ Error creating template:');
