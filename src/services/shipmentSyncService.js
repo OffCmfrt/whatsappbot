@@ -321,9 +321,13 @@ async function syncShipment(shipment) {
                 carrierStatus = String(srOrder.status);
                 const fallbackMapped = mapCarrierStatus(carrierStatus, null);
                 // Only accept the fallback if it's a non-terminal status;
-                // terminal statuses (rto, cancelled) must come from the
-                // tracking API, not the stale order-level status.
-                if (fallbackMapped && fallbackMapped !== 'rto' && fallbackMapped !== 'cancelled') {
+                // terminal statuses (any RTO variant, cancelled) must come
+                // from the tracking API, not the stale order-level status.
+                // NOTE: check the 'rto' prefix, not just 'rto' exactly —
+                // 'RTO Initiated'/'RTO Acknowledged'/'RTO NDR' map to
+                // rto_initiated and 'RTO Delivered' maps to rto_delivered,
+                // and those froze in-transit parcels (e.g. order #64247).
+                if (fallbackMapped && !String(fallbackMapped).startsWith('rto') && fallbackMapped !== 'cancelled') {
                     mapped = fallbackMapped;
                     if (!expectedDelivery) expectedDelivery = srOrder.expectedDelivery || null;
                 }
