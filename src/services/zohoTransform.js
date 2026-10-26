@@ -621,13 +621,26 @@ function creditLineFromInvoiceLine(line, qty, returnType) {
     const invoiceQty = parseFloat(line.quantity || 1) || 1;
 
     // Per-unit discount the original invoice gave on this line, so the
-    // credit reverses the exact same proportion (req: original discount)
-    const lineDiscountTotal = (line.discounts || [])
-        .reduce((s, d) => s + (parseFloat(d.discount_amount ?? d.amount) || 0), 0)
-        + (parseFloat(line.discount_amount || 0) || 0);
+    // credit reverses the exact same proportion (req: original discount).
+    // Zoho reports the SAME discount twice on a line — as the flat
+    // discount_amount/discount total AND inside the discounts[] breakdown
+    // (e.g. #55668: 1237.30 + 1178.38 → a negative credit line Zoho
+    // rejects with "credit notes balance isn't negative"). Take the
+    // largest single source, never the sum.
+    const discountsArrayTotal = (line.discounts || [])
+        .reduce((s, d) => s + (parseFloat(d.discount_amount ?? d.amount) || 0), 0);
+    const flatDiscountTotal = Math.max(
+        parseFloat(line.discount_amount) || 0,
+        parseFloat(line.discount) || 0
+    );
+    const lineDiscountTotal = Math.max(discountsArrayTotal, flatDiscountTotal);
 
     let rate = parseFloat(line.rate || 0);
     let discount = round2((lineDiscountTotal / invoiceQty) * qty);
+    // Discount can never exceed the line's gross — guards against payloads
+    // where Zoho returns overlapping discount fields on a partially
+    // credited line (would make the credit note total negative).
+    discount = Math.min(discount, round2(rate * qty));
 
     // No explicit discount fields but item_total shows a lower net — fall
     // back to the net unit price so credited amount still matches invoice

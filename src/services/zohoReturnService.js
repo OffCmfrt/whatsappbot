@@ -196,26 +196,30 @@ async function prepareAndCreateCreditNote({ shopifyOrder, orderId, returnItems, 
     }
 
     // Books rejects a credit note whose total would exceed the invoice total
-    // ("credit notes balance isn't negative") — i.e. part of this invoice was
-    // already credited earlier. Cap the lines at the remaining creditable
-    // amount, proportionally, instead of failing. `credits_applied` on the
-    // invoice is the authoritative sum of already-applied credit notes.
+    // or fall below zero ("credit notes balance isn't negative") — cap the
+    // lines at the remaining creditable amount, proportionally, instead of
+    // failing. Runs whether or not credits were already applied, and also
+    // catches negative line totals from bad discount mirroring.
     try {
         const invoiceTotal = parseFloat(fullInvoice?.total);
         const alreadyCredited = parseFloat(fullInvoice?.credits_applied) || 0;
-        if (Number.isFinite(invoiceTotal) && invoiceTotal > 0 && alreadyCredited > 0) {
+        if (Number.isFinite(invoiceTotal) && invoiceTotal > 0) {
             const remaining = invoiceTotal - alreadyCredited;
+            const inclusive = !!creditNotePayload.is_inclusive_tax;
 
             const estTotal = (creditNotePayload.line_items || []).reduce((sum, l) => {
                 const net = (parseFloat(l.rate) || 0) * (parseFloat(l.quantity) || 1) - (parseFloat(l.discount) || 0);
                 const pct = (parseFloat(l.cgst_rate) || 0) + (parseFloat(l.sgst_rate) || 0)
                     + (parseFloat(l.igst_rate) || 0);
-                return sum + net * (1 + pct / 100);
+                return sum + (inclusive ? net : net * (1 + pct / 100));
             }, 0);
 
             if (remaining <= 0.02) {
                 console.log(`ℹ️ Zoho ${returnType}: invoice ${originalInvoice.invoice_id} already fully credited (₹${alreadyCredited.toFixed(2)} of ₹${invoiceTotal.toFixed(2)}) — skipping ${reference}`);
                 return { success: true, creditNoteId: null, fullyCredited: true, customerId };
+            }
+            if (estTotal < -0.02) {
+                throw new Error(`Credit note ${reference} built a negative total (₹${estTotal.toFixed(2)}) — discount mirroring bug, aborting before Zoho rejects it`);
             }
             if (estTotal > remaining + 0.02) {
                 const factor = remaining / estTotal;
@@ -227,6 +231,9 @@ async function prepareAndCreateCreditNote({ shopifyOrder, orderId, returnItems, 
             }
         }
     } catch (capErr) {
+        // Negative-total abort is a real bug — surface it instead of
+        // proceeding with a payload Zoho will reject anyway
+        if (/negative total/.test(capErr.message)) throw capErr;
         console.warn(`⚠️ Zoho ${returnType}: balance-cap check failed (${capErr.message}) — attempting full amount`);
     }
 
