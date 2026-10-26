@@ -1280,9 +1280,22 @@ class ShopifyService {
         if (!calculated) throw new Error('Shopify returned no refund calculation');
         console.log(`🔍 [refund] Calculated refund amount: ${calculated.refund?.amount || calculated.amount || 'unknown'}, transactions: ${(calculated.transactions || []).length}`);
 
+        // The calculate endpoint returns transactions with kind: "suggested_refund"
+        // which the create endpoint rejects. Rewrite them to "refund".
+        const createTransactions = (calculated.transactions || []).map(t => ({
+            ...t,
+            kind: 'refund'
+        }));
+
         const createRes = await axios.post(
             `${cfg.base}/orders/${order.id}/refunds.json`,
-            { refund: calculated, notify: true },
+            {
+                refund: {
+                    ...calculated,
+                    transactions: createTransactions
+                },
+                notify: true
+            },
             { headers: cfg.headers, timeout: 20000 }
         );
         const created = createRes.data?.refund;
