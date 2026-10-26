@@ -29,6 +29,15 @@ const STATUS_RANK = { created: 0, awb_assigned: 1, pickup_scheduled: 2, shipped:
 // Delay between carrier calls so a big batch never hammers their API
 const PER_CALL_DELAY_MS = 300;
 
+// Carriers emit transient RTO scans (an NDR that is later re-attempted, a
+// stale "RTO Initiated" that reverses when the parcel resumes moving). Once
+// an RTO variant is written the row leaves ACTIVE_STATUSES and would freeze
+// forever. So for a bounded window we keep re-polling recently-created RTO
+// rows: if the carrier shows the parcel still moving FORWARD, the row
+// self-heals back to in_transit. Bounded by created_at (immutable) so settled
+// RTOs permanently age out of the sweep and stop costing carrier calls.
+const RTO_RECHECK_DAYS = 30;
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let isRunning = false;
@@ -236,11 +245,19 @@ function resolveTransition(currentStatus, mappedStatus) {
     if (!mappedStatus || mappedStatus === currentStatus) return null;
     if (currentStatus === 'delivered') return null; // delivered is final
     
-    // All RTO variants (rto, rto_initiated, rto_delivered) are terminal
+    // All RTO variants (rto, rto_initiated, rto_delivered) are terminal.
     const isRtoVariant = (status) => status === 'rto' || (status && status.startsWith('rto_'));
-    
+
     if (isRtoVariant(mappedStatus) || mappedStatus === 'cancelled') return mappedStatus;
-    if (isRtoVariant(currentStatus)) return null; // RTO is final — DTO is also a failure case
+    if (isRtoVariant(currentStatus)) {
+        // A transient RTO scan must not permanently freeze a parcel that the
+        // carrier now shows moving FORWARD again. Recover only to in_transit /
+        // out_for_delivery. 'delivered' is still NOT allowed out of RTO, so a
+        // genuine DTO (Delhivery StatusType RT/RTO reported as Delivered)
+        // correctly stays a terminal failure.
+        if (mappedStatus === 'in_transit' || mappedStatus === 'out_for_delivery') return mappedStatus;
+        return null; // RTO is otherwise final — DTO is also a failure case
+    }
     
     const from = STATUS_RANK[currentStatus] ?? 0;
     const to = STATUS_RANK[mappedStatus] ?? 0;
@@ -283,6 +300,17 @@ async function syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliver
             await dbAdapter.query(
                 `UPDATE orders SET awb = NULL, courier_name = NULL, tracking_url = NULL, status = 'cancelled_shipment', updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
                 [shipment.order_id, shipment.awb]
+            );
+        } else if (
+            (shipment.status === 'rto' || (shipment.status && shipment.status.startsWith('rto_'))) &&
+            ['shipped', 'in_transit', 'out_for_delivery'].includes(newStatus)
+        ) {
+            // Self-healing a false/transient RTO: the shipment resumed forward
+            // movement, so mirror that back onto the orders row too — otherwise
+            // the hub would still show the order under the RTO pill.
+            await dbAdapter.query(
+                `UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
+                [newStatus, shipment.order_id, shipment.awb]
             );
         } else if (expectedDelivery) {
             await dbAdapter.query(
@@ -404,12 +432,22 @@ async function syncActiveShipments({ limit = 60 } = {}) {
 
     try {
         const placeholders = ACTIVE_STATUSES.map(() => '?').join(', ');
+        // Normal active pipeline, PLUS recent RTO rows still inside the
+        // self-heal window (bounded by immutable created_at). This lets a
+        // false/transient RTO recover to in_transit without a manual reset,
+        // while RTOs older than the window stay frozen and stop being polled.
         const shipments = await dbAdapter.query(`
             SELECT * FROM shipments
-            WHERE awb IS NOT NULL AND awb <> '' AND status IN (${placeholders})
+            WHERE awb IS NOT NULL AND awb <> '' AND (
+                status IN (${placeholders})
+                OR (
+                    (status = 'rto' OR status LIKE 'rto\\_%')
+                    AND created_at > NOW() - (? || ' days')::interval
+                )
+            )
             ORDER BY updated_at ASC NULLS FIRST
             LIMIT ?
-        `, [...ACTIVE_STATUSES, Math.min(parseInt(limit) || 60, 200)]);
+        `, [...ACTIVE_STATUSES, String(RTO_RECHECK_DAYS), Math.min(parseInt(limit) || 60, 200)]);
 
         let updated = 0;
         for (const shipment of shipments) {
