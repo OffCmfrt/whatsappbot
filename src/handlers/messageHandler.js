@@ -515,8 +515,60 @@ class MessageHandler {
                 
                 // Update follow-up recipients if this was from a follow-up campaign
                 await this.updateFollowUpResponse(phone, 'cancelled');
-                
-                await whatsappService.sendMessage(phone, `❌ *Order Cancellation*\n\n${target.order_id ? `▫️ *Order ID:* ${target.order_id}\n` : ''}▫️ *Order Cancellation Request Received.*\n▫️ Our team will process the cancellation.\n▫️ If the order has not been shipped yet, it will be cancelled shortly.`);
+
+                // ── AUTO-REFUND for prepaid unshipped orders ──
+                // If the customer cancelled before the order shipped and payment
+                // was already captured, refund them immediately in Shopify.
+                let autoRefunded = false;
+                let autoRefundAmount = 0;
+                try {
+                    const shopperRows = await dbAdapter.select('store_shoppers', { id: targetOrderId }, { limit: 1 });
+                    const shopper = shopperRows?.[0];
+                    if (shopper && shopper.order_id) {
+                        const pm = String(shopper.payment_method || '').trim().toLowerCase();
+                        const isPrepaid = pm && !/cod|cash on delivery/.test(pm);
+                        const shipped = await this.isOrderShipped(shopper.order_id);
+
+                        if (isPrepaid && !shipped) {
+                            console.log(`💰 [AUTO-REFUND] Order ${shopper.order_id} is prepaid + unshipped — initiating Shopify refund`);
+                            const shopifyService = require('../services/shopifyService');
+                            const result = await shopifyService.cancelAndRefundOrder(shopper.order_id, { refundPrepaid: true });
+
+                            if (result.cancelled || result.alreadyCancelled) {
+                                // Persist sync state so the hub shows the "Synced" badge
+                                await dbAdapter.update('store_shoppers', {
+                                    shopify_cancelled_at: new Date().toISOString(),
+                                    shopify_refund_amount: result.refunded ? (result.refundAmount || null) : null,
+                                    updated_at: new Date().toISOString()
+                                }, { id: targetOrderId });
+                                invalidateCache('shoppers');
+                            }
+
+                            if (result.refunded) {
+                                autoRefunded = true;
+                                autoRefundAmount = result.refundAmount || 0;
+                                console.log(`💰 [AUTO-REFUND] ✅ Refunded ₹${autoRefundAmount} for order ${shopper.order_id}`);
+                            } else if (result.refundSkipped) {
+                                console.log(`💰 [AUTO-REFUND] Refund skipped for ${shopper.order_id}: ${result.refundSkipped}`);
+                            } else if (result.error) {
+                                console.error(`💰 [AUTO-REFUND] ❌ Failed for ${shopper.order_id}: ${result.error}`);
+                            }
+                        }
+                    }
+                } catch (refundErr) {
+                    // Never block the cancel flow on a refund failure — log and continue
+                    console.error(`💰 [AUTO-REFUND] Error for order ${target.order_id}:`, refundErr.message);
+                }
+
+                // Send acknowledgment — mention refund if one was issued
+                let cancelReply = `❌ *Order Cancellation*\n\n${target.order_id ? `▫️ *Order ID:* ${target.order_id}\n` : ''}▫️ *Order Cancellation Request Received.*\n`;
+                if (autoRefunded) {
+                    cancelReply += `▫️ *Refund of ₹${Number(autoRefundAmount).toLocaleString('en-IN')} has been initiated* to your original payment method.\n`;
+                    cancelReply += `▫️ Please allow 5-7 business days for the refund to reflect.\n`;
+                } else {
+                    cancelReply += `▫️ Our team will process the cancellation.\n▫️ If the order has not been shipped yet, it will be cancelled shortly.\n`;
+                }
+                await whatsappService.sendMessage(phone, cancelReply);
                 break;
             }
 

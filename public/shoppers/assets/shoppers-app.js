@@ -2807,6 +2807,7 @@ function renderCards(shoppers, total, append = false) {
 
                 ${canShip ? `<button class="ship-btn" onclick="openShipModal('${s.id}')">🚚 Ship Order</button>` : ''}
                 ${s.awb ? `<div class="awb-chip" onclick="openShipmentsDrawer('${s.id}', '${s.order_id}')" title="View shipments">📦 ${escapeHtml(awbChipLabel)}</div>` : ''}
+                ${(s.status === 'cancelled' && isPrepaidShopper(s) && !s.shopify_refund_amount) ? `<button class="refund-btn" onclick="refundSingleOrder('${s.id}', '${escapeHtml(s.order_id || '')}')" title="Refund ₹${s.order_total || '0'} to customer">💰 Refund ₹${s.order_total || '0'}</button>` : ''}
             `;
         } else {
             card.innerHTML = `
@@ -2860,6 +2861,7 @@ function renderCards(shoppers, total, append = false) {
                 </button>
                 ${canShip ? `<button class="action-icon-btn ship-icon-btn" onclick="openShipModal('${s.id}')" title="Ship Order">🚚</button>` : ''}
                 ${s.awb ? `<button class="action-icon-btn ship-icon-btn" onclick="openShipmentsDrawer('${s.id}', '${s.order_id}')" title="${escapeHtml(awbChipLabel)}">📦</button>` : ''}
+                ${(s.status === 'cancelled' && isPrepaidShopper(s) && !s.shopify_refund_amount) ? `<button class="action-icon-btn refund-icon-btn" onclick="refundSingleOrder('${s.id}', '${escapeHtml(s.order_id || '')}')" title="Refund ₹${s.order_total || '0'}">💰</button>` : ''}
             </div>
 
             <div class="row-status-pills">
@@ -6764,6 +6766,39 @@ async function startShopifyCancel() {
 window.openShopifyCancelModal = openShopifyCancelModal;
 window.closeShopifyCancelModal = closeShopifyCancelModal;
 window.startShopifyCancel = startShopifyCancel;
+
+// ==========================================
+// DIRECT SINGLE-ORDER REFUND (prepaid cancelled)
+// Calls the existing shopify-cancel endpoint for one order.
+// ==========================================
+async function refundSingleOrder(shopperId, orderDisplayId) {
+    if (!hubRequirePerm('edit_orders', 'refund orders')) return;
+    const confirmed = confirm(`Refund order #${orderDisplayId || shopperId} in Shopify?\n\nThis will issue a full refund to the customer's original payment method.`);
+    if (!confirmed) return;
+
+    showShipToast(`Refunding order #${orderDisplayId || shopperId}...`);
+    try {
+        const data = await apiCall(`/shoppers/${shopperId}/shopify-cancel`, 'POST', { refundPrepaid: true });
+        if (data && data.success) {
+            const r = data.result || {};
+            if (r.refunded) {
+                showShipToast(`✅ Refunded ₹${Number(r.refundAmount || 0).toLocaleString('en-IN')} for order #${r.orderName || orderDisplayId}`);
+            } else if (r.refundSkipped) {
+                showShipToast(`⚠️ ${r.refundSkipped} — order #${r.orderName || orderDisplayId}`, true);
+            } else {
+                showShipToast(`✅ Order #${r.orderName || orderDisplayId} cancelled in Shopify`);
+            }
+            fetchShoppersData();
+            fetchInboxCounts();
+        } else {
+            showShipToast(`❌ Refund failed: ${data?.error || 'Unknown error'}`, true);
+        }
+    } catch (err) {
+        console.error('[refundSingleOrder]', err);
+        showShipToast(`❌ Network error while refunding`, true);
+    }
+}
+window.refundSingleOrder = refundSingleOrder;
 
 // ==========================================
 // CANCELLATION REASONS (single + bulk)
