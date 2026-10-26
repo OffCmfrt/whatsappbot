@@ -9,6 +9,17 @@ const { invalidateCache } = require('../utils/cache');
 
 const autoSupportAgent = require('../services/ai/autoSupportAgent');
 
+// How long after an order is placed the Confirm/Cancel/Edit buttons stay usable.
+const CONFIRMATION_WINDOW_HOURS = 24;
+
+// Wording used when a button click arrives after the window has closed.
+function confirmationWindowExpiredMsg(orderId) {
+    return `⏳ *This Order Is Past Our ${CONFIRMATION_WINDOW_HOURS}-Hour Window*
+
+▫️ ${orderId ? `*Order ID:* ${orderId}\n` : ''}▫️ Confirm, cancel and edit requests are only automated within *${CONFIRMATION_WINDOW_HOURS} hours* of placing an order.
+▫️ For any change now, please type *support* and our team will help you directly.`;
+}
+
 // Generate a candidate ticket number: TKT-YYMMDD-XXXX (9000 per day instead of per year)
 function generateTicketNumber() {
     const now = new Date();
@@ -448,6 +459,13 @@ class MessageHandler {
                     await whatsappService.sendMessage(phone, "⚠️ *No Pending Orders*\n\n▫️ You don't have any pending orders to confirm.\n▫️ If you have multiple orders, please confirm each one separately.");
                     break;
                 }
+
+                // Only actionable within 24h of the order being placed
+                if (!this.isWithinConfirmationWindow(target.order_placed_at)) {
+                    console.log(`[CONFIRM] Blocked — order ${target.order_id} is older than ${CONFIRMATION_WINDOW_HOURS}h for ${phone}`);
+                    await whatsappService.sendMessage(phone, confirmationWindowExpiredMsg(target.order_id));
+                    break;
+                }
                 
                 const targetOrderId = target.id;
                 console.log(`[CONFIRM] Confirming order ${target.order_id} (row ${targetOrderId}) for ${phone}`);
@@ -488,6 +506,13 @@ class MessageHandler {
                 if (!target) {
                     console.log(`[WARN] No pending order found for ${phone} to cancel`);
                     await whatsappService.sendMessage(phone, "⚠️ *No Pending Orders*\n\n▫️ You don't have any pending orders to cancel.\n▫️ If you need help with an existing order, please contact support.");
+                    break;
+                }
+
+                // Only actionable within 24h of the order being placed
+                if (!this.isWithinConfirmationWindow(target.order_placed_at)) {
+                    console.log(`[CANCEL] Blocked — order ${target.order_id} is older than ${CONFIRMATION_WINDOW_HOURS}h for ${phone}`);
+                    await whatsappService.sendMessage(phone, confirmationWindowExpiredMsg(target.order_id));
                     break;
                 }
                 
@@ -577,6 +602,13 @@ class MessageHandler {
                 const recentShopper = await this.resolveShopperForButtonClick(phone, null);
                 const targetOrderId = recentShopper?.order_id || null;
                 const targetShopperId = recentShopper?.id || null;
+
+                // Only actionable within 24h of the order being placed
+                if (recentShopper && !this.isWithinConfirmationWindow(recentShopper.order_placed_at)) {
+                    console.log(`[EDIT] Blocked — order ${targetOrderId} is older than ${CONFIRMATION_WINDOW_HOURS}h for ${phone}`);
+                    await whatsappService.sendMessage(phone, confirmationWindowExpiredMsg(targetOrderId));
+                    break;
+                }
 
                 // Block edits on orders that are already shipped — a late "Edit Details"
                 // click must never flip a shipped order back out of the shipped bucket.
@@ -898,7 +930,7 @@ class MessageHandler {
         const params = status ? [phoneVariations, status] : [phoneVariations];
         try {
             const rows = await dbAdapter.query(
-                `SELECT s.id, s.order_id, c.sent_at AS confirmation_sent_at
+                `SELECT s.id, s.order_id, s.created_at AS order_placed_at, c.sent_at AS confirmation_sent_at
                  FROM store_shoppers s
                  LEFT JOIN shopper_confirmations c
                         ON c.phone = s.phone AND c.order_id = s.order_id
@@ -913,11 +945,22 @@ class MessageHandler {
             // shopper_confirmations may be missing — fall back to legacy lookup
             console.warn('[BUTTON] Confirmation-aware lookup failed, falling back:', err.message);
             const fallbackRows = await dbAdapter.query(
-                `SELECT id, order_id FROM store_shoppers WHERE phone = ANY(?) ${status ? "AND status = ?" : ''} ORDER BY created_at DESC LIMIT 1`,
+                `SELECT id, order_id, created_at AS order_placed_at FROM store_shoppers WHERE phone = ANY(?) ${status ? "AND status = ?" : ''} ORDER BY created_at DESC LIMIT 1`,
                 params
             );
             return fallbackRows?.[0] || null;
         }
+    }
+
+    // Order-template buttons (Confirm / Cancel / Edit) are only actionable within
+    // CONFIRMATION_WINDOW_HOURS of the order being placed (store_shoppers.created_at).
+    // Returns true when the click is still inside the window. If the placement time
+    // is missing/unparseable we fail open so legacy rows keep working.
+    isWithinConfirmationWindow(orderPlacedAt) {
+        if (!orderPlacedAt) return true;
+        const placed = new Date(orderPlacedAt).getTime();
+        if (Number.isNaN(placed)) return true;
+        return (Date.now() - placed) <= CONFIRMATION_WINDOW_HOURS * 60 * 60 * 1000;
     }
 
     // Update follow-up recipient response
