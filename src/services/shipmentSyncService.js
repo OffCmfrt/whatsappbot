@@ -183,7 +183,13 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     // not as a substring (to avoid false positives)
     // Exact matches for Ekart "RTO" status
     const isExactRto = s === 'rto';
-    const hasRtoWord = isExactRto || /\brto\b/i.test(s) || s.includes('rto initiated') || 
+    // Shiprocket returns underscored forms like RTO_OFD / RTO_NDR / RTO_LOCK
+    // (codes 41, 40, 75). JS regex \b treats '_' as a word character, so
+    // /\brto\b/ does NOT match "rto_ofd" — the underscored RTO prefix used to
+    // slip past this check and fall through to the generic 'ofd' → out_for_delivery
+    // branch, falsely healing genuine returns. Match rto followed by a word
+    // boundary OR an underscore/non-word char.
+    const hasRtoWord = isExactRto || /\brto\b|\brto_/i.test(s) || s.includes('rto initiated') || 
                        s.includes('rto delivered') || s.includes('rto in-transit') ||
                        s.includes('rto in intransit') || s.includes('rto acknowledged') || 
                        s.includes('rto ndr') || s.includes('rto ofd') || s.includes('rto lock') ||
@@ -468,11 +474,13 @@ async function syncActiveShipments({ limit = 60 } = {}) {
         // rto_delivered is deliberately excluded from RTO_RECHECK_STATUSES —
         // a settled return can never move forward again.
         //
-        // Priority ordering: active-pipeline rows sort ahead of RTO recheck
-        // rows, so a stale in-transit parcel always gets refreshed before an
-        // aging RTO does. Prevents the (much larger) RTO backlog from
-        // starving the live pipeline of LIMIT slots. Within each group,
-        // oldest-updated-first rotation is preserved.
+        // Ordering: pure updated_at ASC (oldest-first rotation) with NO
+        // active/RTO priority split. Earlier I tried to sort active rows
+        // ahead, but with 1,877 stale actives and only 100 slots/cycle that
+        // starved RTO rechecks entirely (batch showed 0 RTO slots for hours)
+        // and false RTOs healed with a 10+ hour lag. Interleaved rotation
+        // keeps heal latency bounded to one full pass (~10 h) while still
+        // refreshing every active row on the same schedule.
         const shipments = await dbAdapter.query(`
             SELECT * FROM shipments
             WHERE awb IS NOT NULL AND awb <> '' AND (
@@ -482,17 +490,9 @@ async function syncActiveShipments({ limit = 60 } = {}) {
                     AND created_at > NOW() - (? || ' days')::interval
                 )
             )
-            ORDER BY
-                CASE WHEN status IN (${placeholders}) THEN 0 ELSE 1 END,
-                updated_at ASC NULLS FIRST
+            ORDER BY updated_at ASC NULLS FIRST
             LIMIT ?
-        `, [
-            ...ACTIVE_STATUSES,
-            ...RTO_RECHECK_STATUSES,
-            String(RTO_RECHECK_DAYS),
-            ...ACTIVE_STATUSES,
-            Math.min(parseInt(limit) || 60, 200)
-        ]);
+        `, [...ACTIVE_STATUSES, ...RTO_RECHECK_STATUSES, String(RTO_RECHECK_DAYS), Math.min(parseInt(limit) || 60, 200)]);
 
         let updated = 0;
         for (const shipment of shipments) {
