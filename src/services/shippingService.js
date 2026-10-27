@@ -349,19 +349,10 @@ async function syncOrderRow(ctx, data, shopper) {
             });
         }
 
-        // Also update the store_shoppers row so the frontend sees the AWB immediately
-        // This prevents duplicate rows for the same order_id from being re-shipped in bulk operations
-        if (shopper?.id) {
-            try {
-                await dbAdapter.query(`
-                    UPDATE store_shoppers
-                    SET awb = ?, status = 'shipped', updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                `, [data.awb, shopper.id]);
-            } catch (shopperErr) {
-                console.warn(`⚠️ Failed to sync store_shoppers row for shopper ${shopper.id}:`, shopperErr.message);
-            }
-        }
+        // Note: store_shoppers has no 'awb' column — the hub's awb/courier fields
+        // come from the orders row via LEFT JOIN, so the update above is enough.
+        // Bulk re-ship duplicates are already blocked by the getActiveShipment()
+        // idempotency guard in ship(), not by a per-row awb flag.
     } catch (error) {
         // Non-fatal: the shipments row is the source of truth
         console.error('⚠️ Failed to sync orders row after shipping:', error.message);
