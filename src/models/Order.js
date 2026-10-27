@@ -64,6 +64,28 @@ class Order {
     // Update order status
     static async updateStatus(orderId, status, additionalData = {}) {
         try {
+            // Guard against stale order-level RTO. Shiprocket's ORDER-level
+            // status feed (used by orderSyncService / order handlers) can show
+            // "rto_initiated" from a transient NDR even while the parcel is
+            // still moving. The shipments row is driven by live AWB tracking
+            // and is authoritative, so never let an order-level RTO overwrite
+            // an order whose shipment is still in an active (non-terminal)
+            // state. Legitimate RTO still flows through syncOrderRowStatus,
+            // which mirrors only after the shipment itself goes terminal.
+            const normStatus = String(status || '').toLowerCase().replace(/[\s-]+/g, '_');
+            if (normStatus.startsWith('rto')) {
+                const ACTIVE = ['created', 'awb_assigned', 'pickup_scheduled', 'shipped', 'in_transit', 'out_for_delivery'];
+                const shipRows = await dbAdapter.query(
+                    `SELECT status FROM shipments WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`,
+                    [orderId]
+                );
+                const shipStatus = shipRows[0] && String(shipRows[0].status || '').toLowerCase();
+                if (shipStatus && ACTIVE.includes(shipStatus)) {
+                    console.log(`🛡️ Blocked stale order-level RTO (${status}) for order ${orderId}: shipment is "${shipStatus}" (still moving)`);
+                    return await this.findByOrderId(orderId);
+                }
+            }
+
             const updateData = {
                 status,
                 updated_at: new Date(),
