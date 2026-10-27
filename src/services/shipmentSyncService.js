@@ -36,7 +36,15 @@ const PER_CALL_DELAY_MS = 300;
 // rows: if the carrier shows the parcel still moving FORWARD, the row
 // self-heals back to in_transit. Bounded by created_at (immutable) so settled
 // RTOs permanently age out of the sweep and stop costing carrier calls.
+//
+// OPTIMIZATION: only 'rto' and 'rto_initiated' are re-polled. 'rto_delivered'
+// means the return parcel was already delivered back to origin — that state
+// is absolutely terminal and can never resume forward movement, so re-polling
+// it is pure waste. It is also the largest bucket (currently 725 of the 1018
+// RTO rows inside the window) and was starving genuine in-transit parcels of
+// LIMIT slots, roughly doubling rotation time for the whole pipeline.
 const RTO_RECHECK_DAYS = 30;
+const RTO_RECHECK_STATUSES = ['rto', 'rto_initiated'];
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -249,12 +257,17 @@ function resolveTransition(currentStatus, mappedStatus) {
     const isRtoVariant = (status) => status === 'rto' || (status && status.startsWith('rto_'));
 
     if (isRtoVariant(mappedStatus) || mappedStatus === 'cancelled') return mappedStatus;
+    // rto_delivered = return already delivered back to origin. Absolutely
+    // final; cannot resume forward movement to the customer. Skipping the
+    // recovery branch here matches the sweep (RTO_RECHECK_STATUSES excludes
+    // rto_delivered) so genuine settled returns never get re-evaluated.
+    if (currentStatus === 'rto_delivered') return null;
     if (isRtoVariant(currentStatus)) {
-        // A transient RTO scan must not permanently freeze a parcel that the
-        // carrier now shows moving FORWARD again. Recover only to in_transit /
-        // out_for_delivery. 'delivered' is still NOT allowed out of RTO, so a
-        // genuine DTO (Delhivery StatusType RT/RTO reported as Delivered)
-        // correctly stays a terminal failure.
+        // A transient RTO scan (rto / rto_initiated) must not permanently
+        // freeze a parcel that the carrier now shows moving FORWARD again.
+        // Recover only to in_transit / out_for_delivery. 'delivered' is still
+        // NOT allowed out of RTO, so a genuine DTO (Delhivery StatusType
+        // RT/RTO reported as Delivered) correctly stays a terminal failure.
         if (mappedStatus === 'in_transit' || mappedStatus === 'out_for_delivery') return mappedStatus;
         return null; // RTO is otherwise final — DTO is also a failure case
     }
@@ -323,6 +336,53 @@ async function syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliver
     }
 }
 
+// Post-transition side effects, shared by the cron sync (syncShipment) and
+// the on-demand admin "Refresh tracking" path (shippingService.trackShipment).
+// Without this, a manual refresh on a healed false RTO would update the
+// shipments row but leave orders stuck at rto_* (e.g. #64600, #64697, #64729)
+// and skip the Zoho COD/credit-note reconciliation + OFD WhatsApp template.
+async function applyTransitionSideEffects(shipment, newStatus, opts = {}) {
+    const { expectedDelivery = null, deliveredAt = null, carrierStatusText = '' } = opts;
+    await syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliveredAt);
+    if (carrierStatusText) {
+        console.log(`📦 Shipment #${shipment.id} (${shipment.order_id}, AWB ${shipment.awb}): ${shipment.status} → ${newStatus} [carrier: "${carrierStatusText}"]`);
+    }
+
+    // Zoho middleware hook — auto COD reconciliation + RTO credit notes
+    const isRtoVariantInner = (status) => status === 'rto' || (status && status.startsWith('rto_'));
+    if (newStatus === 'delivered' || isRtoVariantInner(newStatus)) {
+        try {
+            require('./zohoShipmentHook').onShipmentTerminal(shipment, newStatus, deliveredAt)
+                .catch(e => console.warn(`⚠️ Zoho shipment hook failed for ${shipment.order_id}:`, e.message));
+        } catch (hookErr) {
+            console.warn(`⚠️ Zoho shipment hook unavailable:`, hookErr.message);
+        }
+    }
+
+    // Send "Out for Delivery" WhatsApp template notification to the customer
+    if (newStatus === 'out_for_delivery' && shipment.status !== 'out_for_delivery') {
+        try {
+            const shopperRows = await dbAdapter.query(
+                `SELECT phone, name, order_id FROM store_shoppers WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`,
+                [shipment.order_id]
+            );
+            const shopper = shopperRows[0];
+            if (shopper && shopper.phone) {
+                const whatsappService = require('./whatsappService');
+                await whatsappService.sendOutOfDeliveryNotification(
+                    shopper.phone,
+                    shopper.name || 'Customer',
+                    shipment.order_id,
+                    shipment.awb
+                );
+                console.log(`🚚 Out-for-delivery notification sent to ${shopper.phone} for order ${shipment.order_id}`);
+            }
+        } catch (notifyErr) {
+            console.warn(`⚠️ Failed to send OFD notification for ${shipment.order_id}:`, notifyErr.message);
+        }
+    }
+}
+
 // Sync one shipment against its carrier. Returns true if the status changed.
 async function syncShipment(shipment) {
     const adapter = getAdapter(shipment.carrier);
@@ -381,43 +441,11 @@ async function syncShipment(shipment) {
         ...(deliveredAt ? { delivered_at: deliveredAt } : {})
     }, { id: shipment.id });
 
-    await syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliveredAt);
-    console.log(`📦 Shipment #${shipment.id} (${shipment.order_id}, AWB ${shipment.awb}): ${shipment.status} → ${newStatus} [carrier: "${carrierStatus}"]`);
-
-    // Zoho middleware hook — auto COD reconciliation + RTO credit notes
-    const prevStatus = shipment.status;
-    const isRtoVariant = (status) => status === 'rto' || (status && status.startsWith('rto_'));
-    if (newStatus === 'delivered' || isRtoVariant(newStatus)) {
-        try {
-            require('./zohoShipmentHook').onShipmentTerminal(shipment, newStatus, deliveredAt)
-                .catch(e => console.warn(`⚠️ Zoho shipment hook failed for ${shipment.order_id}:`, e.message));
-        } catch (hookErr) {
-            console.warn(`⚠️ Zoho shipment hook unavailable:`, hookErr.message);
-        }
-    }
-
-    // Send "Out for Delivery" WhatsApp template notification to the customer
-    if (newStatus === 'out_for_delivery' && shipment.status !== 'out_for_delivery') {
-        try {
-            const shopperRows = await dbAdapter.query(
-                `SELECT phone, name, order_id FROM store_shoppers WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`,
-                [shipment.order_id]
-            );
-            const shopper = shopperRows[0];
-            if (shopper && shopper.phone) {
-                const whatsappService = require('./whatsappService');
-                await whatsappService.sendOutOfDeliveryNotification(
-                    shopper.phone,
-                    shopper.name || 'Customer',
-                    shipment.order_id,
-                    shipment.awb
-                );
-                console.log(`🚚 Out-for-delivery notification sent to ${shopper.phone} for order ${shipment.order_id}`);
-            }
-        } catch (notifyErr) {
-            console.warn(`⚠️ Failed to send OFD notification for ${shipment.order_id}:`, notifyErr.message);
-        }
-    }
+    await applyTransitionSideEffects(shipment, newStatus, {
+        expectedDelivery,
+        deliveredAt,
+        carrierStatusText: carrierStatus
+    });
 
     return true;
 }
@@ -432,22 +460,39 @@ async function syncActiveShipments({ limit = 60 } = {}) {
 
     try {
         const placeholders = ACTIVE_STATUSES.map(() => '?').join(', ');
-        // Normal active pipeline, PLUS recent RTO rows still inside the
+        const rtoPlaceholders = RTO_RECHECK_STATUSES.map(() => '?').join(', ');
+        // Normal active pipeline, PLUS recoverable RTO rows still inside the
         // self-heal window (bounded by immutable created_at). This lets a
         // false/transient RTO recover to in_transit without a manual reset,
         // while RTOs older than the window stay frozen and stop being polled.
+        // rto_delivered is deliberately excluded from RTO_RECHECK_STATUSES —
+        // a settled return can never move forward again.
+        //
+        // Priority ordering: active-pipeline rows sort ahead of RTO recheck
+        // rows, so a stale in-transit parcel always gets refreshed before an
+        // aging RTO does. Prevents the (much larger) RTO backlog from
+        // starving the live pipeline of LIMIT slots. Within each group,
+        // oldest-updated-first rotation is preserved.
         const shipments = await dbAdapter.query(`
             SELECT * FROM shipments
             WHERE awb IS NOT NULL AND awb <> '' AND (
                 status IN (${placeholders})
                 OR (
-                    (status = 'rto' OR status LIKE 'rto\\_%')
+                    status IN (${rtoPlaceholders})
                     AND created_at > NOW() - (? || ' days')::interval
                 )
             )
-            ORDER BY updated_at ASC NULLS FIRST
+            ORDER BY
+                CASE WHEN status IN (${placeholders}) THEN 0 ELSE 1 END,
+                updated_at ASC NULLS FIRST
             LIMIT ?
-        `, [...ACTIVE_STATUSES, String(RTO_RECHECK_DAYS), Math.min(parseInt(limit) || 60, 200)]);
+        `, [
+            ...ACTIVE_STATUSES,
+            ...RTO_RECHECK_STATUSES,
+            String(RTO_RECHECK_DAYS),
+            ...ACTIVE_STATUSES,
+            Math.min(parseInt(limit) || 60, 200)
+        ]);
 
         let updated = 0;
         for (const shipment of shipments) {
@@ -483,5 +528,7 @@ module.exports = {
     mapCarrierStatus,
     resolveTransition,
     extractDeliveredAt,
+    syncOrderRowStatus,
+    applyTransitionSideEffects,
     getLastRunAt
 };

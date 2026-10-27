@@ -565,11 +565,26 @@ async function trackShipment(shipmentId) {
 
     // Opportunistic status sync from live tracking (same smart mapping +
     // forward-only transitions as the automatic background sync)
-    const { mapCarrierStatus, resolveTransition } = require('./shipmentSyncService');
+    const { mapCarrierStatus, resolveTransition, extractDeliveredAt, applyTransitionSideEffects } = require('./shipmentSyncService');
     const mapped = mapCarrierStatus(result.data.currentStatus, result.data.statusType);
     const newStatus = resolveTransition(shipment.status, mapped);
     if (newStatus) {
-        await dbAdapter.update('shipments', { status: newStatus, updated_at: new Date().toISOString() }, { id: shipment.id });
+        const deliveredAt = newStatus === 'delivered' ? extractDeliveredAt(result) : null;
+        await dbAdapter.update('shipments', {
+            status: newStatus,
+            updated_at: new Date().toISOString(),
+            ...(deliveredAt ? { delivered_at: deliveredAt } : {})
+        }, { id: shipment.id });
+        // Mirror orders row + fire Zoho terminal hook + OFD WhatsApp template
+        // via the same helper the cron sync uses. Previously this path only
+        // updated the shipments row, so an admin "Refresh tracking" click on
+        // a self-healed false RTO would leave the orders row stuck at rto_*
+        // (e.g. #64600, #64697, #64729).
+        await applyTransitionSideEffects(shipment, newStatus, {
+            expectedDelivery: result.data.expectedDelivery,
+            deliveredAt,
+            carrierStatusText: result.data.currentStatus
+        });
     }
 
     return { data: { ...result.data, awb: shipment.awb, courierName: shipment.courier_name, carrier: shipment.carrier } };
