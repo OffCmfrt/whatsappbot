@@ -572,22 +572,42 @@ class DelhiveryAdapter extends BaseCarrier {
             const shipmentData = response.data?.ShipmentData?.[0]?.Shipment;
             if (!shipmentData) return this.fail('No tracking data found for this AWB', response.data);
 
-            const scans = (shipmentData.Scans || []).map(s => {
-                const detail = s.ScanDetail || s;
-                return {
-                    date: detail.ScanDateTime || detail.StatusDateTime || '',
-                    location: detail.ScannedLocation || detail.CityLocation || '',
-                    activity: detail.Instructions || detail.Scan || '',
-                    status: detail.Scan || detail.ScanType || ''
-                };
-            }).reverse();
+            const rawScans = shipmentData.Scans || [];
 
-            return this.ok({
+            const data = {
                 currentStatus: shipmentData.Status?.Status || 'Unknown',
                 statusType: shipmentData.Status?.StatusType || null,
-                expectedDelivery: shipmentData.ExpectedDeliveryDate || null,
-                timeline: scans
-            }, response.data);
+                expectedDelivery: shipmentData.ExpectedDeliveryDate || null
+            };
+
+            // Lazy, as in the Shiprocket adapter: the background sweep polls
+            // hundreds of shipments per cycle and only reads the scan list for
+            // rows that just became 'delivered'. `enumerable` keeps
+            // JSON.stringify output identical for the hub's tracking timeline.
+            Object.defineProperty(data, 'timeline', {
+                enumerable: true,
+                configurable: true,
+                get() {
+                    const scans = rawScans.map(s => {
+                        const detail = s.ScanDetail || s;
+                        return {
+                            date: detail.ScanDateTime || detail.StatusDateTime || '',
+                            location: detail.ScannedLocation || detail.CityLocation || '',
+                            activity: detail.Instructions || detail.Scan || '',
+                            status: detail.Scan || detail.ScanType || ''
+                        };
+                    }).reverse();
+                    Object.defineProperty(data, 'timeline', {
+                        value: scans,
+                        enumerable: true,
+                        writable: true,
+                        configurable: true
+                    });
+                    return scans;
+                }
+            });
+
+            return this.ok(data, response.data);
         } catch (error) {
             return this.fail(`Delhivery tracking failed: ${this.describeAxiosError(error)}`, error.response?.data);
         }

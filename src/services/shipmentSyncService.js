@@ -29,6 +29,19 @@ const STATUS_RANK = { created: 0, awb_assigned: 1, pickup_scheduled: 2, shipped:
 // Delay between carrier calls so a big batch never hammers their API
 const PER_CALL_DELAY_MS = 300;
 
+// Only the columns the sync pipeline actually reads.
+//
+// This is deliberately NOT `SELECT *`: shipments.request_payload /
+// response_payload are multi-KB jsonb blobs (measured on the live table: the
+// average row is ~6.2 KB, of which ~5.6 KB is response_payload; without the
+// two blobs it is ~382 B). pg has to parse those into JS object graphs for
+// every row, so a 300-row sweep used to materialise ~1.9 MB of heap it never
+// read. Projecting the needed columns keeps the same sweep at ~115 KB — the
+// process runs under a 512 MB RSS ceiling with a watchdog, so per-cycle row
+// size is a real constraint, not a micro-optimisation.
+const SYNC_COLUMNS = `id, order_id, awb, carrier, carrier_shipment_id, carrier_order_id,
+                      courier_name, status, payment_mode, cod_amount`;
+
 // Carriers emit transient RTO scans (an NDR that is later re-attempted, a
 // stale "RTO Initiated" that reverses when the parcel resumes moving). Once
 // an RTO variant is written the row leaves ACTIVE_STATUSES and would freeze
@@ -390,7 +403,11 @@ async function applyTransitionSideEffects(shipment, newStatus, opts = {}) {
 }
 
 // Sync one shipment against its carrier. Returns true if the status changed.
-async function syncShipment(shipment) {
+//
+// `touchQueue`: when the caller passes an array, unchanged rows are NOT written
+// one-by-one — their ids are collected so the batch loop can flush a single
+// UPDATE for the whole pass (previously that was one round trip per row).
+async function syncShipment(shipment, touchQueue = null) {
     const adapter = getAdapter(shipment.carrier);
     if (!adapter || !shipment.awb) return false;
 
@@ -435,7 +452,8 @@ async function syncShipment(shipment) {
 
     // Always bump updated_at so unchanged shipments rotate to the back of the queue
     if (!newStatus) {
-        await dbAdapter.update('shipments', { updated_at: new Date().toISOString() }, { id: shipment.id });
+        if (touchQueue) touchQueue.push(shipment.id);
+        else await dbAdapter.update('shipments', { updated_at: new Date().toISOString() }, { id: shipment.id });
         return false;
     }
 
@@ -457,52 +475,105 @@ async function syncShipment(shipment) {
 }
 
 /**
- * Poll the carrier for a batch of active shipments and apply status updates.
- * Oldest-synced first so every active shipment gets refreshed over time.
+ * Rotate a pass's unchanged rows to the back of the queue in ONE statement.
+ *
+ * Every poll must bump updated_at or the oldest-first rotation stops moving,
+ * which used to cost one round trip per unchanged row (the vast majority of a
+ * sweep). Chunked at 500 so a future larger cap can't hit PostgreSQL's 65535
+ * bind-parameter limit.
  */
-async function syncActiveShipments({ limit = 60 } = {}) {
+async function touchShipments(ids) {
+    for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500);
+        await dbAdapter.query(
+            `UPDATE shipments SET updated_at = CURRENT_TIMESTAMP WHERE id IN (${chunk.map(() => '?').join(', ')})`,
+            chunk
+        );
+    }
+}
+
+/**
+ * Poll the carrier for a batch of shipments and apply status updates.
+ *
+ * Two INDEPENDENT budgets, deliberately:
+ *  • the active pipeline rotates oldest-synced-first, exactly as before;
+ *  • recoverable RTO rows (inside the self-heal window, bounded by immutable
+ *    created_at) get their OWN LIMIT, so a large active backlog can never
+ *    starve them.
+ *
+ * Why the split: when both shared one 100-row queue, the ~1,870 active rows
+ * dominated it and the ~270 in-window RTO rows were only rechecked once per
+ * full rotation (~10.7 h). A transient RTO scan therefore kept a still-moving
+ * parcel in the hub's RTO section for most of a day — #64693 sat there 9h16m
+ * before healing, and ops kept seeing in-transit parcels under RTO. With its
+ * own budget the RTO set is drained roughly every 2-3 cycles (~80 min), so a
+ * false RTO clears while ops are still looking at it.
+ *
+ * Both passes are pure updated_at ASC: every poll bumps updated_at, so rows
+ * that did not change rotate to the back and a larger set than the budget
+ * still gets full coverage over consecutive cycles (no starvation either way).
+ */
+async function syncActiveShipments({ limit = 60, rtoLimit = null } = {}) {
     if (isRunning) return { skipped: true, reason: 'sync already in progress', checked: 0, updated: 0 };
     isRunning = true;
 
     try {
-        const placeholders = ACTIVE_STATUSES.map(() => '?').join(', ');
+        const activeCap = Math.min(parseInt(limit) || 60, 200);
+        // 0 disables the self-heal pass (useful for a pure pipeline refresh).
+        const rtoCap = rtoLimit === 0
+            ? 0
+            : Math.min(parseInt(rtoLimit) || activeCap, 400);
+
+        const activePlaceholders = ACTIVE_STATUSES.map(() => '?').join(', ');
         const rtoPlaceholders = RTO_RECHECK_STATUSES.map(() => '?').join(', ');
-        // Normal active pipeline, PLUS recoverable RTO rows still inside the
-        // self-heal window (bounded by immutable created_at). This lets a
-        // false/transient RTO recover to in_transit without a manual reset,
-        // while RTOs older than the window stay frozen and stop being polled.
-        // rto_delivered is deliberately excluded from RTO_RECHECK_STATUSES —
-        // a settled return can never move forward again.
-        //
-        // Ordering: pure updated_at ASC (oldest-first rotation) with NO
-        // active/RTO priority split. Earlier I tried to sort active rows
-        // ahead, but with 1,877 stale actives and only 100 slots/cycle that
-        // starved RTO rechecks entirely (batch showed 0 RTO slots for hours)
-        // and false RTOs healed with a 10+ hour lag. Interleaved rotation
-        // keeps heal latency bounded to one full pass (~10 h) while still
-        // refreshing every active row on the same schedule.
-        const shipments = await dbAdapter.query(`
-            SELECT * FROM shipments
-            WHERE awb IS NOT NULL AND awb <> '' AND (
-                status IN (${placeholders})
-                OR (
-                    status IN (${rtoPlaceholders})
-                    AND created_at > NOW() - (? || ' days')::interval
-                )
-            )
+
+        // One pass = fetch, poll, flush. Results are released between passes so
+        // peak heap holds a single result set rather than both at once.
+        const runPass = async (sql, params) => {
+            const rows = await dbAdapter.query(sql, params);
+            const touches = [];
+            let changed = 0;
+            try {
+                for (let i = 0; i < rows.length; i++) {
+                    const shipment = rows[i];
+                    try {
+                        if (await syncShipment(shipment, touches)) changed++;
+                    } catch (error) {
+                        console.error(`⚠️ Status sync failed for shipment #${shipment.id} (AWB ${shipment.awb}):`, error.message);
+                    }
+                    if (i < rows.length - 1) await sleep(PER_CALL_DELAY_MS);
+                }
+            } finally {
+                // Flush even if the loop above throws, otherwise those rows
+                // keep the oldest updated_at and would be picked forever.
+                await touchShipments(touches);
+            }
+            return { checked: rows.length, updated: changed };
+        };
+
+        const active = await runPass(`
+            SELECT ${SYNC_COLUMNS} FROM shipments
+            WHERE awb IS NOT NULL AND awb <> ''
+              AND status IN (${activePlaceholders})
             ORDER BY updated_at ASC NULLS FIRST
             LIMIT ?
-        `, [...ACTIVE_STATUSES, ...RTO_RECHECK_STATUSES, String(RTO_RECHECK_DAYS), Math.min(parseInt(limit) || 60, 200)]);
+        `, [...ACTIVE_STATUSES, activeCap]);
 
-        let updated = 0;
-        for (const shipment of shipments) {
-            try {
-                if (await syncShipment(shipment)) updated++;
-            } catch (error) {
-                console.error(`⚠️ Status sync failed for shipment #${shipment.id} (AWB ${shipment.awb}):`, error.message);
-            }
-            if (shipments.length > 1) await sleep(PER_CALL_DELAY_MS);
-        }
+        // Self-heal pass. rto_delivered is deliberately excluded from
+        // RTO_RECHECK_STATUSES — a settled return can never move forward again.
+        const rto = rtoCap > 0
+            ? await runPass(`
+                SELECT ${SYNC_COLUMNS} FROM shipments
+                WHERE awb IS NOT NULL AND awb <> ''
+                  AND status IN (${rtoPlaceholders})
+                  AND created_at > NOW() - (? || ' days')::interval
+                ORDER BY updated_at ASC NULLS FIRST
+                LIMIT ?
+            `, [...RTO_RECHECK_STATUSES, String(RTO_RECHECK_DAYS), rtoCap])
+            : { checked: 0, updated: 0 };
+
+        const checked = active.checked + rto.checked;
+        const updated = active.updated + rto.updated;
 
         if (updated > 0 && caches && caches.shoppers) {
             caches.shoppers.clear();
@@ -510,10 +581,10 @@ async function syncActiveShipments({ limit = 60 } = {}) {
         }
 
         lastRunAt = new Date();
-        if (shipments.length > 0) {
-            console.log(`🔄 Shipment status sync: checked ${shipments.length}, updated ${updated}`);
+        if (checked > 0) {
+            console.log(`🔄 Shipment status sync: checked ${checked} (${active.checked} active + ${rto.checked} RTO recheck), updated ${updated}`);
         }
-        return { checked: shipments.length, updated };
+        return { checked, activeChecked: active.checked, rtoChecked: rto.checked, updated };
     } finally {
         isRunning = false;
     }

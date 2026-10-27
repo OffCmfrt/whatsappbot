@@ -1173,25 +1173,52 @@ class ShiprocketAdapter extends BaseCarrier {
             }
 
             const td = trackingData.tracking_data;
-            const timeline = (td.shipment_track_activities || []).map(a => ({
-                date: a.date,
-                location: a.location,
-                activity: a.activity,
-                status: a['sr-status-label'] || a.sr_status_label || ''
-            }));
+            const activities = td.shipment_track_activities || [];
 
             // Fresh shipments often have zero scans — fall back to Shiprocket's
             // numeric shipment_status code so the status sync still works pre-pickup.
             // IMPORTANT: codeStatus (from shipment_status) takes priority over
-            // timeline[0] because the timeline can contain a stale RTO scan while
-            // the shipment has since resumed transit.
+            // the newest scan because the scan list can contain a stale RTO entry
+            // while the shipment has since resumed transit.
             const codeStatus = SR_SHIPMENT_STATUS_CODES[Number(td.shipment_status)] || null;
+            const newestScanStatus = activities[0]
+                ? (activities[0]['sr-status-label'] || activities[0].sr_status_label || '')
+                : '';
 
-            return this.ok({
-                currentStatus: td.shipment_track?.[0]?.current_status || codeStatus || timeline[0]?.status || 'Unknown',
-                expectedDelivery: td.etd || null,
-                timeline
-            }, trackingData);
+            const data = {
+                currentStatus: td.shipment_track?.[0]?.current_status || codeStatus || newestScanStatus || 'Unknown',
+                expectedDelivery: td.etd || null
+            };
+
+            // The scan timeline is materialised LAZILY. The background sweep
+            // polls ~300 shipments per cycle and only reads the timeline for
+            // the handful that just became 'delivered' (extractDeliveredAt),
+            // so eagerly mapping every scan of every parcel burned CPU and
+            // allocated hundreds of throwaway objects per call. Hub endpoints
+            // that render the timeline still see a plain array: the first read
+            // builds it once and swaps the getter for a data property, and
+            // `enumerable` keeps JSON.stringify output byte-identical.
+            Object.defineProperty(data, 'timeline', {
+                enumerable: true,
+                configurable: true,
+                get() {
+                    const timeline = activities.map(a => ({
+                        date: a.date,
+                        location: a.location,
+                        activity: a.activity,
+                        status: a['sr-status-label'] || a.sr_status_label || ''
+                    }));
+                    Object.defineProperty(data, 'timeline', {
+                        value: timeline,
+                        enumerable: true,
+                        writable: true,
+                        configurable: true
+                    });
+                    return timeline;
+                }
+            });
+
+            return this.ok(data, trackingData);
         } catch (error) {
             return this.fail(`Shiprocket tracking failed: ${error.message}`);
         }
