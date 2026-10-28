@@ -5,7 +5,7 @@ const Customer = require('../models/Customer');
 const { dbAdapter } = require('../database/db');
 const { sanitizeInput, normalizePhone, getPhoneVariations } = require('../utils/validators');
 const { getPortalIdForNewTicket } = require('../utils/portalAssignment');
-const { invalidateCache } = require('../utils/cache');
+const { invalidateCache, invalidateCachePrefix } = require('../utils/cache');
 
 const autoSupportAgent = require('../services/ai/autoSupportAgent');
 
@@ -845,6 +845,11 @@ class MessageHandler {
                 status: 'received',
                 created_at: new Date().toISOString()
             });
+
+            // A new inbound message changes the inbox badge. Only the cheap badge
+            // counters are expired — clearing the whole 'unread' namespace would
+            // re-run the expensive conversation-list scan on every message.
+            if (type === 'incoming') invalidateCachePrefix('unread', 'chat_unread_count:');
 
             // Cleanup: Keep only last 200 messages per customer
             await this.cleanupOldMessages(phone);

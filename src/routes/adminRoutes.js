@@ -3456,73 +3456,107 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
             dateParams.push(utcEndDate);
         }
 
-        // Build search filter
-        let searchClause = '';
+        // Filters that reference the joined shopper/customer live on the outer query.
+        // Keeping them out of dateParams matters: those params belong to the
+        // messages sub-select only.
+        const filterClause = [];
+        const filterParams = [];
         if (search) {
-            searchClause += ' AND (c.name LIKE ? OR m.customer_phone LIKE ? OR s.order_id LIKE ?)';
+            filterClause.push('(c.name LIKE ? OR u.phone LIKE ? OR ls.order_id LIKE ?)');
             const searchParam = `%${search}%`;
-            dateParams.push(searchParam, searchParam, searchParam);
+            filterParams.push(searchParam, searchParam, searchParam);
         }
-
-        // Build action type filter (filter by shopper status)
-        let actionClause = '';
         if (actionType) {
-            actionClause += ' AND s.status = ?';
-            dateParams.push(actionType);
+            filterClause.push('ls.status = ?');
+            filterParams.push(actionType);
         }
+        const outerWhere = filterClause.length ? ` AND ${filterClause.join(' AND ')}` : '';
+        // The page always joins (it returns name/order/shopper columns); the count
+        // only joins when a filter actually references them.
+        const pageJoins = 'LEFT JOIN latest_shopper ls ON ls.phone = u.phone LEFT JOIN customers c ON c.phone = u.phone';
+        const countJoins = outerWhere ? pageJoins : '';
 
-        // Find phones with unread incoming messages (optimized with JOINs instead of correlated subqueries)
-        const unreadSql = `
-            SELECT m.customer_phone as phone,
-                   MAX(m.created_at) as last_message_at,
-                   COUNT(*) as unread_count,
-                   MAX(m.message_content) as latest_message,
-                   MAX(c.name) as name,
-                   MAX(ls.id) as shopper_id,
-                   MAX(ls.order_id) as order_id,
-                   MAX(ls.status) as status,
-                   MAX(ls.order_total) as order_total,
-                   MAX(ls.delivery_type) as delivery_type,
-                   MAX(ls.payment_method) as payment_method,
-                   MAX(ls.confirmed_by) as confirmed_by,
-                   MAX(ls.created_at) as created_at,
-                   MAX(ls.updated_at) as updated_at,
-                   MAX(ls.last_response_at) as last_response_at
-            FROM messages m
-            LEFT JOIN (
-                SELECT s1.id, s1.phone, s1.order_id, s1.status, s1.order_total,
+        // Latest shopper row per phone. DISTINCT ON walks
+        // idx_store_shoppers_phone_created; the previous shape recomputed this
+        // with a GROUP BY self-join over the whole table on every request.
+        const latestShopperCte = `latest_shopper AS (
+                SELECT DISTINCT ON (s1.phone)
+                       s1.phone, s1.id, s1.order_id, s1.status, s1.order_total,
                        s1.delivery_type, s1.payment_method, s1.confirmed_by,
                        s1.created_at, s1.updated_at, s1.last_response_at
                 FROM store_shoppers s1
-                INNER JOIN (
-                    SELECT phone, MAX(created_at) as max_created
-                    FROM store_shoppers
-                    GROUP BY phone
-                ) s2 ON s1.phone = s2.phone AND s1.created_at = s2.max_created
-            ) ls ON ls.phone = m.customer_phone
-            LEFT JOIN customers c ON c.phone = m.customer_phone
-            WHERE m.message_type = 'incoming'
-              AND NOT EXISTS (SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id)
-              ${dateClause}
-              ${searchClause}
-              ${actionClause}
-            GROUP BY m.customer_phone
-            ORDER BY last_message_at DESC
+                ORDER BY s1.phone, s1.created_at DESC
+            )`;
+
+        // One row per phone: the newest unread inbound message.
+        // The old GROUP BY + MAX(message_content) + MAX() per shopper column
+        // aggregated every unread message (41k rows), spilled a 5MB sort to disk
+        // and took ~7.9s — long enough to consume the whole pool.
+        const unreadSql = `
+            WITH unread AS (
+                SELECT DISTINCT ON (m.customer_phone)
+                       m.customer_phone AS phone,
+                       m.created_at     AS last_message_at,
+                       m.message_content AS latest_message
+                FROM messages m
+                WHERE m.message_type = 'incoming'
+                  AND NOT EXISTS (SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id)
+                  ${dateClause}
+                ORDER BY m.customer_phone, m.created_at DESC
+            ),
+            ${latestShopperCte}
+            SELECT u.phone, u.last_message_at, u.latest_message,
+                   ls.id AS shopper_id, ls.order_id, ls.status, ls.order_total,
+                   ls.delivery_type, ls.payment_method, ls.confirmed_by,
+                   ls.created_at, ls.updated_at, ls.last_response_at,
+                   c.name
+            FROM unread u
+            ${pageJoins}
+            WHERE 1=1 ${outerWhere}
+            ORDER BY u.last_message_at DESC
             LIMIT ? OFFSET ?
         `;
-        const shoppers = await dbAdapter.query(unreadSql, [...dateParams, parseInt(limit), parseInt(offset)]);
+        const pageRows = await dbAdapter.query(unreadSql, [...dateParams, ...filterParams, parseInt(limit), parseInt(offset)]);
 
-        // Get total count of phones with unread messages (optimized)
+        // unread_count for the phones on this page only (~2ms, index-backed)
+        const pagePhones = pageRows.map(row => row.phone);
+        let counts = [];
+        if (pagePhones.length) {
+            counts = await dbAdapter.query(`
+                SELECT m.customer_phone AS phone, COUNT(*)::int AS unread_count
+                FROM messages m
+                WHERE m.customer_phone = ANY(?)
+                  AND m.message_type = 'incoming'
+                  AND NOT EXISTS (SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id)
+                  ${dateClause}
+                GROUP BY m.customer_phone
+            `, [pagePhones, ...dateParams]);
+        }
+        const unreadCountByPhone = new Map(counts.map(row => [row.phone, row.unread_count]));
+        const shoppers = pageRows.map(row => ({
+            ...row,
+            unread_count: unreadCountByPhone.get(row.phone) || 0
+        }));
+
+        // Total conversations with unread messages. The joins are skipped when no
+        // filter references them, which keeps the badge count query cheap.
         const countSql = `
-            SELECT COUNT(DISTINCT m.customer_phone) as total
-            FROM messages m
-            WHERE m.message_type = 'incoming'
-              AND NOT EXISTS (SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id)
-              ${dateClause}
-              ${searchClause}
-              ${actionClause}
+            WITH unread AS (
+                SELECT DISTINCT ON (m.customer_phone) m.customer_phone AS phone
+                FROM messages m
+                WHERE m.message_type = 'incoming'
+                  AND NOT EXISTS (SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id)
+                  ${dateClause}
+                ORDER BY m.customer_phone, m.created_at DESC
+            )
+            ${outerWhere ? `, ${latestShopperCte}` : ''}
+            SELECT COUNT(*)::int AS total
+            FROM unread u
+            ${countJoins}
+            WHERE 1=1 ${outerWhere}
         `;
-        const countRes = await dbAdapter.query(countSql, dateParams);
+        const countParams = outerWhere ? [...dateParams, ...filterParams] : [...dateParams];
+        const countRes = await dbAdapter.query(countSql, countParams);
         const total = countRes[0]?.total || 0;
 
         const result = {
@@ -3533,13 +3567,59 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
         };
 
         if (!search) {
-            setCache(chatCacheKey, result, 'shoppers', 2 * 60 * 1000); // 2 minutes TTL
+            // Dedicated namespace: confirming an order clears the 'shoppers' cache,
+            // which used to wipe this entry and force the full scan again.
+            setCache(chatCacheKey, result, 'unread', 90 * 1000);
         }
 
         res.json(result);
     } catch (error) {
         console.error('Unread messages fetch error:', error);
         res.status(500).json({ error: 'Failed to fetch unread messages' });
+    }
+});
+
+// Unread conversation count only — the inbox badge used to call
+// /chat/unread?limit=1, which still ran the full conversation scan.
+router.get('/chat/unread/count', verifyToken, async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+        const cacheKey = `chat_unread_count:${startDate || 'all'}:${endDate || 'all'}`;
+        const cached = getCached(cacheKey);
+        if (cached) return res.json(cached);
+
+        let dateClause = '';
+        const dateParams = [];
+        if (startDate) {
+            const startDateTime = startDate.includes('T') ? startDate : `${startDate} 00:00:00`;
+            const utcStartDate = fromISTtoUTC(startDateTime) || startDateTime;
+            dateClause += ' AND m.created_at >= ?';
+            dateParams.push(utcStartDate);
+        }
+        if (endDate) {
+            const endDateTime = endDate.includes('T') ? endDate : `${endDate} 23:59:59`;
+            const utcEndDate = fromISTtoUTC(endDateTime) || endDateTime;
+            dateClause += ' AND m.created_at <= ?';
+            dateParams.push(utcEndDate);
+        }
+
+        const rows = await dbAdapter.query(`
+            SELECT COUNT(*)::int AS total FROM (
+                SELECT DISTINCT ON (m.customer_phone) m.customer_phone
+                FROM messages m
+                WHERE m.message_type = 'incoming'
+                  AND NOT EXISTS (SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id)
+                  ${dateClause}
+                ORDER BY m.customer_phone, m.created_at DESC
+            ) unread
+        `, dateParams);
+
+        const result = { success: true, total: rows[0]?.total || 0 };
+        setCache(cacheKey, result, 'unread', 60 * 1000);
+        res.json(result);
+    } catch (error) {
+        console.error('Unread count fetch error:', error);
+        res.status(500).json({ error: 'Failed to fetch unread count' });
     }
 });
 
@@ -3712,6 +3792,8 @@ router.post('/chat/mark-read/:phone', verifyToken, async (req, res) => {
             }
         }
 
+        // Badge/list cache is now stale — this conversation was just read
+        invalidateCache('unread');
         res.json({ success: true, marked: markedCount });
     } catch (error) {
         console.error('Mark read error:', error);
@@ -6264,11 +6346,18 @@ router.get('/shipping/shipments/:id/track', verifyToken, async (req, res) => {
 // advances statuses (pickup_scheduled → in_transit → delivered / rto).
 // Fired in the background when the Shipped Orders view opens/refreshes;
 // the 30-min cron (shipmentSyncCron) covers everything in between.
+// Single-flight: the UI fires this on every refresh, and overlapping runs used
+// to pile up carrier calls plus their DB writes on the same small pool.
+let syncStatusesInFlight = null;
 router.post('/shipping/sync-statuses', verifyToken, async (req, res) => {
     try {
         const shipmentSyncService = require('../services/shipmentSyncService');
         const limit = Math.min(parseInt(req.body?.limit) || 60, 200);
-        const result = await shipmentSyncService.syncActiveShipments({ limit });
+        if (!syncStatusesInFlight) {
+            syncStatusesInFlight = shipmentSyncService.syncActiveShipments({ limit })
+                .finally(() => { syncStatusesInFlight = null; });
+        }
+        const result = await syncStatusesInFlight;
         res.json({ success: true, ...result });
     } catch (error) {
         console.error('Shipping status sync error:', error);
@@ -6319,6 +6408,10 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
         // Memory/CPU optimization: skip 3 joins for counts & stats unless search requires them
         const countFrom = search ? baseFrom : ' FROM shipments s ';
 
+        // Status counters and the carrier list only change when the underlying
+        // shipments do, and they are display-only — 60s of staleness beats
+        // re-scanning 34k shipment rows on every view refresh (~0.8-1s each).
+        const statsCacheKey = `ship_stats:${where}:${JSON.stringify(params)}`;
         const [rows, countRows, statsRows, carrierRows] = await Promise.all([
             dbAdapter.query(`
                 SELECT s.id, s.order_id, s.shopper_id, s.carrier, s.carrier_shipment_id, s.carrier_order_id,
@@ -6341,7 +6434,7 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
                 LIMIT ? OFFSET ?
             `, [...params, safeLimit, safeOffset]),
             dbAdapter.query(`SELECT COUNT(*)::int AS total ${countFrom}${where}`, params),
-            dbAdapter.query(`
+            caches.queries.getOrLoad(statsCacheKey, () => dbAdapter.query(`
                 SELECT COUNT(*)::int AS total,
                        COUNT(*) FILTER (WHERE s.status IN ('created', 'awb_assigned'))::int AS ready_to_ship,
                        COUNT(*) FILTER (WHERE s.status = 'pickup_scheduled')::int AS pickup_scheduled,
@@ -6357,8 +6450,9 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
                        COALESCE(SUM(s.cod_amount) FILTER (WHERE s.payment_mode = 'COD' AND s.status NOT IN ('cancelled', 'failed', 'rto')), 0)::float AS cod_value,
                        COALESCE(SUM(s.freight_charge) FILTER (WHERE s.status NOT IN ('cancelled', 'failed')), 0)::float AS freight_total
                 ${countFrom}${where}
-            `, params),
-            dbAdapter.query(`SELECT DISTINCT carrier FROM shipments ORDER BY carrier`)
+            `, params), 60 * 1000),
+            caches.queries.getOrLoad('ship_carriers', () =>
+                dbAdapter.query(`SELECT DISTINCT carrier FROM shipments ORDER BY carrier`), 5 * 60 * 1000)
         ]);
 
         res.json({

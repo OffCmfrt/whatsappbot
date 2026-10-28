@@ -5,10 +5,26 @@ require('dotenv').config();
 const pool = new Pool({
   connectionString: process.env.SUPABASE_DB_URL,
   ssl: { rejectUnauthorized: false },
-  max: 5, // Keep at 5 for concurrent DB operations
+  application_name: 'offcomfrt-bot',
+  // max was 5 — a single slow dashboard burst then occupied every slot and
+  // every other request queued until the 15s connect timeout fired
+  // ("timeout exceeded when trying to connect" in the webhook/widget/portal paths).
+  max: 10,
   min: 0, // Allow all connections to close when idle (saves ~10MB native)
   idleTimeoutMillis: 10000, // Close idle connections after 10s (was 20s)
-  connectionTimeoutMillis: 15000 // Allow up to 15s during warm-up bursts
+  connectionTimeoutMillis: 15000, // Allow up to 15s during warm-up bursts
+  // Client-side guard: a query that never returns must not pin a pool slot forever
+  query_timeout: 35000
+});
+
+// Per-connection session tuning. work_mem is the important one: the default 4MB
+// forced the unread-conversation sort (5MB) to spill to a temp file on this
+// instance's very slow temp storage — 4-13s per run vs ~400ms with 16MB.
+// statement_timeout caps a runaway plan so it cannot starve the pool for minutes.
+pool.on('connect', (client) => {
+  client.query("SET work_mem = '16MB'; SET statement_timeout = '30s'").catch((err) => {
+    console.error('⚠️ pg session setup failed:', err.message);
+  });
 });
 
 // CRITICAL: handle background errors from idle pooled connections.
@@ -74,19 +90,32 @@ class DatabaseAdapter {
     return 'SUPABASE';
   }
 
-  // Execute a raw SQL query
+  // Execute a raw SQL query.
+  // Acquires the client explicitly so pool-queue time can be reported separately
+  // from execution time — the old log conflated the two, which is why a 0.2ms
+  // hub_operators primary-key lookup appeared as a 14s "slow query".
   async query(sql, params = []) {
-    const start = Date.now();
     const pgSql = convertPlaceholders(sql);
     const values = params.map(v => v === undefined ? null : v);
-    const result = await pool.query(pgSql, values);
-    const duration = Date.now() - start;
-    
-    // Log slow queries (>100ms)
-    if (duration > 100) {
-      console.warn(`⚠️ SLOW QUERY (${duration}ms): ${sql.substring(0, 100)}`);
+    const queuedAt = Date.now();
+    const client = await pool.connect();
+    const acquiredAt = Date.now();
+    let result;
+    try {
+      result = await client.query(pgSql, values);
+    } catch (err) {
+      client.release(err);
+      throw err;
     }
-    
+    const duration = Date.now() - acquiredAt;
+    const poolWait = acquiredAt - queuedAt;
+    client.release();
+
+    // Log slow queries (>100ms) and any query that had to wait for a connection
+    if (duration > 100 || poolWait > 250) {
+      console.warn(`⚠️ SLOW QUERY (${duration}ms exec, ${poolWait}ms pool wait, pool ${pool.totalCount}/${pool.options.max}): ${sql.substring(0, 100)}`);
+    }
+
     return result.rows;
   }
 
@@ -1017,7 +1046,27 @@ async function initializePerformanceIndexes() {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_orderid_updated ON store_shoppers(order_id, updated_at DESC)');
     // ── store_shoppers: composite for phone dedup (chat unread JOIN) ──
     await pool.query('CREATE INDEX IF NOT EXISTS idx_store_shoppers_phone_created ON store_shoppers(phone, created_at DESC)');
-    
+
+    // ── store_shoppers: status + order_id for the paginated count on the
+    // shoppers list. Without it the planner used idx_ss_inv_cover (59MB because
+    // it INCLUDEs items_json) and the count took 4.4s instead of ~140ms. ──
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_ss_status_order ON store_shoppers(status, order_id)');
+
+    // ── shipments: sort key for the Shipped Orders list (was a full seq scan +
+    // sort of 34k rows on every refresh: ~900ms) ──
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_created_at ON shipments(created_at DESC)');
+
+    // ── messages: no extra index for the unread-conversation scan. A partial
+    // (customer_phone, created_at DESC) WHERE message_type='incoming' index was
+    // measured against the live table: the planner kept using
+    // idx_messages_type_created + an in-memory sort (253ms either way), so it was
+    // dropped rather than left as write overhead. ──
+
+    // ── Dead weight: this 63MB covering index was never scanned once in
+    // production. idx_ss_inv_cover covers the same (status, created_at) prefix
+    // for the inventory queries, so dropping it only removes write overhead. ──
+    await pool.query('DROP INDEX IF EXISTS idx_store_shoppers_inv_intel');
+
     console.log('✅ Performance indexes initialized');
   } catch (error) {
     console.error('❌ Failed to initialize performance indexes:', error.message);

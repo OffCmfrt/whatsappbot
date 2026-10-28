@@ -1315,7 +1315,9 @@ async function fetchInboxCounts() {
         const dateParam = dateQs.length > 0 ? '&' + dateQs.join('&') : '';
 
         const [unreadData, confirmedData, analyticsData] = await Promise.all([
-            apiCall(`/chat/unread?limit=1${dateParam}`),
+            // Badge number only — /chat/unread?limit=1 still ran the full
+            // conversation scan, so it now has a dedicated count endpoint
+            apiCall(`/chat/unread/count${dateParam ? `?${dateParam.slice(1)}` : ''}`),
             apiCall(`/shoppers/recent-confirmed?limit=1${dateParam}`),
             apiCall('/chat/analytics/overview')
         ]);

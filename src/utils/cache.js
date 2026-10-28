@@ -160,6 +160,10 @@ const caches = {
   
   // Shopper data
   shoppers: new LRUCache(100, 90 * 1000),       // 100 entries, 90s TTL
+
+  // Inbox unread conversations (expensive DISTINCT ON scan, own namespace so
+  // confirming an order — which clears 'shoppers' — does not wipe it)
+  unread: new LRUCache(40, 90 * 1000),          // 40 entries, 90s TTL
 };
 
 // Cache key generator for queries
@@ -190,6 +194,22 @@ function invalidateCache(cacheName = null, key = null) {
     // Clear all caches
     Object.values(caches).forEach(cache => cache.clear());
   }
+}
+
+// Drop every entry in a cache whose key starts with a given prefix.
+// Used to expire only the cheap badge counters when a new message arrives,
+// leaving the expensive conversation-list cache intact.
+function invalidateCachePrefix(cacheName, prefix) {
+  const cache = caches[cacheName];
+  if (!cache) return 0;
+  let removed = 0;
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) {
+      cache.delete(key);
+      removed++;
+    }
+  }
+  return removed;
 }
 
 // Get cache statistics
@@ -251,6 +271,7 @@ module.exports = {
   cachedQuery,
   generateQueryKey,
   invalidateCache,
+  invalidateCachePrefix,
   getCacheStats,
   getCached,
   setCache,
