@@ -270,14 +270,17 @@ async function createExchangeReplacementInvoice({ shopifyOrder, orderId, exchang
     const resolver = createItemResolver();
     const zohoLines = [];
     for (const li of lineItems) {
+        // breakBundleLineItems strips the size from size-suffixed titles — put
+        // it back so the line matches the size-specific catalog item.
+        const lineName = withSizeInTitle(li.name, li.variant);
         const line = {
-            name: li.name,
+            name: lineName,
             description: 'Exchange replacement item',
             quantity: li.quantity,
             rate: 0,
             discount: 0
         };
-        const item = await resolver.resolve(li.sku || li.name);
+        const item = await resolver.resolve(lineName) || (li.sku ? await resolver.resolve(li.sku) : null);
         if (item?.item_id) line.item_id = item.item_id;
         zohoLines.push(line);
     }
@@ -483,14 +486,150 @@ async function handleRTO(shopifyOrder, carrierInfo = {}) {
 }
 
 /**
+ * Pass a non-exchanged invoice line through untouched — same name, quantity,
+ * rate, discount and GST split (shipping, COD, items outside the exchange).
+ */
+function preserveInvoiceLine(line) {
+    const preserved = {
+        name: line.name,
+        description: line.description || line.name,
+        quantity: parseFloat(line.quantity || 1),
+        rate: parseFloat(line.rate || 0),
+        discount: parseFloat(line.discount || 0),
+        is_inclusive_tax: true
+    };
+    if (line.item_id) preserved.item_id = line.item_id;
+    // Preserve tax treatment from the original line
+    const tax = taxFromInvoiceLine(line);
+    if (tax.cgst_rate) preserved.cgst_rate = tax.cgst_rate;
+    if (tax.sgst_rate) preserved.sgst_rate = tax.sgst_rate;
+    if (tax.igst_rate) preserved.igst_rate = tax.igst_rate;
+    if (tax.tax_percentage) preserved.tax_percentage = tax.tax_percentage;
+    return preserved;
+}
+
+/**
+ * Swap the invoice lines that were returned/exchanged for the replacement
+ * product or variant. Each replacement inherits the rate, discount and GST
+ * split of the line it replaces, so the invoice total — and the payments
+ * already recorded against it — stay balanced. Bundles are expanded into
+ * size-wise singles like everywhere else.
+ */
+async function buildExchangeCorrectedLines({ invoiceLines, originalItems, exchangedItems }) {
+    const bundleMap = await loadBundleMap();
+    const resolver = createItemResolver();
+
+    const lines = (invoiceLines || []).map(l => ({ ...l, _matched: false }));
+    const norm = (s) => String(s || '').toUpperCase().replace(/\s+/g, ' ').trim();
+
+    // Find the invoice line a returned/exchanged item came from
+    const findOrigLine = (item) => {
+        const keys = [item.sku, item.title].filter(Boolean);
+        for (const key of keys) {
+            const hit = lines.find(l =>
+                !l._matched && (
+                    norm(l.sku || '') === norm(key) ||
+                    norm(l.name || '') === norm(key) ||
+                    (key.length > 3 && (norm(l.name || '').includes(norm(key)) || norm(key).includes(norm(l.name || ''))))
+                )
+            );
+            if (hit) return hit;
+        }
+        return null;
+    };
+
+    for (const orig of originalItems || []) {
+        const line = findOrigLine(orig);
+        if (line) line._matched = true;
+    }
+
+    // Catalog renames make SKU/title matching drift — fall back to positional
+    // matching against the invoice's product lines so the swap still happens.
+    if (!lines.some(l => l._matched)) {
+        const isProductLine = (l) => {
+            const name = (l.name || '').toLowerCase();
+            const desc = (l.description || '').toLowerCase();
+            return !(name.includes('shipping') || desc.includes('shipping')
+                || name.includes('cod') || desc.includes('cod')
+                || name.includes('cash on delivery') || desc.includes('cash on delivery'));
+        };
+        const productLines = lines.filter(isProductLine);
+        const wanted = Math.max((originalItems || []).length, 1);
+        for (let i = 0; i < Math.min(wanted, productLines.length); i++) productLines[i]._matched = true;
+    }
+
+    const rawExchanged = (exchangedItems || []).map(i => ({
+        title: withSizeInTitle(i.title || '', i.variant || ''),
+        sku: i.sku || '',
+        quantity: parseInt(i.quantity || 1) || 1,
+        price: 0,
+        variant: i.variant || ''
+    }));
+    const { lineItems: brokenExchanged } = breakBundleLineItems(rawExchanged, bundleMap);
+
+    const buildLine = async (exItem, origLine) => {
+        // breakBundleLineItems strips a size-suffixed title back to the base
+        // name and keeps the size in `variant` — re-attach it so the Zoho
+        // catalog name (and therefore the stock item) stays size-specific.
+        const lineName = withSizeInTitle(exItem.name, exItem.variant);
+        const line = {
+            name: lineName,
+            description: `Exchange replacement — ${lineName}`,
+            quantity: exItem.quantity,
+            // Money does not move on an exchange: bill the replacement at the
+            // rate the customer actually paid for the item it replaces.
+            rate: parseFloat(origLine?.rate || 0),
+            discount: parseFloat(origLine?.discount || 0),
+            is_inclusive_tax: true
+        };
+        if (origLine) {
+            const tax = taxFromInvoiceLine(origLine);
+            if (tax.cgst_rate) line.cgst_rate = tax.cgst_rate;
+            if (tax.sgst_rate) line.sgst_rate = tax.sgst_rate;
+            if (tax.igst_rate) line.igst_rate = tax.igst_rate;
+            if (tax.tax_percentage) line.tax_percentage = tax.tax_percentage;
+        }
+        // Resolve by NAME first — the exchange SKU can still be the ORIGINAL
+        // item's SKU, which would link the line to the wrong stock item.
+        let item = await resolver.resolve(lineName);
+        if (!item?.item_id && exItem.sku) item = await resolver.resolve(exItem.sku);
+        if (item?.item_id) line.item_id = item.item_id;
+        else console.warn(`⚠️ Zoho exchange: no catalog item for "${lineName}" — line created without item_id (no stock movement)`);
+        return line;
+    };
+
+    const corrected = [];
+    let exIdx = 0;
+    for (const line of lines) {
+        if (!line._matched) {
+            corrected.push(preserveInvoiceLine(line));
+            continue;
+        }
+        const exItem = brokenExchanged[exIdx++];
+        if (!exItem) continue; // fewer replacement items than original lines
+        corrected.push(await buildLine(exItem, line));
+    }
+    // More replacement items than matched originals (a swap that turned into
+    // two pieces) — append the remainder rather than dropping them.
+    for (; exIdx < brokenExchanged.length; exIdx++) {
+        corrected.push(await buildLine(brokenExchanged[exIdx], null));
+    }
+    return corrected;
+}
+
+/**
  * Correct the original Zoho invoice after an exchange so it shows the
- * NEW items the customer actually received (e.g. Henley S instead of M).
+ * NEW product/variant the customer actually received (e.g. Henley S
+ * instead of M).
  *
- * Flow: delete credit note → delete payments → delete original invoice →
- * create new invoice with exchanged items → re-record payments.
+ * Flow: drop the exchange credit note → re-line the original invoice with
+ * the replacement items (in place, keeping invoice number and payments).
+ * Only when Books refuses the edit: delete invoice → recreate → re-record
+ * payments.
  *
- * Stock effect: old invoice deletion returns original stock, new invoice
- * deduction removes exchanged items — net effect is correct.
+ * Stock effect: Books derives item-wise stock from the invoice lines, so the
+ * old variant returns and the replacement variant is deducted — the same net
+ * effect as deleting and recreating, without losing the invoice number.
  */
 async function correctOriginalInvoiceForExchange({ shopifyOrder, orderId, originalItems, exchangedItems, creditNoteId, customerId }) {
     if (!exchangedItems?.length) return { success: false, reason: 'no_exchanged_items' };
@@ -499,24 +638,63 @@ async function correctOriginalInvoiceForExchange({ shopifyOrder, orderId, origin
     const originalInvoice = await findInvoiceForOrder(orderId);
     if (!originalInvoice) return { success: false, reason: 'no_original_invoice' };
 
-    const fullInvoice = await fetchFullInvoice(originalInvoice);
+    let fullInvoice = await fetchFullInvoice(originalInvoice);
     if (!fullInvoice?.line_items?.length) return { success: false, reason: 'no_invoice_lines' };
 
     const invoiceId = fullInvoice.invoice_id;
 
-    // 2. Delete the exchange credit note first (it's linked to the invoice;
-    //    Zoho may block invoice deletion while a credit note references it)
+    // 2. Delete the exchange credit note first — the invoice itself is about
+    //    to bill the replacement items, so keeping the credit would reverse
+    //    the order twice and leave the recorded payments unapplied.
     if (creditNoteId) {
         try {
             await zohoService.deleteCreditNote(creditNoteId);
             console.log(`🗑️ Zoho exchange correction: deleted credit note ${creditNoteId}`);
+            fullInvoice = await fetchFullInvoice(originalInvoice);
         } catch (e) {
             console.warn(`⚠️ Zoho exchange correction: credit note delete failed (${e.message}) — continuing`);
         }
     }
 
-    // 3. Fetch and delete payments on the original invoice
-    //    (Zoho blocks invoice deletion when payments exist)
+    // Guard: credits still applied to the invoice mean the reversal could not
+    // be removed — re-lining now would credit the order twice.
+    const creditsApplied = parseFloat(fullInvoice?.credits_applied) || 0;
+    if (creditsApplied > 0.01) {
+        console.warn(`⚠️ Zoho exchange correction: invoice ${invoiceId} still carries ₹${creditsApplied.toFixed(2)} in applied credits — leaving it for manual review (order #${orderId})`);
+        return { success: false, reason: 'credits_applied', creditsApplied };
+    }
+
+    // 3. Build the corrected lines: every returned item's invoice line is
+    //    replaced by the product/variant the customer actually received
+    const correctedLines = await buildExchangeCorrectedLines({
+        invoiceLines: fullInvoice.line_items,
+        originalItems,
+        exchangedItems
+    });
+
+    // 4. Preferred fix: re-line the ORIGINAL invoice in place. Invoice number,
+    //    date and payments survive, and Books moves the stock (old variant
+    //    back, replacement variant out) because stock follows the lines.
+    try {
+        const updated = await zohoService.updateInvoice(
+            invoiceId,
+            { line_items: correctedLines, is_inclusive_tax: true },
+            `Exchange: product/variant replaced with what the customer received (order #${orderId})`
+        );
+        console.log(`✅ Zoho exchange correction: order #${orderId} → invoice ${invoiceId} now bills the replacement item(s)`);
+        const delta = parseFloat(updated?.total) - parseFloat(fullInvoice.total);
+        if (Number.isFinite(delta) && Math.abs(delta) > 0.01) {
+            console.warn(`⚠️ Zoho exchange correction: invoice ${invoiceId} total moved ₹${delta.toFixed(2)} — review payments for order #${orderId}`);
+        }
+        return { success: true, newInvoiceId: invoiceId, inPlace: true };
+    } catch (e) {
+        console.warn(`⚠️ Zoho exchange correction: in-place re-line rejected for #${orderId} (${e.message}) — falling back to invoice replacement`);
+    }
+
+    // 5. Fallback for invoices Books refuses to edit (locked/paid/audited):
+    //    remove payments → delete invoice → recreate with the corrected lines
+    //    → re-record the payments. Rates are carried over, so the recreated
+    //    invoice keeps the amount the customer actually paid.
     let deletedPayments = [];
     try {
         const payments = await zohoService.getPayments(invoiceId, fullInvoice.invoice_number);
@@ -537,7 +715,6 @@ async function correctOriginalInvoiceForExchange({ shopifyOrder, orderId, origin
         console.warn(`⚠️ Zoho exchange correction: payment fetch failed (${e.message})`);
     }
 
-    // 4. Delete the original invoice
     try {
         await zohoService.deleteInvoice(invoiceId);
         console.log(`🗑️ Zoho exchange correction: deleted invoice ${invoiceId}`);
@@ -546,90 +723,12 @@ async function correctOriginalInvoiceForExchange({ shopifyOrder, orderId, origin
         return { success: false, reason: 'delete_failed', error: e.message };
     }
 
-    // 5. Build new line items with exchanged products
-    const bundleMap = await loadBundleMap();
-    const resolver = createItemResolver();
-
-    // Map original invoice lines → track which are exchanged
-    const invoiceLines = (fullInvoice.line_items || []).map(l => ({ ...l, _matched: false }));
-
-    const findOrigLine = (item) => {
-        const keys = [item.sku, item.title].filter(Boolean);
-        for (const key of keys) {
-            const norm = (s) => String(s || '').toUpperCase().replace(/\s+/g, ' ').trim();
-            const hit = invoiceLines.find(l =>
-                !l._matched && (
-                    norm(l.sku || '') === norm(key) ||
-                    norm(l.name || '') === norm(key) ||
-                    (key.length > 3 && (norm(l.name || '').includes(norm(key)) || norm(key).includes(norm(l.name || ''))))
-                )
-            );
-            if (hit) return hit;
-        }
-        return null;
-    };
-
-    // Mark matched lines
-    for (const orig of originalItems) {
-        const line = findOrigLine(orig);
-        if (line) line._matched = true;
-    }
-
-    // Build new lines: exchanged items replace the matched original lines
-    const newLines = [];
-    const rawExchanged = exchangedItems.map(i => ({
-        title: withSizeInTitle(i.title || '', i.variant || ''),
-        sku: i.sku || '',
-        quantity: parseInt(i.quantity || 1) || 1,
-        price: 0,
-        variant: i.variant || ''
-    }));
-    const { lineItems: brokenExchanged } = breakBundleLineItems(rawExchanged, bundleMap);
-
-    for (const exItem of brokenExchanged) {
-        const desc = exItem.variant
-            ? `${exItem.name} (${exItem.variant})`
-            : (exItem.name || 'Item');
-        const line = {
-            name: exItem.name,
-            description: desc,
-            quantity: exItem.quantity,
-            rate: 0,
-            discount: 0,
-            is_inclusive_tax: true
-        };
-        const item = await resolver.resolve(exItem.sku || exItem.name);
-        if (item?.item_id) line.item_id = item.item_id;
-        newLines.push(line);
-    }
-
-    // Preserve non-exchanged lines (shipping, other items not exchanged)
-    for (const line of invoiceLines) {
-        if (line._matched) continue;
-        const preserved = {
-            name: line.name,
-            description: line.description || line.name,
-            quantity: parseFloat(line.quantity || 1),
-            rate: parseFloat(line.rate || 0),
-            discount: parseFloat(line.discount || 0),
-            is_inclusive_tax: true
-        };
-        if (line.item_id) preserved.item_id = line.item_id;
-        // Preserve tax treatment from original line
-        const tax = taxFromInvoiceLine(line);
-        if (tax.cgst_rate) preserved.cgst_rate = tax.cgst_rate;
-        if (tax.sgst_rate) preserved.sgst_rate = tax.sgst_rate;
-        if (tax.igst_rate) preserved.igst_rate = tax.igst_rate;
-        if (tax.tax_percentage) preserved.tax_percentage = tax.tax_percentage;
-        newLines.push(preserved);
-    }
-
-    // 6. Create the new invoice with exchanged items
+    // 6. Recreate the invoice with the replacement lines
     const newPayload = {
         customer_id: fullInvoice.customer_id || customerId || undefined,
         date: fullInvoice.date || new Date().toISOString().split('T')[0],
         payment_terms: 0,
-        line_items: newLines,
+        line_items: correctedLines,
         notes: fullInvoice.notes || `Shopify Order #${orderId}`,
         reference_number: fullInvoice.reference_number,
         is_inclusive_tax: true,
@@ -723,12 +822,13 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
             extraNotes: exchangedSummary ? `Exchanged for: ${exchangedSummary}` : ''
         });
 
-        // Correct the original invoice to show the NEW items the customer
-        // actually received (e.g. Henley S instead of Henley M). This
-        // deletes the old invoice and creates a new one with exchanged
-        // items, so Zoho always reflects reality. Payments are re-recorded.
+        // Correct the original invoice so it bills the product/variant the
+        // customer actually received (e.g. Henley S instead of Henley M).
+        // The invoice is re-lined in place; only if Books refuses the edit is
+        // it deleted and recreated. Recorded payments survive either way.
         let replacementInvoiceId = null;
         let correctedInvoiceId = null;
+        let correctionReason = null;
         try {
             const correction = await correctOriginalInvoiceForExchange({
                 shopifyOrder,
@@ -740,14 +840,19 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
             });
             if (correction.success) {
                 correctedInvoiceId = correction.newInvoiceId;
+            } else {
+                correctionReason = correction.reason || null;
             }
         } catch (corrErr) {
+            correctionReason = corrErr.message;
             console.warn(`⚠️ Zoho exchange: invoice correction failed for #${orderId}: ${corrErr.message} — falling back to replacement invoice`);
         }
 
-        // Fallback: if correction failed, create a separate zero-value
-        // replacement invoice (old behaviour — stock deduction only)
-        if (!correctedInvoiceId) {
+        // Fallback: if the invoice could not be corrected at all, create a
+        // separate zero-value replacement invoice (old behaviour — stock
+        // deduction only). Skipped when credits are still applied, since that
+        // invoice needs manual review rather than a second document.
+        if (!correctedInvoiceId && correctionReason !== 'credits_applied') {
             try {
                 replacementInvoiceId = await createExchangeReplacementInvoice({
                     shopifyOrder,
