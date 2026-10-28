@@ -595,7 +595,7 @@ function setupEventListeners() {
     document.getElementById('backToShoppersFromShipped')?.addEventListener('click', hideShippedOrdersView);
     document.getElementById('refreshShippedBtn')?.addEventListener('click', () => { fetchShippedOrders(); syncShipmentStatuses(true); });
     document.getElementById('soSyncBtn')?.addEventListener('click', () => syncShipmentStatuses(true));
-    document.getElementById('soExportBtn')?.addEventListener('click', exportShippedCsv);
+    document.getElementById('soExportBtn')?.addEventListener('click', openSoExportModal);
 
     // Shipped Orders - New Forward Shipment (ship any order by its Order ID)
     document.getElementById('soNewShipBtn')?.addEventListener('click', openSoNewShipModal);
@@ -7364,41 +7364,314 @@ function soViewShipmentsFromLookup(shopperId, orderId) {
     openShipmentsDrawer(shopperId, orderId);
 }
 
-async function exportShippedCsv() {
-    showShipToast('Preparing CSV export...');
-    try {
-        const data = await apiCall('/shipping/history?' + buildSoParams(1000, 0).toString());
-        if (!data || !data.success) { showShipToast(data?.error || 'Export failed', true); return; }
-        const shipments = data.shipments || [];
-        if (shipments.length === 0) { showShipToast('Nothing to export for current filters', true); return; }
+// ============================================================
+// SHIPMENTS EXPORT — filter-aware CSV download
+// The old export asked /shipping/history for its first 1 000 rows, so anything
+// bigger was silently cut off, and it built the whole file as one string.
+// Now the dialog picks its own filters and the server streams the CSV in
+// 1 000-row batches: no row cap, flat memory on both ends.
+// ============================================================
+const SO_EXPORT_STATUS_OPTIONS = [
+    { key: 'ready', label: 'Ready' },
+    { key: 'pickup_scheduled', label: 'Pickup' },
+    { key: 'in_transit', label: 'In Transit' },
+    { key: 'delivered', label: 'Delivered' },
+    { key: 'rto', label: 'RTO' },
+    { key: 'rto_initiated', label: 'RTO Initiated' },
+    { key: 'rto_delivered', label: 'RTO Delivered' },
+    { key: 'untrackable', label: 'Untrackable' },
+    { key: 'cancelled', label: 'Cancelled' }
+];
+let soExportStatuses = new Set();
+let soExportCountTimer = null;
+let soExportCountSeq = 0;
+let soExportBound = false;
+let soExportRunning = false;
+let soExportAbort = null;
 
-        const cols = ['Order ID', 'Customer', 'Phone', 'Address', 'City', 'State', 'Pincode', 'Products', 'Carrier', 'Courier', 'AWB', 'Status', 'Payment', 'COD Amount', 'Order Total', 'Weight (g)', 'Freight', 'Pickup Date', 'Tracking URL', 'Shipped By', 'Created At'];
-        const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-        const rows = shipments.map(sh => {
-            const products = sh.items_json ? parseItemsWithQty(sh.items_json) : (sh.product_name || '');
-            return [
-                sh.order_id, sh.customer_name, sh.customer_phone, sh.customer_address, sh.customer_city,
-                sh.customer_state, sh.customer_pincode, products, sh.carrier, sh.courier_name, sh.awb, sh.status,
-                sh.payment_mode, sh.cod_amount, sh.order_total, sh.weight_grams, sh.freight_charge,
-                sh.pickup_date, sh.tracking_url, sh.shipped_by, sh.created_at
-            ].map(esc).join(',');
+function soExportEl(id) { return document.getElementById(id); }
+
+function soExportFilters() {
+    return {
+        statuses: Array.from(soExportStatuses).join(','),
+        carrier: soExportEl('soExportCarrier')?.value || '',
+        payment_mode: soExportEl('soExportPayment')?.value || '',
+        date_from: soExportEl('soExportDateFrom')?.value || '',
+        date_to: soExportEl('soExportDateTo')?.value || '',
+        search: (soExportEl('soExportSearch')?.value || '').trim()
+    };
+}
+
+function soExportQuery(filters) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
+    return params.toString();
+}
+
+// Same IST day maths as the list's quick-date pills, kept local so the modal
+// never touches the view state while the user is still choosing.
+function soExportRangeDates(range) {
+    const istNow = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const day = offset => new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate() + offset));
+    const fmt = d => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+
+    switch (range) {
+        case 'today': return { from: fmt(day(0)), to: fmt(day(0)) };
+        case 'yesterday': return { from: fmt(day(-1)), to: fmt(day(-1)) };
+        case 'last7': return { from: fmt(day(-6)), to: fmt(day(0)) };
+        case 'last30': return { from: fmt(day(-29)), to: fmt(day(0)) };
+        case 'thisMonth': return {
+            from: fmt(new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), 1))),
+            to: fmt(day(0))
+        };
+        case 'all': return { from: '', to: '' };
+        default: return null;
+    }
+}
+
+function renderSoExportChips() {
+    const wrap = soExportEl('soExportStatusChips');
+    if (!wrap) return;
+    wrap.innerHTML = SO_EXPORT_STATUS_OPTIONS.map(opt => {
+        const active = soExportStatuses.has(opt.key);
+        return `<button type="button" class="so-export-chip${active ? ' active' : ''}" data-export-status="${opt.key}">${opt.label}</button>`;
+    }).join('');
+}
+
+function seedSoExportFromView() {
+    soExportStatuses = new Set(
+        SO_EXPORT_STATUS_OPTIONS.some(opt => opt.key === soStatus) ? [soStatus] : []
+    );
+    const carrierSel = soExportEl('soExportCarrier');
+    if (carrierSel) carrierSel.value = soCarrier || '';
+    const paymentSel = soExportEl('soExportPayment');
+    if (paymentSel) paymentSel.value = soPayment || '';
+    const fromEl = soExportEl('soExportDateFrom');
+    const toEl = soExportEl('soExportDateTo');
+    if (fromEl) fromEl.value = soStartDate || '';
+    if (toEl) toEl.value = soEndDate || '';
+    const searchEl = soExportEl('soExportSearch');
+    if (searchEl) searchEl.value = soSearchQuery || '';
+}
+
+// Mirror the list's carrier dropdown so both agree on the carrier values
+function populateSoExportCarriers() {
+    const source = soExportEl('soCarrierFilter');
+    const target = soExportEl('soExportCarrier');
+    if (!source || !target) return;
+    const current = target.value;
+    target.innerHTML = '';
+    Array.from(source.options).forEach(opt => {
+        const clone = document.createElement('option');
+        clone.value = opt.value;
+        clone.textContent = opt.textContent;
+        target.appendChild(clone);
+    });
+    target.value = current;
+}
+
+function setSoExportProgress(text) {
+    const el = soExportEl('soExportProgress');
+    if (!el) return;
+    if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.style.display = 'block';
+    el.textContent = text;
+}
+
+function scheduleSoExportCount(delay = 500) {
+    clearTimeout(soExportCountTimer);
+    soExportCountTimer = setTimeout(refreshSoExportCount, delay);
+}
+
+async function refreshSoExportCount() {
+    const summary = soExportEl('soExportSummary');
+    if (!summary) return;
+    // Counts are stamped so a slow reply from an older filter set can never
+    // overwrite the summary the user is currently looking at.
+    const seq = ++soExportCountSeq;
+    const filters = soExportFilters();
+    summary.textContent = 'Counting matching shipments…';
+    try {
+        const data = await apiCall('/shipping/history/export/count?' + soExportQuery(filters));
+        if (seq !== soExportCountSeq) return;
+        if (!data || !data.success) throw new Error(data?.error || 'count failed');
+        const total = Number(data.total) || 0;
+        summary.innerHTML = total
+            ? `<strong>${total.toLocaleString('en-IN')}</strong> shipment${total === 1 ? '' : 's'} match — downloads as one CSV`
+            : 'No shipments match these filters.';
+        const runBtn = soExportEl('soExportRunBtn');
+        if (runBtn) runBtn.disabled = total === 0 || soExportRunning;
+    } catch (err) {
+        if (seq !== soExportCountSeq) return;
+        summary.textContent = 'Could not count matches — you can still try exporting.';
+        const runBtn = soExportEl('soExportRunBtn');
+        if (runBtn) runBtn.disabled = soExportRunning;
+    }
+}
+
+function bindSoExportModal() {
+    if (soExportBound) return;
+    soExportBound = true;
+
+    soExportEl('soExportStatusChips')?.addEventListener('click', (event) => {
+        const chip = event.target.closest('[data-export-status]');
+        if (!chip) return;
+        const key = chip.dataset.exportStatus;
+        if (soExportStatuses.has(key)) soExportStatuses.delete(key);
+        else soExportStatuses.add(key);
+        renderSoExportChips();
+        scheduleSoExportCount();
+    });
+
+    ['soExportCarrier', 'soExportPayment'].forEach(id => {
+        soExportEl(id)?.addEventListener('change', () => scheduleSoExportCount(120));
+    });
+    // Typing a search term hits a heavier query, so it waits longer before counting
+    soExportEl('soExportSearch')?.addEventListener('input', () => scheduleSoExportCount(800));
+    ['soExportDateFrom', 'soExportDateTo'].forEach(id => {
+        soExportEl(id)?.addEventListener('change', () => scheduleSoExportCount(120));
+    });
+
+    document.querySelectorAll('[data-so-export-range]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const range = soExportRangeDates(btn.dataset.soExportRange);
+            if (!range) return;
+            const fromEl = soExportEl('soExportDateFrom');
+            const toEl = soExportEl('soExportDateTo');
+            if (fromEl) fromEl.value = range.from;
+            if (toEl) toEl.value = range.to;
+            document.querySelectorAll('[data-so-export-range]').forEach(b => b.classList.toggle('active', b === btn));
+            scheduleSoExportCount(120);
+        });
+    });
+
+    soExportEl('soExportUseViewBtn')?.addEventListener('click', () => {
+        seedSoExportFromView();
+        renderSoExportChips();
+        refreshSoExportCount();
+    });
+
+    soExportEl('soExportRunBtn')?.addEventListener('click', runSoExport);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && soExportEl('soExportModal')?.classList.contains('active')) closeSoExportModal();
+    });
+}
+
+function openSoExportModal() {
+    const modal = soExportEl('soExportModal');
+    if (!modal) return;
+    bindSoExportModal();
+    seedSoExportFromView();
+    populateSoExportCarriers();
+    renderSoExportChips();
+    setSoExportProgress('');
+    modal.classList.add('active');
+    refreshSoExportCount();
+}
+
+function closeSoExportModal() {
+    // A running export keeps the dialog open so its progress stays visible —
+    // Cancel aborts the stream and closes instead of waiting it out.
+    if (soExportRunning) {
+        if (soExportAbort) soExportAbort.abort();
+        return;
+    }
+    soExportEl('soExportModal')?.classList.remove('active');
+    setSoExportProgress('');
+}
+
+function soExportFileName(response) {
+    const header = response.headers.get('Content-Disposition') || '';
+    const match = header.match(/filename="([^"]+)"/i);
+    return match ? match[1] : `shipments_${new Date().toISOString().slice(0, 10)}.csv`;
+}
+
+async function runSoExport() {
+    if (soExportRunning) return;
+    const filters = soExportFilters();
+    const runBtn = soExportEl('soExportRunBtn');
+    const summary = soExportEl('soExportSummary');
+    soExportRunning = true;
+    soExportAbort = new AbortController();
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Exporting…'; }
+
+    try {
+        setSoExportProgress('Requesting export… (Cancel to stop)');
+        const res = await fetch(`${API_BASE}/shipping/history/export?${soExportQuery(filters)}`, {
+            headers: { 'Authorization': `Bearer ${authToken}` },
+            signal: soExportAbort.signal
         });
 
-        const csv = [cols.map(esc).join(','), ...rows].join('\n');
-        const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+        if (!res.ok) {
+            let message = `Export failed (${res.status})`;
+            try {
+                const body = await res.json();
+                if (body && body.error) message = body.error;
+            } catch (_) { /* non-JSON error body */ }
+            throw new Error(message);
+        }
+
+        // Read the CSV as a stream: chunks are collected as-is (never joined into
+        // one giant string) while a lightweight decode counts rows for progress.
+        const fileName = soExportFileName(res);
+        const chunks = [];
+        let rows = 0;
+        let lastPaint = 0;
+
+        if (res.body && res.body.getReader) {
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                const text = decoder.decode(value, { stream: true });
+                for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) rows++;
+                const now = Date.now();
+                if (now - lastPaint > 250) {
+                    lastPaint = now;
+                    setSoExportProgress(`Downloading… ${Math.max(0, rows - 1).toLocaleString('en-IN')} rows`);
+                }
+            }
+        } else {
+            chunks.push(new Uint8Array(await res.arrayBuffer()));
+        }
+
+        const totalRows = Math.max(0, rows - 1);
+        setSoExportProgress('Saving file…');
+        const blob = new Blob(chunks, { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `shipped-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+        link.download = fileName;
+        document.body.appendChild(link);
         link.click();
-        URL.revokeObjectURL(link.href);
-        showShipToast(`✅ Exported ${shipments.length} shipments`);
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+
+        setSoExportProgress('');
+        showShipToast(`✅ Exported ${totalRows.toLocaleString('en-IN')} shipments`);
+        soExportEl('soExportModal')?.classList.remove('active');
     } catch (err) {
-        console.error('Shipped CSV export error:', err);
-        showShipToast('Export failed', true);
+        setSoExportProgress('');
+        if (err && err.name === 'AbortError') {
+            showShipToast('Export cancelled');
+            soExportEl('soExportModal')?.classList.remove('active');
+        } else {
+            console.error('Shipments export error:', err);
+            if (summary) summary.textContent = err.message || 'Export failed. Try narrowing the filters.';
+            showShipToast(err.message || 'Export failed', true);
+        }
+    } finally {
+        soExportRunning = false;
+        soExportAbort = null;
+        if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Export CSV'; }
+        if (soExportEl('soExportModal')?.classList.contains('active')) refreshSoExportCount();
     }
 }
 
 // Expose shipped-orders functions for inline onclick handlers
+window.openSoExportModal = openSoExportModal;
+window.closeSoExportModal = closeSoExportModal;
 window.soDoCancel = soDoCancel;
 window.soRemoveFilter = soRemoveFilter;
 window.soRetryShipment = soRetryShipment;

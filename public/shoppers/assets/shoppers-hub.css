@@ -6514,3 +6514,141 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
 #noticeModal {
     backdrop-filter: blur(4px);
 }
+
+/* ============ Shipments Export Modal (so-export-*) ============ */
+#soExportModal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 2800;
+    background: rgba(0, 0, 0, 0.88);
+    backdrop-filter: blur(8px);
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+#soExportModal.active { display: flex; }
+.so-export-content {
+    width: 100%;
+    max-width: 620px;
+    max-height: 92vh;
+    display: flex;
+    flex-direction: column;
+    background: #0a0a0a;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+.so-export-content .ship-body {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+.so-export-section { display: flex; flex-direction: column; gap: 0.5rem; }
+.so-export-label {
+    font-family: 'Archivo Narrow', sans-serif;
+    font-size: 0.68rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.55);
+    font-weight: 600;
+}
+.so-export-hint {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.3);
+    margin-left: 0.4rem;
+}
+.so-export-chips {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    background: rgba(0, 0, 0, 0.35);
+    padding: 0.35rem;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.so-export-chip {
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.45);
+    padding: 0.45rem 0.85rem;
+    font-family: 'Archivo Narrow', sans-serif;
+    letter-spacing: 1px;
+    font-weight: 600;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 7px;
+    transition: all 0.2s ease;
+}
+.so-export-chip:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
+.so-export-chip.active {
+    color: #000;
+    background: #53bdeb;
+    box-shadow: 0 2px 8px rgba(83, 189, 235, 0.25);
+}
+.so-export-chip .so-export-chip-count {
+    font-size: 0.6rem;
+    margin-left: 0.25rem;
+    opacity: 0.7;
+}
+.so-export-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+.so-export-content .export-option-group label {
+    display: block;
+    font-size: 0.68rem;
+    color: rgba(255, 255, 255, 0.55);
+    margin-bottom: 0.35rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-family: 'Archivo Narrow', sans-serif;
+}
+.so-export-content select,
+.so-export-content input[type="text"],
+.so-export-content input[type="date"] {
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #fff;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.8rem;
+}
+.so-export-content select:focus,
+.so-export-content input:focus {
+    outline: none;
+    border-color: rgba(83, 189, 235, 0.4);
+    box-shadow: 0 0 0 2px rgba(83, 189, 235, 0.1);
+}
+.so-export-content select option { background: #1a1a1a; color: #fff; }
+.so-export-summary {
+    padding: 0.75rem 0.9rem;
+    border-radius: 8px;
+    background: rgba(83, 189, 235, 0.06);
+    border: 1px solid rgba(83, 189, 235, 0.18);
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.75);
+}
+.so-export-summary strong { color: #53bdeb; }
+.so-export-progress {
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.65);
+    font-family: 'Archivo Narrow', sans-serif;
+    letter-spacing: 0.5px;
+}
+.so-export-footer-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-left: auto;
+}
+@media (max-width: 620px) {
+    .so-export-grid { grid-template-columns: 1fr; }
+}

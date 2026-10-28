@@ -1162,7 +1162,7 @@
                     </svg>
                     New Shipment
                 </button>
-                <button id="soExportBtn" class="mo-card-toggle" title="Export current filters as CSV">
+                <button id="soExportBtn" class="mo-card-toggle" title="Export shipments as CSV — filter by status, carrier, payment and date">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
@@ -1639,6 +1639,72 @@
                     <img src="/shoppers/assets/export-icon.svg" width="16" height="16" alt="Export" style="vertical-align: middle; margin-right: 6px;" />
                     Export Now
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shipments Export Modal — filter-aware CSV download (streamed server-side,
+         so tens of thousands of rows download without hitting the 1 000-row cap) -->
+    <div id="soExportModal" onclick="if(event.target === this) closeSoExportModal()">
+        <div class="so-export-content">
+            <div class="ship-modal-header">
+                <h3>Export Shipments</h3>
+                <button class="ship-close" onclick="closeSoExportModal()">&times;</button>
+            </div>
+            <div class="ship-body">
+                <div class="so-export-section">
+                    <div class="so-export-label">Status <span class="so-export-hint">none selected = every status</span></div>
+                    <div class="so-export-chips" id="soExportStatusChips"></div>
+                </div>
+
+                <div class="so-export-grid">
+                    <div class="export-option-group">
+                        <label>Carrier</label>
+                        <select id="soExportCarrier">
+                            <option value="">All Carriers</option>
+                        </select>
+                    </div>
+                    <div class="export-option-group">
+                        <label>Payment</label>
+                        <select id="soExportPayment">
+                            <option value="">All Payments</option>
+                            <option value="COD">COD</option>
+                            <option value="Prepaid">Prepaid</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="so-export-section">
+                    <div class="so-export-label">Date Range (IST)</div>
+                    <div class="so-date-range">
+                        <input type="date" id="soExportDateFrom" title="Start date">
+                        <span class="mo-date-sep">to</span>
+                        <input type="date" id="soExportDateTo" title="End date">
+                    </div>
+                    <div class="so-quick-dates" style="margin-top: 0.5rem;">
+                        <button class="so-quick-date" data-so-export-range="today">Today</button>
+                        <button class="so-quick-date" data-so-export-range="yesterday">Yesterday</button>
+                        <button class="so-quick-date" data-so-export-range="last7">7 Days</button>
+                        <button class="so-quick-date" data-so-export-range="last30">30 Days</button>
+                        <button class="so-quick-date" data-so-export-range="thisMonth">This Month</button>
+                        <button class="so-quick-date" data-so-export-range="all">Clear</button>
+                    </div>
+                </div>
+
+                <div class="export-option-group">
+                    <label>Search</label>
+                    <input type="text" id="soExportSearch" placeholder="Order ID, AWB, courier, name, phone..." autocomplete="off">
+                </div>
+
+                <div class="so-export-summary" id="soExportSummary">Checking matches&hellip;</div>
+                <div class="so-export-progress" id="soExportProgress" style="display: none;"></div>
+            </div>
+            <div class="ship-footer">
+                <button class="btn btn-outline" onclick="closeSoExportModal()">Cancel</button>
+                <div class="so-export-footer-actions">
+                    <button class="btn btn-outline" id="soExportUseViewBtn" title="Fill the form from the filters applied to the list">Use Current View</button>
+                    <button class="btn btn-primary" id="soExportRunBtn">Export CSV</button>
+                </div>
             </div>
         </div>
     </div>

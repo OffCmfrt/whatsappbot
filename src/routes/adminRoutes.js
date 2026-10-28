@@ -13,6 +13,7 @@ const whatsappService = require('../services/whatsappService');
 const { dbAdapter } = require('../database/db');
 const cloudinaryService = require('../services/cloudinaryService');
 const igCommentService = require('../services/igCommentService');
+const shipmentExportService = require('../services/shipmentExportService');
 const { toIST, formatDateForExport, fromISTtoUTC } = require('../utils/timezone');
 
 // Multer config: disk storage (avoids holding files in RAM)
@@ -6294,15 +6295,9 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
         }
         if (carrier) { where += ' AND s.carrier = ?'; params.push(carrier); }
         if (status) {
-            // Grouped filter: 'in_transit' covers shipped + in_transit, 'rto' covers rto, 'cancelled' covers cancelled + failed
-            if (status === 'in_transit') where += ` AND s.status IN ('shipped', 'in_transit', 'out_for_delivery')`;
-            else if (status === 'rto') where += ` AND (s.status = 'rto' OR s.status LIKE 'rto_%')`;
-            else if (status === 'rto_initiated') where += ` AND s.status = 'rto_initiated'`;
-            else if (status === 'rto_delivered') where += ` AND s.status = 'rto_delivered'`;
-            else if (status === 'untrackable') where += ` AND s.status = 'untrackable'`;
-            else if (status === 'cancelled') where += ` AND s.status IN ('cancelled', 'failed')`;
-            else if (status === 'ready') where += ` AND s.status IN ('created', 'awb_assigned')`;
-            else { where += ' AND s.status = ?'; params.push(status); }
+            // Grouped filters live in shipmentExportService so the list and the
+            // CSV export always agree on what 'RTO' or 'In Transit' means.
+            where += ` AND (${shipmentExportService.shipmentStatusClause(status, params)})`;
         }
         if (payment_mode) { where += ' AND s.payment_mode = ?'; params.push(payment_mode); }
         // Date filters compare against IST calendar days (ops team works in IST)
@@ -6378,6 +6373,55 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
     } catch (error) {
         console.error('Shipping history error:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch shipping history' });
+    }
+});
+
+// ── Streamed shipment CSV export ────────────────────────────────────────────
+// Downloads the full filtered shipment set (tens of thousands of rows) with flat
+// memory use: keyset-paginated batches are streamed straight to the client, so
+// neither the server nor the browser ever holds the whole file.
+// `statuses` takes a comma-separated multi-select, so an export can be narrowed
+// to Ready + RTO + Cancelled independently of what the list is showing.
+router.get('/shipping/history/export', verifyToken, requirePermission('export'), async (req, res) => {
+    const filters = {
+        search: req.query.search,
+        carrier: req.query.carrier,
+        status: req.query.status,
+        statuses: req.query.statuses,
+        payment_mode: req.query.payment_mode,
+        date_from: req.query.date_from,
+        date_to: req.query.date_to
+    };
+    logOperatorActivity(req, 'export', `Shipments export (${shipmentExportService.buildFileName(filters)})`);
+    try {
+        const rows = await shipmentExportService.streamShipmentsCsv(res, filters);
+        console.log(`📤 Shipment export streamed ${rows} rows`);
+    } catch (error) {
+        console.error('Shipping export error:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, error: 'Failed to export shipments' });
+        } else if (!res.writableEnded) {
+            res.end();
+        }
+    }
+});
+
+// Live match count for the export dialog — same filters, count only
+router.get('/shipping/history/export/count', verifyToken, requirePermission('export'), async (req, res) => {
+    try {
+        const total = await shipmentExportService.countShipments({
+            search: req.query.search,
+            carrier: req.query.carrier,
+            status: req.query.status,
+            statuses: req.query.statuses,
+            payment_mode: req.query.payment_mode,
+            date_from: req.query.date_from,
+            date_to: req.query.date_to
+        });
+        res.json({ success: true, total });
+    } catch (error) {
+        console.error('Shipping export count error:', error);
+        res.status(500).json({ success: false, error: 'Failed to count shipments' });
     }
 });
 
