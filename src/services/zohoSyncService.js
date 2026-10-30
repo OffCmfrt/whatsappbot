@@ -353,24 +353,58 @@ async function syncOrderToZoho(shopifyOrder) {
         // integration may create a second invoice with the same reference_number.
         // Run an immediate sweep AND a delayed sweep (60s later) to catch both
         // timing cases: native faster than middleware, and native slower.
+        //
+        // A "duplicate" is only a document created ALONGSIDE this invoice. An
+        // older invoice with the same reference is the order's real document
+        // (re-syncs happen), and voiding it — with its payments — is how an
+        // exchange ended up with a void original and an unpaid replacement.
+        const TWIN_WINDOW_MS = 30 * 60 * 1000;
         const sweepDuplicates = async (label) => {
             try {
                 const allRefs = await zohoService.searchInvoice({ reference_number: orderId });
-                const others = allRefs.filter(
-                    inv => inv.invoice_id !== zohoInvoice?.invoice_id
-                        && inv.status !== 'void' && inv.status !== 'deleted'
-                );
+                const keeperTime = Date.parse(zohoInvoice?.created_time || '') || Date.now();
+                const others = [];
+                for (const candidate of allRefs) {
+                    if (candidate.invoice_id === zohoInvoice?.invoice_id) continue;
+                    // The list API omits created_time/credits_applied, so decide
+                    // on the document itself — a listing must never be a reason
+                    // to void the order's real invoice.
+                    let inv;
+                    try {
+                        inv = await zohoService.getInvoice(candidate.invoice_id);
+                    } catch (e) {
+                        continue;
+                    }
+                    if (!inv || inv.status === 'void' || inv.status === 'deleted') continue;
+                    const created = Date.parse(inv.created_time || inv.date || '');
+                    // Older document → the order's own invoice, not a twin
+                    if (Number.isFinite(created) && created < keeperTime - TWIN_WINDOW_MS) {
+                        console.log(`ℹ️ Zoho sync #${orderId} [${label}]: keeping ${inv.invoice_number} — it predates this sync, not a duplicate`);
+                        continue;
+                    }
+                    // Anything already carrying credit notes is referenced by
+                    // other documents (an exchange reversal lives there).
+                    if ((parseFloat(inv.credits_applied) || 0) > 0) {
+                        console.warn(`⚠️ Zoho sync #${orderId} [${label}]: ${inv.invoice_number} has credits applied — left untouched`);
+                        continue;
+                    }
+                    // A document holding a payment is not a duplicate: it either
+                    // is the real invoice or a genuine second collection. Both
+                    // mean money, and money is never deleted to tidy a listing.
+                    const pmts = await zohoService.getPayments(inv.invoice_id, inv.invoice_number);
+                    if (pmts.length > 0) {
+                        console.warn(`⚠️ Zoho sync #${orderId} [${label}]: ${inv.invoice_number} holds ${pmts.length} payment(s) — left untouched`);
+                        continue;
+                    }
+                    others.push(inv);
+                }
                 if (others.length > 0) {
                     console.warn(`⚠️ Zoho sync #${orderId} [${label}]: found ${others.length} duplicate(s) — removing`);
                     for (const dup of others) {
                         try {
-                            const pmts = await zohoService.getPayments(null, dup.invoice_number);
-                            for (const p of pmts) {
-                                try { await zohoService.deletePayment(p.payment_id); } catch (_) {}
-                            }
                             if (dup.status !== 'void') await zohoService.voidInvoice(dup.invoice_id);
                             await zohoService.deleteInvoice(dup.invoice_id);
-                            console.log(`✅ Zoho sync #${orderId} [${label}]: removed duplicate ${dup.invoice_number}`);
+                            console.log(`✅ Zoho sync #${orderId} [${label}]: removed empty duplicate ${dup.invoice_number}`);
                         } catch (dupErr) {
                             console.warn(`⚠️ Zoho sync #${orderId} [${label}]: failed to remove ${dup.invoice_number}: ${dupErr.message}`);
                         }

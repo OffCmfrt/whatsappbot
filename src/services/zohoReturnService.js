@@ -428,12 +428,25 @@ async function createExchangeReplacementInvoice({
     const zohoLines = await buildReplacementInvoiceLines({ invoiceLines, originalItems, exchangedItems });
     if (zohoLines.length === 0) return null;
 
-    // Dedupe — one replacement invoice per order
+    // Dedupe — one replacement invoice per order. A VOID document is not a
+    // usable invoice (Books refuses to re-line it and no payment can settle
+    // it), so it never counts as "already booked".
+    const usable = (inv) => inv && inv.status !== 'void' && inv.status !== 'deleted';
     let invoiceId = existingInvoiceId || null;
+    if (invoiceId) {
+        // Callers may pass an id from a list scan; only trust it when the
+        // document can still be written to.
+        try {
+            if (!usable(await zohoService.getInvoice(invoiceId))) invoiceId = null;
+        } catch (e) { invoiceId = null; }
+    }
     if (!invoiceId) {
         try {
             const existing = await zohoService.searchInvoice({ reference_number: ref });
-            invoiceId = existing[0]?.invoice_id || null;
+            invoiceId = existing.find(usable)?.invoice_id || null;
+            if (existing.length && !invoiceId) {
+                console.warn(`⚠️ Zoho exchange: order #${orderId} has a void ${ref} — creating a usable one instead`);
+            }
         } catch (e) { /* create a fresh document */ }
     }
 
@@ -519,7 +532,12 @@ async function moveExchangePayments({ originalInvoice, replacementInvoice, credi
     if (paid <= 0.01) return result;
 
     const oldTarget = Math.min(paid, Math.max(0, round((parseFloat(originalInvoice.total) || 0) - round(creditNoteTotal))));
-    const newTarget = Math.min(round(paid - oldTarget), Math.max(0, round(replacementInvoice.total ?? replacementInvoice.balance)));
+    // The replacement is settled by its outstanding BALANCE, not its total: a
+    // document that already took money must not be paid twice.
+    const replacementDue = round(
+        parseFloat(replacementInvoice.balance) >= 0 ? replacementInvoice.balance : replacementInvoice.total
+    );
+    const newTarget = Math.min(round(paid - oldTarget), Math.max(0, replacementDue));
 
     const sample = movable[0];
     const recordOn = (targetInvoiceId, amount, description) => zohoService.recordPayment({
@@ -569,6 +587,82 @@ async function moveExchangePayments({ originalInvoice, replacementInvoice, credi
         result.warnings.push(`₹${result.leftover} of recorded payment is now unused (refund/advance) — settle manually`);
     }
     return result;
+}
+
+/**
+ * Was this order actually paid? The Zoho documents cannot answer that once a
+ * cleanup flow has deleted the payment, so ask the source that recorded the
+ * order: the Shopify payload in the sync log.
+ */
+async function orderPaidFromSyncLog(orderId) {
+    const key = String(orderId || '').replace(/^#/, '');
+    if (!key) return false;
+    try {
+        const rows = await dbAdapter.query(
+            `SELECT original_payload->>'financial_status' AS financial_status
+             FROM zoho_sync_log WHERE shopify_order_id = ? ORDER BY created_at DESC LIMIT 1`,
+            [key]
+        );
+        const status = String(rows[0]?.financial_status || '').toLowerCase();
+        return status === 'paid' || status === 'partially_paid';
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * Settle the replacement invoice.
+ *
+ * The customer's money follows the goods: when the order was paid, what they
+ * paid is what funds the product they now hold, and the credit note released
+ * exactly that amount on the original invoice. Moving recorded payments already
+ * covers the usual case — this covers the ones where nothing is left to move
+ * (an old cleanup flow deleted the payment, or it never reached this invoice),
+ * which is what leaves a paid exchange showing as overdue.
+ *
+ * Unpaid (COD) orders are deliberately left alone: their money is still to be
+ * collected, so the warning says so instead of inventing a receipt.
+ */
+async function settleReplacementInvoice({ replacementInvoiceId, creditNoteTotal = 0, orderPaid = false, orderId = '', paymentMode = 'cash' }) {
+    const out = { settled: 0, balance: 0, warnings: [] };
+    if (!replacementInvoiceId) return out;
+
+    const round = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+    let invoice;
+    try {
+        invoice = await zohoService.getInvoice(replacementInvoiceId);
+    } catch (e) {
+        out.warnings.push(`replacement invoice re-read failed: ${e.message}`);
+        return out;
+    }
+
+    out.balance = round(invoice?.balance);
+    if (out.balance <= 0.02) return out; // already settled
+
+    if (!orderPaid) {
+        out.warnings.push(`replacement invoice ${invoice.invoice_number || replacementInvoiceId} carries ₹${out.balance} — the order is not marked paid, so COD/collection settles it`);
+        return out;
+    }
+
+    const credit = round(creditNoteTotal);
+    const amount = credit > 0 ? Math.min(out.balance, credit) : out.balance;
+    if (!(amount > 0)) return out;
+
+    try {
+        await zohoService.recordPayment({
+            customer_id: invoice.customer_id,
+            amount,
+            date: new Date().toISOString().split('T')[0],
+            payment_mode: paymentMode,
+            invoices: [{ invoice_id: replacementInvoiceId, amount_applied: amount }],
+            description: `Exchange: settles the replacement invoice (order #${String(orderId).replace(/^#/, '')})`
+        });
+        out.settled = amount;
+        console.log(`✅ Zoho exchange: replacement invoice ${invoice.invoice_number || replacementInvoiceId} settled with ₹${amount} (the customer already paid for the replacement)`);
+    } catch (e) {
+        out.warnings.push(`₹${amount} could not be recorded on the replacement invoice: ${e.message}`);
+    }
+    return out;
 }
 
 /**
@@ -1047,7 +1141,7 @@ const lineFingerprint = (l) => `${l.name} x${money(l.quantity)} @${money(l.rate)
  */
 async function planExchangeInvoice({
     orderId, originalItems, exchangedItems,
-    invoice = null, creditNoteId, replacementInvoiceId,
+    invoice = null, creditNoteId, replacementInvoiceId, orderPaid,
     requireMatch = false, withPayments = false
 }) {
     const ref = String(orderId || '').replace(/^#/, '').trim();
@@ -1134,8 +1228,13 @@ async function planExchangeInvoice({
         replacementInvoiceId = null;
         try {
             const reps = await zohoService.searchInvoice({ reference_number: `EXCH-INV-${ref}` });
-            replacementRow = reps.find(i => i.status !== 'void' && i.status !== 'deleted') || reps[0] || null;
+            // A VOID document cannot be re-lined or paid, so it never counts as
+            // "the replacement invoice already exists" — a usable one is made.
+            replacementRow = reps.find(i => i.status !== 'void' && i.status !== 'deleted') || null;
             replacementInvoiceId = replacementRow?.invoice_id || null;
+            if (!replacementRow && reps.length) {
+                out.notes.push(`${reps.length} void EXCH-INV document(s) — a usable one will be created`);
+            }
         } catch (e) {
             out.notes.push(`EXCH-INV lookup failed: ${e.message}`);
         }
@@ -1212,7 +1311,18 @@ async function planExchangeInvoice({
     out.totalAfter = replacementTotal;
     out.withPayments = !!withPayments;
 
-    out.changed = !!(revertLineItems || creditNotePayload || replacementNeedsLines);
+    // 8. Money: a paid order must end with the replacement invoice settled, and
+    //    a COD one must not be paid before the cash arrives.
+    out.orderPaid = orderPaid !== undefined
+        ? !!orderPaid
+        : (await orderPaidFromSyncLog(ref))
+            || /paid|partially_paid/.test(String(full.status || '').toLowerCase())
+            || !!(full.payments && full.payments.length);
+    out.replacementBalance = replacementRow ? money(replacementRow.balance) : null;
+    out.replacementNeedsSettlement = !!(withPayments && out.orderPaid && replacementInvoiceId
+        && (replacementNeedsLines || (out.replacementBalance || 0) > 0.02));
+
+    out.changed = !!(revertLineItems || creditNotePayload || replacementNeedsLines || out.replacementNeedsSettlement);
     return { ...out, status: out.changed ? 'would_fix' : 'already_correct' };
 }
 
@@ -1322,6 +1432,18 @@ async function applyExchangePlan(plan) {
         } catch (e) {
             out.notes.push(`payment move failed: ${e.message}`);
         }
+
+        // Whatever the move could not cover (the payment was destroyed by an
+        // old cleanup, or never landed on this document) is settled here when
+        // the order was paid — the replacement must not stay overdue.
+        const settled = await settleReplacementInvoice({
+            replacementInvoiceId: out.replacementInvoiceId,
+            creditNoteTotal: out.creditNoteTotal || 0,
+            orderPaid: out.orderPaid !== undefined ? out.orderPaid : await orderPaidFromSyncLog(ref),
+            orderId: ref
+        });
+        out.paymentSettle = settled;
+        out.notes.push(...settled.warnings);
     }
 
     return { ...out, status: out.notes.length ? 'fixed_with_warnings' : 'fixed' };
@@ -1412,6 +1534,7 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
         // 3. The money follows the order, not one document: the part that pays
         //    for the replacement moves onto the replacement invoice.
         let paymentMove = null;
+        let paymentSettle = null;
         if (replacementInvoice?.invoice_id && fullInvoice) {
             try {
                 paymentMove = await moveExchangePayments({
@@ -1424,6 +1547,28 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
                 }
             } catch (pmErr) {
                 console.warn(`⚠️ Zoho exchange: payment move failed for #${orderId}: ${pmErr.message}`);
+            }
+
+            // 3b. Settle what the move could not cover. Without this the
+            // replacement invoice stays OVERDUE on an exchange the customer
+            // already paid for (their payment was often removed by an older
+            // cleanup flow that deleted it together with a duplicate invoice).
+            try {
+                const financial = String(shopifyOrder?.financial_status || '').toLowerCase();
+                paymentSettle = await settleReplacementInvoice({
+                    replacementInvoiceId: replacementInvoice.invoice_id,
+                    creditNoteTotal: result.creditNoteTotal || 0,
+                    orderPaid: financial === 'paid' || financial === 'partially_paid'
+                        || await orderPaidFromSyncLog(orderId),
+                    orderId,
+                    // Mirror the sync path: a gateway order is not a cash receipt.
+                    paymentMode: (shopifyOrder?.payment_gateway_names || []).length ? 'online' : 'cash'
+                });
+                for (const warning of paymentSettle.warnings) {
+                    console.warn(`⚠️ Zoho exchange: order #${orderId} — ${warning}`);
+                }
+            } catch (stErr) {
+                console.warn(`⚠️ Zoho exchange: settle failed for #${orderId}: ${stErr.message}`);
             }
         }
 
@@ -1473,6 +1618,7 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
             creditNoteId: result.creditNoteId,
             replacementInvoiceId,
             paymentMove,
+            paymentSettle,
             originalItems,
             exchangedItems
         };
