@@ -9,8 +9,29 @@ const {
     determineTaxType
 } = require('./zohoTransform');
 const { createItemResolver } = require('./zohoItemResolver');
-const { taxFromInvoiceLine } = require('./zohoTransform');
+const { taxFromInvoiceLine, extractSizeFromTitle } = require('./zohoTransform');
 const { dbAdapter } = require('../database/db');
+
+// One resolver per process. A catalog miss costs up to three Zoho searches, so
+// rebuilding the cache for every invoice throws that work away — a bulk run
+// resolves the same few hundred style/size names over and over.
+let sharedResolver = null;
+function getItemResolver() {
+    if (!sharedResolver) sharedResolver = createItemResolver();
+    return sharedResolver;
+}
+
+// Bundle map is a small static table; don't hit Postgres once per invoice.
+let bundleMapCache = { value: null, at: 0 };
+const BUNDLE_MAP_TTL_MS = 5 * 60 * 1000;
+async function getBundleMap() {
+    if (bundleMapCache.value && Date.now() - bundleMapCache.at < BUNDLE_MAP_TTL_MS) {
+        return bundleMapCache.value;
+    }
+    const map = await loadBundleMap();
+    bundleMapCache = { value: map, at: Date.now() };
+    return map;
+}
 
 // Append " - SIZE" to a product title when the size is provided separately
 // and not already present in the title. Zoho Books catalog uses the format
@@ -84,6 +105,82 @@ function fallbackTaxDecisionFor(shopifyOrder) {
 }
 
 /**
+ * Credit note payload that MIRRORS the invoice it reverses: same rate, same
+ * discount proportion, same tax basis (CGST+SGST vs IGST, inclusive vs
+ * exclusive) and item-linked lines so the stock returns. Falls back to the
+ * state-derived payload when the invoice has no usable lines.
+ */
+async function buildMirroredCreditNotePayload({
+    shopifyOrder, orderId, returnItems, returnType, fullInvoice, reference, extraNotes = '', customerId = null
+}) {
+    const fallbackTaxDecision = fallbackTaxDecisionFor(shopifyOrder);
+    const payload = (fullInvoice?.line_items || []).length > 0
+        ? await buildCreditNoteFromInvoice({
+            shopifyOrder, returnItems, returnType,
+            originalInvoice: fullInvoice,
+            extraNotes,
+            referenceNumber: reference,
+            fallbackTaxDecision
+        })
+        : buildCreditNotePayload(shopifyOrder, returnItems, returnType, extraNotes, fallbackTaxDecision);
+
+    // Books requires the credit note's customer to be EXACTLY the invoice's
+    // customer (400 "You cannot change the customer..."). The invoice's own
+    // customer_id is authoritative; the Shopify-resolved customer is only a
+    // fallback for the rare case the invoice has none.
+    payload.customer_id = fullInvoice?.customer_id || customerId || null;
+    payload.invoice_id = fullInvoice?.invoice_id;
+    return payload;
+}
+
+/**
+ * Books rejects a credit note whose total would exceed the invoice total or
+ * fall below zero ("credit notes balance isn't negative") — cap the lines at
+ * the remaining creditable amount, proportionally, instead of failing. Runs
+ * whether or not credits were already applied, and also catches negative line
+ * totals from bad discount mirroring.
+ */
+function capCreditNoteToBalance(payload, fullInvoice, reference, returnType) {
+    try {
+        const invoiceTotal = parseFloat(fullInvoice?.total);
+        const alreadyCredited = parseFloat(fullInvoice?.credits_applied) || 0;
+        if (Number.isFinite(invoiceTotal) && invoiceTotal > 0) {
+            const remaining = invoiceTotal - alreadyCredited;
+            const inclusive = !!payload.is_inclusive_tax;
+
+            const estTotal = (payload.line_items || []).reduce((sum, l) => {
+                const net = (parseFloat(l.rate) || 0) * (parseFloat(l.quantity) || 1) - (parseFloat(l.discount) || 0);
+                const pct = (parseFloat(l.cgst_rate) || 0) + (parseFloat(l.sgst_rate) || 0)
+                    + (parseFloat(l.igst_rate) || 0);
+                return sum + (inclusive ? net : net * (1 + pct / 100));
+            }, 0);
+
+            if (remaining <= 0.02) {
+                console.log(`ℹ️ Zoho ${returnType}: invoice ${fullInvoice.invoice_id} already fully credited (₹${alreadyCredited.toFixed(2)} of ₹${invoiceTotal.toFixed(2)}) — skipping ${reference}`);
+                return { fullyCredited: true };
+            }
+            if (estTotal < -0.02) {
+                throw new Error(`Credit note ${reference} built a negative total (₹${estTotal.toFixed(2)}) — discount mirroring bug, aborting before Zoho rejects it`);
+            }
+            if (estTotal > remaining + 0.02) {
+                const factor = remaining / estTotal;
+                console.warn(`⚠️ Zoho ${returnType}: capping ${reference} from ₹${estTotal.toFixed(2)} to remaining creditable ₹${remaining.toFixed(2)}`);
+                for (const l of payload.line_items || []) {
+                    l.rate = Math.round((parseFloat(l.rate) || 0) * factor * 100) / 100;
+                    l.discount = Math.round((parseFloat(l.discount) || 0) * factor * 100) / 100;
+                }
+            }
+        }
+    } catch (capErr) {
+        // Negative-total abort is a real bug — surface it instead of
+        // proceeding with a payload Zoho will reject anyway
+        if (/negative total/.test(capErr.message)) throw capErr;
+        console.warn(`⚠️ Zoho ${returnType}: balance-cap check failed (${capErr.message}) — attempting full amount`);
+    }
+    return { fullyCredited: false };
+}
+
+/**
  * Shared credit note flow for returns, RTOs and exchanges:
  *  1. Zoho-side duplicate check (reference convention)
  *  2. customer resolution
@@ -98,7 +195,13 @@ async function prepareAndCreateCreditNote({ shopifyOrder, orderId, returnItems, 
         const existing = await zohoService.searchCreditNotes({ reference_number: reference });
         if (existing.length > 0) {
             console.log(`✅ Zoho ${returnType}: credit note for reference ${reference} already exists in Zoho (${existing[0].creditnote_id})`);
-            return { success: true, alreadyProcessed: true, creditNoteId: existing[0].creditnote_id, customerId: existing[0].customer_id || null };
+            return {
+                success: true,
+                alreadyProcessed: true,
+                creditNoteId: existing[0].creditnote_id,
+                creditNoteTotal: parseFloat(existing[0].total) || 0,
+                customerId: existing[0].customer_id || null
+            };
         }
     } catch (dedupeErr) {
         console.warn(`⚠️ Zoho ${returnType}: credit note dedupe check failed (${dedupeErr.message}) — DB dedupe still applies`);
@@ -123,28 +226,10 @@ async function prepareAndCreateCreditNote({ shopifyOrder, orderId, returnItems, 
     }
     const fullInvoice = await fetchFullInvoice(originalInvoice);
 
-    // Build the credit note mirroring the original invoice — same tax
-    // basis (CGST+SGST vs IGST, inclusive/exclusive), same rate and the
-    // original discount reversed in proportion; item-linked lines so
-    // stock returns to inventory. Falls back to the state-derived payload
-    // when the invoice has no usable lines.
-    const fallbackTaxDecision = fallbackTaxDecisionFor(shopifyOrder);
-    const creditNotePayload = (fullInvoice?.line_items || []).length > 0
-        ? await buildCreditNoteFromInvoice({
-            shopifyOrder, returnItems, returnType,
-            originalInvoice: fullInvoice,
-            extraNotes,
-            referenceNumber: reference,
-            fallbackTaxDecision
-        })
-        : buildCreditNotePayload(shopifyOrder, returnItems, returnType, extraNotes, fallbackTaxDecision);
-
-    // Books requires the credit note's customer to be EXACTLY the invoice's
-    // customer (400 "You cannot change the customer..."). The invoice's own
-    // customer_id is authoritative; the Shopify-resolved customer is only a
-    // fallback for the rare case the invoice has none.
-    creditNotePayload.customer_id = fullInvoice?.customer_id || originalInvoice.customer_id || customerId;
-    creditNotePayload.invoice_id = originalInvoice.invoice_id;
+    const creditNotePayload = await buildMirroredCreditNotePayload({
+        shopifyOrder, orderId, returnItems, returnType, fullInvoice, reference, extraNotes,
+        customerId: customerId || originalInvoice.customer_id
+    });
 
     // For RTOs where ALL items are returned, include shipping and COD charges
     // in the credit note so the invoice balances to zero. Without this, those
@@ -195,115 +280,295 @@ async function prepareAndCreateCreditNote({ shopifyOrder, orderId, returnItems, 
         }
     }
 
-    // Books rejects a credit note whose total would exceed the invoice total
-    // or fall below zero ("credit notes balance isn't negative") — cap the
-    // lines at the remaining creditable amount, proportionally, instead of
-    // failing. Runs whether or not credits were already applied, and also
-    // catches negative line totals from bad discount mirroring.
-    try {
-        const invoiceTotal = parseFloat(fullInvoice?.total);
-        const alreadyCredited = parseFloat(fullInvoice?.credits_applied) || 0;
-        if (Number.isFinite(invoiceTotal) && invoiceTotal > 0) {
-            const remaining = invoiceTotal - alreadyCredited;
-            const inclusive = !!creditNotePayload.is_inclusive_tax;
-
-            const estTotal = (creditNotePayload.line_items || []).reduce((sum, l) => {
-                const net = (parseFloat(l.rate) || 0) * (parseFloat(l.quantity) || 1) - (parseFloat(l.discount) || 0);
-                const pct = (parseFloat(l.cgst_rate) || 0) + (parseFloat(l.sgst_rate) || 0)
-                    + (parseFloat(l.igst_rate) || 0);
-                return sum + (inclusive ? net : net * (1 + pct / 100));
-            }, 0);
-
-            if (remaining <= 0.02) {
-                console.log(`ℹ️ Zoho ${returnType}: invoice ${originalInvoice.invoice_id} already fully credited (₹${alreadyCredited.toFixed(2)} of ₹${invoiceTotal.toFixed(2)}) — skipping ${reference}`);
-                return { success: true, creditNoteId: null, fullyCredited: true, customerId };
-            }
-            if (estTotal < -0.02) {
-                throw new Error(`Credit note ${reference} built a negative total (₹${estTotal.toFixed(2)}) — discount mirroring bug, aborting before Zoho rejects it`);
-            }
-            if (estTotal > remaining + 0.02) {
-                const factor = remaining / estTotal;
-                console.warn(`⚠️ Zoho ${returnType}: capping ${reference} from ₹${estTotal.toFixed(2)} to remaining creditable ₹${remaining.toFixed(2)}`);
-                for (const l of creditNotePayload.line_items || []) {
-                    l.rate = Math.round((parseFloat(l.rate) || 0) * factor * 100) / 100;
-                    l.discount = Math.round((parseFloat(l.discount) || 0) * factor * 100) / 100;
-                }
-            }
-        }
-    } catch (capErr) {
-        // Negative-total abort is a real bug — surface it instead of
-        // proceeding with a payload Zoho will reject anyway
-        if (/negative total/.test(capErr.message)) throw capErr;
-        console.warn(`⚠️ Zoho ${returnType}: balance-cap check failed (${capErr.message}) — attempting full amount`);
+    const cap = capCreditNoteToBalance(creditNotePayload, fullInvoice, reference, returnType);
+    if (cap.fullyCredited) {
+        return { success: true, creditNoteId: null, fullyCredited: true, creditNoteTotal: 0, customerId };
     }
 
     const creditNote = await zohoService.createCreditNote(creditNotePayload);
-    return { success: true, creditNoteId: creditNote?.creditnote_id || null, customerId };
+    const creditNoteTotal = parseFloat(creditNote?.total) || 0;
+    await ensureCreditNoteApplied({ creditNote, fullInvoice, reference, returnType });
+    return {
+        success: true,
+        creditNoteId: creditNote?.creditnote_id || null,
+        creditNoteTotal,
+        customerId
+    };
 }
 
 /**
- * Exchange replacement: zero-value invoice for the NEW items the customer
- * received. item_id linkage makes Books deduct the new size from stock
- * (old size returns via the exchange credit note). Bundles are expanded
- * into size-wise singles like everywhere else.
+ * Make sure the credit note is actually APPLIED to the invoice it reverses.
+ *
+ * Books does not always apply a credit note created against an invoice — it
+ * can leave it as unused customer credit, so the invoice keeps showing the
+ * returned amount as due even though the return is booked. The invoice is
+ * re-read after creation (Books has by then applied it if it was going to) and
+ * only the difference is applied. Failure is non-fatal: the credit note itself
+ * is valid and merely sits as customer credit.
  */
-async function createExchangeReplacementInvoice({ shopifyOrder, orderId, exchangedItems, customerId }) {
-    if (!exchangedItems || exchangedItems.length === 0) return null;
-    const ref = `EXCH-INV-${String(orderId).replace(/^#/, '')}`;
+async function ensureCreditNoteApplied({ creditNote, fullInvoice, reference, returnType }) {
+    const creditNoteId = creditNote?.creditnote_id;
+    const invoiceId = fullInvoice?.invoice_id;
+    const amount = Math.round((parseFloat(creditNote?.total) || 0) * 100) / 100;
+    if (!creditNoteId || !invoiceId || !(amount > 0)) return false;
 
-    // Dedupe — one replacement invoice per order
+    const before = Math.round((parseFloat(fullInvoice?.credits_applied) || 0) * 100) / 100;
+    let after = before;
     try {
-        const existing = await zohoService.searchInvoice({ reference_number: ref });
-        if (existing.length > 0) return existing[0].invoice_id;
-    } catch (e) { /* continue */ }
-
-    const bundleMap = await loadBundleMap();
-    const rawItems = exchangedItems.map(i => ({
-        title: withSizeInTitle(i.title || '', i.variant || ''),
-        sku: i.sku || '',
-        quantity: parseInt(i.quantity || 1) || 1,
-        price: 0,
-        variant: i.variant || ''
-    }));
-    const { lineItems } = breakBundleLineItems(rawItems, bundleMap);
-
-    const resolver = createItemResolver();
-    const zohoLines = [];
-    for (const li of lineItems) {
-        // breakBundleLineItems strips the size from size-suffixed titles — put
-        // it back so the line matches the size-specific catalog item.
-        const lineName = withSizeInTitle(li.name, li.variant);
-        const line = {
-            name: lineName,
-            description: 'Exchange replacement item',
-            quantity: li.quantity,
-            rate: 0,
-            discount: 0
-        };
-        const item = await resolver.resolve(lineName) || (li.sku ? await resolver.resolve(li.sku) : null);
-        if (item?.item_id) line.item_id = item.item_id;
-        zohoLines.push(line);
+        const fresh = await zohoService.getInvoice(invoiceId);
+        after = Math.round((parseFloat(fresh?.credits_applied) || 0) * 100) / 100;
+    } catch (e) {
+        // State unknown — an over-application is rejected by Books rather than
+        // double-crediting the invoice, so attempting it is still safe.
     }
 
-    const payload = {
-        customer_id: customerId || undefined,
-        date: new Date().toISOString().split('T')[0],
-        payment_terms: 0,
-        line_items: zohoLines,
-        notes: `Exchange replacement for Shopify Order #${orderId}`,
-        reference_number: ref,
-        is_inclusive_tax: true,
-        gst_treatment: 'consumer'
-    };
+    const pending = Math.round(Math.max(0, amount - Math.max(0, after - before)) * 100) / 100;
+    if (pending <= 0.01) return true;
 
-    const invoice = await zohoService.createInvoice(payload);
+    try {
+        await zohoService.applyCreditNote(creditNoteId, invoiceId, pending);
+        console.log(`✅ Zoho ${returnType}: credit note ${reference} applied to invoice ${fullInvoice.invoice_number || invoiceId} (₹${pending.toFixed(2)})`);
+        return true;
+    } catch (e) {
+        console.warn(`⚠️ Zoho ${returnType}: credit note ${reference} could not be applied to invoice ${fullInvoice.invoice_number || invoiceId} (${e.message}) — it remains as customer credit`);
+        return false;
+    }
+}
+
+// Charge lines (shipping, COD) are never part of an exchange swap: they stay
+// on the original invoice and are never billed a second time.
+const isChargeLine = (l) => /shipping|cod|cash on delivery/i.test(`${l?.name || ''} ${l?.description || ''}`);
+
+// A rendered line carries its GST split as flat rates (that is what Books
+// accepts on a POST/PUT). The credit-note builder reads the split from the
+// `taxes[]` array Zoho returns, so rebuild that shape for lines we built.
+function taxesArrayFromRates(line) {
+    const taxes = [];
+    if (parseFloat(line.igst_rate)) taxes.push({ tax_name: 'IGST', rate: parseFloat(line.igst_rate) });
+    if (parseFloat(line.cgst_rate)) taxes.push({ tax_name: 'CGST', rate: parseFloat(line.cgst_rate) });
+    if (parseFloat(line.sgst_rate)) taxes.push({ tax_name: 'SGST', rate: parseFloat(line.sgst_rate) });
+    return taxes;
+}
+
+/** The invoice's dominant product tax split (used by lines built without one). */
+function dominantInvoiceTax(invoiceLines) {
+    let best = null;
+    for (const line of invoiceLines || []) {
+        if (isChargeLine(line)) continue;
+        const tax = taxFromInvoiceLine(line);
+        if (!tax.tax_percentage) continue;
+        const gross = (parseFloat(line.rate) || 0) * (parseFloat(line.quantity) || 1);
+        if (!best || gross > best.gross) best = { ...tax, gross };
+    }
+    return best;
+}
+
+/**
+ * Lines for the standalone replacement invoice: the exchanged items in the
+ * shape the ORIGINAL invoice bills, priced from the exchange record
+ * (`replacementPrice`, prorated across bundle components). A record without a
+ * price falls back to what the customer paid for the item it replaces, so a
+ * same-product swap never moves money.
+ */
+async function buildReplacementInvoiceLines({ invoiceLines = [], originalItems = [], exchangedItems = [] }) {
+    if (!exchangedItems?.length) return [];
+    const lines = await buildSwapLines({
+        invoiceLines,
+        fromItems: originalItems,
+        toItems: exchangedItems,
+        useRecordedPrice: true,
+        newDocument: true,
+        rateFor: (exItem, inheritedRate, origLine) => {
+            const explicit = parseFloat(exItem.price) || 0;
+            if (explicit > 0) return explicit;
+            // No price on the exchange record: bill what the customer ACTUALLY
+            // paid for the item being replaced, net of its line discount. The
+            // replacement line carries no discount of its own, so inheriting
+            // the gross rate would leave a balance on a like-for-like swap.
+            const net = Math.round(Math.max(0, inheritedRate - (parseFloat(origLine?.discount) || 0)) * 100) / 100;
+            if (net > 0) {
+                console.warn(`⚠️ Zoho exchange: no replacement price for "${exItem.name}" — billing the amount paid (₹${net})`);
+            }
+            return net;
+        }
+    });
+
+    // A replacement that matched no invoice line (renamed style, extra piece)
+    // inherits no GST split. Give it the invoice's dominant one, otherwise the
+    // new document is billed untaxed while the credit note reverses tax.
+    const tax = dominantInvoiceTax(invoiceLines);
+    if (tax) {
+        for (const line of lines) {
+            if (line.cgst_rate || line.sgst_rate || line.igst_rate || line.tax_percentage) continue;
+            if (tax.cgst_rate) line.cgst_rate = tax.cgst_rate;
+            if (tax.sgst_rate) line.sgst_rate = tax.sgst_rate;
+            if (tax.igst_rate) line.igst_rate = tax.igst_rate;
+            if (tax.tax_percentage) line.tax_percentage = tax.tax_percentage;
+        }
+    }
+    return lines;
+}
+
+/**
+ * Exchange replacement invoice — the NEW items the customer received, billed
+ * on their own document (EXCH-INV-<order>) at the exchange record's price.
+ * The returned items are reversed by the EXCH-<order> credit note on the
+ * original invoice, so the two documents settle the exchange between them.
+ *
+ * One document per order: an existing one (including the ₹0 stock-only
+ * artifact the old flow left behind) is re-lined in place instead of a second
+ * invoice being created.
+ */
+async function createExchangeReplacementInvoice({
+    orderId, exchangedItems, originalItems = [], originalInvoice = null,
+    invoiceLines = [], existingInvoiceId = null
+}) {
+    if (!exchangedItems?.length) return null;
+    const ref = `EXCH-INV-${String(orderId).replace(/^#/, '')}`;
+    const zohoLines = await buildReplacementInvoiceLines({ invoiceLines, originalItems, exchangedItems });
+    if (zohoLines.length === 0) return null;
+
+    // Dedupe — one replacement invoice per order
+    let invoiceId = existingInvoiceId || null;
+    if (!invoiceId) {
+        try {
+            const existing = await zohoService.searchInvoice({ reference_number: ref });
+            invoiceId = existing[0]?.invoice_id || null;
+        } catch (e) { /* create a fresh document */ }
+    }
+
+    let invoice;
+    if (invoiceId) {
+        invoice = await zohoService.updateInvoice(
+            invoiceId,
+            { line_items: zohoLines, is_inclusive_tax: true },
+            `Exchange: replacement items billed (order #${orderId})`
+        );
+    } else {
+        const payload = {
+            customer_id: originalInvoice?.customer_id || undefined,
+            date: new Date().toISOString().split('T')[0],
+            payment_terms: 0,
+            line_items: zohoLines,
+            notes: `Exchange replacement for Shopify Order #${orderId}`,
+            reference_number: ref,
+            is_inclusive_tax: true,
+            // Same GST basis as the invoice the credit note reverses
+            gst_treatment: originalInvoice?.gst_treatment || 'consumer'
+        };
+        if (originalInvoice?.place_of_supply) payload.place_of_supply = originalInvoice.place_of_supply;
+        if (originalInvoice?.shipping_address) payload.shipping_address = originalInvoice.shipping_address;
+        invoice = await zohoService.createInvoice(payload);
+    }
+
     // Mark sent so the stock deduction actually happens
     try {
         await zohoService.markInvoiceSent(invoice.invoice_id);
     } catch (sentErr) {
         console.warn(`⚠️ Zoho exchange: replacement invoice mark-sent failed (${sentErr.message})`);
     }
-    return invoice?.invoice_id || null;
+    return invoice;
+}
+
+/**
+ * Move the customer's money onto the replacement invoice.
+ *
+ * The payment is recorded against the ORIGINAL invoice, which the exchange
+ * credit note just reduced — left alone the invoice ends up overpaid while the
+ * replacement shows as unpaid. Only payments applied to this invoice ALONE are
+ * moved: deleting a payment that also settles other invoices would unbalance
+ * documents this flow knows nothing about, so those are reported instead.
+ *
+ * Split rule: the original invoice keeps what it is still owed after the
+ * credit note, the replacement invoice receives up to its own total, and any
+ * remainder (a cheaper replacement) is reported as an unused/refundable amount.
+ */
+async function moveExchangePayments({ originalInvoice, replacementInvoice, creditNoteTotal = 0 }) {
+    const result = { moved: 0, stayed: 0, leftover: 0, warnings: [] };
+    const invoiceId = originalInvoice?.invoice_id;
+    if (!invoiceId || !replacementInvoice?.invoice_id) {
+        result.warnings.push('missing invoice document — payments not moved');
+        return result;
+    }
+
+    let payments = [];
+    try {
+        payments = await zohoService.getPayments(invoiceId, originalInvoice.invoice_number);
+    } catch (e) {
+        result.warnings.push(`payment lookup failed: ${e.message}`);
+        return result;
+    }
+    if (!payments.length) return result;
+
+    const invoiceNumber = String(originalInvoice.invoice_number || '');
+    const appliesOnlyHere = (p) => {
+        const applied = Array.isArray(p.invoices) ? p.invoices : [];
+        if (applied.length > 1) return false;
+        if (applied.length === 1 && applied[0]?.invoice_id && String(applied[0].invoice_id) !== String(invoiceId)) return false;
+        const numbers = String(p.invoice_numbers || '');
+        if (numbers.includes(',')) return false;
+        if (numbers && invoiceNumber && !numbers.includes(invoiceNumber)) return false;
+        return true;
+    };
+    const movable = payments.filter(appliesOnlyHere);
+    if (movable.length < payments.length) {
+        result.warnings.push(`${payments.length - movable.length} payment(s) also settle other invoices — left untouched`);
+    }
+    const round = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+    const paid = round(movable.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0));
+    if (paid <= 0.01) return result;
+
+    const oldTarget = Math.min(paid, Math.max(0, round((parseFloat(originalInvoice.total) || 0) - round(creditNoteTotal))));
+    const newTarget = Math.min(round(paid - oldTarget), Math.max(0, round(replacementInvoice.total ?? replacementInvoice.balance)));
+
+    const sample = movable[0];
+    const recordOn = (targetInvoiceId, amount, description) => zohoService.recordPayment({
+        customer_id: sample.customer_id || originalInvoice.customer_id,
+        amount,
+        date: sample.date || new Date().toISOString().split('T')[0],
+        payment_mode: sample.payment_mode || 'cash',
+        invoices: [{ invoice_id: targetInvoiceId, amount_applied: amount }],
+        description
+    });
+
+    const deleted = [];
+    for (const p of movable) {
+        try {
+            await zohoService.deletePayment(p.payment_id);
+            deleted.push(p);
+        } catch (e) {
+            // Never leave money unrecorded: put back what was already removed.
+            const removed = round(deleted.reduce((s, d) => s + (parseFloat(d.amount) || 0), 0));
+            const back = Math.min(removed, oldTarget);
+            if (back > 0) {
+                await recordOn(invoiceId, back, 'Exchange: payment restored after a failed transfer').catch(() => {});
+            }
+            result.warnings.push(`payment ${p.payment_id} could not be moved: ${e.message}`);
+            return result;
+        }
+    }
+
+    if (oldTarget > 0) {
+        try {
+            await recordOn(invoiceId, oldTarget, 'Exchange: payment re-recorded after the exchange credit note');
+            result.stayed = oldTarget;
+        } catch (e) {
+            result.warnings.push(`₹${oldTarget} not recorded back on the original invoice: ${e.message}`);
+        }
+    }
+    if (newTarget > 0) {
+        try {
+            await recordOn(replacementInvoice.invoice_id, newTarget, 'Exchange: payment transferred from the original invoice');
+            result.moved = newTarget;
+        } catch (e) {
+            result.warnings.push(`₹${newTarget} not recorded on the replacement invoice: ${e.message}`);
+        }
+    }
+    result.leftover = Math.max(0, round(paid - result.moved - result.stayed));
+    if (result.leftover > 0) {
+        result.warnings.push(`₹${result.leftover} of recorded payment is now unused (refund/advance) — settle manually`);
+    }
+    return result;
 }
 
 /**
@@ -509,18 +774,134 @@ function preserveInvoiceLine(line) {
 }
 
 /**
- * Swap the invoice lines that were returned/exchanged for the replacement
- * product or variant. Each replacement inherits the rate, discount and GST
- * split of the line it replaces, so the invoice total — and the payments
- * already recorded against it — stay balanced. Bundles are expanded into
- * size-wise singles like everywhere else.
+ * Turn one exchange item into the form the INVOICE uses. Bundle mappings are
+ * keyed without a size ("HENLEY - 001 ( TRIPLE )") and the invoice usually
+ * bills the components, so look the bundle up size-free and hand the size over
+ * as the variant — the components come back as "... ( B ) - L".
+ * Items that are not bundles come back as themselves.
  */
-async function buildExchangeCorrectedLines({ invoiceLines, originalItems, exchangedItems }) {
-    const bundleMap = await loadBundleMap();
-    const resolver = createItemResolver();
+async function expandItem(item, bundleMap) {
+    const title = String(item?.title || '');
+    const size = item?.variant || extractSizeFromTitle(title);
+    let base = title;
+    if (size) {
+        const sizeRe = String(size).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        base = base
+            .replace(new RegExp(`\\s*-\\s*${sizeRe}\\s*$`, 'i'), '')
+            .replace(new RegExp(`\\(\\s*${sizeRe}\\s*\\)\\s*$`, 'i'), '')
+            .trim();
+    }
+    const raw = [{
+        title: base,
+        sku: item?.sku || '',
+        quantity: parseInt(item?.quantity || 1) || 1,
+        price: parseFloat(item?.price || 0) || 0,
+        variant: size
+    }];
+    const { lineItems } = breakBundleLineItems(raw, bundleMap);
+    return lineItems.map(li => {
+        // breakBundleLineItems strips a size-suffixed title back to the base
+        // name — re-attach it so it equals the invoice line name.
+        const name = withSizeInTitle(li.name, li.variant || '');
+        return {
+            title: name,
+            name,
+            sku: li.sku || '',
+            variant: li.variant || '',
+            quantity: li.quantity,
+            // For a bundle this is the prorated per-component price, the same
+            // math the original invoice used; for a plain item it is the price
+            // paid.
+            price: parseFloat(li.rate) || 0,
+            isBundleComponent: !!li.is_bundle_component
+        };
+    });
+}
 
-    const lines = (invoiceLines || []).map(l => ({ ...l, _matched: false }));
-    const norm = (s) => String(s || '').toUpperCase().replace(/\s+/g, ' ').trim();
+const tightName = (s) => String(s || '').replace(/\s+/g, '').toUpperCase();
+
+// An older backfill appended the replacement as an extra ₹0 line ("Exchange
+// replacement - S") instead of re-lining the original. It is never a real
+// billed line: it must not decide the invoice's shape nor satisfy a match.
+const isObsoleteLine = (l) => !(parseFloat(l.rate) > 0)
+    && /^exchange replacement/i.test(String(l.description || ''));
+
+/**
+ * Pair every item the invoice bills with the item that takes its place, in the
+ * shape the invoice itself uses: when the invoice bills a bundle as one line
+ * ("WAFFLE-001 (BUNDLE) - S") both sides stay whole, when it bills the
+ * components both sides are expanded so each keeps its own colourway and
+ * price. Without this a component invoice would be rewritten as a single line
+ * (total changes) or a bundle line would be rewritten as several.
+ *
+ * Directional on purpose: forwards (original → replacement) to bill what the
+ * customer received, backwards (replacement → original) to undo a correction
+ * made by the old in-place flow.
+ */
+async function pairExchangeItems({ fromItems, toItems, invoiceLines }) {
+    const bundleMap = await getBundleMap();
+    const billedNames = new Set((invoiceLines || [])
+        .filter(l => !isObsoleteLine(l))
+        .map(l => tightName(l.name)));
+    const originals = [];
+    const replacements = [];
+    const count = Math.max((fromItems || []).length, (toItems || []).length);
+
+    for (let i = 0; i < count; i++) {
+        const fromItem = (fromItems || [])[i];
+        const toItem = (toItems || [])[i];
+        const origPlain = await expandItem(fromItem, {});          // no expansion
+        const origExpanded = await expandItem(fromItem, bundleMap);
+        const replPlain = await expandItem(toItem, {});
+        const replExpanded = await expandItem(toItem, bundleMap);
+
+        // Does the invoice bill this item whole, or as its components?
+        const billedWhole = origPlain.some(o => billedNames.has(tightName(o.title)));
+        const useWhole = billedWhole || origExpanded.length === 1;
+        originals.push(...(useWhole ? origPlain : origExpanded));
+        replacements.push(...(useWhole ? replPlain : replExpanded));
+    }
+
+    return { originals, replacements };
+}
+
+/**
+ * Swap the invoice lines that were returned/exchanged for their replacement.
+ * Each replacement inherits the rate, discount and GST split of the line it
+ * replaces, so the invoice total — and the payments already recorded against
+ * it — stay balanced. Bundles are expanded into size-wise singles like
+ * everywhere else.
+ *
+ * Directional: `fromItems` are what the invoice currently bills, `toItems`
+ * what takes their place. The same call therefore reverses a correction.
+ *
+ * `newDocument` renders the swap for a STANDALONE document (the replacement
+ * invoice): charge lines are not carried over, the line discount is dropped,
+ * and `rateFor` may override the price of each replacement.
+ */
+async function buildSwapLines({
+    invoiceLines, fromItems, toItems, useRecordedPrice = false, newDocument = false, rateFor = null
+}) {
+    const resolver = getItemResolver();
+    const { originals, replacements: brokenExchanged } = await pairExchangeItems({ fromItems, toItems, invoiceLines });
+
+    let lines = (invoiceLines || []).map(l => ({ ...l, _matched: false }));
+    // Whitespace is dropped entirely: the catalog and the dashboard disagree on
+    // spacing around parens ("( ACID WASH)" vs "( ACID WASH )") while meaning
+    // the same variant.
+    const norm = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
+    const isProductLine = (l) => !isChargeLine(l);
+
+    // An older backfill appended the replacement as an extra ₹0 line
+    // ("Exchange replacement - S") instead of re-lining the original. That line
+    // is superseded below, and keeping it would book the replacement twice.
+    if (lines.some(l => isProductLine(l) && !isObsoleteLine(l))) {
+        const before = lines.length;
+        lines = lines.filter(l => !isObsoleteLine(l));
+        if (lines.length !== before) {
+            console.log(`🔁 Zoho exchange: dropping ${before - lines.length} zero-value replacement line(s) superseded by the correction`);
+        }
+    }
 
     // Find the invoice line a returned/exchanged item came from
     const findOrigLine = (item) => {
@@ -538,48 +919,44 @@ async function buildExchangeCorrectedLines({ invoiceLines, originalItems, exchan
         return null;
     };
 
-    for (const orig of originalItems || []) {
+    for (const orig of originals) {
         const line = findOrigLine(orig);
-        if (line) line._matched = true;
+        if (line) {
+            line._matched = true;
+            line._origItem = orig;
+        }
     }
 
     // Catalog renames make SKU/title matching drift — fall back to positional
     // matching against the invoice's product lines so the swap still happens.
     if (!lines.some(l => l._matched)) {
-        const isProductLine = (l) => {
-            const name = (l.name || '').toLowerCase();
-            const desc = (l.description || '').toLowerCase();
-            return !(name.includes('shipping') || desc.includes('shipping')
-                || name.includes('cod') || desc.includes('cod')
-                || name.includes('cash on delivery') || desc.includes('cash on delivery'));
-        };
         const productLines = lines.filter(isProductLine);
-        const wanted = Math.max((originalItems || []).length, 1);
-        for (let i = 0; i < Math.min(wanted, productLines.length); i++) productLines[i]._matched = true;
+        const wanted = Math.max(originals.length, 1);
+        for (let i = 0; i < Math.min(wanted, productLines.length); i++) {
+            productLines[i]._matched = true;
+            productLines[i]._origItem = originals[i] || null;
+        }
     }
 
-    const rawExchanged = (exchangedItems || []).map(i => ({
-        title: withSizeInTitle(i.title || '', i.variant || ''),
-        sku: i.sku || '',
-        quantity: parseInt(i.quantity || 1) || 1,
-        price: 0,
-        variant: i.variant || ''
-    }));
-    const { lineItems: brokenExchanged } = breakBundleLineItems(rawExchanged, bundleMap);
-
     const buildLine = async (exItem, origLine) => {
-        // breakBundleLineItems strips a size-suffixed title back to the base
-        // name and keeps the size in `variant` — re-attach it so the Zoho
-        // catalog name (and therefore the stock item) stays size-specific.
+        // The pairing already produced invoice-shaped names (size included) —
+        // keep them so the Zoho catalog item stays size-specific.
         const lineName = withSizeInTitle(exItem.name, exItem.variant);
+        let rate = parseFloat(origLine?.rate || 0);
+        if (!(rate > 0) && useRecordedPrice) {
+            // Backfill case: an invoice recreated by the old flow carries the
+            // replacement at ₹0 — fall back to the price on the exchange record.
+            rate = parseFloat(origLine?._origItem?.price || 0) || 0;
+        }
+        // A standalone replacement invoice bills the price on the exchange
+        // record; an in-place re-line keeps the amount already paid.
+        if (rateFor) rate = rateFor(exItem, rate, origLine);
         const line = {
             name: lineName,
             description: `Exchange replacement — ${lineName}`,
             quantity: exItem.quantity,
-            // Money does not move on an exchange: bill the replacement at the
-            // rate the customer actually paid for the item it replaces.
-            rate: parseFloat(origLine?.rate || 0),
-            discount: parseFloat(origLine?.discount || 0),
+            rate,
+            discount: newDocument ? 0 : parseFloat(origLine?.discount || 0),
             is_inclusive_tax: true
         };
         if (origLine) {
@@ -598,186 +975,375 @@ async function buildExchangeCorrectedLines({ invoiceLines, originalItems, exchan
         return line;
     };
 
+    // Pair every replaced line with its own replacement: same product/colourway,
+    // different size ("HENLEY - 001 ( B ) - L" ↔ "HENLEY - 001 ( B ) - M").
+    // A bundle expands into several components, so line order alone would put
+    // the wrong colourway on the wrong stock item.
+    const baseKey = (name) => String(name || '').toUpperCase().replace(/\s+/g, ' ')
+        .replace(/\s*-\s*[A-Z0-9]{1,3}$/, '').trim();
+    const taken = new Array(brokenExchanged.length).fill(false);
+    const takeReplacement = (lineName) => {
+        const key = baseKey(lineName);
+        let idx = brokenExchanged.findIndex((ex, i) =>
+            !taken[i] && baseKey(withSizeInTitle(ex.name, ex.variant)) === key);
+        // No name match (renamed style, unexpected component) — keep the old
+        // positional behaviour rather than dropping the replacement.
+        if (idx < 0) idx = taken.indexOf(false);
+        if (idx < 0) return null;
+        taken[idx] = true;
+        return brokenExchanged[idx];
+    };
+
     const corrected = [];
-    let exIdx = 0;
     for (const line of lines) {
         if (!line._matched) {
-            corrected.push(preserveInvoiceLine(line));
+            // A standalone replacement invoice carries only the swapped items.
+            if (!newDocument) corrected.push(preserveInvoiceLine(line));
             continue;
         }
-        const exItem = brokenExchanged[exIdx++];
+        const exItem = takeReplacement(line.name);
         if (!exItem) continue; // fewer replacement items than original lines
         corrected.push(await buildLine(exItem, line));
     }
     // More replacement items than matched originals (a swap that turned into
     // two pieces) — append the remainder rather than dropping them.
-    for (; exIdx < brokenExchanged.length; exIdx++) {
-        corrected.push(await buildLine(brokenExchanged[exIdx], null));
+    for (let i = 0; i < brokenExchanged.length; i++) {
+        if (!taken[i]) corrected.push(await buildLine(brokenExchanged[i], null));
     }
     return corrected;
 }
 
+// NOTE: an exchange is never booked by re-billing the original invoice.
+// The returned product is reversed with a credit note on that invoice and the
+// product the customer received is billed on its own replacement invoice
+// (createExchangeReplacementInvoice) — see handleExchange.
+
+const money = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+const lineFingerprint = (l) => `${l.name} x${money(l.quantity)} @${money(l.rate).toFixed(2)}`;
+
 /**
- * Correct the original Zoho invoice after an exchange so it shows the
- * NEW product/variant the customer actually received (e.g. Henley S
- * instead of M).
+ * Plan the exchange documents for an order — read-only.
  *
- * Flow: drop the exchange credit note → re-line the original invoice with
- * the replacement items (in place, keeping invoice number and payments).
- * Only when Books refuses the edit: delete invoice → recreate → re-record
- * payments.
+ * Target state (what applyExchangePlan writes):
+ *   original invoice  bills what the customer ORDERED, with the returned
+ *                     items reversed by the EXCH-<order> credit note
+ *   EXCH-INV-<order>  bills what the customer RECEIVED, priced from the
+ *                     exchange record
  *
- * Stock effect: Books derives item-wise stock from the invoice lines, so the
- * old variant returns and the replacement variant is deducted — the same net
- * effect as deleting and recreating, without losing the invoice number.
+ * Orders booked by the OLD flow need repairs: that flow deleted the credit
+ * note and re-lined the invoice in place, and its fallback left a ₹0
+ * "stock only" EXCH-INV document behind. The plan therefore also carries the
+ * lines needed to revert such an invoice, and re-lines an existing EXCH-INV
+ * instead of creating a second document.
+ *
+ * The plan is serialisable and carries every payload apply needs, so a bulk
+ * run can review every order first and then execute the writes without
+ * re-reading anything from Zoho.
+ *
+ * `invoice`, `creditNoteId` and `replacementInvoiceId` may be passed in by a
+ * bulk caller that already resolved them from paged list scans — that removes
+ * up to three calls per order. Pass `null` for "known absent"; leave them
+ * undefined to let this function look them up.
  */
-async function correctOriginalInvoiceForExchange({ shopifyOrder, orderId, originalItems, exchangedItems, creditNoteId, customerId }) {
-    if (!exchangedItems?.length) return { success: false, reason: 'no_exchanged_items' };
+async function planExchangeInvoice({
+    orderId, originalItems, exchangedItems,
+    invoice = null, creditNoteId, replacementInvoiceId,
+    requireMatch = false, withPayments = false
+}) {
+    const ref = String(orderId || '').replace(/^#/, '').trim();
+    const out = { orderId: ref, status: 'skipped', invoiceId: null, invoiceNumber: '', before: [], after: [], notes: [] };
+    if (!ref) return { ...out, status: 'invalid_order' };
+    if (!exchangedItems?.length) return { ...out, status: 'no_exchanged_items' };
 
-    // 1. Find the original invoice
-    const originalInvoice = await findInvoiceForOrder(orderId);
-    if (!originalInvoice) return { success: false, reason: 'no_original_invoice' };
-
-    let fullInvoice = await fetchFullInvoice(originalInvoice);
-    if (!fullInvoice?.line_items?.length) return { success: false, reason: 'no_invoice_lines' };
-
-    const invoiceId = fullInvoice.invoice_id;
-
-    // 2. Delete the exchange credit note first — the invoice itself is about
-    //    to bill the replacement items, so keeping the credit would reverse
-    //    the order twice and leave the recorded payments unapplied.
-    if (creditNoteId) {
+    // 1. Locate the original invoice. The EXCH-INV document carries its own
+    //    reference, so searching the bare order number never returns it.
+    if (!invoice) {
         try {
-            await zohoService.deleteCreditNote(creditNoteId);
-            console.log(`🗑️ Zoho exchange correction: deleted credit note ${creditNoteId}`);
-            fullInvoice = await fetchFullInvoice(originalInvoice);
+            const found = await zohoService.searchInvoice({ reference_number: ref });
+            invoice = found.find(i => i.status !== 'void' && i.status !== 'deleted') || null;
         } catch (e) {
-            console.warn(`⚠️ Zoho exchange correction: credit note delete failed (${e.message}) — continuing`);
+            return { ...out, status: 'invoice_lookup_failed', notes: [e.message] };
         }
     }
-
-    // Guard: credits still applied to the invoice mean the reversal could not
-    // be removed — re-lining now would credit the order twice.
-    const creditsApplied = parseFloat(fullInvoice?.credits_applied) || 0;
-    if (creditsApplied > 0.01) {
-        console.warn(`⚠️ Zoho exchange correction: invoice ${invoiceId} still carries ₹${creditsApplied.toFixed(2)} in applied credits — leaving it for manual review (order #${orderId})`);
-        return { success: false, reason: 'credits_applied', creditsApplied };
+    if (!invoice) return { ...out, status: 'no_invoice' };
+    out.invoiceId = invoice.invoice_id;
+    out.invoiceNumber = invoice.invoice_number || '';
+    if (invoice.status === 'void' || invoice.status === 'deleted') {
+        return { ...out, status: 'invoice_void' };
     }
 
-    // 3. Build the corrected lines: every returned item's invoice line is
-    //    replaced by the product/variant the customer actually received
-    const correctedLines = await buildExchangeCorrectedLines({
-        invoiceLines: fullInvoice.line_items,
-        originalItems,
-        exchangedItems
-    });
+    // 2. Read the current lines — the only per-order detail call.
+    let full = invoice;
+    if (!Array.isArray(invoice.line_items) || invoice.line_items.length === 0) {
+        try {
+            full = await zohoService.getInvoice(invoice.invoice_id);
+        } catch (e) {
+            return { ...out, status: 'invoice_fetch_failed', notes: [e.message] };
+        }
+    }
+    if (!full?.line_items?.length) return { ...out, status: 'no_invoice_lines' };
 
-    // 4. Preferred fix: re-line the ORIGINAL invoice in place. Invoice number,
-    //    date and payments survive, and Books moves the stock (old variant
-    //    back, replacement variant out) because stock follows the lines.
-    try {
-        const updated = await zohoService.updateInvoice(
-            invoiceId,
-            { line_items: correctedLines, is_inclusive_tax: true },
-            `Exchange: product/variant replaced with what the customer received (order #${orderId})`
+    const keyOf = (v) => String(v || '').toUpperCase().replace(/\s+/g, '');
+    const lineMatches = (l, item) => {
+        const name = keyOf(l.name);
+        return [item?.sku, item?.title].filter(Boolean).map(keyOf).some(k =>
+            name === k || (k.length > 3 && (name.includes(k) || k.includes(name)))
         );
-        console.log(`✅ Zoho exchange correction: order #${orderId} → invoice ${invoiceId} now bills the replacement item(s)`);
-        const delta = parseFloat(updated?.total) - parseFloat(fullInvoice.total);
-        if (Number.isFinite(delta) && Math.abs(delta) > 0.01) {
-            console.warn(`⚠️ Zoho exchange correction: invoice ${invoiceId} total moved ₹${delta.toFixed(2)} — review payments for order #${orderId}`);
-        }
-        return { success: true, newInvoiceId: invoiceId, inPlace: true };
-    } catch (e) {
-        console.warn(`⚠️ Zoho exchange correction: in-place re-line rejected for #${orderId} (${e.message}) — falling back to invoice replacement`);
-    }
-
-    // 5. Fallback for invoices Books refuses to edit (locked/paid/audited):
-    //    remove payments → delete invoice → recreate with the corrected lines
-    //    → re-record the payments. Rates are carried over, so the recreated
-    //    invoice keeps the amount the customer actually paid.
-    let deletedPayments = [];
-    try {
-        const payments = await zohoService.getPayments(invoiceId, fullInvoice.invoice_number);
-        for (const p of payments) {
-            try {
-                await zohoService.deletePayment(p.payment_id);
-                deletedPayments.push({
-                    amount: parseFloat(p.amount || 0),
-                    date: p.date,
-                    payment_mode: p.payment_mode,
-                    customer_id: p.customer_id || customerId
-                });
-            } catch (e) {
-                console.warn(`⚠️ Zoho exchange correction: payment delete failed (${e.message})`);
-            }
-        }
-    } catch (e) {
-        console.warn(`⚠️ Zoho exchange correction: payment fetch failed (${e.message})`);
-    }
-
-    try {
-        await zohoService.deleteInvoice(invoiceId);
-        console.log(`🗑️ Zoho exchange correction: deleted invoice ${invoiceId}`);
-    } catch (e) {
-        console.error(`❌ Zoho exchange correction: invoice delete failed (${e.message})`);
-        return { success: false, reason: 'delete_failed', error: e.message };
-    }
-
-    // 6. Recreate the invoice with the replacement lines
-    const newPayload = {
-        customer_id: fullInvoice.customer_id || customerId || undefined,
-        date: fullInvoice.date || new Date().toISOString().split('T')[0],
-        payment_terms: 0,
-        line_items: correctedLines,
-        notes: fullInvoice.notes || `Shopify Order #${orderId}`,
-        reference_number: fullInvoice.reference_number,
-        is_inclusive_tax: true,
-        gst_treatment: fullInvoice.gst_treatment || 'consumer'
     };
-    if (fullInvoice.shipping_address) newPayload.shipping_address = fullInvoice.shipping_address;
-    if (fullInvoice.place_of_supply) newPayload.place_of_supply = fullInvoice.place_of_supply;
+    // ₹0 lines the old backfill appended are not real invoice lines.
+    const productLines = full.line_items.filter(l => !isChargeLine(l) && !isObsoleteLine(l));
+    const billsAll = (items) => (items || []).length > 0
+        && items.every(it => productLines.some(l => lineMatches(l, it)));
 
-    let newInvoice;
-    try {
-        newInvoice = await zohoService.createInvoice(newPayload);
-    } catch (e) {
-        console.error(`❌ Zoho exchange correction: new invoice creation failed (${e.message})`);
-        return { success: false, reason: 'create_failed', error: e.message };
-    }
-
-    // Mark sent so stock deduction happens
-    try {
-        await zohoService.markInvoiceSent(newInvoice.invoice_id);
-    } catch (e) {
-        console.warn(`⚠️ Zoho exchange correction: mark-sent failed (${e.message})`);
-    }
-
-    console.log(`✅ Zoho exchange correction: order #${orderId} → new invoice ${newInvoice.invoice_id} (was ${invoiceId})`);
-
-    // 7. Re-record payments on the new invoice
-    for (const p of deletedPayments) {
-        try {
-            await zohoService.recordPayment({
-                customer_id: p.customer_id,
-                amount: p.amount,
-                date: p.date,
-                payment_mode: p.payment_mode || 'cash',
-                invoices: [{ invoice_id: newInvoice.invoice_id, amount_applied: p.amount }],
-                description: 'Payment re-recorded after exchange correction'
-            });
-        } catch (e) {
-            console.warn(`⚠️ Zoho exchange correction: payment re-record failed (${e.message})`);
+    // 3. Safety gate for bulk runs: only touch an order whose returned items
+    //    can be tied to a real invoice line by name/SKU. Anything ambiguous is
+    //    reported instead of written.
+    const billsReplacement = billsAll(exchangedItems) && !billsAll(originalItems);
+    if (requireMatch) {
+        const { originals: matchedItems } = await pairExchangeItems({
+            fromItems: originalItems, toItems: exchangedItems, invoiceLines: full.line_items
+        });
+        const unmatched = matchedItems.filter(it => !productLines.some(l => lineMatches(l, it)));
+        const allZero = productLines.length > 0 && productLines.every(l => !(parseFloat(l.rate) > 0));
+        if (unmatched.length && !allZero && !billsReplacement) {
+            return {
+                ...out,
+                status: 'needs_review',
+                before: full.line_items.map(lineFingerprint),
+                notes: [
+                    ...out.notes,
+                    `no invoice line for returned item(s): ${unmatched.map(u => u.title || u.sku || '?').join(', ')}`
+                ]
+            };
         }
     }
 
-    return { success: true, newInvoiceId: newInvoice.invoice_id };
+    // 4. Existing exchange documents for this order.
+    if (creditNoteId === undefined) {
+        creditNoteId = null;
+        try {
+            const cns = await zohoService.searchCreditNotes({ reference_number: `EXCH-${ref}` });
+            creditNoteId = cns[0]?.creditnote_id || null;
+        } catch (e) {
+            out.notes.push(`credit note lookup failed: ${e.message}`);
+        }
+    }
+
+    let replacementRow = null;
+    if (replacementInvoiceId === undefined) {
+        replacementInvoiceId = null;
+        try {
+            const reps = await zohoService.searchInvoice({ reference_number: `EXCH-INV-${ref}` });
+            replacementRow = reps.find(i => i.status !== 'void' && i.status !== 'deleted') || reps[0] || null;
+            replacementInvoiceId = replacementRow?.invoice_id || null;
+        } catch (e) {
+            out.notes.push(`EXCH-INV lookup failed: ${e.message}`);
+        }
+    }
+
+    // 5. An invoice re-lined by the old flow bills the replacement — restore
+    //    the original items first, or the credit note would reverse the wrong
+    //    product (and stock).
+    const revertLineItems = billsReplacement
+        ? await buildSwapLines({
+            invoiceLines: full.line_items,
+            fromItems: exchangedItems,
+            toItems: originalItems,
+            useRecordedPrice: true
+        })
+        : null;
+    const baseLines = revertLineItems || full.line_items;
+
+    // 6. Credit note for the returned items, mirroring the invoice lines they
+    //    came from (rate, discount share, GST split, item linkage).
+    let creditNotePayload = null;
+    let creditNoteTotal = 0;
+    if (!creditNoteId) {
+        const creditReference = creditNoteReference(ref, 'exchange');
+        const baseInvoice = {
+            ...full,
+            line_items: revertLineItems
+                ? revertLineItems.map(l => ({ ...l, taxes: taxesArrayFromRates(l) }))
+                : full.line_items,
+            // Reverting the re-line removes the credits applied against it.
+            credits_applied: billsReplacement ? 0 : full.credits_applied
+        };
+        creditNotePayload = await buildMirroredCreditNotePayload({
+            shopifyOrder: { order_number: ref, id: ref },
+            orderId: ref,
+            returnItems: originalItems,
+            returnType: 'exchange',
+            fullInvoice: baseInvoice,
+            reference: creditReference
+        });
+        const cap = capCreditNoteToBalance(creditNotePayload, baseInvoice, creditReference, 'exchange');
+        if (cap.fullyCredited) creditNotePayload = null;
+        creditNoteTotal = money((creditNotePayload?.line_items || []).reduce(
+            (s, l) => s + money(l.rate) * (parseFloat(l.quantity) || 1) - money(l.discount), 0));
+    }
+
+    // 7. The replacement product on its own invoice, priced from the exchange
+    //    record (the old flow billed it at ₹0).
+    const replacementInvoiceLines = await buildReplacementInvoiceLines({
+        invoiceLines: baseLines, originalItems, exchangedItems
+    });
+    const replacementTotal = money(replacementInvoiceLines.reduce(
+        (s, l) => s + money(l.rate) * (parseFloat(l.quantity) || 1), 0));
+    const replacementNeedsLines = replacementInvoiceLines.length > 0
+        && (replacementRow ? !(parseFloat(replacementRow.total) > 0) : !replacementInvoiceId);
+
+    out.before = full.line_items.map(lineFingerprint);
+    out.after = replacementInvoiceLines.map(lineFingerprint);
+    out.creditNoteId = creditNoteId;
+    out.creditNotePayload = creditNotePayload;
+    out.creditNoteTotal = creditNoteTotal;
+    out.replacementInvoiceId = replacementInvoiceId;
+    out.replacementInvoiceLines = replacementInvoiceLines;
+    out.replacementNeedsLines = replacementNeedsLines;
+    out.replacementTotal = replacementTotal;
+    out.revertLineItems = revertLineItems;
+    out.customerId = full.customer_id || null;
+    out.gstTreatment = full.gst_treatment || 'consumer';
+    out.placeOfSupply = full.place_of_supply || null;
+    // Credits already on the invoice once the revert is written — the apply
+    // pass uses it to tell an applied credit note from an unapplied one.
+    out.creditsApplied = money(billsReplacement ? 0 : full.credits_applied);
+    out.totalBefore = money(full.total);
+    out.totalAfter = replacementTotal;
+    out.withPayments = !!withPayments;
+
+    out.changed = !!(revertLineItems || creditNotePayload || replacementNeedsLines);
+    return { ...out, status: out.changed ? 'would_fix' : 'already_correct' };
+}
+
+/**
+ * Execute a plan produced by planExchangeInvoice: revert an old in-place
+ * re-line, book the credit note for the returned items, then write the
+ * replacement invoice. Payments move only when the plan asked for it. Safe to
+ * call twice — a second pass finds the documents already in place.
+ */
+async function applyExchangePlan(plan) {
+    const out = { ...plan, notes: [...(plan.notes || [])] };
+    const ref = String(out.orderId || '').replace(/^#/, '');
+    if (!out.invoiceId) return { ...out, status: 'invalid_plan' };
+
+    // 1. Undo an old in-place re-line: the invoice must bill what the customer
+    //    ordered before the credit note can reverse the returned item.
+    if (Array.isArray(out.revertLineItems) && out.revertLineItems.length > 0) {
+        try {
+            await zohoService.updateInvoice(
+                out.invoiceId,
+                { line_items: out.revertLineItems, is_inclusive_tax: true },
+                `Exchange: restore the originally invoiced items (order #${ref})`
+            );
+        } catch (e) {
+            return { ...out, status: 'revert_failed', notes: [...out.notes, e.message] };
+        }
+    }
+
+    // 2. Credit note on the ORIGINAL invoice for the returned item(s).
+    if (out.creditNotePayload?.line_items?.length && !out.creditNoteId) {
+        try {
+            const cn = await zohoService.createCreditNote(out.creditNotePayload);
+            out.creditNoteId = cn?.creditnote_id || null;
+            out.creditNoteTotal = money(cn?.total ?? out.creditNoteTotal);
+            out.notes.push(`credit note ${out.creditNoteId} booked`);
+            // Books can leave the new note as unused customer credit; apply it
+            // so the original invoice actually drops by the returned amount.
+            if (out.creditNoteId) {
+                await ensureCreditNoteApplied({
+                    creditNote: { creditnote_id: out.creditNoteId, total: out.creditNoteTotal },
+                    fullInvoice: {
+                        invoice_id: out.invoiceId,
+                        invoice_number: out.invoiceNumber,
+                        credits_applied: out.creditsApplied || 0
+                    },
+                    reference: creditNoteReference(ref, 'exchange'),
+                    returnType: 'exchange'
+                });
+            }
+        } catch (e) {
+            return { ...out, status: 'credit_note_failed', notes: [...out.notes, e.message] };
+        }
+    }
+
+    // 3. The replacement product on its own invoice.
+    if (out.replacementNeedsLines && out.replacementInvoiceLines?.length) {
+        try {
+            if (out.replacementInvoiceId) {
+                await zohoService.updateInvoice(
+                    out.replacementInvoiceId,
+                    { line_items: out.replacementInvoiceLines, is_inclusive_tax: true },
+                    `Exchange: replacement items billed (order #${ref})`
+                );
+            } else {
+                const payload = {
+                    customer_id: out.customerId || undefined,
+                    date: new Date().toISOString().split('T')[0],
+                    payment_terms: 0,
+                    line_items: out.replacementInvoiceLines,
+                    notes: `Exchange replacement for Shopify Order #${ref}`,
+                    reference_number: `EXCH-INV-${ref}`,
+                    is_inclusive_tax: true,
+                    gst_treatment: out.gstTreatment || 'consumer'
+                };
+                if (out.placeOfSupply) payload.place_of_supply = out.placeOfSupply;
+                const created = await zohoService.createInvoice(payload);
+                out.replacementInvoiceId = created?.invoice_id || null;
+            }
+            if (out.replacementInvoiceId) {
+                try {
+                    await zohoService.markInvoiceSent(out.replacementInvoiceId);
+                } catch (e) {
+                    out.notes.push(`mark-sent failed: ${e.message}`);
+                }
+            }
+        } catch (e) {
+            return { ...out, status: 'replacement_invoice_failed', notes: [...out.notes, e.message] };
+        }
+    }
+
+    // 4. Payments are only re-allocated on request: a bulk run over historical
+    //    orders leaves the money where it already sits.
+    if (out.withPayments && out.replacementInvoiceId) {
+        try {
+            const moved = await moveExchangePayments({
+                originalInvoice: {
+                    invoice_id: out.invoiceId,
+                    invoice_number: out.invoiceNumber,
+                    total: out.totalBefore,
+                    customer_id: out.customerId
+                },
+                replacementInvoice: { invoice_id: out.replacementInvoiceId, total: out.replacementTotal },
+                creditNoteTotal: out.creditNoteTotal || 0
+            });
+            out.paymentMove = moved;
+            out.notes.push(...moved.warnings);
+        } catch (e) {
+            out.notes.push(`payment move failed: ${e.message}`);
+        }
+    }
+
+    return { ...out, status: out.notes.length ? 'fixed_with_warnings' : 'fixed' };
+}
+
+/** Plan + optionally apply in one call, for a single order. */
+async function backfillExchangeInvoice(opts) {
+    const plan = await planExchangeInvoice(opts);
+    if (!opts.apply || plan.status !== 'would_fix') return plan;
+    return applyExchangePlan(plan);
 }
 
 /**
  * Handle an exchange (customer returns product A, gets product B).
- * Creates credit note for original product, then corrects the original
- * invoice to show the new items so Zoho always reflects what the
- * customer actually has.
+ *
+ * Books is kept as two documents, like a real exchange:
+ *   1. a CREDIT NOTE on the original invoice for the product coming back
+ *      (item-linked → the old variant returns to stock)
+ *   2. a NEW INVOICE for the product going out (EXCH-INV-<order>), priced from
+ *      the exchange record → the replacement variant leaves stock
+ *   3. the customer's payment is moved onto the new invoice, so neither
+ *      document is left over- or under-paid
  */
 async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
     const rawOrderId = shopifyOrder.order_number?.toString() || shopifyOrder.id?.toString();
@@ -806,12 +1372,14 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
     );
 
     try {
-        // Credit note for the ORIGINAL items (item-linked → old size stock
-        // returns). The exchangedSummary is stamped in the notes for audit.
-        const exchangedSummary = (exchangedItems || [])
+        const summarise = (items) => (items || [])
             .map(i => `${i.quantity || 1}x ${i.title || i.sku || 'item'}${i.variant ? ' (' + i.variant + ')' : ''}`)
             .join(', ');
+        const exchangedSummary = summarise(exchangedItems);
 
+        // 1. Reverse the returned items on the ORIGINAL invoice. It keeps its
+        //    lines, number, date and payments — the credit note is what
+        //    reverses the old product (and returns its stock).
         const reference = creditNoteReference(orderId, 'exchange');
         const result = await prepareAndCreateCreditNote({
             shopifyOrder,
@@ -822,86 +1390,89 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
             extraNotes: exchangedSummary ? `Exchanged for: ${exchangedSummary}` : ''
         });
 
-        // Correct the original invoice so it bills the product/variant the
-        // customer actually received (e.g. Henley S instead of Henley M).
-        // The invoice is re-lined in place; only if Books refuses the edit is
-        // it deleted and recreated. Recorded payments survive either way.
-        let replacementInvoiceId = null;
-        let correctedInvoiceId = null;
-        let correctionReason = null;
-        try {
-            const correction = await correctOriginalInvoiceForExchange({
-                shopifyOrder,
-                orderId,
-                originalItems,
-                exchangedItems,
-                creditNoteId: result.creditNoteId,
-                customerId: result.customerId
-            });
-            if (correction.success) {
-                correctedInvoiceId = correction.newInvoiceId;
-            } else {
-                correctionReason = correction.reason || null;
-            }
-        } catch (corrErr) {
-            correctionReason = corrErr.message;
-            console.warn(`⚠️ Zoho exchange: invoice correction failed for #${orderId}: ${corrErr.message} — falling back to replacement invoice`);
-        }
-
-        // Fallback: if the invoice could not be corrected at all, create a
-        // separate zero-value replacement invoice (old behaviour — stock
-        // deduction only). Skipped when credits are still applied, since that
-        // invoice needs manual review rather than a second document.
-        if (!correctedInvoiceId && correctionReason !== 'credits_applied') {
+        // 2. Bill what the customer actually received on its own invoice, at
+        //    the price on the exchange record.
+        const originalInvoice = await findInvoiceForOrder(orderId);
+        const fullInvoice = originalInvoice ? await fetchFullInvoice(originalInvoice) : null;
+        let replacementInvoice = null;
+        if (fullInvoice?.line_items?.length) {
             try {
-                replacementInvoiceId = await createExchangeReplacementInvoice({
-                    shopifyOrder,
+                replacementInvoice = await createExchangeReplacementInvoice({
                     orderId,
                     exchangedItems,
-                    customerId: result.customerId
+                    originalItems,
+                    originalInvoice: fullInvoice,
+                    invoiceLines: fullInvoice.line_items
                 });
             } catch (invErr) {
                 console.error(`❌ Zoho exchange: replacement invoice failed for order #${orderId}: ${invErr.message}`);
             }
         }
 
-        // ── Create a note/comment on the Zoho invoice documenting the exchange ──
-        const targetInvoiceId = correctedInvoiceId || replacementInvoiceId;
-        if (targetInvoiceId) {
-            const origSummary = (originalItems || [])
-                .map(i => `${i.quantity || 1}x ${i.title || i.sku || 'item'}${i.variant ? ' (' + i.variant + ')' : ''}`)
-                .join(', ');
-            const exchSummary = (exchangedItems || [])
-                .map(i => `${i.quantity || 1}x ${i.title || i.sku || 'item'}${i.variant ? ' (' + i.variant + ')' : ''}`)
-                .join(', ');
-            const noteText = `EXCHANGE — ${new Date().toISOString().split('T')[0]}\nOriginal: ${origSummary}\nExchanged for: ${exchSummary}\nProcessed via returns server.`;
+        // 3. The money follows the order, not one document: the part that pays
+        //    for the replacement moves onto the replacement invoice.
+        let paymentMove = null;
+        if (replacementInvoice?.invoice_id && fullInvoice) {
             try {
-                await zohoService.addInvoiceComment(targetInvoiceId, noteText);
-                console.log(`📝 Zoho exchange: note added to invoice ${targetInvoiceId}`);
-            } catch (noteErr) {
-                console.warn(`⚠️ Zoho exchange: failed to add note to invoice ${targetInvoiceId}: ${noteErr.message}`);
+                paymentMove = await moveExchangePayments({
+                    originalInvoice: fullInvoice,
+                    replacementInvoice,
+                    creditNoteTotal: result.creditNoteTotal || 0
+                });
+                for (const warning of paymentMove.warnings) {
+                    console.warn(`⚠️ Zoho exchange: order #${orderId} — ${warning}`);
+                }
+            } catch (pmErr) {
+                console.warn(`⚠️ Zoho exchange: payment move failed for #${orderId}: ${pmErr.message}`);
             }
         }
 
+        // 4. Document the exchange on both documents.
+        const replacementInvoiceId = replacementInvoice?.invoice_id || null;
+        const noteText = `EXCHANGE — ${new Date().toISOString().split('T')[0]}\n`
+            + `Original: ${summarise(originalItems)}\n`
+            + `Exchanged for: ${exchangedSummary}\n`
+            + 'Processed via returns server.';
+        for (const docId of [fullInvoice?.invoice_id, replacementInvoiceId]) {
+            if (!docId) continue;
+            try {
+                await zohoService.addInvoiceComment(docId, noteText);
+                console.log(`📝 Zoho exchange: note added to invoice ${docId}`);
+            } catch (noteErr) {
+                console.warn(`⚠️ Zoho exchange: failed to add note to invoice ${docId}: ${noteErr.message}`);
+            }
+        }
+
+        // 5. Persist what Zoho now holds for this exchange. An exchange with no
+        //    replacement invoice is only half booked — record it as a failure so
+        //    retryReturn (or the bulk backfill) picks the order up again.
+        const partialFailure = (exchangedItems || []).length > 0 && !replacementInvoiceId;
+        const savedStatus = partialFailure ? 'failed' : 'synced';
+        const savedError = partialFailure ? `replacement invoice not created for order #${orderId}` : null;
+        if (partialFailure) {
+            console.error(`❌ Zoho exchange: order #${orderId} has no replacement invoice — flagged for retry`);
+        }
         try {
             await dbAdapter.run(
-                `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, zoho_exchange_invoice_id = ?, updated_at = NOW() WHERE id = ?`,
-                ['synced', result.creditNoteId || null, correctedInvoiceId || replacementInvoiceId, logResult.lastInsertRowid]
+                `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, zoho_exchange_invoice_id = ?, error_message = ?, updated_at = NOW() WHERE id = ?`,
+                [savedStatus, result.creditNoteId || null, replacementInvoiceId, savedError, logResult.lastInsertRowid]
             );
         } catch (colErr) {
             // Column added post-rollout — fall back without it
             await dbAdapter.run(
-                `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, updated_at = NOW() WHERE id = ?`,
-                ['synced', result.creditNoteId || null, logResult.lastInsertRowid]
+                `UPDATE zoho_returns SET status = ?, zoho_credit_note_id = ?, error_message = ?, updated_at = NOW() WHERE id = ?`,
+                [savedStatus, result.creditNoteId || null, savedError, logResult.lastInsertRowid]
             );
         }
 
-        console.log(`✅ Zoho exchange: order #${orderId} → credit note ${result.creditNoteId || 'created'}${correctedInvoiceId ? ` + corrected invoice ${correctedInvoiceId}` : replacementInvoiceId ? ` + replacement invoice ${replacementInvoiceId}` : ''}`);
+        console.log(`✅ Zoho exchange: order #${orderId} → credit note ${result.creditNoteId || 'created'} + replacement invoice ${replacementInvoiceId || 'not created'}`);
         return {
             success: true,
+            partialFailure,
             logId: logResult.lastInsertRowid,
             creditNoteId: result.creditNoteId,
-            replacementInvoiceId: correctedInvoiceId || replacementInvoiceId,
+            replacementInvoiceId,
+            paymentMove,
             originalItems,
             exchangedItems
         };
@@ -1048,19 +1619,29 @@ async function retryReturn(returnId) {
     const originalItems = typeof row.original_items === 'string' ? JSON.parse(row.original_items) : row.original_items;
     const correctedItems = typeof row.corrected_items === 'string' ? JSON.parse(row.corrected_items) : row.corrected_items;
 
-    // Mark as pending for retry
+    // Mark as retrying for the duration: the retried call logs its OWN new row,
+    // so leaving this one in 'pending' made its duplicate guard skip the retry.
     await dbAdapter.run(
         `UPDATE zoho_returns SET status = ?, error_message = NULL, updated_at = NOW() WHERE id = ?`,
-        ['pending', returnId]
+        ['retrying', returnId]
     );
 
+    let result;
     if (row.return_type === 'rto') {
-        return handleRTO({ order_number: row.shopify_order_id, line_items: originalItems }, { awb: row.shopify_return_id });
+        result = await handleRTO({ order_number: row.shopify_order_id, line_items: originalItems }, { awb: row.shopify_return_id });
     } else if (row.return_type === 'exchange') {
-        return handleExchange({ order_number: row.shopify_order_id }, originalItems, correctedItems);
+        result = await handleExchange({ order_number: row.shopify_order_id }, originalItems, correctedItems);
     } else {
-        return handleShopifyRefund({ order_number: row.shopify_order_id }, { id: row.shopify_return_id, line_items: originalItems });
+        result = await handleShopifyRefund({ order_number: row.shopify_order_id }, { id: row.shopify_return_id, line_items: originalItems });
     }
+
+    // Resolve this row's state from the outcome: a successful retry is no longer
+    // a failure (the fresh row carries the document ids).
+    await dbAdapter.run(
+        `UPDATE zoho_returns SET status = ?, error_message = ?, updated_at = NOW() WHERE id = ?`,
+        [result?.success ? 'synced' : 'failed', result?.success ? null : (result?.error || 'retry failed'), returnId]
+    );
+    return result;
 }
 
 /**
@@ -1136,6 +1717,9 @@ module.exports = {
     handleRTO,
     handleRTOByOrderId,
     handleExchange,
+    planExchangeInvoice,
+    applyExchangePlan,
+    backfillExchangeInvoice,
     handleReturnsServerReturn,
     prepareAndCreateCreditNote,
     creditNoteReference,

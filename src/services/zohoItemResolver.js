@@ -19,18 +19,14 @@ const normName = (s) => String(s || '').replace(/\s+/g, '').toUpperCase();
  */
 function createItemResolver() {
     const itemCache = new Map();
+    const inflight = new Map();                // key -> pending lookup promise
     const ITEM_CACHE_TTL = 10 * 60 * 1000;  // 10 min — items rarely change
     const ITEM_CACHE_MAX = 300;              // hard cap: 300 unique items
 
-    async function resolve(key) {
-        if (!key) return null;
-        const cached = itemCache.get(key);
-        if (cached && (Date.now() - cached.ts) < ITEM_CACHE_TTL) return cached.value;
-
-        let item = null;
+    async function lookup(key) {
         try {
             const bySku = await zohoService.searchItem({ sku: key });
-            item = bySku[0] || null;
+            let item = bySku[0] || null;
             if (!item) item = await zohoService.getItemByName(key);
             if (!item) {
                 // Fuzzy fallback: style-prefix search + whitespace-insensitive
@@ -43,18 +39,34 @@ function createItemResolver() {
                 const cands = await zohoService.searchItem({ name_contains: prefix, per_page: 200 });
                 item = cands.find(c => normName(c.name) === normName(key)) || null;
             }
-        } catch (e) { /* leave unlinked */ }
-
-        // LRU-style: delete first so re-set moves to tail
-        if (itemCache.has(key)) itemCache.delete(key);
-        itemCache.set(key, { value: item, ts: Date.now() });
-
-        // Evict oldest when over cap
-        while (itemCache.size > ITEM_CACHE_MAX) {
-            itemCache.delete(itemCache.keys().next().value);
+            return item;
+        } catch (e) {
+            return null;   // leave unlinked
         }
+    }
 
-        return item;
+    async function resolve(key) {
+        if (!key) return null;
+        const cached = itemCache.get(key);
+        if (cached && (Date.now() - cached.ts) < ITEM_CACHE_TTL) return cached.value;
+        // Concurrent callers (bulk backfill workers) share one lookup instead
+        // of each paying for the same catalog search.
+        if (inflight.has(key)) return inflight.get(key);
+
+        const promise = lookup(key).then(item => {
+            // LRU-style: delete first so re-set moves to tail
+            if (itemCache.has(key)) itemCache.delete(key);
+            itemCache.set(key, { value: item, ts: Date.now() });
+
+            // Evict oldest when over cap
+            while (itemCache.size > ITEM_CACHE_MAX) {
+                itemCache.delete(itemCache.keys().next().value);
+            }
+            return item;
+        }).finally(() => inflight.delete(key));
+
+        inflight.set(key, promise);
+        return promise;
     }
 
     return { resolve, normName };

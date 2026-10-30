@@ -15,11 +15,33 @@ const ACCOUNTS_BASE = () => `https://accounts.${process.env.ZOHO_BOOKS_DOMAIN ||
 
 const ORG_ID = () => process.env.ZOHO_ORGANIZATION_ID || '';
 
-// Token cache — refreshed automatically before expiry
+// Token cache — refreshed automatically before expiry. Also mirrored to disk
+// when possible: Zoho throttles the token endpoint itself ("too many requests
+// continuously" for minutes), so every short-lived script run minting a new
+// token is what triggers those blocks.
 let tokenCache = {
     access_token: null,
     expires_at: 0
 };
+
+const TOKEN_CACHE_FILE = process.env.ZOHO_TOKEN_CACHE_FILE
+    || require('path').join(__dirname, '..', '..', 'tmp', '.zoho_token.json');
+
+function readTokenCache() {
+    try {
+        const saved = JSON.parse(require('fs').readFileSync(TOKEN_CACHE_FILE, 'utf8'));
+        if (saved?.access_token && saved?.expires_at) tokenCache = { ...saved };
+    } catch (e) { /* no cache — refresh normally */ }
+}
+
+function writeTokenCache() {
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        fs.mkdirSync(path.dirname(TOKEN_CACHE_FILE), { recursive: true });
+        fs.writeFileSync(TOKEN_CACHE_FILE, JSON.stringify(tokenCache));
+    } catch (e) { /* read-only filesystem (Render) — memory cache is enough */ }
+}
 
 // Rate limiter — Books' org limit is ~100 req/min; pace well below it so
 // concurrent workers never trigger 429 storms (Zoho's cooldowns cost minutes)
@@ -53,12 +75,29 @@ async function waitForSlot() {
 // OAuth2 Token Management
 // ============================================================
 
+let tokenRefreshPromise = null;
+
 async function getAccessToken(force = false) {
+    // A token minted by an earlier run is still good — reuse it instead of
+    // asking Zoho for another one.
+    if (!tokenCache.access_token) readTokenCache();
+
     // Return cached token if still valid (with 60s buffer)
     if (!force && tokenCache.access_token && Date.now() < tokenCache.expires_at - 60000) {
         return tokenCache.access_token;
     }
 
+    // Zoho invalidates the previously issued access token when a new one is
+    // minted, so concurrent refreshes (parallel sync jobs) race each other and
+    // leave the losers holding a dead token — every request then fails with
+    // 400 "invalid oauth token". Collapse them into a single refresh.
+    if (!tokenRefreshPromise) {
+        tokenRefreshPromise = refreshAccessToken().finally(() => { tokenRefreshPromise = null; });
+    }
+    return tokenRefreshPromise;
+}
+
+async function refreshAccessToken() {
     const clientId = process.env.ZOHO_CLIENT_ID;
     const clientSecret = process.env.ZOHO_CLIENT_SECRET;
     const refreshToken = process.env.ZOHO_REFRESH_TOKEN;
@@ -82,6 +121,7 @@ async function getAccessToken(force = false) {
 
     tokenCache.access_token = res.data.access_token;
     tokenCache.expires_at = Date.now() + (res.data.expires_in || 3600) * 1000;
+    writeTokenCache();
 
     console.log('🔑 Zoho access token refreshed');
     return tokenCache.access_token;
@@ -106,8 +146,24 @@ async function zohoRequest(method, url, data = null, params = {}) {
 
     // Retry with exponential backoff
     while (true) {
-        // Fetched each iteration so an auth retry picks up the fresh token
-        const token = await getAccessToken(forceRefresh);
+        // Fetched each iteration so an auth retry picks up the fresh token.
+        // The token endpoint has its own throttle, so a refused refresh is a
+        // wait-and-retry, not a failed operation.
+        let token;
+        try {
+            token = await getAccessToken(forceRefresh);
+        } catch (err) {
+            const refreshLimited = /too many requests/i.test(
+                `${err.response?.data?.error_description || ''} ${err.response?.data?.error || ''}`
+            );
+            if (refreshLimited && rateLimitRetries < rateLimitDelays.length) {
+                const delay = rateLimitDelays[rateLimitRetries++];
+                console.warn(`⚠️ Zoho token refresh throttled — cooling down ${delay / 1000}s (rate retry ${rateLimitRetries}/${rateLimitDelays.length})`);
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+            throw new Error(`Zoho auth error: ${err.response?.data?.error_description || err.message}`);
+        }
         forceRefresh = false;
         const config = {
             method,
@@ -137,6 +193,17 @@ async function zohoRequest(method, url, data = null, params = {}) {
                 authRetried = true;
                 forceRefresh = true;
                 console.warn('⚠️ Zoho API 401 — forcing token refresh and retrying');
+                continue;
+            }
+            // A refresh by another process can also come back as a 400
+            // "invalid oauth token" — same cure: mint a fresh token once.
+            const tokenRejected = status === 400 && /invalid\s*(oauth|token)|access token/i.test(
+                `${err.response?.data?.error || ''} ${err.response?.data?.message || ''} ${err.response?.data?.error_description || ''}`
+            );
+            if (tokenRejected && !authRetried) {
+                authRetried = true;
+                forceRefresh = true;
+                console.warn('⚠️ Zoho API 400 invalid token — forcing token refresh and retrying');
                 continue;
             }
             // Zoho signals rate limiting with a 400 "Access Denied / too many
@@ -245,6 +312,20 @@ async function getCreditNote(creditNoteId) {
     const url = `${BOOKS_BASE()}/creditnotes/${creditNoteId}`;
     const result = await zohoRequest('get', url);
     return result.creditnote;
+}
+
+/**
+ * Apply a credit note to the invoice it reverses, so the invoice's balance
+ * actually drops. A credit note created "against" an invoice is not always
+ * applied by Books — it can stay as unused customer credit, leaving the
+ * invoice looking unpaid even though the return is booked.
+ */
+async function applyCreditNote(creditNoteId, invoiceId, amount) {
+    const url = `${BOOKS_BASE()}/creditnotes/${creditNoteId}/invoices`;
+    const result = await zohoRequest('post', url, {
+        invoices: [{ invoice_id: invoiceId, amount_applied: amount }]
+    });
+    return result;
 }
 
 /**
@@ -572,6 +653,7 @@ module.exports = {
     // Credit Notes
     createCreditNote,
     getCreditNote,
+    applyCreditNote,
     searchCreditNotes,
 
     // Invoice updates
