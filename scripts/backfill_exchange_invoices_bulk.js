@@ -308,7 +308,7 @@ const PROGRESS_FILE = path.join(__dirname, '..', 'tmp', 'exchange_plan_progress.
 // Plans describe the credit-note + replacement-invoice model. Bump this when
 // that model changes so a log written by an older script is re-planned instead
 // of being replayed against different semantics.
-const PLAN_VERSION = 2;
+const PLAN_VERSION = 3;
 
 function loadProgress() {
     const done = new Map();

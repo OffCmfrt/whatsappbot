@@ -29,7 +29,7 @@ Thumbs.db
 build-liquid*.js
 test-*.js
 force-*.js
-apply_*.js
+/apply_*.js
 debug-*.js
 check-*.js
 read-err.js

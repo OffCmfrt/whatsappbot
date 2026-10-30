@@ -364,13 +364,64 @@ function dominantInvoiceTax(invoiceLines) {
 }
 
 /**
+ * Cap a rendered document to an exact total.
+ *
+ * An exchange is a SWAP, not a further sale: what the customer paid for the
+ * returned item is what buys the replacement, and the credit note releases
+ * exactly that amount. Billing the replacement at a catalogue price above it
+ * (₹1,299 billed against a ₹1,234.05 credit note) opens a ₹64.95 due the
+ * customer never agreed to on a like-for-like swap. Rates are therefore scaled
+ * down proportionally and the last line absorbs the rounding, so the document
+ * lands exactly on the credit note total.
+ *
+ * The comparison is TAX INCLUSIVE, because the ceiling is a credit note total
+ * (which carries GST) and the line rates do not. Comparing a pre-tax rate with
+ * a tax-inclusive note leaves the tax behind as a phantom due: a ₹1,234.05 note
+ * against a ₹1,234.05 rate plus 5% GST still bills ₹61.70.
+ *
+ * Only ever scales DOWN: a cheaper replacement keeps its own price and the
+ * difference stays as unused customer credit (refundable), which is correct.
+ */
+const lineTaxPct = (l) => {
+    const split = (parseFloat(l.cgst_rate) || 0) + (parseFloat(l.sgst_rate) || 0) + (parseFloat(l.igst_rate) || 0);
+    if (split > 0) return split;
+    const flat = parseFloat(l.tax_percentage);
+    return Number.isFinite(flat) ? flat : 0;
+};
+
+function capLinesToTotal(lines, capTotal) {
+    if (!lines?.length) return lines;
+    const qtyOf = (l) => parseFloat(l.quantity) || 1;
+    const multOf = (l) => 1 + lineTaxPct(l) / 100;
+    const gross = (l) => money(money(l.rate) * qtyOf(l) * multOf(l));
+    const total = money(lines.reduce((s, l) => s + gross(l), 0));
+    const target = money(capTotal);
+    if (!(target > 0) || !(total > 0) || total <= target + 0.01) return lines;
+
+    const factor = target / total;
+    let allocated = 0;
+    return lines.map((l, i) => {
+        const qty = qtyOf(l);
+        const mult = multOf(l);
+        if (i === lines.length - 1) {
+            // Last line takes the remainder so the total is exact, not rounded
+            return { ...l, rate: money(money(target - allocated) / (qty * mult)) };
+        }
+        const rate = money(money(l.rate) * factor);
+        allocated = money(allocated + money(rate * qty * mult));
+        return { ...l, rate };
+    });
+}
+
+/**
  * Lines for the standalone replacement invoice: the exchanged items in the
  * shape the ORIGINAL invoice bills, priced from the exchange record
  * (`replacementPrice`, prorated across bundle components). A record without a
  * price falls back to what the customer paid for the item it replaces, so a
- * same-product swap never moves money.
+ * same-product swap never moves money. `capTotal` (the credit note) is the
+ * hard ceiling — see capLinesToTotal.
  */
-async function buildReplacementInvoiceLines({ invoiceLines = [], originalItems = [], exchangedItems = [] }) {
+async function buildReplacementInvoiceLines({ invoiceLines = [], originalItems = [], exchangedItems = [], capTotal = 0 }) {
     if (!exchangedItems?.length) return [];
     const lines = await buildSwapLines({
         invoiceLines,
@@ -406,7 +457,7 @@ async function buildReplacementInvoiceLines({ invoiceLines = [], originalItems =
             if (tax.tax_percentage) line.tax_percentage = tax.tax_percentage;
         }
     }
-    return lines;
+    return capLinesToTotal(lines, capTotal);
 }
 
 /**
@@ -421,11 +472,13 @@ async function buildReplacementInvoiceLines({ invoiceLines = [], originalItems =
  */
 async function createExchangeReplacementInvoice({
     orderId, exchangedItems, originalItems = [], originalInvoice = null,
-    invoiceLines = [], existingInvoiceId = null
+    invoiceLines = [], existingInvoiceId = null, creditNoteTotal = 0
 }) {
     if (!exchangedItems?.length) return null;
     const ref = `EXCH-INV-${String(orderId).replace(/^#/, '')}`;
-    const zohoLines = await buildReplacementInvoiceLines({ invoiceLines, originalItems, exchangedItems });
+    const zohoLines = await buildReplacementInvoiceLines({
+        invoiceLines, originalItems, exchangedItems, capTotal: creditNoteTotal
+    });
     if (zohoLines.length === 0) return null;
 
     // Dedupe — one replacement invoice per order. A VOID document is not a
@@ -1279,17 +1332,32 @@ async function planExchangeInvoice({
         if (cap.fullyCredited) creditNotePayload = null;
         creditNoteTotal = money((creditNotePayload?.line_items || []).reduce(
             (s, l) => s + money(l.rate) * (parseFloat(l.quantity) || 1) - money(l.discount), 0));
+    } else {
+        // The credit note already exists — its total is the ceiling the
+        // replacement must respect, so read it once instead of guessing.
+        try {
+            const cn = await zohoService.getCreditNote(creditNoteId);
+            creditNoteTotal = money(cn?.total);
+        } catch (e) {
+            out.notes.push(`credit note total lookup failed: ${e.message}`);
+        }
     }
 
     // 7. The replacement product on its own invoice, priced from the exchange
-    //    record (the old flow billed it at ₹0).
+    //    record (the old flow billed it at ₹0), capped at the credit note so a
+    //    swap never opens a due of its own.
     const replacementInvoiceLines = await buildReplacementInvoiceLines({
-        invoiceLines: baseLines, originalItems, exchangedItems
+        invoiceLines: baseLines, originalItems, exchangedItems, capTotal: creditNoteTotal
     });
     const replacementTotal = money(replacementInvoiceLines.reduce(
         (s, l) => s + money(l.rate) * (parseFloat(l.quantity) || 1), 0));
-    const replacementNeedsLines = replacementInvoiceLines.length > 0
-        && (replacementRow ? !(parseFloat(replacementRow.total) > 0) : !replacementInvoiceId);
+    // Re-line when the document is missing, carries no price (the old ₹0
+    // artifact), or is priced differently from what the swap now calls for —
+    // that last case is how an overstated replacement stops showing a due.
+    const existingTotal = replacementRow ? money(replacementRow.total) : null;
+    const replacementNeedsLines = replacementInvoiceLines.length > 0 && (replacementRow
+        ? !(existingTotal > 0) || Math.abs(existingTotal - replacementTotal) > 0.01
+        : !replacementInvoiceId);
 
     out.before = full.line_items.map(lineFingerprint);
     out.after = replacementInvoiceLines.map(lineFingerprint);
@@ -1524,7 +1592,10 @@ async function handleExchange(shopifyOrder, originalItems, exchangedItems) {
                     exchangedItems,
                     originalItems,
                     originalInvoice: fullInvoice,
-                    invoiceLines: fullInvoice.line_items
+                    invoiceLines: fullInvoice.line_items,
+                    // A swap is money-neutral: the replacement cannot exceed what
+                    // the credit note released on the returned item.
+                    creditNoteTotal: result.creditNoteTotal || 0
                 });
             } catch (invErr) {
                 console.error(`❌ Zoho exchange: replacement invoice failed for order #${orderId}: ${invErr.message}`);
