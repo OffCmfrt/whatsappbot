@@ -90,7 +90,7 @@ function mapCarrierStatus(rawStatus, statusType = null) {
             case 8: return 'cancelled'; // Canceled
             case 9: return 'rto_initiated'; // RTO Initiated
             case 10: return 'rto_delivered'; // RTO Delivered
-            case 12: return 'failed'; // Lost
+            case 12: return 'untrackable'; // Lost — carrier wrote the parcel off
             case 13: return 'in_transit'; // Pickup Error
             case 14: return 'rto_initiated'; // RTO Acknowledged
             case 15: return 'pickup_scheduled'; // Pickup Rescheduled
@@ -158,7 +158,8 @@ function mapCarrierStatus(rawStatus, statusType = null) {
         'RETURN_OFD': 'rto_initiated', // Return out for delivery
         'RETURN_DELIVERED': 'rto_delivered', // Return delivered
         'NOT_PICKED': 'failed',
-        'LOST': 'failed'
+        'LOST': 'untrackable',        // parcel lost in the network
+        'UNTRACEABLE': 'untrackable'  // carrier has no further trace of it
     };
     if (delhiveryB2BStatuses[upper]) {
         return delhiveryB2BStatuses[upper];
@@ -224,6 +225,19 @@ function mapCarrierStatus(rawStatus, statusType = null) {
         return 'rto'; // Generic RTO
     }
 
+    // Lost / untraceable in transit — the carrier has written the parcel off.
+    // MUST run before the undelivered/transit/delivered branches below:
+    // free-text forms such as "Lost in Transit", "Shipment Untraceable" or
+    // "UNDELIVERED - LOST" contain 'transit'/'undeliver', so they used to fall
+    // through to in_transit and were re-polled forever, never reaching the
+    // hub's Untrackable filter.
+    if (/\blost\b/i.test(s) ||
+        s.includes('untraceable') || s.includes('untrackable') ||
+        s.includes('not traceable') || s.includes('no tracking') ||
+        s.includes('trace failed')) {
+        return 'untrackable';
+    }
+
     // Cancellation detection
     if (s.includes('cancellation requested') || s.includes('cancel requested')) return null; // not cancelled yet
     if (s.includes('cancel') || s.includes('cancelled')) return 'cancelled';
@@ -251,20 +265,17 @@ function mapCarrierStatus(rawStatus, statusType = null) {
     // Pickup scheduled
     if (s.includes('pickup') || s.includes('scheduled') || s.includes('out for pickup')) return 'pickup_scheduled';
     
-    // Failed / Lost
-    if (s.includes('lost') || s.includes('destroyed') || s.includes('damaged') || 
+    // Failed (not lost — loss/untraceable is handled above as 'untrackable')
+    if (s.includes('destroyed') || s.includes('damaged') ||
         s.includes('disposed') || s.includes('qc failed') || s.includes('not picked')) return 'failed';
-    
-    // Untrackable
-    if (s.includes('untraceable') || s.includes('untrackable')) return 'untrackable';
-    
+
     return null;
 }
 
 /**
  * Decide the status to persist for a shipment given the mapped live status.
- * Terminal overrides (rto/cancelled) always win unless already delivered;
- * pipeline statuses only ever move forward.
+ * Terminal overrides (rto/cancelled/untrackable) always win unless already
+ * delivered; pipeline statuses only ever move forward.
  * RTO is final — DTO (Delivered to Origin) is also a failure case and cannot
  * override RTO back to delivered.
  */
@@ -275,7 +286,7 @@ function resolveTransition(currentStatus, mappedStatus) {
     // All RTO variants (rto, rto_initiated, rto_delivered) are terminal.
     const isRtoVariant = (status) => status === 'rto' || (status && status.startsWith('rto_'));
 
-    if (isRtoVariant(mappedStatus) || mappedStatus === 'cancelled') return mappedStatus;
+    if (isRtoVariant(mappedStatus) || mappedStatus === 'cancelled' || mappedStatus === 'untrackable') return mappedStatus;
     // rto_delivered = return already delivered back to origin. Absolutely
     // final; cannot resume forward movement to the customer. Skipping the
     // recovery branch here matches the sweep (RTO_RECHECK_STATUSES excludes
@@ -290,6 +301,12 @@ function resolveTransition(currentStatus, mappedStatus) {
         if (mappedStatus === 'in_transit' || mappedStatus === 'out_for_delivery') return mappedStatus;
         return null; // RTO is otherwise final — DTO is also a failure case
     }
+
+    // untrackable (lost in transit) has no pipeline rank, so without this
+    // explicit branch the rank guard below silently dropped every recovery
+    // scan and a found-again parcel stayed lost forever. Only the revival
+    // direction is special-cased; writing untrackable is handled above.
+    if (currentStatus === 'untrackable') return mappedStatus;
     
     const from = STATUS_RANK[currentStatus] ?? 0;
     const to = STATUS_RANK[mappedStatus] ?? 0;
@@ -327,6 +344,14 @@ async function syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliver
                 `UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
                 [newStatus, shipment.order_id, shipment.awb]
             );
+        } else if (newStatus === 'untrackable') {
+            // Lost / untraceable at the carrier — mirror it so the hub shows
+            // the order under the Untrackable filter instead of leaving it
+            // looking in transit forever.
+            await dbAdapter.query(
+                `UPDATE orders SET status = 'untrackable', updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
+                [shipment.order_id, shipment.awb]
+            );
         } else if (newStatus === 'cancelled') {
             // Cancelled at the carrier: free the order so it's re-shippable from the hub
             await dbAdapter.query(
@@ -334,12 +359,13 @@ async function syncOrderRowStatus(shipment, newStatus, expectedDelivery, deliver
                 [shipment.order_id, shipment.awb]
             );
         } else if (
-            (shipment.status === 'rto' || (shipment.status && shipment.status.startsWith('rto_'))) &&
+            (shipment.status === 'rto' || (shipment.status && shipment.status.startsWith('rto_')) || shipment.status === 'untrackable') &&
             ['shipped', 'in_transit', 'out_for_delivery'].includes(newStatus)
         ) {
-            // Self-healing a false/transient RTO: the shipment resumed forward
-            // movement, so mirror that back onto the orders row too — otherwise
-            // the hub would still show the order under the RTO pill.
+            // Self-healing a false/transient RTO (or a lost parcel that was
+            // found again): the shipment resumed forward movement, so mirror
+            // that back onto the orders row too — otherwise the hub would
+            // still show the order under the RTO / Untrackable pill.
             await dbAdapter.query(
                 `UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND awb = ?`,
                 [newStatus, shipment.order_id, shipment.awb]

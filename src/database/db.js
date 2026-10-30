@@ -671,15 +671,25 @@ async function initializeShipmentsTable() {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_awb ON shipments(awb)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status)');
     // Idempotency guard: only one OPEN shipment per order. Terminal states
-    // (cancelled/failed/delivered/rto) release the slot so the order can be
-    // re-shipped: replacement after delivery, forward-ship after RTO, retry
-    // after cancellation/failure.
+    // (cancelled/failed/delivered/rto/untrackable) release the slot so the
+    // order can be re-shipped: replacement after delivery, forward-ship after
+    // RTO or a lost parcel, retry after cancellation/failure.
+    // The index is recreated under a new name because CREATE INDEX IF NOT
+    // EXISTS never rewrites an existing predicate — the old definition kept
+    // treating a lost (untrackable) shipment as open and blocked its own
+    // replacement shipment.
     await pool.query('DROP INDEX IF EXISTS idx_shipments_active_order');
-    await pool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_open_order
-        ON shipments(order_id)
-        WHERE status NOT IN ('cancelled', 'failed', 'delivered', 'rto')
-    `);
+    try {
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_open_order_v2
+          ON shipments(order_id)
+          WHERE status NOT IN ('cancelled', 'failed', 'delivered', 'rto', 'untrackable')
+      `);
+      await pool.query('DROP INDEX IF EXISTS idx_shipments_open_order');
+    } catch (e) {
+      // Keep the previous index if duplicate open rows block the new one.
+      console.warn('⚠️ Could not widen idx_shipments_open_order_v2:', e.message);
+    }
 
     console.log('✅ Shipments table initialized');
   } catch (error) {

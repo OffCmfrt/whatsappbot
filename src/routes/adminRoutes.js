@@ -6154,7 +6154,7 @@ router.get('/shipping/orders/lookup', verifyToken, async (req, res) => {
             LEFT JOIN orders o ON o.order_id = s.order_id
             LEFT JOIN LATERAL (
                 SELECT id, status, awb, carrier FROM shipments sp
-                WHERE sp.order_id = s.order_id AND sp.status NOT IN ('cancelled', 'failed')
+                WHERE sp.order_id = s.order_id AND sp.status NOT IN ('cancelled', 'failed', 'untrackable')
                 ORDER BY sp.id DESC LIMIT 1
             ) act ON TRUE
             LEFT JOIN LATERAL (
@@ -6374,29 +6374,37 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
         const safeLimit = Math.min(parseInt(limit) || 25, 1000);
         const safeOffset = Math.max(0, parseInt(offset) || 0);
 
-        let where = ' WHERE 1=1';
-        const params = [];
+        // Filters other than the status pill. The pill counters are built from
+        // this set only: each pill (and each RTO sub-pill — RTO Initiated /
+        // RTO Delivered / Untrackable) has to report its own total, so applying
+        // the selected status to the stats query used to zero every sibling
+        // counter and made the sub-filter row look broken.
+        let baseWhere = ' WHERE 1=1';
+        const baseParams = [];
 
         if (search) {
             const like = `%${search}%`;
-            where += ` AND (s.order_id ILIKE ? OR s.awb ILIKE ? OR s.courier_name ILIKE ? OR ss.name ILIKE ? OR ss.phone ILIKE ? OR c.name ILIKE ? OR o.customer_phone ILIKE ?)`;
-            params.push(like, like, like, like, like, like, like);
+            baseWhere += ` AND (s.order_id ILIKE ? OR s.awb ILIKE ? OR s.courier_name ILIKE ? OR ss.name ILIKE ? OR ss.phone ILIKE ? OR c.name ILIKE ? OR o.customer_phone ILIKE ?)`;
+            baseParams.push(like, like, like, like, like, like, like);
         }
-        if (carrier) { where += ' AND s.carrier = ?'; params.push(carrier); }
+        if (carrier) { baseWhere += ' AND s.carrier = ?'; baseParams.push(carrier); }
+        if (payment_mode) { baseWhere += ' AND s.payment_mode = ?'; baseParams.push(payment_mode); }
+        // Date filters compare against IST calendar days (ops team works in IST)
+        if (date_from && /^\d{4}-\d{2}-\d{2}$/.test(date_from)) {
+            baseWhere += ` AND (s.created_at + INTERVAL '5 hours 30 minutes')::date >= ?::date`;
+            baseParams.push(date_from);
+        }
+        if (date_to && /^\d{4}-\d{2}-\d{2}$/.test(date_to)) {
+            baseWhere += ` AND (s.created_at + INTERVAL '5 hours 30 minutes')::date <= ?::date`;
+            baseParams.push(date_to);
+        }
+
+        let where = baseWhere;
+        const params = [...baseParams];
         if (status) {
             // Grouped filters live in shipmentExportService so the list and the
             // CSV export always agree on what 'RTO' or 'In Transit' means.
             where += ` AND (${shipmentExportService.shipmentStatusClause(status, params)})`;
-        }
-        if (payment_mode) { where += ' AND s.payment_mode = ?'; params.push(payment_mode); }
-        // Date filters compare against IST calendar days (ops team works in IST)
-        if (date_from && /^\d{4}-\d{2}-\d{2}$/.test(date_from)) {
-            where += ` AND (s.created_at + INTERVAL '5 hours 30 minutes')::date >= ?::date`;
-            params.push(date_from);
-        }
-        if (date_to && /^\d{4}-\d{2}-\d{2}$/.test(date_to)) {
-            where += ` AND (s.created_at + INTERVAL '5 hours 30 minutes')::date <= ?::date`;
-            params.push(date_to);
         }
 
         const baseFrom = `
@@ -6411,7 +6419,7 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
         // Status counters and the carrier list only change when the underlying
         // shipments do, and they are display-only — 60s of staleness beats
         // re-scanning 34k shipment rows on every view refresh (~0.8-1s each).
-        const statsCacheKey = `ship_stats:${where}:${JSON.stringify(params)}`;
+        const statsCacheKey = `ship_stats:${baseWhere}:${JSON.stringify(baseParams)}`;
         const [rows, countRows, statsRows, carrierRows] = await Promise.all([
             dbAdapter.query(`
                 SELECT s.id, s.order_id, s.shopper_id, s.carrier, s.carrier_shipment_id, s.carrier_order_id,
@@ -6447,10 +6455,10 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
                        COUNT(*) FILTER (WHERE s.status = 'untrackable')::int AS untrackable,
                        COUNT(*) FILTER (WHERE s.status IN ('cancelled', 'failed'))::int AS cancelled,
                        COUNT(*) FILTER (WHERE s.payment_mode = 'COD')::int AS cod_count,
-                       COALESCE(SUM(s.cod_amount) FILTER (WHERE s.payment_mode = 'COD' AND s.status NOT IN ('cancelled', 'failed', 'rto')), 0)::float AS cod_value,
+                       COALESCE(SUM(s.cod_amount) FILTER (WHERE s.payment_mode = 'COD' AND s.status NOT IN ('cancelled', 'failed', 'rto', 'untrackable')), 0)::float AS cod_value,
                        COALESCE(SUM(s.freight_charge) FILTER (WHERE s.status NOT IN ('cancelled', 'failed')), 0)::float AS freight_total
-                ${countFrom}${where}
-            `, params), 60 * 1000),
+                ${countFrom}${baseWhere}
+            `, baseParams), 60 * 1000),
             caches.queries.getOrLoad('ship_carriers', () =>
                 dbAdapter.query(`SELECT DISTINCT carrier FROM shipments ORDER BY carrier`), 5 * 60 * 1000)
         ]);
@@ -7577,7 +7585,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
             const shipped = row.shopper_status === 'confirmed' && (row.awb || orderStatus === 'shipped');
             if (row.shopper_status === 'rto' || orderStatus === 'rto') return 'rto_incoming';
             if (orderStatus === 'delivered') return 'delivered';
-            if (shipped && !['cancelled', 'failed'].includes(orderStatus)) return 'in_circulation';
+            if (shipped && !['cancelled', 'failed', 'untrackable'].includes(orderStatus)) return 'in_circulation';
             return null;
         };
         for (const row of circulationRows) {

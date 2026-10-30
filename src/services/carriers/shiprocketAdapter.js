@@ -1236,7 +1236,7 @@ const SR_SHIPMENT_STATUS_CODES = {
     19: 'Out For Pickup', 20: 'Pickup Exception', 21: 'Undelivered', 22: 'Delayed',
     23: 'Partial Delivered', 38: 'Reached Destination Hub', 39: 'Misrouted',
     40: 'RTO NDR', 41: 'RTO Out For Delivery', 42: 'Picked Up',
-    45: 'Cancelled Before Dispatched', 46: 'RTO In Transit'
+    45: 'Cancelled Before Dispatched', 46: 'RTO In Transit', 76: 'Untraceable'
 };
 
 module.exports = new ShiprocketAdapter();

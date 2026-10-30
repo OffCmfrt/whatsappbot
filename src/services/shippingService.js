@@ -23,8 +23,8 @@ const { getConfiguredCarriers, getAdapter } = require('./carriers');
 const DEFAULT_PACKAGE = { weightGrams: 500, lengthCm: 30, breadthCm: 40, heightCm: 2 };
 
 // Terminal shipment states — they release the one-open-shipment-per-order slot
-// (mirrors the idx_shipments_open_order partial unique index in db.js)
-const TERMINAL_STATUSES = ['cancelled', 'failed', 'delivered', 'rto'];
+// (mirrors the idx_shipments_open_order_v2 partial unique index in db.js)
+const TERMINAL_STATUSES = ['cancelled', 'failed', 'delivered', 'rto', 'untrackable'];
 
 function invalidateShoppersCache() {
     if (caches && caches.shoppers) {
@@ -139,11 +139,14 @@ async function buildShipmentContext(shopperId, overrides = {}) {
 }
 
 // Open (non-terminal) shipment for an order, if any — blocks a new shipment.
-// Delivered/RTO shipments are terminal too, so replacement re-ships are allowed.
+// Delivered/RTO/lost shipments are terminal too, so replacement re-ships are
+// allowed. Built from TERMINAL_STATUSES so the guard can never drift from the
+// DB partial index again (a lost shipment used to block its own replacement).
 async function getActiveShipment(orderId) {
+    const placeholders = TERMINAL_STATUSES.map(() => '?').join(', ');
     const rows = await dbAdapter.query(
-        `SELECT * FROM shipments WHERE order_id = ? AND status NOT IN ('cancelled', 'failed', 'delivered', 'rto') ORDER BY id DESC LIMIT 1`,
-        [orderId]
+        `SELECT * FROM shipments WHERE order_id = ? AND status NOT IN (${placeholders}) ORDER BY id DESC LIMIT 1`,
+        [orderId, ...TERMINAL_STATUSES]
     );
     return rows[0] || null;
 }
@@ -185,7 +188,7 @@ async function ship({ shopperId, carrier, courierId, packageOverrides, consignee
     }
 
     // Re-ship lineage: the referenced shipment must exist, belong to this order
-    // and already be terminal (cancelled/failed/delivered/rto)
+    // and already be terminal (cancelled/failed/delivered/rto/untrackable)
     let reshipOf = null;
     if (reshipOfShipmentId) {
         reshipOf = await getShipmentById(reshipOfShipmentId);
