@@ -14,6 +14,7 @@ const { dbAdapter } = require('../database/db');
 const cloudinaryService = require('../services/cloudinaryService');
 const igCommentService = require('../services/igCommentService');
 const shipmentExportService = require('../services/shipmentExportService');
+const { streamCsv } = require('../utils/csvStream');
 const { toIST, formatDateForExport, fromISTtoUTC } = require('../utils/timezone');
 
 // Multer config: disk storage (avoids holding files in RAM)
@@ -32,7 +33,7 @@ const { getPhoneVariations } = require('../utils/validators');
 // In-memory store for last known portal passwords (so admin can view them)
 const portalPasswords = new Map();
 
-// Lazy-load multer to save ~3-5MB at startup — only needed for file upload endpoints
+// Lazy-load multer to save ~3-5MB at startup â€” only needed for file upload endpoints
 let _upload = null;
 function getUpload() {
   if (!_upload) {
@@ -47,7 +48,7 @@ function getUpload() {
   return _upload;
 }
 
-// Lazy-load xlsx (saves ~30-50MB at startup) — only loaded when export/import is triggered
+// Lazy-load xlsx (saves ~30-50MB at startup) â€” only loaded when export/import is triggered
 let _xlsx = null;
 function getXlsx() {
   if (!_xlsx) _xlsx = require('xlsx');
@@ -57,14 +58,14 @@ function getXlsx() {
 // Advanced caching system imported from utils/cache
 // Using LRU cache with TTL for better performance
 
-// Targeted cache invalidation — only clear what's actually affected
+// Targeted cache invalidation â€” only clear what's actually affected
 function invalidateCache(target = null) {
   if (target && caches[target]) {
     caches[target].clear();
-    console.log(`🗑️ Cache invalidated: ${target}`);
+    console.log(`ðŸ—‘ï¸ Cache invalidated: ${target}`);
   } else {
     clearAllCaches(); // Fallback: clear all
-    console.log('🗑️ All caches invalidated');
+    console.log('ðŸ—‘ï¸ All caches invalidated');
   }
 }
 
@@ -75,7 +76,7 @@ router.post('/login', async (req, res) => {
 
         // Check credentials (in production, hash password and store in DB)
         if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
-            // Generate JWT token — credFp ties the session to the current
+            // Generate JWT token â€” credFp ties the session to the current
             // ADMIN_PASSWORD so changing it on Render instantly logs everyone out
             const token = jwt.sign(
                 { username, role: 'admin', credFp: adminCredentialFingerprint() },
@@ -299,7 +300,7 @@ router.get('/customers', verifyToken, async (req, res) => {
                 const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
                 segmentCondition = `
                     WHERE phone NOT IN (
-                        SELECT customer_phone FROM orders 
+                        SELECT customer_phone FROM orders
                         WHERE created_at >= ? AND customer_phone IS NOT NULL
                     )
                     AND created_at < ?
@@ -314,12 +315,12 @@ router.get('/customers', verifyToken, async (req, res) => {
 
         // Optimized query using LEFT JOIN instead of correlated subquery
         const sql = `
-            SELECT c.*, 
+            SELECT c.*,
                 COALESCE(m.message_count, 0) as message_count
             FROM customers c
             LEFT JOIN (
-                SELECT customer_phone, COUNT(*) as message_count 
-                FROM messages 
+                SELECT customer_phone, COUNT(*) as message_count
+                FROM messages
                 GROUP BY customer_phone
             ) m ON c.phone = m.customer_phone
             ${segmentCondition}
@@ -389,27 +390,27 @@ router.get('/customers/:phone/details', verifyToken, async (req, res) => {
 router.get('/customers/:phone/all-orders', verifyToken, async (req, res) => {
     try {
         const { phone } = req.params;
-        
+
         console.log(`[ALL ORDERS] Fetching all-time orders from database for: ${phone}`);
-        
+
         // Use phone variations to match any format
         const phoneVariations = getPhoneVariations(phone);
-        
+
         // Capped at 50 most recent orders to bound DB egress (chat sidebar use)
         const orders = await dbAdapter.query(
             'SELECT * FROM orders WHERE customer_phone = ANY(?) ORDER BY created_at DESC LIMIT 50',
             [phoneVariations]
         );
-        
+
         console.log(`[ALL ORDERS] Found ${(orders || []).length} orders for ${phone}`);
-        
+
         res.json({ success: true, orders: orders || [], source: 'database' });
     } catch (error) {
         console.error('All orders error:', error);
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             error: 'Failed to fetch orders from database',
-            details: error.message 
+            details: error.message
         });
     }
 });
@@ -423,10 +424,10 @@ router.get('/orders', verifyToken, async (req, res) => {
         const safeOffset = Math.max(0, parseInt(offset) || 0);
 
         const sql = `
-            SELECT o.*, c.name as customer_name 
-            FROM orders o 
-            LEFT JOIN customers c ON o.customer_phone = c.phone 
-            ORDER BY o.created_at DESC 
+            SELECT o.*, c.name as customer_name
+            FROM orders o
+            LEFT JOIN customers c ON o.customer_phone = c.phone
+            ORDER BY o.created_at DESC
             LIMIT ? OFFSET ?
         `;
         formattedOrders = await dbAdapter.query(sql, [safeLimit, safeOffset]);
@@ -559,9 +560,9 @@ router.post('/broadcast/import', verifyToken, async (req, res) => {
         // Extract phone numbers (smart search for phone columns)
         const phones = [];
         data.forEach(row => {
-            const phoneKey = Object.keys(row).find(key => 
-                key.toLowerCase().includes('phone') || 
-                key.toLowerCase().includes('mobile') || 
+            const phoneKey = Object.keys(row).find(key =>
+                key.toLowerCase().includes('phone') ||
+                key.toLowerCase().includes('mobile') ||
                 key.toLowerCase().includes('number') ||
                 key.toLowerCase().includes('contact')
             );
@@ -605,7 +606,7 @@ router.post('/chat/start', verifyToken, async (req, res) => {
         if (!phone || !message) return res.status(400).json({ error: 'Phone and message are required' });
 
         const standardized = whatsappService.formatPhoneNumber(phone);
-        
+
         // 1. Send immediate message (WhatsApp service handles logging automatically)
         if (req.body.imageUrl) {
             await whatsappService.sendImage(standardized, req.body.imageUrl, message, 'text');
@@ -669,7 +670,7 @@ router.post('/offers', verifyToken, async (req, res) => {
     }
 });
 
-// Get analytics — uses SQL aggregation instead of loading ALL rows into memory
+// Get analytics â€” uses SQL aggregation instead of loading ALL rows into memory
 router.get('/analytics', verifyToken, async (req, res) => {
     try {
         // Aggregate by type in SQL (avoids loading all messages/orders into memory)
@@ -680,15 +681,15 @@ router.get('/analytics', verifyToken, async (req, res) => {
             'SELECT status, COUNT(*) as count FROM orders GROUP BY status'
         );
 
-        // Last 7 days message volume — single aggregation query
+        // Last 7 days message volume â€” single aggregation query
         const sevenDaysAgo = new Date();
         sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
         sevenDaysAgo.setHours(0, 0, 0, 0);
         const dailyCounts = await dbAdapter.query(
-            `SELECT DATE(created_at) as date, COUNT(*) as count 
-             FROM messages 
-             WHERE created_at >= ? 
-             GROUP BY DATE(created_at) 
+            `SELECT DATE(created_at) as date, COUNT(*) as count
+             FROM messages
+             WHERE created_at >= ?
+             GROUP BY DATE(created_at)
              ORDER BY date`,
             [sevenDaysAgo.toISOString()]
         );
@@ -893,11 +894,11 @@ router.get('/templates/sync', verifyToken, async (req, res) => {
         });
 
         await ensureTemplatesTable();
-        
+
         // Filter to only sync APPROVED templates (skip DRAFT, PENDING, REJECTED)
         const approvedTemplates = metaTemplates.filter(t => t.status === 'APPROVED');
         console.log(`[TEMPLATES] Filtering to APPROVED only: ${approvedTemplates.length} of ${metaTemplates.length}`);
-        
+
         let syncedCount = 0;
         for (const t of approvedTemplates) {
             // Extract components
@@ -905,29 +906,29 @@ router.get('/templates/sync', verifyToken, async (req, res) => {
             const headerComponent = t.components?.find(c => c.type === 'HEADER');
             const footerComponent = t.components?.find(c => c.type === 'FOOTER');
             const buttonsComponent = t.components?.find(c => c.type === 'BUTTONS');
-            
+
             // Count variables in body text
             const bodyText = bodyComponent?.text || '';
             const variablesCount = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
-            
+
             // Get rejection reason if rejected
             let rejectionReason = null;
             if (t.status === 'REJECTED') {
                 rejectionReason = t.error_reason || 'Meta policy violation';
             }
-            
+
             // Upsert logic with enhanced component data
             const existing = await dbAdapter.query('SELECT id FROM templates WHERE name = ?', [t.name]);
             if (existing && existing.length > 0) {
                 await dbAdapter.query(
-                    `UPDATE templates SET 
-                        category=?, status=?, language=?, body=?, header=?, footer=?, 
-                        buttons=?, components=?, variables_count=?, rejection_reason=?, updated_at=? 
+                    `UPDATE templates SET
+                        category=?, status=?, language=?, body=?, header=?, footer=?,
+                        buttons=?, components=?, variables_count=?, rejection_reason=?, updated_at=?
                     WHERE name=?`,
                     [
-                        t.category, 
-                        t.status, 
-                        t.language, 
+                        t.category,
+                        t.status,
+                        t.language,
                         bodyText,
                         headerComponent?.text || headerComponent?.format || '',
                         footerComponent?.text || '',
@@ -935,22 +936,22 @@ router.get('/templates/sync', verifyToken, async (req, res) => {
                         JSON.stringify(t.components),
                         variablesCount,
                         rejectionReason,
-                        new Date().toISOString(), 
+                        new Date().toISOString(),
                         t.name
                     ]
                 );
             } else {
                 await dbAdapter.query(
                     `INSERT INTO templates (
-                        id, name, category, status, language, body, header, footer, 
+                        id, name, category, status, language, body, header, footer,
                         buttons, components, variables_count, rejection_reason, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     [
-                        t.id || `meta_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, 
-                        t.name, 
-                        t.category, 
-                        t.status, 
-                        t.language, 
+                        t.id || `meta_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                        t.name,
+                        t.category,
+                        t.status,
+                        t.language,
                         bodyText,
                         headerComponent?.text || headerComponent?.format || '',
                         footerComponent?.text || '',
@@ -964,7 +965,7 @@ router.get('/templates/sync', verifyToken, async (req, res) => {
             }
             syncedCount++;
         }
-        
+
         // Clear old templates that are no longer in Meta (sync cleanup)
         const templateNames = approvedTemplates.map(t => t.name);
         if (templateNames.length > 0) {
@@ -975,16 +976,16 @@ router.get('/templates/sync', verifyToken, async (req, res) => {
             );
             console.log(`[TEMPLATES] Cleaned up old templates not in Meta account`);
         }
-        
+
         // Invalidate cache after template changes
         invalidateCache('stats');
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             count: syncedCount,
             totalFetched: metaTemplates.length,
             approvedOnly: approvedTemplates.length,
-            message: `Successfully synced ${syncedCount} APPROVED templates from Meta` 
+            message: `Successfully synced ${syncedCount} APPROVED templates from Meta`
         });
     } catch (error) {
         console.error('Sync error:', error);
@@ -1028,12 +1029,12 @@ async function ensureTemplatesTable() {
     for (const col of columns) {
         try {
             await dbAdapter.query(`ALTER TABLE templates ADD COLUMN ${col.name} ${col.type}`);
-            console.log(`✅ Added column ${col.name} to templates table`);
+            console.log(`âœ… Added column ${col.name} to templates table`);
         } catch (err) {
             // Ignore error if column already exists
-            if (!err.message.includes('duplicate column name') && 
+            if (!err.message.includes('duplicate column name') &&
                 !err.message.includes('SQLITE_ERROR')) {
-                console.log(`ℹ️ Column ${col.name} might already exist: ${err.message}`);
+                console.log(`â„¹ï¸ Column ${col.name} might already exist: ${err.message}`);
             }
         }
     }
@@ -1042,25 +1043,25 @@ async function ensureTemplatesTable() {
 // Create new template and submit to Meta
 router.post('/templates/create', verifyToken, async (req, res) => {
     try {
-        const { 
+        const {
             name, category, language, headerType, headerText, headerImageUrl,
-            body, footer, buttons, exampleValues 
+            body, footer, buttons, exampleValues
         } = req.body;
-        
+
         // Validate template name
         if (!name || !/^[a-z0-9_]+$/.test(name)) {
-            return res.status(400).json({ 
-                error: 'Template name must contain only lowercase letters, numbers, and underscores' 
+            return res.status(400).json({
+                error: 'Template name must contain only lowercase letters, numbers, and underscores'
             });
         }
-        
+
         if (name.length > 512) {
             return res.status(400).json({ error: 'Template name must be 512 characters or less' });
         }
-        
+
         // Build template components
         const components = [];
-        
+
         // Add header if present
         if (headerType !== 'NONE') {
             if (headerType === 'TEXT') {
@@ -1085,26 +1086,26 @@ router.post('/templates/create', verifyToken, async (req, res) => {
                 });
             }
         }
-        
+
         // Validate body
         if (!body) {
             return res.status(400).json({ error: 'Body content is required' });
         }
-        
+
         // Add body with examples
         const bodyComponent = {
             type: 'BODY',
             text: body
         };
-        
+
         if (exampleValues && Array.isArray(exampleValues)) {
             bodyComponent.example = {
                 body_text: [exampleValues]
             };
         }
-        
+
         components.push(bodyComponent);
-        
+
         // Add footer if present
         if (footer && footer.trim()) {
             components.push({
@@ -1112,13 +1113,13 @@ router.post('/templates/create', verifyToken, async (req, res) => {
                 text: footer
             });
         }
-        
+
         // Add buttons if present
         if (buttons && buttons.length > 0) {
             if (buttons.length > 3) {
                 return res.status(400).json({ error: 'Maximum 3 buttons allowed' });
             }
-            
+
             components.push({
                 type: 'BUTTONS',
                 buttons: buttons.map(btn => ({
@@ -1127,7 +1128,7 @@ router.post('/templates/create', verifyToken, async (req, res) => {
                 }))
             });
         }
-        
+
         // Submit to Meta API
         const whatsappService = require('../services/whatsappService');
         const axios = require('axios');
@@ -1146,7 +1147,7 @@ router.post('/templates/create', verifyToken, async (req, res) => {
                 }
             }
         );
-        
+
         // Save to local DB with PENDING status
         await dbAdapter.query(
             `INSERT INTO templates (id, name, category, status, language, body, header, footer, buttons, components, variables_count, updated_at)
@@ -1166,16 +1167,16 @@ router.post('/templates/create', verifyToken, async (req, res) => {
                 new Date().toISOString()
             ]
         );
-        
-        res.json({ 
-            success: true, 
+
+        res.json({
+            success: true,
             templateId: response.data.id,
-            message: 'Template submitted to Meta for approval. Approval usually takes 24-48 hours.' 
+            message: 'Template submitted to Meta for approval. Approval usually takes 24-48 hours.'
         });
-        
+
     } catch (error) {
         console.error('Template creation error:', error.response?.data || error.message);
-        res.status(500).json({ 
+        res.status(500).json({
             error: 'Failed to create template',
             details: error.response?.data?.error?.message || error.message
         });
@@ -1193,19 +1194,19 @@ router.get('/templates/:id/status', verifyToken, async (req, res) => {
                 headers: { 'Authorization': `Bearer ${whatsappService.accessToken}` }
             }
         );
-        
+
         // Update local DB
         const template = response.data;
         let rejectionReason = null;
         if (template.status === 'REJECTED') {
             rejectionReason = template.error_reason || 'Meta policy violation';
         }
-        
+
         await dbAdapter.query(
             'UPDATE templates SET status = ?, rejection_reason = ?, updated_at = ? WHERE id = ?',
             [template.status, rejectionReason, new Date().toISOString(), req.params.id]
         );
-        
+
         res.json({ success: true, status: template.status, rejection_reason: rejectionReason });
     } catch (error) {
         console.error('Status check error:', error);
@@ -1218,7 +1219,7 @@ router.delete('/templates/:id', verifyToken, async (req, res) => {
     try {
         const whatsappService = require('../services/whatsappService');
         const axios = require('axios');
-        
+
         // Try to delete from Meta first
         try {
             await axios.delete(
@@ -1230,12 +1231,12 @@ router.delete('/templates/:id', verifyToken, async (req, res) => {
         } catch (metaError) {
             console.warn('Meta deletion failed, removing from local DB only:', metaError.message);
         }
-        
+
         // Delete from local DB
         await dbAdapter.query('DELETE FROM templates WHERE id = ?', [req.params.id]);
-        
+
         invalidateCache('stats');
-        
+
         res.json({ success: true, message: 'Template deleted successfully' });
     } catch (error) {
         console.error('Delete error:', error);
@@ -1258,7 +1259,7 @@ async function ensureAutomationTable() {
     // Defensively add description column if it doesn't exist (for existing tables)
     try {
         await dbAdapter.query(`ALTER TABLE automation_config ADD COLUMN description TEXT`);
-        console.log('✅ Added column description to automation_config');
+        console.log('âœ… Added column description to automation_config');
     } catch (err) {
         // Likely already exists
     }
@@ -1298,8 +1299,8 @@ router.post('/sync/all', verifyToken, async (req, res) => {
         const shopifyService = require('../services/shopifyService');
         const shiprocketService = require('../services/shiprocketService');
 
-        console.log('🔄 Starting Unified Background Sync...');
-        
+        console.log('ðŸ”„ Starting Unified Background Sync...');
+
         // Start sync in background
         // We don't 'await' these so we can return response immediately
         const runBackgroundSync = async () => {
@@ -1312,21 +1313,21 @@ router.post('/sync/all', verifyToken, async (req, res) => {
                 if (process.env.SHOPIFY_STORE && process.env.SHOPIFY_ACCESS_TOKEN) {
                     try {
                         shopifyCount = await shopifyService.syncAllCustomers();
-                        console.log(`✅ Shopify background sync finished: ${shopifyCount}`);
+                        console.log(`âœ… Shopify background sync finished: ${shopifyCount}`);
                     } catch (e) { console.error('Shopify background sync failed:', e.message); }
                 } else {
-                    console.log('ℹ️ Shopify credentials missing, skipping Shopify sync.');
+                    console.log('â„¹ï¸ Shopify credentials missing, skipping Shopify sync.');
                 }
 
                 // 2. Shiprocket (Disabled customer sync as we rely on Shopify for the 7000+ records)
                 /*
                 try {
                     shiprocketCount = await shiprocketService.syncAllCustomers();
-                    console.log(`✅ Shiprocket background sync finished: ${shiprocketCount}`);
+                    console.log(`âœ… Shiprocket background sync finished: ${shiprocketCount}`);
                 } catch (e) { console.error('Shiprocket background sync failed:', e.message); }
                 */
 
-                console.log(`🏁 Unified Background Sync Completed (Shopify Source).`);
+                console.log(`ðŸ Unified Background Sync Completed (Shopify Source).`);
             } catch (err) {
                 console.error('Unified background sync error:', err);
             }
@@ -1336,8 +1337,8 @@ router.post('/sync/all', verifyToken, async (req, res) => {
         runBackgroundSync();
 
         // Return immediately
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             message: 'Synchronization started in background. Data will appear shortly.',
             status: 'processing'
         });
@@ -1358,14 +1359,14 @@ router.get('/customers/segments', verifyToken, async (req, res) => {
 
         // Optimized query using pre-calculated order_count column
         const sql = `
-            SELECT c.phone, c.order_count, c.created_at, 
+            SELECT c.phone, c.order_count, c.created_at,
                 MAX(o.order_date) as last_order_at
             FROM customers c
             LEFT JOIN orders o ON c.phone = o.customer_phone
             GROUP BY c.phone, c.order_count, c.created_at
         `;
         const customers = await dbAdapter.query(sql);
-        
+
         const sixtyDaysAgo = new Date();
         sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
 
@@ -1377,7 +1378,7 @@ router.get('/customers/segments', verifyToken, async (req, res) => {
             inactive: customers.filter(c => {
                 const lastOrderDate = c.last_order_at ? new Date(c.last_order_at) : null;
                 const joinedDate = new Date(c.created_at);
-                
+
                 if (lastOrderDate) {
                     // Has ordered before: inactive if last order > 60 days ago
                     return lastOrderDate < sixtyDaysAgo;
@@ -1389,10 +1390,10 @@ router.get('/customers/segments', verifyToken, async (req, res) => {
         };
 
         const response = { success: true, segments };
-        
+
         // Cache the response
         setCache('customer_segments', response, 'stats', 5 * 60 * 1000); // 5 minutes TTL
-        
+
         res.json(response);
     } catch (error) {
         console.error('Fetch segments error:', error);
@@ -1419,7 +1420,7 @@ router.post('/templates', verifyToken, async (req, res) => {
             `INSERT INTO templates (id, name, category, body, image_url, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
             [id, name, category, body, image_url || '', updated_at || new Date().toISOString()]
         );
-        
+
         // Invalidate cache after template creation
         invalidateCache('stats');
         res.json({ success: true });
@@ -1436,7 +1437,7 @@ router.put('/templates/:id', verifyToken, async (req, res) => {
             `UPDATE templates SET name=?, category=?, body=?, image_url=?, updated_at=? WHERE id=?`,
             [name, category, body, image_url || '', updated_at || new Date().toISOString(), req.params.id]
         );
-        
+
         // Invalidate cache after template update
         invalidateCache('stats');
         res.json({ success: true });
@@ -1449,7 +1450,7 @@ router.put('/templates/:id', verifyToken, async (req, res) => {
 router.delete('/templates/:id', verifyToken, async (req, res) => {
     try {
         await dbAdapter.query('DELETE FROM templates WHERE id=?', [req.params.id]);
-        
+
         // Invalidate cache after template deletion
         invalidateCache('stats');
         res.json({ success: true });
@@ -1465,7 +1466,7 @@ router.delete('/templates/:id', verifyToken, async (req, res) => {
 // Settings Routes
 // ===================================
 
-// GET /api/admin/settings — return current abandoned cart delay settings
+// GET /api/admin/settings â€” return current abandoned cart delay settings
 router.get('/settings', verifyToken, async (req, res) => {
     try {
         const [firstDelay, secondDelay] = await Promise.all([
@@ -1486,7 +1487,7 @@ router.get('/settings', verifyToken, async (req, res) => {
     }
 });
 
-// POST /api/admin/settings — update abandoned cart delay settings
+// POST /api/admin/settings â€” update abandoned cart delay settings
 router.post('/settings', verifyToken, async (req, res) => {
     try {
         const { abandoned_cart_first_delay_hours, abandoned_cart_second_delay_hours } = req.body;
@@ -1524,7 +1525,7 @@ router.post('/settings', verifyToken, async (req, res) => {
 // ===================================
 // Support Tickets Endpoints
 // ===================================
-// Cache Intl.DateTimeFormat per timezone — each instance allocates native ICU memory
+// Cache Intl.DateTimeFormat per timezone â€” each instance allocates native ICU memory
 // outside the V8 heap, so creating one per ticket bloats RSS without showing in heap stats
 const timeFormatterCache = new Map();
 function getTimeFormatter(timezone) {
@@ -1561,18 +1562,18 @@ function isTicketInTimeRangeForAdmin(ticket, config) {
         // Overnight range (e.g., 18:00 to 06:00)
         inRange = ticketMinutes >= startMinutes || ticketMinutes < endMinutes;
     }
-    
+
     // Debug first 3 tickets only
     if (global._debugTicketCount === undefined) global._debugTicketCount = 0;
     if (global._debugTicketCount < 3) {
-        console.log(`   🎫 Ticket ${ticket.id} (${ticket.created_at}):`);
+        console.log(`   ðŸŽ« Ticket ${ticket.id} (${ticket.created_at}):`);
         console.log(`      UTC: ${createdAt.toISOString()}`);
         console.log(`      ${timezone}: ${timeStr} (${ticketMinutes} minutes)`);
         console.log(`      Range: ${config.time_start}-${config.time_end} (${startMinutes}-${endMinutes} minutes)`);
         console.log(`      Match: ${inRange}`);
         global._debugTicketCount++;
     }
-    
+
     return inRange;
 }
 
@@ -1596,7 +1597,7 @@ function timeRangeSqlClause(config, col = 'created_at') {
         : `(${mins} >= ${start} OR ${mins} < ${end})`;
 }
 
-// Allowed ticket status values. 'follow_up' parks a ticket for later action —
+// Allowed ticket status values. 'follow_up' parks a ticket for later action â€”
 // it is NOT resolved and still counts toward the portal's active workload.
 const SUPPORT_TICKET_STATUSES = ['open', 'resolved', 'closed', 'follow_up'];
 
@@ -1701,11 +1702,11 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
             params.push(channel);
         }
 
-        // Urgent keywords arrive regardless of whether the urgent filter is on —
+        // Urgent keywords arrive regardless of whether the urgent filter is on â€”
         // they feed the "urgent" stat card, and filter the list only when urgent_filter=1
         const urgentActive = urgent_filter === '1' || urgent_filter === 'true';
         let urgentClause = null;
-        let urgentClauseLiteral = null; // for FILTER() in stats SQL — uses escaped literals, not ?
+        let urgentClauseLiteral = null; // for FILTER() in stats SQL â€” uses escaped literals, not ?
         const urgentParams = urgentKeywords.map(k => `%${k}%`);
         if (urgentKeywords.length) {
             urgentClause = '(' + urgentKeywords.map(() => 'message ILIKE ?').join(' OR ') + ')';
@@ -1723,7 +1724,7 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
         const whereSql = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
         const orderSql = sort === 'oldest' ? 'created_at ASC, id ASC' : 'created_at DESC, id DESC';
 
-        // Slim column set — message is truncated to a preview; the chat view loads
+        // Slim column set â€” message is truncated to a preview; the chat view loads
         // the full conversation separately. Keeps each page well under the response cap.
         const buildDataSql = (withOrderId) => `SELECT id, ticket_number, customer_phone, customer_name,
                 LEFT(message, 600) AS message, status, is_read, portal_id, sentiment,
@@ -1744,7 +1745,7 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
 
         let tickets;
         let statsRow;
-        const statsParams = [...params]; // no extra urgent params needed — literal clause used in FILTER
+        const statsParams = [...params]; // no extra urgent params needed â€” literal clause used in FILTER
         try {
             const [dataRows, statsRows] = await Promise.all([
                 dbAdapter.query(buildDataSql(true), [...params, limit, offset]),
@@ -1753,7 +1754,7 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
             tickets = dataRows;
             statsRow = statsRows[0] || {};
         } catch (err) {
-            // order_id may not exist on older schemas — retry without it
+            // order_id may not exist on older schemas â€” retry without it
             if (!/order_id/.test(err.message || '')) throw err;
             const [dataRows, statsRows] = await Promise.all([
                 dbAdapter.query(buildDataSql(false), [...params, limit, offset]),
@@ -1800,13 +1801,13 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
     }
 });
 
-// ── Export Support Tickets (with chat) as Excel or CSV ──────────────────────
+// â”€â”€ Export Support Tickets (with chat) as Excel or CSV â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/support-tickets/export', verifyToken, requirePermission('export'), async (req, res) => {
     try {
         const { status, date_from, date_to, search, portal, channel, format = 'xlsx', urgent } = req.query;
         logOperatorActivity(req, 'export', `Support tickets export (status: ${status || 'all'}, format: ${format})`);
 
-        // ── Build WHERE clause (mirrors the list endpoint filters) ──
+        // â”€â”€ Build WHERE clause (mirrors the list endpoint filters) â”€â”€
         const conditions = [];
         const params = [];
 
@@ -1834,48 +1835,160 @@ router.get('/support-tickets/export', verifyToken, requirePermission('export'), 
 
         const whereSql = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
 
-        // ── Fetch tickets (up to 5 000 for export) ──
-        const ticketsSql = `SELECT t.id, t.ticket_number, t.customer_phone, t.customer_name,
-                t.message, t.status, t.is_read, t.portal_id, t.sentiment,
-                t.ai_scenario, t.ai_confidence, t.source, t.channel,
-                t.follow_up_at, t.follow_up_note, t.order_id,
-                t.created_at, t.updated_at
-            FROM support_tickets t${whereSql}
-            ORDER BY t.created_at DESC
-            LIMIT 5000`;
-        const tickets = await dbAdapter.query(ticketsSql, params);
+        // â”€â”€ Fetch tickets (up to 5 000 for export) â”€â”€
+        // â”€â”€ Fetch tickets in batches (up to 5,000 for export) â”€â”€
+const tickets = [];
+const TICKET_BATCH_SIZE = 1000;
+let ticketCursor = null;
+
+while (tickets.length < 5000) {
+    const batchLimit = Math.min(TICKET_BATCH_SIZE, 5000 - tickets.length);
+
+    let cursorClause = '';
+    const batchParams = [...params];
+
+    if (ticketCursor) {
+        if (ticketCursor.createdAt === null) {
+            // DESC ordering puts NULL timestamps first.
+            cursorClause = `
+                AND (
+                    (t.created_at IS NULL AND t.id < ?)
+                    OR t.created_at IS NOT NULL
+                )
+            `;
+            batchParams.push(ticketCursor.id);
+        } else {
+            cursorClause = `
+                AND (
+                    t.created_at < ?
+                    OR (t.created_at = ? AND t.id < ?)
+                )
+            `;
+            batchParams.push(
+                ticketCursor.createdAt,
+                ticketCursor.createdAt,
+                ticketCursor.id
+            );
+        }
+    }
+
+    const batchSql = `
+        SELECT t.id, t.ticket_number, t.customer_phone, t.customer_name,
+            t.message, t.status, t.is_read, t.portal_id, t.sentiment,
+            t.ai_scenario, t.ai_confidence, t.source, t.channel,
+            t.follow_up_at, t.follow_up_note, t.order_id,
+            t.created_at, t.updated_at
+        FROM support_tickets t
+        ${whereSql ? whereSql + cursorClause : (cursorClause ? ' WHERE ' + cursorClause.trim().replace(/^AND\s*/, '') : '')}
+        ORDER BY t.created_at DESC, t.id DESC
+        LIMIT ?
+    `;
+
+    batchParams.push(batchLimit);
+
+    const batch = await dbAdapter.query(batchSql, batchParams);
+
+    if (!batch.length) break;
+
+    tickets.push(...batch);
+
+    const lastTicket = batch[batch.length - 1];
+    ticketCursor = {
+        createdAt: lastTicket.created_at,
+        id: lastTicket.id
+    };
+
+    if (batch.length < batchLimit) break;
+}
 
         // Resolve portal names
         const allPortals = await dbAdapter.query("SELECT id, name FROM support_portals");
         const portalNameById = {};
         allPortals.forEach(p => { portalNameById[p.id] = p.name; });
 
-        // ── Collect unique phones → fetch all chat messages in one batch ──
+        // â”€â”€ Collect unique phones â†’ fetch all chat messages in one batch â”€â”€
         const phones = [...new Set(tickets.map(t => t.customer_phone).filter(Boolean))];
         let messagesByPhone = {};
         if (phones.length) {
-            const chatRows = await dbAdapter.query(
-                `SELECT customer_phone, message_content, message_type, status, created_at
-                 FROM messages
-                 WHERE customer_phone = ANY(?)
-                 ORDER BY created_at ASC
-                 LIMIT 50000`,
-                [phones]
+            // â”€â”€ Fetch chat history in batches (up to 50,000 messages) â”€â”€
+const MESSAGE_BATCH_SIZE = 1000;
+let messageCursor = null;
+let messageCount = 0;
+
+while (messageCount < 50000) {
+    const batchLimit = Math.min(
+        MESSAGE_BATCH_SIZE,
+        50000 - messageCount
+    );
+
+    let cursorClause = '';
+    const batchParams = [phones];
+
+    if (messageCursor) {
+        if (messageCursor.createdAt === null) {
+            // ASC ordering puts NULL timestamps last.
+            cursorClause = `
+                AND created_at IS NULL
+                AND id > ?
+            `;
+            batchParams.push(messageCursor.id);
+        } else {
+            cursorClause = `
+                AND (
+                    created_at > ?
+                    OR (created_at = ? AND id > ?)
+                    OR created_at IS NULL
+                )
+            `;
+            batchParams.push(
+                messageCursor.createdAt,
+                messageCursor.createdAt,
+                messageCursor.id
             );
-            chatRows.forEach(m => {
-                const phone = m.customer_phone;
-                if (!messagesByPhone[phone]) messagesByPhone[phone] = [];
-                messagesByPhone[phone].push(m);
-            });
+        }
+    }
+
+    const chatSql = `
+        SELECT id, customer_phone, message_content,
+            message_type, status, created_at
+        FROM messages
+        WHERE customer_phone = ANY(?)
+        ${cursorClause}
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?
+    `;
+
+    batchParams.push(batchLimit);
+
+    const chatBatch = await dbAdapter.query(chatSql, batchParams);
+
+    if (!chatBatch.length) break;
+
+    chatBatch.forEach(m => {
+        const phone = m.customer_phone;
+        if (!messagesByPhone[phone]) messagesByPhone[phone] = [];
+        messagesByPhone[phone].push(m);
+    });
+
+    messageCount += chatBatch.length;
+
+    const lastMessage = chatBatch[chatBatch.length - 1];
+    messageCursor = {
+        createdAt: lastMessage.created_at,
+        id: lastMessage.id
+    };
+
+    if (chatBatch.length < batchLimit) break;
+}
         }
 
-        // ── Helper: status display label ──
+        // â”€â”€ Helper: status display label â”€â”€
         const statusLabel = (s) => {
             const map = { open: 'Open', resolved: 'Resolved', closed: 'Closed', follow_up: 'Follow-Up' };
             return map[s] || (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Open');
         };
 
-        // ── Sheet 1 — Tickets Summary ──
+        // â”€â”€ Sheet 1 â€” Tickets Summary â”€â”€
         const ticketRows = tickets.map(t => ({
             'Ticket Number': t.ticket_number || '',
             'Customer Name': t.customer_name || '',
@@ -1895,7 +2008,7 @@ router.get('/support-tickets/export', verifyToken, requirePermission('export'), 
             'Updated At (UTC)': t.updated_at ? new Date(t.updated_at).toISOString() : ''
         }));
 
-        // ── Sheet 2 — Chat History (all messages for exported tickets) ──
+        // â”€â”€ Sheet 2 â€” Chat History (all messages for exported tickets) â”€â”€
         const chatRows = [];
         tickets.forEach(t => {
             const msgs = messagesByPhone[t.customer_phone] || [];
@@ -1927,7 +2040,7 @@ router.get('/support-tickets/export', verifyToken, requirePermission('export'), 
         const istDate = toIST(new Date(), 'date');
         const filterTag = status || 'all';
 
-        // ── CSV format ──
+        // â”€â”€ CSV format â”€â”€
         if (format === 'csv') {
             const XLSX = getXlsx();
             const ws = XLSX.utils.json_to_sheet(ticketRows);
@@ -1938,7 +2051,7 @@ router.get('/support-tickets/export', verifyToken, requirePermission('export'), 
             return res.send(Buffer.concat([Buffer.from('\uFEFF', 'utf8'), Buffer.from(csv, 'utf8')]));
         }
 
-        // ── Excel format (multi-sheet) ──
+        // â”€â”€ Excel format (multi-sheet) â”€â”€
         const XLSX = getXlsx();
         const wb = XLSX.utils.book_new();
 
@@ -2031,7 +2144,7 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
                     params.push(follow_up_note || null);
                 }
             } else if (status === 'resolved' || status === 'closed') {
-                // Resolving closes the follow-up loop — drop any pending reminder
+                // Resolving closes the follow-up loop â€” drop any pending reminder
                 updates.push('follow_up_at = NULL', 'follow_up_note = NULL');
             }
         }
@@ -2047,18 +2160,18 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
             `UPDATE support_tickets SET ${updates.join(', ')} WHERE id = ?`,
             params
         );
-        
+
         // Invalidate ticket cache when ticket is updated
         clearAllCaches('tickets');
-        
+
         // If status changed, update the portal's assigned_count.
-        // Follow-up tickets are still active work — they count as assigned.
+        // Follow-up tickets are still active work â€” they count as assigned.
         if (status) {
             const ticket = await dbAdapter.query(
                 'SELECT portal_id FROM support_tickets WHERE id = ?',
                 [id]
             );
-            
+
             if (ticket[0]?.portal_id) {
                 const countResult = await dbAdapter.query(
                     'SELECT COUNT(*) as count FROM support_tickets WHERE portal_id = ? AND status IN (\'open\', \'follow_up\')',
@@ -2071,11 +2184,11 @@ router.put('/support-tickets/:id', verifyToken, async (req, res) => {
                 );
             }
         }
-        
+
         // Invalidate cache after ticket status change
         invalidateCache('stats');
 
-        // Outcome signal for AI learning: resolved ticket → recent examples from
+        // Outcome signal for AI learning: resolved ticket â†’ recent examples from
         // this customer's conversation worked (fire-and-forget)
         if (status === 'resolved' || status === 'closed') {
             const resolvedTicket = await dbAdapter.query('SELECT customer_phone FROM support_tickets WHERE id = ?', [id]);
@@ -2149,7 +2262,7 @@ router.post('/support-tickets/:id/assign-portal', verifyToken, async (req, res) 
             `UPDATE support_tickets SET portal_id = ? WHERE id = ?`,
             [portalId || null, id]
         );
-        
+
         // Invalidate ticket cache when portal assignment changes
         clearAllCaches('tickets');
 
@@ -2171,8 +2284,8 @@ router.post('/support-tickets/:id/assign-portal', verifyToken, async (req, res) 
         }
 
         invalidateCache('stats');
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             message: portalId ? 'Ticket assigned to portal' : 'Ticket removed from portal',
             portalId: portalId || null
         });
@@ -2197,7 +2310,7 @@ router.delete('/support-tickets/:id', verifyToken, async (req, res) => {
             `DELETE FROM support_tickets WHERE id = ?`,
             [id]
         );
-        
+
         // Update portal's assigned_count if ticket was assigned
         if (ticket[0]?.portal_id) {
             const countResult = await dbAdapter.query(
@@ -2210,7 +2323,7 @@ router.delete('/support-tickets/:id', verifyToken, async (req, res) => {
                 [newCount, ticket[0].portal_id]
             );
         }
-        
+
         // Invalidate cache after ticket deletion
         invalidateCache('stats');
 
@@ -2255,7 +2368,7 @@ router.delete('/support-tickets/bulk/delete', verifyToken, async (req, res) => {
 router.get('/shoppers', verifyToken, async (req, res) => {
     try {
         let { limit = 100, offset = 0, status, search, startDate, endDate, orderIdFrom, orderIdTo, paymentMethod, deliveryType, sortBy, noLimit } = req.query;
-        
+
         // ENFORCE LIMITS to prevent memory overload
         // noLimit=true raises ceiling to 2000 for export use cases (single-day downloads)
         if (noLimit && noLimit === 'true') {
@@ -2265,7 +2378,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
             limit = Math.min(parseInt(limit), 500); // Max 500 records per request
         }
         offset = Math.max(0, parseInt(offset));
-        
+
         // CACHE for list queries without search
         // NOTE: cache key MUST include every filter param, otherwise a filtered
         // request collides with an earlier unfiltered response (filter appears broken)
@@ -2276,7 +2389,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
                 return res.json(cached);
             }
         }
-        
+
         let whereClause = 'WHERE 1=1';
         const params = [];
 
@@ -2355,7 +2468,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
         const countRes = await dbAdapter.query(countSql, params);
         const total = countRes[0]?.total || 0;
 
-        // Cleanup script ran 2026-04-29 — duplicates eliminated, skip expensive self-join
+        // Cleanup script ran 2026-04-29 â€” duplicates eliminated, skip expensive self-join
         const sql = `
             SELECT s.id, s.phone, s.name, s.email, s.order_id, s.address, s.city, s.province, s.zip,
                    s.payment_method, s.order_total, s.delivery_type, s.source,
@@ -2370,12 +2483,12 @@ router.get('/shoppers', verifyToken, async (req, res) => {
                    o.tracking_url
             FROM store_shoppers s
             LEFT JOIN orders o ON o.order_id = s.order_id
-            ${whereClause} 
+            ${whereClause}
             ${orderByClause}
             LIMIT ? OFFSET ?
         `;
         const queryParams = [...params, parseInt(limit), parseInt(offset)];
-        
+
         const shoppers = await dbAdapter.query(sql, queryParams);
 
         // Note: Deduplication removed after cleanup script ran on 2026-04-29
@@ -2387,9 +2500,9 @@ router.get('/shoppers', verifyToken, async (req, res) => {
             total,
             page: Math.floor(offset / limit) + 1
         };
-        
+
         res.json(response);
-        
+
         // Cache the response (only if no search)
         if (!search) {
             setCache(cacheKey, response, 'shoppers', 10 * 60 * 1000); // 10 minutes TTL
@@ -2400,7 +2513,7 @@ router.get('/shoppers', verifyToken, async (req, res) => {
     }
 });
 
-// ── Customer Context for Chat Sidebar ──
+// â”€â”€ Customer Context for Chat Sidebar â”€â”€
 // Returns all orders, RTOs, and return/exchange requests for a customer
 // so the chat sidebar can show full history when an operator opens a chat.
 // The aggregation lives in customerContextService so the support desk and
@@ -2460,7 +2573,7 @@ router.put('/shoppers/:id', verifyToken, requirePermission('edit_orders'), async
         }
 
         await dbAdapter.update('store_shoppers', updateData, { id });
-        
+
         // Invalidate cache after shopper update
         invalidateCache('shoppers');
 
@@ -2486,7 +2599,7 @@ router.put('/shoppers/:id', verifyToken, requirePermission('edit_orders'), async
                     paymentMethod: paymentChanged ? payment_method : null
                 });
             } catch (syncError) {
-                console.error('⚠️ Shopify order sync error (hub still updated):', syncError.message);
+                console.error('âš ï¸ Shopify order sync error (hub still updated):', syncError.message);
                 shopifySync = { success: false, actions: [], warnings: [syncError.message] };
             }
         }
@@ -2507,7 +2620,7 @@ router.put('/shoppers/:id', verifyToken, requirePermission('edit_orders'), async
                 if (addrSync.success) shopifySync.actions.push('Shipping address updated in Shopify');
                 else shopifySync.warnings.push(...addrSync.warnings.map(w => `Address sync: ${w}`));
             } catch (addrError) {
-                console.error('⚠️ Shopify address sync error (hub still updated):', addrError.message);
+                console.error('âš ï¸ Shopify address sync error (hub still updated):', addrError.message);
                 if (!shopifySync) shopifySync = { success: false, actions: [], warnings: [] };
                 shopifySync.warnings.push(`Address sync: ${addrError.message}`);
             }
@@ -2528,7 +2641,7 @@ router.put('/shoppers/:id', verifyToken, requirePermission('edit_orders'), async
                     ...(addressChanged ? { shippingAddress: { name, phone, address, city, state: province, pincode: zip } } : {})
                 });
             } catch (gkError) {
-                console.error('⚠️ GoKwik order sync error (hub still updated):', gkError.message);
+                console.error('âš ï¸ GoKwik order sync error (hub still updated):', gkError.message);
                 gokwikSync = { success: false, skipped: false, reason: gkError.message };
             }
         }
@@ -2540,7 +2653,7 @@ router.put('/shoppers/:id', verifyToken, requirePermission('edit_orders'), async
     }
 });
 
-// Live shipping address from the Shopify order — used by the edit modal's
+// Live shipping address from the Shopify order â€” used by the edit modal's
 // "Pull from Shopify" button so hub address fields can be re-synced
 router.get('/shoppers/:id/shopify-address', verifyToken, async (req, res) => {
     try {
@@ -2581,7 +2694,7 @@ async function notifyCustomerOfCancellation(shopper, reason) {
     const isPrepaid = shopper.payment_method && !/cod|cash on delivery/i.test(String(shopper.payment_method));
     const amount = parseFloat(shopper.order_total) || 0;
     const refundNote = isPrepaid
-        ? `Your prepaid amount of ₹${amount.toLocaleString('en-IN')} will be refunded to the original payment method within 5-7 business days.`
+        ? `Your prepaid amount of â‚¹${amount.toLocaleString('en-IN')} will be refunded to the original payment method within 5-7 business days.`
         : 'This was a Cash on Delivery order, so no refund is applicable.';
     return await whatsappService.sendOrderCancellationNotice(
         shopper.phone,
@@ -2602,7 +2715,7 @@ router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'
             return res.status(400).json({ error: 'Invalid status' });
         }
 
-        // Manual cancellations must carry a reason — it is stored on the order
+        // Manual cancellations must carry a reason â€” it is stored on the order
         // and included in the WhatsApp notice sent to the customer.
         // (Customer-initiated WhatsApp cancels are stamped 'AUTO' by the bot.)
         const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
@@ -2610,13 +2723,13 @@ router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'
             return res.status(400).json({ error: 'Cancellation reason is required' });
         }
 
-        // Previous status (before this update) — a re-cancel must not re-notify the customer
+        // Previous status (before this update) â€” a re-cancel must not re-notify the customer
         const prevRows = await dbAdapter.select('store_shoppers', { id }, { limit: 1 });
         const wasAlreadyCancelled = status === 'cancelled' && prevRows[0]?.status === 'cancelled';
-        logOperatorActivity(req, 'status_update', `Shopper ${id} → ${status}${status === 'cancelled' ? ` (reason: ${reason})` : ''}`);
+        logOperatorActivity(req, 'status_update', `Shopper ${id} â†’ ${status}${status === 'cancelled' ? ` (reason: ${reason})` : ''}`);
 
-        const updateData = { 
-            status, 
+        const updateData = {
+            status,
             updated_at: new Date().toISOString()
         };
 
@@ -2642,18 +2755,18 @@ router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'
                     const shipping = require('../services/shippingService');
                     shipmentCancellation = await shipping.cancelActiveShipmentForOrder(orderId);
                     if (shipmentCancellation.hadShipment && !shipmentCancellation.cancelled) {
-                        console.error(`⚠️ Order ${orderId} cancelled in hub but carrier cancellation failed: ${shipmentCancellation.error}`);
+                        console.error(`âš ï¸ Order ${orderId} cancelled in hub but carrier cancellation failed: ${shipmentCancellation.error}`);
                     } else if (shipmentCancellation.cancelled) {
-                        console.log(`📦 Cancelled shipment (AWB: ${shipmentCancellation.awb}) at ${shipmentCancellation.carrier} for order ${orderId}`);
+                        console.log(`ðŸ“¦ Cancelled shipment (AWB: ${shipmentCancellation.awb}) at ${shipmentCancellation.carrier} for order ${orderId}`);
                     }
                 }
-                // Notify the customer on WhatsApp with the reason — only on the
+                // Notify the customer on WhatsApp with the reason â€” only on the
                 // first cancel (re-cancelling must not spam the customer again)
                 if (!wasAlreadyCancelled) {
                     whatsappNotified = await notifyCustomerOfCancellation(shopper, reason);
                 }
             } catch (shipError) {
-                console.error('⚠️ Carrier cancellation check failed (order status still updated):', shipError.message);
+                console.error('âš ï¸ Carrier cancellation check failed (order status still updated):', shipError.message);
                 shipmentCancellation = { hadShipment: true, cancelled: false, error: shipError.message };
             }
         }
@@ -2663,12 +2776,12 @@ router.post('/shoppers/:id/status', verifyToken, requirePermission('edit_orders'
 
         let message = `Status updated to ${status}`;
         if (shipmentCancellation?.cancelled) {
-            message += ` — shipment (AWB: ${shipmentCancellation.awb}) cancelled at ${shipmentCancellation.carrier}`;
+            message += ` â€” shipment (AWB: ${shipmentCancellation.awb}) cancelled at ${shipmentCancellation.carrier}`;
         } else if (shipmentCancellation?.hadShipment && !shipmentCancellation.cancelled) {
-            message += ` — but carrier cancellation FAILED: ${shipmentCancellation.error}. Cancel it manually from the shipments drawer.`;
+            message += ` â€” but carrier cancellation FAILED: ${shipmentCancellation.error}. Cancel it manually from the shipments drawer.`;
         }
         if (status === 'cancelled' && whatsappNotified === true) {
-            message += ' — customer notified on WhatsApp';
+            message += ' â€” customer notified on WhatsApp';
         }
         res.json({ success: true, message, shipmentCancellation, whatsappNotified });
     } catch (error) {
@@ -2700,7 +2813,7 @@ router.delete('/shoppers/bulk', verifyToken, requirePermission('edit_orders'), a
 });
 
 // Cancel a shopper's order in Shopify (optionally refunding prepaid orders).
-// Powers the Shoppers Hub "Cancel in Shopify & Refund" premium bulk action —
+// Powers the Shoppers Hub "Cancel in Shopify & Refund" premium bulk action â€”
 // the hub loops over selected cancelled orders and calls this once per order.
 router.post('/shoppers/:id/shopify-cancel', verifyToken, requirePermission('edit_orders'), async (req, res) => {
     try {
@@ -2712,12 +2825,12 @@ router.post('/shoppers/:id/shopify-cancel', verifyToken, requirePermission('edit
         if (!shopper) return res.status(404).json({ success: false, error: 'Shopper not found' });
         if (!shopper.order_id) return res.status(400).json({ success: false, error: 'Shopper has no order ID' });
 
-        logOperatorActivity(req, 'shopify_cancel', `Shopper ${id} (order ${shopper.order_id}) → Shopify cancel${refundPrepaid ? ' + prepaid refund' : ''}`);
+        logOperatorActivity(req, 'shopify_cancel', `Shopper ${id} (order ${shopper.order_id}) â†’ Shopify cancel${refundPrepaid ? ' + prepaid refund' : ''}`);
 
         const shopifyService = require('../services/shopifyService');
         const result = await shopifyService.cancelAndRefundOrder(shopper.order_id, { refundPrepaid });
 
-        console.log(`🔍 [shopify-cancel] Shopper ${id}, order ${shopper.order_id}: cancelled=${result.cancelled}, refunded=${result.refunded}, refundAmount=${result.refundAmount}, refundSkipped=${result.refundSkipped}, error=${result.error}`);
+        console.log(`ðŸ” [shopify-cancel] Shopper ${id}, order ${shopper.order_id}: cancelled=${result.cancelled}, refunded=${result.refunded}, refundAmount=${result.refundAmount}, refundSkipped=${result.refundSkipped}, error=${result.error}`);
 
         if (!result.cancelled) {
             return res.status(502).json({ success: false, error: result.error || 'Shopify cancellation failed', result });
@@ -2733,7 +2846,7 @@ router.post('/shoppers/:id/shopify-cancel', verifyToken, requirePermission('edit
             }, { id });
             invalidateCache('shoppers');
         } catch (syncErr) {
-            console.warn(`⚠️ Could not persist Shopify cancel sync flag for shopper ${id}:`, syncErr.message);
+            console.warn(`âš ï¸ Could not persist Shopify cancel sync flag for shopper ${id}:`, syncErr.message);
         }
 
         res.json({ success: true, result });
@@ -2807,7 +2920,7 @@ router.get('/shoppers/multi-orders', verifyToken, async (req, res) => {
         }
 
         const ordersSql = `
-            SELECT s.*, 
+            SELECT s.*,
                    (SELECT o.awb FROM orders o WHERE o.order_id = s.order_id LIMIT 1) as awb,
                    (SELECT o.courier_name FROM orders o WHERE o.order_id = s.order_id LIMIT 1) as courier_name,
                    (SELECT o.tracking_url FROM orders o WHERE o.order_id = s.order_id LIMIT 1) as tracking_url,
@@ -2834,17 +2947,17 @@ router.get('/shoppers/multi-orders', verifyToken, async (req, res) => {
                     seenOrderIds: new Set()
                 };
             }
-            
+
             // Skip if this order_id was already added for this phone
             if (groupsMap[phone].seenOrderIds.has(order.order_id)) {
                 continue;
             }
-            
+
             groupsMap[phone].seenOrderIds.add(order.order_id);
             groupsMap[phone].orders.push(order);
             totalOrders++;
         }
-        
+
         // Clean up the temporary Set
         Object.values(groupsMap).forEach(g => delete g.seenOrderIds);
 
@@ -2947,7 +3060,7 @@ router.get('/shoppers/export', verifyToken, requirePermission('export'), async (
     try {
         const { status, search, startDate, endDate, orderIdFrom, orderIdTo, format = 'xlsx', exportType } = req.query;
         logOperatorActivity(req, 'export', `Shoppers export (status: ${status || 'all'}, format: ${format})`);
-        
+
         let whereClause = 'WHERE 1=1';
         const params = [];
 
@@ -2995,7 +3108,7 @@ router.get('/shoppers/export', verifyToken, requirePermission('export'), async (
         }
 
         const sql = `
-            SELECT s.name, s.phone, s.email, s.order_id, s.address, s.city, s.province, s.zip, s.country, 
+            SELECT s.name, s.phone, s.email, s.order_id, s.address, s.city, s.province, s.zip, s.country,
                    s.payment_method, s.items_json,
                    CASE WHEN s.status = 'confirmed' AND ${shippedExpr} THEN 'shipped' ELSE s.status END as status,
                    s.created_at, s.customer_message,
@@ -3008,11 +3121,143 @@ router.get('/shoppers/export', verifyToken, requirePermission('export'), async (
                 GROUP BY order_id
             ) latest_s ON s.order_id = latest_s.order_id AND s.updated_at = latest_s.max_updated
             LEFT JOIN orders o ON s.order_id = o.order_id
-            ${whereClause} 
+            ${whereClause}
             ORDER BY s.created_at DESC
             LIMIT 5000
         `;
-        const shoppers = await dbAdapter.query(sql, params);
+                // Stream CSV in batches instead of loading all shoppers into memory
+        if (format === 'csv') {
+            const istDate = toIST(new Date(), 'date');
+
+            const columns = [
+                'Name', 'Phone', 'Email', 'Order ID', 'Status',
+                'Order Total', 'Payment Method', 'Delivery Type',
+                'Products', 'Address', 'City', 'Province', 'ZIP',
+                'Country', 'AWB', 'Courier', 'Customer Message',
+                'Created At (IST)'
+            ];
+
+            const mapShopperRow = (s) => {
+                let productsStr = '';
+
+                try {
+                    const items = JSON.parse(s.items_json || '[]');
+                    productsStr = items.map(item => {
+                        let size = item.size || item.variant_size || item.product_size || '';
+
+                        if (!size && item.variant_title) {
+                            const sizeMatch =
+                                item.variant_title.match(/Size:\s*(\w+)/i) ||
+                                item.variant_title.match(/\b(S|M|L|XL|XXS|XS|XXL|XXXL|Free Size|One Size)\b/i);
+
+                            if (sizeMatch) size = sizeMatch[1].toUpperCase();
+                        }
+
+                        const sizePart = size ? ` (${size})` : '';
+                        return `${item.title || item.name || 'Product'}${sizePart} x${item.quantity || 1}`;
+                    }).join('; ');
+                } catch (e) {
+                    productsStr = s.items_json || '';
+                }
+
+                const statusMap = {
+                    pending: 'Pending',
+                    confirmed: 'Confirmed',
+                    shipped: 'Shipped',
+                    cancelled: 'Cancelled',
+                    edit_details: 'Edit Details'
+                };
+
+                const statusDisplay = statusMap[s.status] ||
+                    (s.status ? s.status.charAt(0).toUpperCase() + s.status.slice(1) : 'Pending');
+
+                return [
+                    s.name || '',
+                    s.phone || '',
+                    s.email || '',
+                    s.order_id || '',
+                    statusDisplay,
+                    s.order_total || '',
+                    s.payment_method || '',
+                    s.delivery_type || 'Standard',
+                    productsStr,
+                    s.address || '',
+                    s.city || '',
+                    s.province || '',
+                    s.zip || '',
+                    s.country || '',
+                    s.awb || '',
+                    s.courier_name || '',
+                    s.customer_message || '',
+                    formatDateForExport(s.created_at) || ''
+                ];
+            };
+
+            return await streamCsv(res, {
+                columns,
+                filename: `shoppers_${istDate}.csv`,
+                batchSize: 1000,
+                maxRows: 5000,
+                bom: false,
+                fetchBatch: async (cursor, limit) => {
+                    let cursorClause = '';
+                    const batchParams = [...params];
+
+                    if (cursor) {
+    if (cursor.createdAt === null) {
+        cursorClause = `
+            AND s.created_at IS NULL
+            AND s.id < ?
+        `;
+        batchParams.push(cursor.id);
+    } else {
+    cursorClause = `
+        AND (
+            s.created_at < ?
+            OR (s.created_at = ? AND s.id < ?)
+        )
+    `;
+    batchParams.push(cursor.createdAt, cursor.createdAt, cursor.id);
+}
+}
+                    batchParams.push(limit);
+
+                    const batchSql = `
+                        SELECT s.id, s.name, s.phone, s.email, s.order_id,
+                               s.address, s.city, s.province, s.zip, s.country,
+                               s.payment_method, s.items_json,
+                               CASE WHEN s.status = 'confirmed' AND ${shippedExpr}
+                                    THEN 'shipped' ELSE s.status END as status,
+                               s.created_at, s.customer_message, s.delivery_type,
+                               COALESCE(s.order_total, o.total) as order_total,
+                               o.awb, o.courier_name
+                        FROM store_shoppers s
+                        INNER JOIN (
+                            SELECT order_id, MAX(updated_at) as max_updated
+                            FROM store_shoppers
+                            GROUP BY order_id
+                        ) latest_s
+                          ON s.order_id = latest_s.order_id
+                         AND s.updated_at = latest_s.max_updated
+                        LEFT JOIN orders o ON s.order_id = o.order_id
+                        ${whereClause}
+                        ${cursorClause}
+                        ORDER BY s.created_at DESC, s.id DESC
+                        LIMIT ?
+                    `;
+
+                    return dbAdapter.query(batchSql, batchParams);
+                },
+                getCursor: row => ({
+                    createdAt: row.created_at,
+                    id: row.id
+                }),
+                mapRow: mapShopperRow
+            });
+        }
+
+const shoppers = await dbAdapter.query(sql, params);
+
 
         // Format data for export
         const exportData = shoppers.map(s => {
@@ -3086,7 +3331,7 @@ router.get('/shoppers/export', verifyToken, requirePermission('export'), async (
         const buffer = getXlsx().write(wb, { type: 'buffer', bookType: 'xlsx' });
 
         const istDate = toIST(new Date(), 'date');
-        const filename = exportType === 'daily' 
+        const filename = exportType === 'daily'
             ? `daily_report_${istDate}.xlsx`
             : `shoppers_${status || 'all'}_${istDate}.xlsx`;
 
@@ -3154,7 +3399,7 @@ router.get('/inbox/export', verifyToken, requirePermission('export'), async (req
                 }
             }
         } else {
-            // Unread tab export — export customers with unread messages
+            // Unread tab export â€” export customers with unread messages
             whereClause += ' AND s.status != ?';
             params.push('cancelled');
 
@@ -3275,7 +3520,7 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
     try {
         const { limit = 20, offset = 0, startDate, endDate, search, actionType } = req.query;
 
-        // Cache unread chat list (2 min TTL) — heavy query with JOINs + NOT EXISTS
+        // Cache unread chat list (2 min TTL) â€” heavy query with JOINs + NOT EXISTS
         const chatCacheKey = `chat_unread:${limit}:${offset}:${startDate || 'all'}:${endDate || 'all'}:${search || 'none'}:${actionType || 'all'}`;
         if (!search) {
             const cached = getCached(chatCacheKey);
@@ -3333,7 +3578,7 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
         // One row per phone: the newest unread inbound message.
         // The old GROUP BY + MAX(message_content) + MAX() per shopper column
         // aggregated every unread message (41k rows), spilled a 5MB sort to disk
-        // and took ~7.9s — long enough to consume the whole pool.
+        // and took ~7.9s â€” long enough to consume the whole pool.
         const unreadSql = `
             WITH unread AS (
                 SELECT DISTINCT ON (m.customer_phone)
@@ -3421,7 +3666,7 @@ router.get('/chat/unread', verifyToken, async (req, res) => {
     }
 });
 
-// Unread conversation count only — the inbox badge used to call
+// Unread conversation count only â€” the inbox badge used to call
 // /chat/unread?limit=1, which still ran the full conversation scan.
 router.get('/chat/unread/count', verifyToken, async (req, res) => {
     try {
@@ -3470,51 +3715,51 @@ router.get('/chat/:phone', verifyToken, async (req, res) => {
     try {
         const { phone } = req.params;
         const { limit = 200 } = req.query;
-        
+
         // Use phone variations to match any format
         const phoneVariations = getPhoneVariations(phone);
-        
+
         // Get ALL messages from messages table (incoming + all outgoing types)
         const messages = await dbAdapter.query(
-            `SELECT 
+            `SELECT
                 m.id,
                 m.message_content as content,
                 m.message_type as type,
                 m.status,
                 m.created_at,
-                CASE 
+                CASE
                     WHEN m.message_type = 'incoming' THEN 'customer'
                     ELSE 'agent'
                 END as sender,
-                CASE 
+                CASE
                     WHEN m.message_type = 'incoming' AND mr.id IS NULL THEN 0
                     ELSE 1
                 END as is_read
             FROM messages m
             LEFT JOIN message_reads mr ON m.id = mr.message_id
             WHERE m.customer_phone = ANY(?)
-            ORDER BY m.created_at ASC 
+            ORDER BY m.created_at ASC
             LIMIT ?`,
             [phoneVariations, parseInt(limit)]
         );
-        
+
         // Ensure all created_at values are proper ISO strings for frontend IST conversion
         const formattedMessages = messages.map(msg => ({
             ...msg,
             created_at: msg.created_at ? new Date(msg.created_at).toISOString() : null
         }));
-        
+
         // Get customer info
         const customerInfo = await dbAdapter.query(
-            `SELECT 
+            `SELECT
                 name, phone, email, order_id, status,
                 customer_message, last_response_at, response_count
-            FROM store_shoppers 
+            FROM store_shoppers
             WHERE phone = ANY(?)
             ORDER BY created_at DESC LIMIT 1`,
             [phoneVariations]
         );
-        
+
         res.json({
             success: true,
             phone: phone,
@@ -3531,20 +3776,20 @@ router.get('/chat/:phone', verifyToken, async (req, res) => {
 router.post('/chat/send', verifyToken, requirePermission('send_messages'), async (req, res) => {
     try {
         const { phone, message, type = 'text', suggestedText = null } = req.body;
-        
+
         if (!phone || !message) {
             return res.status(400).json({ error: 'Phone and message are required' });
         }
         logOperatorActivity(req, 'chat_message', `Sent ${type} message to ${phone}`);
-        
+
         // Normalize phone number
         const cleanPhone = phone.replace(/\D/g, '');
         const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
-        
+
         // Send message via WhatsApp service
         const whatsappService = require('../services/whatsappService');
         let result;
-        
+
         if (type === 'template' && req.body.templateName) {
             // Send template message (WhatsApp service handles logging automatically with manual_reply type)
             const templateData = {
@@ -3557,16 +3802,16 @@ router.post('/chat/send', verifyToken, requirePermission('send_messages'), async
             // Send text message (WhatsApp service handles logging automatically with manual_reply type)
             result = await whatsappService.sendMessage(formattedPhone, message, 'manual_reply');
         }
-        
+
         // Update shopper record if exists
         await dbAdapter.query(
-            `UPDATE store_shoppers 
+            `UPDATE store_shoppers
              SET last_response_at = ?,
                  response_count = COALESCE(response_count, 0) + 1
              WHERE phone = ? OR phone = ?`,
             [new Date().toISOString(), formattedPhone, cleanPhone]
         );
-        
+
         // AI learning: pair this human reply with the customer's latest question
         // so future suggestions imitate approved answers (fire-and-forget).
         // suggestedText tells us if an AI draft was accepted as-is or corrected.
@@ -3574,7 +3819,7 @@ router.post('/chat/send', verifyToken, requirePermission('send_messages'), async
             const aiLearning = require('../services/ai/learning');
             aiLearning.learnFromAgentReply({ phone: cleanPhone, replyText: message, suggestedText }).catch(() => {});
         }
-        
+
         res.json({
             success: true,
             message: 'Message sent successfully',
@@ -3591,7 +3836,7 @@ router.post('/chat/mark-read/:phone', verifyToken, async (req, res) => {
     try {
         const { phone } = req.params;
         const cleanPhone = phone.replace(/\D/g, '');
-        
+
         console.log(`[Mark Read] Processing phone: ${phone}, cleanPhone: ${cleanPhone}`);
 
         // Find all unread incoming messages for this phone
@@ -3603,7 +3848,7 @@ router.post('/chat/mark-read/:phone', verifyToken, async (req, res) => {
                AND mr.id IS NULL`,
             [cleanPhone, `+${cleanPhone}`, `91${cleanPhone}`, `+91${cleanPhone}`]
         );
-        
+
         console.log(`[Mark Read] Found ${unreadMessages?.length || 0} unread messages`);
 
         if (!unreadMessages || unreadMessages.length === 0) {
@@ -3613,16 +3858,16 @@ router.post('/chat/mark-read/:phone', verifyToken, async (req, res) => {
         // Batch insert read status for all unread messages (much faster than individual inserts)
         const now = new Date().toISOString();
         let markedCount = 0;
-        
+
         // Insert in batches of 50 to avoid overwhelming the database
         const batchSize = 50;
         for (let i = 0; i < unreadMessages.length; i += batchSize) {
             const batch = unreadMessages.slice(i, i + batchSize);
-            
+
             // Build batch INSERT with placeholders: (?, ?, ?), (?, ?, ?), ...
             const placeholders = batch.map(() => '(?, ?, ?)').join(', ');
             const params = batch.flatMap(msg => [msg.id, now, 'admin']);
-            
+
             try {
                 await dbAdapter.query(
                     `INSERT INTO message_reads (message_id, read_at, read_by) VALUES ${placeholders} ON CONFLICT (message_id) DO NOTHING`,
@@ -3634,7 +3879,7 @@ router.post('/chat/mark-read/:phone', verifyToken, async (req, res) => {
             }
         }
 
-        // Badge/list cache is now stale — this conversation was just read
+        // Badge/list cache is now stale â€” this conversation was just read
         invalidateCache('unread');
         res.json({ success: true, marked: markedCount });
     } catch (error) {
@@ -3885,7 +4130,7 @@ router.get('/shoppers/recent-confirmed', verifyToken, async (req, res) => {
             dateParams.push(searchParam, searchParam, searchParam);
         }
 
-        // Cleanup script ran 2026-04-29 — duplicates eliminated, skip expensive self-join
+        // Cleanup script ran 2026-04-29 â€” duplicates eliminated, skip expensive self-join
         const confirmedSql = `
             SELECT s.id, s.phone, s.name, s.order_id, s.status, s.customer_message,
                    s.last_response_at, s.created_at, s.updated_at, s.order_total, s.delivery_type,
@@ -3954,24 +4199,24 @@ router.get('/shoppers/recent-confirmed', verifyToken, async (req, res) => {
 router.get('/analytics/orders', verifyToken, async (req, res) => {
     try {
         const { startDate, endDate, noLimit } = req.query;
-        
+
         if (!startDate || !endDate) {
             return res.status(400).json({ error: 'Start date and end date are required' });
         }
-        
+
         // Convert IST dates from frontend to UTC for database query
         const utcStartDate = fromISTtoUTC(startDate + ' 00:00:00') || (startDate + ' 00:00:00');
         const utcEndDate = fromISTtoUTC(endDate + ' 23:59:59') || (endDate + ' 23:59:59');
-        
+
         // Build query - NO LIMIT for analytics to get all historical data
         let limitClause = '';
         if (!noLimit || noLimit !== 'true') {
             limitClause = 'LIMIT 500'; // Default limit for regular queries
         }
-        
+
         // Fetch all orders in the date range
         const orders = await dbAdapter.query(`
-            SELECT 
+            SELECT
                 o.id, o.order_id, c.name as customer_name, o.customer_phone, o.status,
                 o.total as total_price, o.created_at, o.updated_at
             FROM orders o
@@ -3980,10 +4225,10 @@ router.get('/analytics/orders', verifyToken, async (req, res) => {
             ORDER BY o.created_at DESC
             ${limitClause}
         `, [utcStartDate, utcEndDate]);
-        
+
         // Invalidate cache to ensure fresh analytics data
         invalidateCache('stats');
-        
+
         res.json({
             success: true,
             orders: orders || [],
@@ -3999,18 +4244,18 @@ router.get('/analytics/orders', verifyToken, async (req, res) => {
 router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
     try {
         const { startDate, endDate, noLimit } = req.query;
-        
+
         // Check cache first (3 min TTL for analytics)
         const analyticsCacheKey = `analytics_overview:${startDate || 'all'}:${endDate || 'all'}:${noLimit || 'false'}`;
         const cached = getCached(analyticsCacheKey);
         if (cached) {
             return res.json(cached);
         }
-        
+
         // Build date filter - support custom date range or noLimit for all data
         let dateFilter = "";
         const dateParams = [];
-        
+
         if (startDate && endDate) {
             // Convert IST dates from frontend to UTC for database query
             const utcStartDate = fromISTtoUTC(startDate + ' 00:00:00') || (startDate + ' 00:00:00');
@@ -4022,15 +4267,15 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
             dateFilter = "WHERE s.created_at >= NOW() - INTERVAL '30 days'";
         }
         // If noLimit=true and no dates, dateFilter stays empty (ALL historical data)
-        
+
         // Same derived 'shipped' semantics as the /shoppers list endpoint:
         // a confirmed shopper whose orders row carries an AWB / shipped status.
         // 'confirmed' therefore only counts confirmed-but-not-yet-shipped shoppers.
         const shippedExpr = `(o.awb IS NOT NULL OR o.status = 'shipped')`;
-        
+
         // Get overall stats - lightweight aggregation
         const stats = await dbAdapter.query(`
-            SELECT 
+            SELECT
                 COUNT(*) as total_orders,
                 COUNT(DISTINCT s.phone) as total_shoppers,
                 SUM(CASE WHEN s.status = 'confirmed' AND NOT COALESCE(${shippedExpr}, false) THEN 1 ELSE 0 END) as confirmed_count,
@@ -4044,11 +4289,11 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
             LEFT JOIN orders o ON o.order_id = s.order_id
             ${dateFilter}
         `, dateParams);
-        
+
         // Get daily stats with per-status breakdown (IST timezone)
-        // created_at is TIMESTAMP (no tz) storing UTC — convert UTC→IST correctly
+        // created_at is TIMESTAMP (no tz) storing UTC â€” convert UTCâ†’IST correctly
         const dailyStats = await dbAdapter.query(`
-            SELECT 
+            SELECT
                 TO_CHAR(DATE(s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') as date,
                 COUNT(*) as total,
                 SUM(CASE WHEN s.status = 'confirmed' AND NOT COALESCE(${shippedExpr}, false) THEN 1 ELSE 0 END) as confirmed,
@@ -4063,16 +4308,16 @@ router.get('/chat/analytics/overview', verifyToken, async (req, res) => {
             GROUP BY DATE(s.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
             ORDER BY date DESC
         `, dateParams);
-        
+
         const response = {
             success: true,
             overview: stats[0] || {},
             daily: dailyStats
         };
-        
-        // Cache for 15 minutes — analytics queries are expensive
+
+        // Cache for 15 minutes â€” analytics queries are expensive
         setCache(analyticsCacheKey, response, 'stats', 15 * 60 * 1000);
-        
+
         res.json(response);
     } catch (error) {
         console.error('Chat analytics error:', error);
@@ -4089,7 +4334,7 @@ router.get('/follow-up/campaigns', verifyToken, async (req, res) => {
     try {
         const { status, limit } = req.query;
         const result = await followUpService.getCampaigns({ status, limit });
-        
+
         if (result.success) {
             res.json(result);
         } else {
@@ -4105,7 +4350,7 @@ router.get('/follow-up/campaigns', verifyToken, async (req, res) => {
 router.post('/follow-up/campaigns', verifyToken, async (req, res) => {
     try {
         const { name, templateName, messageContent, recipients } = req.body;
-        
+
         // Create campaign
         const result = await followUpService.createCampaign({
             name,
@@ -4113,17 +4358,17 @@ router.post('/follow-up/campaigns', verifyToken, async (req, res) => {
             messageContent,
             createdBy: req.admin?.username || 'admin'
         });
-        
+
         if (!result.success) {
             return res.status(500).json({ error: result.error });
         }
-        
+
         const campaignId = result.campaign.id;
-        
+
         // Add recipients if provided
         if (recipients) {
             let shoppers = [];
-            
+
             if (recipients.type === 'all_pending') {
                 // Get all pending shoppers
                 const pendingShoppers = await followUpService.getPendingShoppers();
@@ -4163,13 +4408,13 @@ router.post('/follow-up/campaigns', verifyToken, async (req, res) => {
                     }
                 }
             }
-            
+
             // Add shoppers to campaign
             if (shoppers.length > 0) {
                 await followUpService.addRecipients(campaignId, shoppers);
             }
         }
-        
+
         res.json(result);
     } catch (error) {
         console.error('Create follow-up campaign error:', error);
@@ -4182,13 +4427,13 @@ router.get('/follow-up/campaigns/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
         const campaignId = parseInt(id);
-        
+
         if (isNaN(campaignId)) {
             return res.status(400).json({ error: 'Invalid campaign ID' });
         }
-        
+
         const result = await followUpService.getCampaignDetails(campaignId);
-        
+
         if (result.success) {
             res.json(result);
         } else {
@@ -4206,17 +4451,17 @@ router.post('/follow-up/campaigns/:id/recipients', verifyToken, async (req, res)
         const { id } = req.params;
         const { shoppers } = req.body;
         const campaignId = parseInt(id);
-        
+
         if (isNaN(campaignId)) {
             return res.status(400).json({ error: 'Invalid campaign ID' });
         }
-        
+
         if (!shoppers || !Array.isArray(shoppers) || shoppers.length === 0) {
             return res.status(400).json({ error: 'Shoppers array is required' });
         }
-        
+
         const result = await followUpService.addRecipients(campaignId, shoppers);
-        
+
         if (result.success) {
             res.json(result);
         } else {
@@ -4233,14 +4478,14 @@ router.post('/follow-up/campaigns/:id/send', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
         const campaignId = parseInt(id);
-        
+
         if (isNaN(campaignId)) {
             return res.status(400).json({ error: 'Invalid campaign ID' });
         }
         logOperatorActivity(req, 'followup_send', `Sent follow-up campaign ${campaignId}`);
-        
+
         const result = await followUpService.sendCampaign(campaignId);
-        
+
         if (result.success) {
             res.json(result);
         } else {
@@ -4257,7 +4502,7 @@ router.post('/follow-up/campaigns/:id/pause', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
         const result = await followUpService.pauseCampaign(parseInt(id));
-        
+
         if (result.success) {
             res.json(result);
         } else {
@@ -4274,7 +4519,7 @@ router.post('/follow-up/campaigns/:id/resume', verifyToken, async (req, res) => 
     try {
         const { id } = req.params;
         const result = await followUpService.resumeCampaign(parseInt(id));
-        
+
         if (result.success) {
             res.json(result);
         } else {
@@ -4291,7 +4536,7 @@ router.delete('/follow-up/campaigns/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
         const result = await followUpService.deleteCampaign(parseInt(id));
-        
+
         if (result.success) {
             res.json(result);
         } else {
@@ -4313,7 +4558,7 @@ router.get('/follow-up/pending-shoppers', verifyToken, async (req, res) => {
             endDate,
             limit: limit || 100
         });
-        
+
         if (result.success) {
             res.json(result);
         } else {
@@ -4330,32 +4575,32 @@ router.post('/follow-up/campaigns/:id/import', verifyToken, async (req, res) => 
     try {
         const { id } = req.params;
         const { fileBase64 } = req.body;
-        
+
         if (!fileBase64) {
             return res.status(400).json({ error: 'File data is required' });
         }
-        
+
         // Parse Excel file
         const buffer = Buffer.from(fileBase64, 'base64');
         const workbook = getXlsx().read(buffer, { type: 'buffer' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
         const data = getXlsx().utils.sheet_to_json(worksheet);
-        
+
         // Extract order IDs or phone numbers
         const orderIds = [];
         const phones = [];
-        
+
         data.forEach(row => {
-            const orderIdKey = Object.keys(row).find(key => 
-                key.toLowerCase().includes('order') || 
+            const orderIdKey = Object.keys(row).find(key =>
+                key.toLowerCase().includes('order') ||
                 key.toLowerCase().includes('order_id')
             );
-            const phoneKey = Object.keys(row).find(key => 
-                key.toLowerCase().includes('phone') || 
+            const phoneKey = Object.keys(row).find(key =>
+                key.toLowerCase().includes('phone') ||
                 key.toLowerCase().includes('mobile')
             );
-            
+
             if (orderIdKey && row[orderIdKey]) {
                 orderIds.push(String(row[orderIdKey]));
             }
@@ -4363,30 +4608,30 @@ router.post('/follow-up/campaigns/:id/import', verifyToken, async (req, res) => 
                 phones.push(whatsappService.formatPhoneNumber(String(row[phoneKey])));
             }
         });
-        
+
         // Find matching shoppers
         let shoppers = [];
         if (orderIds.length > 0) {
             const placeholders = orderIds.map(() => '?').join(',');
             shoppers = await dbAdapter.query(
-                `SELECT * FROM store_shoppers 
-                 WHERE order_id IN (${placeholders}) 
+                `SELECT * FROM store_shoppers
+                 WHERE order_id IN (${placeholders})
                  AND status = 'pending'`,
                 orderIds
             );
         } else if (phones.length > 0) {
             const placeholders = phones.map(() => '?').join(',');
             shoppers = await dbAdapter.query(
-                `SELECT * FROM store_shoppers 
-                 WHERE phone IN (${placeholders}) 
+                `SELECT * FROM store_shoppers
+                 WHERE phone IN (${placeholders})
                  AND status = 'pending'`,
                 phones
             );
         }
-        
+
         // Add to campaign
         const result = await followUpService.addRecipients(parseInt(id), shoppers);
-        
+
         res.json({
             success: true,
             parsed: data.length,
@@ -4404,7 +4649,7 @@ router.get('/follow-up/analytics', verifyToken, async (req, res) => {
     try {
         const { status } = req.query;
         const result = await followUpService.getAnalytics({ status });
-        
+
         if (result.success) {
             res.json(result);
         } else {
@@ -4421,13 +4666,104 @@ router.get('/follow-up/campaigns/:id/export', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
         const { format = 'xlsx' } = req.query;
-        
-        const result = await followUpService.getCampaignDetails(parseInt(id));
-        
+
+
+if (format === 'csv') {
+    const campaignId = parseInt(id, 10);
+
+    const campaigns = await dbAdapter.query(
+        'SELECT id FROM follow_up_campaigns WHERE id = ?',
+        [campaignId]
+    );
+
+    if (!campaigns || campaigns.length === 0) {
+        return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    return streamCsv(res, {
+        columns: [
+            'Phone',
+            'Order ID',
+            'Status',
+            'Response Type',
+            'Sent At',
+            'Delivered At',
+            'Read At',
+            'Responded At',
+            'Error'
+        ],
+        filename: `follow_up_campaign_${id}.csv`,
+        batchSize: 1000,
+        maxRows: 200000,
+        bom: false,
+
+        fetchBatch: async (cursor, limit) => {
+            let cursorClause = '';
+            const batchParams = [campaignId];
+
+            if (cursor) {
+                if (cursor.createdAt === null) {
+                    cursorClause = `
+                        AND (
+                            (created_at IS NULL AND id < ?)
+                            OR created_at IS NOT NULL
+                        )
+                    `;
+                    batchParams.push(cursor.id);
+                } else {
+                    cursorClause = `
+                        AND (
+                            created_at < ?
+                            OR (created_at = ? AND id < ?)
+                        )
+                    `;
+                    batchParams.push(
+                        cursor.createdAt,
+                        cursor.createdAt,
+                        cursor.id
+                    );
+                }
+            }
+
+            batchParams.push(limit);
+
+            return dbAdapter.query(`
+                SELECT id, phone, order_id, status, response_type,
+                       sent_at, delivered_at, read_at, responded_at,
+                       error_message, created_at
+                FROM follow_up_recipients
+                WHERE campaign_id = ?
+                ${cursorClause}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+            `, batchParams);
+        },
+
+        getCursor: row => ({
+            createdAt: row.created_at,
+            id: row.id
+        }),
+
+        mapRow: r => [
+            r.phone || '',
+            r.order_id || '',
+            r.status || '',
+            r.response_type || '',
+            r.sent_at || '',
+            r.delivered_at || '',
+            r.read_at || '',
+            r.responded_at || '',
+            r.error_message || ''
+        ]
+    });
+}
+
+const result = await followUpService.getCampaignDetails(parseInt(id));
+
         if (!result.success) {
             return res.status(404).json({ error: result.error });
         }
-        
+
         const exportData = result.recipients.map(r => ({
             'Phone': r.phone,
             'Order ID': r.order_id,
@@ -4439,7 +4775,7 @@ router.get('/follow-up/campaigns/:id/export', verifyToken, async (req, res) => {
             'Responded At': r.responded_at || '',
             'Error': r.error_message || ''
         }));
-        
+
         if (format === 'csv') {
             const ws = getXlsx().utils.json_to_sheet(exportData);
             const csv = getXlsx().utils.sheet_to_csv(ws);
@@ -4447,14 +4783,14 @@ router.get('/follow-up/campaigns/:id/export', verifyToken, async (req, res) => {
             res.setHeader('Content-Disposition', `attachment; filename=follow_up_campaign_${id}.csv`);
             return res.send(csv);
         }
-        
+
         // Excel format
         const wb = getXlsx().utils.book_new();
         const ws = getXlsx().utils.json_to_sheet(exportData);
         getXlsx().utils.book_append_sheet(wb, ws, 'Recipients');
-        
+
         const buffer = getXlsx().write(wb, { type: 'buffer', bookType: 'xlsx' });
-        
+
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=follow_up_campaign_${id}.xlsx`);
         res.send(buffer);
@@ -4535,7 +4871,7 @@ router.post('/support-portals', verifyToken, async (req, res) => {
 router.get('/support-portals', verifyToken, async (req, res) => {
     try {
         const portals = await dbAdapter.query(`
-            SELECT p.*, 
+            SELECT p.*,
                    COUNT(t.id) as ticket_count,
                    SUM(CASE WHEN t.status = 'open' THEN 1 ELSE 0 END) as assigned_count
             FROM support_portals p
@@ -4590,7 +4926,7 @@ router.get('/support-portals', verifyToken, async (req, res) => {
                     console.error('Error calculating time-based portal count:', e);
                 }
             }
-            
+
             return {
                 ...portal,
                 ticket_count: explicitTotal,
@@ -4721,7 +5057,7 @@ router.post('/support-portals/:id/assign', verifyToken, async (req, res) => {
             `UPDATE support_tickets SET portal_id = ? WHERE id IN (${placeholders})`,
             [id, ...ticketIds]
         );
-        
+
         // Invalidate ticket cache when bulk assignments change
         clearAllCaches('tickets');
 
@@ -4753,7 +5089,7 @@ router.post('/support-portals/:id/clear', verifyToken, async (req, res) => {
             'UPDATE support_tickets SET portal_id = NULL WHERE portal_id = ?',
             [id]
         );
-        
+
         // Invalidate ticket cache when assignments are cleared
         clearAllCaches('tickets');
 
@@ -4771,7 +5107,7 @@ router.post('/support-portals/:id/clear', verifyToken, async (req, res) => {
 async function getPortalTicketRows(portal, onlyOpen = true) {
     const statusClause = onlyOpen ? " AND status = 'open'" : "";
     const cacheKey = `portal_tickets:${portal.id}:${onlyOpen ? 'open' : 'all'}`;
-    
+
     // Cache for 30 seconds to reduce query frequency during dashboard polling
     return await caches.tickets.getOrLoad(cacheKey, async () => {
         if (portal.type === 'time_based') {
@@ -4780,7 +5116,7 @@ async function getPortalTicketRows(portal, onlyOpen = true) {
                 : {};
             const rangeClause = timeRangeSqlClause(config);
             if (!rangeClause) {
-                // No time window — fall back to explicitly-assigned only
+                // No time window â€” fall back to explicitly-assigned only
                 return await dbAdapter.query(
                     `SELECT id, created_at, status, portal_id FROM support_tickets WHERE portal_id = ?${statusClause} ORDER BY created_at DESC LIMIT 1000`,
                     [portal.id]
@@ -4979,8 +5315,8 @@ router.post('/support-portals/transfer', verifyToken, async (req, res) => {
 // Auto-distribute open tickets into N portals with advanced features
 router.post('/support-portals/auto-distribute', verifyToken, async (req, res) => {
     try {
-        const { 
-            count, 
+        const {
+            count,
             namePrefix,
             distributionMode = 'round_robin',
             filters = {},
@@ -5277,14 +5613,14 @@ router.get('/support-portals/distribution-stats', verifyToken, async (req, res) 
         );
 
         const portalStats = await dbAdapter.query(
-            `SELECT 
+            `SELECT
                 id, name, max_tickets, assigned_count, shift_start, shift_end, is_active,
-                CASE 
+                CASE
                     WHEN max_tickets > 0 THEN ROUND((assigned_count * 100.0 / max_tickets), 1)
                     ELSE 0
                 END as utilization_percent
-            FROM support_portals 
-            WHERE type = 'auto' 
+            FROM support_portals
+            WHERE type = 'auto'
             ORDER BY created_at DESC`
         );
 
@@ -5295,7 +5631,7 @@ router.get('/support-portals/distribution-stats', verifyToken, async (req, res) 
             summary: {
                 totalDistributions: history.length,
                 totalPortals: portalStats.length,
-                avgUtilization: portalStats.length > 0 
+                avgUtilization: portalStats.length > 0
                     ? Math.round(portalStats.reduce((sum, p) => sum + parseFloat(p.utilization_percent), 0) / portalStats.length)
                     : 0
             }
@@ -5398,7 +5734,7 @@ router.post('/support-portals/rebalance', verifyToken, async (req, res) => {
         }
 
         const portalIdList = portals.map(p => p.id).join(',');
-        
+
         // Build ticket query: open tickets assigned to these portals PLUS unassigned open tickets in the shift window
         const timeClauses = [];
         for (const p of portals) {
@@ -5475,7 +5811,7 @@ router.post('/support-portals/rebalance', verifyToken, async (req, res) => {
     }
 });
 
-// Portal analytics — single endpoint returning all stats via aggregated SQL.
+// Portal analytics â€” single endpoint returning all stats via aggregated SQL.
 // Memory-smart: never loads full ticket rows, only COUNT(*) aggregations.
 router.get('/support-portals/analytics', verifyToken, async (req, res) => {
     try {
@@ -5512,7 +5848,7 @@ router.get('/support-portals/analytics', verifyToken, async (req, res) => {
             }
         }
 
-        // 2) Unassigned ticket breakdown by IST hour — single lightweight query
+        // 2) Unassigned ticket breakdown by IST hour â€” single lightweight query
         const hourlyUnassigned = await dbAdapter.query(`
             SELECT
                 EXTRACT(HOUR FROM (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'))::int AS ist_hour,
@@ -5524,7 +5860,7 @@ router.get('/support-portals/analytics', verifyToken, async (req, res) => {
             ORDER BY 1
         `);
 
-        // 3) Today's ticket volume by IST hour (all tickets) — single query
+        // 3) Today's ticket volume by IST hour (all tickets) â€” single query
         const hourlyToday = await dbAdapter.query(`
             SELECT
                 EXTRACT(HOUR FROM (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'))::int AS ist_hour,
@@ -5535,7 +5871,7 @@ router.get('/support-portals/analytics', verifyToken, async (req, res) => {
             ORDER BY 1
         `);
 
-        // 4) Unassigned by date (last 7 days) — single query
+        // 4) Unassigned by date (last 7 days) â€” single query
         const dailyUnassigned = await dbAdapter.query(`
             SELECT
                 DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') AS ist_date,
@@ -5731,7 +6067,7 @@ router.put('/support-portals/:id/password', verifyToken, async (req, res) => {
 });
 
 // ============================================================
-// AI SUPPORT ANALYTICS — aggregated insights for the dashboard
+// AI SUPPORT ANALYTICS â€” aggregated insights for the dashboard
 // ============================================================
 
 router.get('/support-analytics/ai-overview', verifyToken, async (req, res) => {
@@ -5760,7 +6096,7 @@ router.get('/support-analytics/ai-overview', verifyToken, async (req, res) => {
             sentimentStats,
             dailyVolume,
             scenarioStats,
-            // ── NEW: deep-dive queries ──
+            // â”€â”€ NEW: deep-dive queries â”€â”€
             hourlyPattern,
             channelSentiment,
             portalPerformance,
@@ -5966,7 +6302,7 @@ router.get('/support-analytics/ai-overview', verifyToken, async (req, res) => {
 });
 
 // ============================================================
-// SHIPPING MODULE (Shopper Hub) — carrier-agnostic shipping API
+// SHIPPING MODULE (Shopper Hub) â€” carrier-agnostic shipping API
 // ============================================================
 const shippingService = require('../services/shippingService');
 
@@ -5980,7 +6316,7 @@ router.get('/shipping/carriers', verifyToken, async (req, res) => {
     }
 });
 
-// Order lookup for forward shipments — search by order ID / name / phone / AWB.
+// Order lookup for forward shipments â€” search by order ID / name / phone / AWB.
 // Returns shippable candidates with their consignee details and shipment state,
 // so the "New Shipment" flow can auto-grab everything from just an order ID.
 router.get('/shipping/orders/lookup', verifyToken, async (req, res) => {
@@ -6057,7 +6393,7 @@ router.post('/shipping/serviceability', verifyToken, async (req, res) => {
     }
 });
 
-// Create shipment (idempotent — 409 if an active shipment exists).
+// Create shipment (idempotent â€” 409 if an active shipment exists).
 // Re-ship: reshipOfShipmentId + reshipReason link the new shipment to the one
 // it replaces (audit trail + replacement-worded WhatsApp notification).
 router.post('/shipping/ship', verifyToken, requirePermission('ship_orders'), async (req, res) => {
@@ -6098,16 +6434,16 @@ router.post('/shipping/ship', verifyToken, requirePermission('ship_orders'), asy
                         state: consigneeOverrides.state,
                         pincode: consigneeOverrides.pincode
                     }).then(sync => {
-                        if (sync.success) console.log(`🔄 Shopify shipping address synced for order ${orderId}`);
-                        else console.warn(`⚠️ Shopify address sync skipped for ${orderId}: ${sync.warnings.join('; ')}`);
-                    }).catch(e => console.error('⚠️ Shopify address sync error:', e.message));
+                        if (sync.success) console.log(`ðŸ”„ Shopify shipping address synced for order ${orderId}`);
+                        else console.warn(`âš ï¸ Shopify address sync skipped for ${orderId}: ${sync.warnings.join('; ')}`);
+                    }).catch(e => console.error('âš ï¸ Shopify address sync error:', e.message));
 
                     const gokwikService = require('../services/gokwikService');
                     gokwikService.notifyOrderUpdate(orderId, { shippingAddress: consigneeOverrides })
-                        .catch(e => console.error('⚠️ GoKwik address sync error:', e.message));
+                        .catch(e => console.error('âš ï¸ GoKwik address sync error:', e.message));
                 }
             } catch (syncSetupError) {
-                console.error('⚠️ Shopify/GoKwik address sync setup error:', syncSetupError.message);
+                console.error('âš ï¸ Shopify/GoKwik address sync setup error:', syncSetupError.message);
             }
         }
 
@@ -6163,7 +6499,7 @@ router.get('/shipping/shipments/:id/label', verifyToken, async (req, res) => {
 
 // Cancel shipment at the carrier + mark cancelled locally.
 // force=true closes the shipment locally even when the carrier refuses (already
-// delivered/RTO/lost) so the order can be re-shipped — the reason is returned as
+// delivered/RTO/lost) so the order can be re-shipped â€” the reason is returned as
 // a warning and stored on the shipment row.
 router.post('/shipping/shipments/:id/cancel', verifyToken, requirePermission('ship_orders'), async (req, res) => {
     try {
@@ -6195,8 +6531,8 @@ router.get('/shipping/shipments/:id/track', verifyToken, async (req, res) => {
     }
 });
 
-// On-demand carrier status sync — polls carriers for active shipments and
-// advances statuses (pickup_scheduled → in_transit → delivered / rto).
+// On-demand carrier status sync â€” polls carriers for active shipments and
+// advances statuses (pickup_scheduled â†’ in_transit â†’ delivered / rto).
 // Fired in the background when the Shipped Orders view opens/refreshes;
 // the 30-min cron (shipmentSyncCron) covers everything in between.
 // Single-flight: the UI fires this on every refresh, and overlapping runs used
@@ -6218,7 +6554,7 @@ router.post('/shipping/sync-statuses', verifyToken, async (req, res) => {
     }
 });
 
-// Full shipped-orders history — shipments joined with orders + shoppers + customers,
+// Full shipped-orders history â€” shipments joined with orders + shoppers + customers,
 // with search/carrier/status/payment/date filters and aggregate stats.
 // Powers the "Shipped Orders" view in the Shopper Hub (Shiprocket-style panel).
 router.get('/shipping/history', verifyToken, async (req, res) => {
@@ -6228,7 +6564,7 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
         const safeOffset = Math.max(0, parseInt(offset) || 0);
 
         // Filters other than the status pill. The pill counters are built from
-        // this set only: each pill (and each RTO sub-pill — RTO Initiated /
+        // this set only: each pill (and each RTO sub-pill â€” RTO Initiated /
         // RTO Delivered / Untrackable) has to report its own total, so applying
         // the selected status to the stats query used to zero every sibling
         // counter and made the sub-filter row look broken.
@@ -6270,7 +6606,7 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
         const countFrom = search ? baseFrom : ' FROM shipments s ';
 
         // Status counters and the carrier list only change when the underlying
-        // shipments do, and they are display-only — 60s of staleness beats
+        // shipments do, and they are display-only â€” 60s of staleness beats
         // re-scanning 34k shipment rows on every view refresh (~0.8-1s each).
         const statsCacheKey = `ship_stats:${baseWhere}:${JSON.stringify(baseParams)}`;
         const [rows, countRows, statsRows, carrierRows] = await Promise.all([
@@ -6331,7 +6667,7 @@ router.get('/shipping/history', verifyToken, async (req, res) => {
     }
 });
 
-// ── Streamed shipment CSV export ────────────────────────────────────────────
+// â”€â”€ Streamed shipment CSV export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Downloads the full filtered shipment set (tens of thousands of rows) with flat
 // memory use: keyset-paginated batches are streamed straight to the client, so
 // neither the server nor the browser ever holds the whole file.
@@ -6350,7 +6686,7 @@ router.get('/shipping/history/export', verifyToken, requirePermission('export'),
     logOperatorActivity(req, 'export', `Shipments export (${shipmentExportService.buildFileName(filters)})`);
     try {
         const rows = await shipmentExportService.streamShipmentsCsv(res, filters);
-        console.log(`📤 Shipment export streamed ${rows} rows`);
+        console.log(`ðŸ“¤ Shipment export streamed ${rows} rows`);
     } catch (error) {
         console.error('Shipping export error:', error);
         if (!res.headersSent) {
@@ -6361,7 +6697,7 @@ router.get('/shipping/history/export', verifyToken, requirePermission('export'),
     }
 });
 
-// Live match count for the export dialog — same filters, count only
+// Live match count for the export dialog â€” same filters, count only
 router.get('/shipping/history/export/count', verifyToken, requirePermission('export'), async (req, res) => {
     try {
         const total = await shipmentExportService.countShipments({
@@ -6380,7 +6716,7 @@ router.get('/shipping/history/export/count', verifyToken, requirePermission('exp
     }
 });
 
-// ─── SHIPMENT BATCHES ────────────────────────────────────────────────
+// â”€â”€â”€ SHIPMENT BATCHES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Batch CRUD, manifest/label downloads, merge & split operations
 
 // Create a new batch (called at bulk-ship start)
@@ -6672,7 +7008,7 @@ router.post('/ai/cancel/:id', verifyToken, async (req, res) => {
     }
 });
 
-// AI reply suggestions for a customer chat (drafts only — never auto-sent)
+// AI reply suggestions for a customer chat (drafts only â€” never auto-sent)
 router.post('/ai/suggest-reply', verifyToken, async (req, res) => {
     try {
         const { phone, ticketId, prefetch } = req.body;
@@ -6834,7 +7170,7 @@ router.get('/ai/learned/test', verifyToken, async (req, res) => {
     }
 });
 
-// Current AI settings — lets the settings panel show stored values instead of
+// Current AI settings â€” lets the settings panel show stored values instead of
 // stale hardcoded defaults (the save endpoint already accepts these keys)
 router.get('/ai/settings', verifyToken, async (req, res) => {
     try {
@@ -7013,7 +7349,7 @@ router.get('/ai/conversations/:ticketId', verifyToken, async (req, res) => {
 
         // Parse AI suggestion from ticket message
         let aiSuggestion = null;
-        const suggestionMatch = ticket.message.match(/💡 \[AI SUGGESTED REPLY - SOP: (.+?)\]\n([\s\S]*?)$/);
+        const suggestionMatch = ticket.message.match(/ðŸ’¡ \[AI SUGGESTED REPLY - SOP: (.+?)\]\n([\s\S]*?)$/);
         if (suggestionMatch) {
             aiSuggestion = {
                 scenario: suggestionMatch[1],
@@ -7149,10 +7485,10 @@ router.get('/ai/quality-metrics', verifyToken, async (req, res) => {
 // on-hand stock with units out in the field: in-circulation shipments,
 // RTO returns coming back, open customer returns and exchange pipelines.
 //   final_available = on_hand + rto_incoming + return_incoming
-//                     + exchange_incoming − exchange_outgoing
+//                     + exchange_incoming âˆ’ exchange_outgoing
 // ==========================================
 
-// Fetch open return/exchange requests from the external returns server —
+// Fetch open return/exchange requests from the external returns server â€”
 // Shopify portal submissions live there, not in the local returns/exchanges
 // tables. Graceful: returns { connected: false } when unconfigured or down.
 // Lives in customerContextService (shared with the support desk); kept here
@@ -7205,8 +7541,8 @@ router.get('/inventory', verifyToken, async (req, res) => {
             setCache(bundleCacheKey, bundleRows, 'stats', 3600000); // Cache for 1 hour
         }
 
-        // Two lightweight per-row scans — optimized for index usage.
-        // A) windowed history → delivered + RTO buckets (split into two queries to avoid OR)
+        // Two lightweight per-row scans â€” optimized for index usage.
+        // A) windowed history â†’ delivered + RTO buckets (split into two queries to avoid OR)
         // B) current in-circulation shipments (never window-trimmed)
         const [historyDelivered, historyRto, circulationRows, returnRows, exchangeRows, rsPipeline, salesRows] = await Promise.all([
             // History: delivered orders
@@ -7240,7 +7576,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
             dbAdapter.query(`SELECT old_items, new_items FROM exchanges WHERE status IN ('pending_approval','initiated','pickup_scheduled') ${windowSql}`),
             fetchReturnsServerPipeline(windowDays),
             // Trailing 84 days of shipped/delivered units for velocity & forecast
-            // series — always a fixed window, independent of the pipeline window.
+            // series â€” always a fixed window, independent of the pipeline window.
             dbAdapter.query(`
                 SELECT s.items_json, s.created_at
                 FROM store_shoppers s
@@ -7252,7 +7588,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
         ]);
 
         // ---------- Bundle / combo expansion (Zoho configuration) ----------
-        // Combos & bundles are NOT distinct products — zoho_bundle_map breaks
+        // Combos & bundles are NOT distinct products â€” zoho_bundle_map breaks
         // them into their single-product components (e.g. "POLO- 001 ( COMBO )"
         // = POLO- 001 BLACK + OFF-WHITE). Every order-derived count is expanded
         // into components, and the bundle products themselves are excluded from
@@ -7283,7 +7619,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
                 if (v.sku) skuIndex.set(norm(v.sku), { p, v });
             }
         }
-        // Direct id lookups — used by the alias index below
+        // Direct id lookups â€” used by the alias index below
         const variantById = new Map();
         for (const p of activeCatalog) {
             for (const v of (p.variants || [])) variantById.set(String(v.id), { p, v });
@@ -7299,7 +7635,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
             for (const a of aliasRows) {
                 aliasIndex.set(`${norm(a.raw_name)}|${norm(a.raw_size)}`, String(a.variant_id));
             }
-        } catch (_) { /* table not migrated yet — fall through to normal matching */ }
+        } catch (_) { /* table not migrated yet â€” fall through to normal matching */ }
 
         // Resolve a raw line item ({title|product_name|name, sku, variant|variant_title|size, quantity})
         // to a catalog variant. Returns { p, v } or null.
@@ -7320,7 +7656,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
 
             let product = titleIndex.get(title) || null;
             if (!product) {
-                // Titles often carry trailing size/colour suffixes — match by containment
+                // Titles often carry trailing size/colour suffixes â€” match by containment
                 for (const [pTitle, p] of titleIndex) {
                     if (!pTitle) continue;
                     if (title.startsWith(pTitle) || pTitle.startsWith(title)) { product = p; break; }
@@ -7333,7 +7669,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
 
             const size = norm(extractItemSize(item));
             // Colourway hint: whatever the title carries beyond the product
-            // family (bundle component "POLO- 001 ( BLACK )" → "black").
+            // family (bundle component "POLO- 001 ( BLACK )" â†’ "black").
             const pNorm = norm(product.title);
             const extraTokens = title.startsWith(pNorm)
                 ? title.slice(pNorm.length).split(' ').filter(Boolean)
@@ -7344,7 +7680,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
                     const vt = norm(v.title);
                     if (!vt) return false;
                     const vtTokens = vt.split(' ').filter(Boolean);
-                    // Token equality ONLY — a substring check here silently
+                    // Token equality ONLY â€” a substring check here silently
                     // attributed size-S sales to XS ("xs" contains "s") when
                     // XS precedes S in the variants array, and L to XL likewise.
                     return wanted.every(t => vtTokens.includes(t));
@@ -7440,16 +7776,16 @@ router.get('/inventory', verifyToken, async (req, res) => {
             addItemUnits(parseItems(row.items_json), 'rto_incoming');
         }
 
-        // 2) Open customer returns → stock coming back
+        // 2) Open customer returns â†’ stock coming back
         for (const row of returnRows) addItemUnits(parseItems(row.items), 'return_incoming');
 
-        // 3) Open exchanges → old items come back, replacement items go out
+        // 3) Open exchanges â†’ old items come back, replacement items go out
         for (const row of exchangeRows) {
             addItemUnits(parseItems(row.old_items), 'exchange_incoming');
             addItemUnits(parseItems(row.new_items), 'exchange_outgoing');
         }
 
-        // 4) External returns server — Shopify portal return/exchange requests
+        // 4) External returns server â€” Shopify portal return/exchange requests
         //    (separate system; no overlap with the local returns/exchanges tables)
         const rsUnits = { return_incoming: 0, exchange_incoming: 0, exchange_outgoing: 0 };
         const rsQty = (items) => items.reduce((acc, i) => acc + Math.max(1, parseInt(i?.quantity, 10) || 1), 0);
@@ -7463,7 +7799,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
                 rsUnits.exchange_incoming += rsQty(items);
                 addItemUnits(items, 'exchange_incoming');
                 // Replacements ship via carrier (not a Shopify order), so Shopify
-                // on-hand is NOT decremented for them — reserve them here.
+                // on-hand is NOT decremented for them â€” reserve them here.
                 const replacements = items
                     .filter(i => i && (i.replacementProductTitle || i.replacementSku || i.replacementVariant))
                     .map(i => ({
@@ -7516,7 +7852,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
         const ageBucketOf = (d) => (d <= 30 ? '0-30' : d <= 60 ? '31-60' : d <= 90 ? '61-90' : d <= 120 ? '91-120' : d <= 180 ? '121-180' : '180+');
 
         // Assumptions with no live data source (surfaced in the UI):
-        const LEAD_TIME_DAYS = 25;      // manufacturer lead time — fixed assumption
+        const LEAD_TIME_DAYS = 25;      // manufacturer lead time â€” fixed assumption
         const DEAD_SALE_DAYS = 45;      // no sale for 45d => dead stock
         const OVERSTOCK_COVER_DAYS = 90;
         const TARGET_COVER_DAYS = 45;   // replenishment target cover
@@ -7559,7 +7895,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
                 const incomingQty = s.in_circulation + s.rto_incoming + s.return_incoming + s.exchange_incoming;
                 const incomingEtaDays = incomingQty > 0 ? (s.in_circulation > 0 ? 3 : 7) : null; // in-transit ~3d, returns pipeline ~7d
                 const incomingArrivesInTime = incomingQty > 0 && incomingEtaDays <= daysOfCover + 3;
-                // Dead = had sales but stopped for 45d+. Never-sold variants are NOT dead — they have no demand signal yet.
+                // Dead = had sales but stopped for 45d+. Never-sold variants are NOT dead â€” they have no demand signal yet.
                 const isDead = everSold && lastSaleDaysAgo > DEAD_SALE_DAYS && onHand > 0 && (ageingDays === null || ageingDays > DEAD_SALE_DAYS);
                 const isOverstock = daysOfCover > OVERSTOCK_COVER_DAYS && velocity > SLOW_VELOCITY;
                 const isStockoutRisk = velocity > 0.05 && daysOfCover <= LEAD_TIME_DAYS && !incomingArrivesInTime;
@@ -7570,15 +7906,15 @@ router.get('/inventory', verifyToken, async (req, res) => {
 
                 let bucket, reason, priority;
                 if (isDead) {
-                    bucket = 'DO NOT BUY'; reason = `No sale in ${lastSaleDaysAgo}d+ – capital better spent elsewhere`; priority = 'Low';
+                    bucket = 'DO NOT BUY'; reason = `No sale in ${lastSaleDaysAgo}d+ â€“ capital better spent elsewhere`; priority = 'Low';
                 } else if (isOverstock) {
-                    bucket = 'OVERSTOCK – DO NOT REPLENISH'; reason = `${daysOfCover}d cover already on hand vs ${LEAD_TIME_DAYS}d lead time`; priority = 'Low';
+                    bucket = 'OVERSTOCK â€“ DO NOT REPLENISH'; reason = `${daysOfCover}d cover already on hand vs ${LEAD_TIME_DAYS}d lead time`; priority = 'Low';
                 } else if (isStockoutRisk) {
                     bucket = 'BUY NOW'; reason = `Stocks out in ${Math.floor(daysOfCover)}d, replenishment takes ${LEAD_TIME_DAYS}d`; priority = 'Critical';
                 } else if (daysOfCover <= LEAD_TIME_DAYS + 14) {
                     bucket = 'BUY SOON'; reason = `${daysOfCover}d cover approaching ${LEAD_TIME_DAYS}d lead time`; priority = 'High';
                 } else {
-                    bucket = 'MONITOR'; reason = `${daysOfCover === 999 ? 'No demand signal' : daysOfCover + 'd cover'} – healthy for now`; priority = 'Normal';
+                    bucket = 'MONITOR'; reason = `${daysOfCover === 999 ? 'No demand signal' : daysOfCover + 'd cover'} â€“ healthy for now`; priority = 'Normal';
                 }
 
                 const status = isDead ? 'Dead'
@@ -7635,7 +7971,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
                     replenishment: {
                         bucket, reason, priority,
                         recommended_qty: recommendedQty,
-                        purchase_value: money(recommendedQty * v.price), // at selling price — no cost data
+                        purchase_value: money(recommendedQty * v.price), // at selling price â€” no cost data
                         target_cover_days: TARGET_COVER_DAYS
                     },
                     value_at_price: money(onHand * v.price),
@@ -7708,7 +8044,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
             final_available_units: onHandUnits + agg('rto_incoming') + agg('return_incoming') + agg('exchange_incoming') - agg('exchange_outgoing'),
             delivered_units: agg('delivered'),
             low_stock_variants: products.reduce((acc, p) => acc + p.variants.filter(v => v.low_stock).length, 0),
-            // control-tower portfolio derivations (monetary figures at selling price — no cost data)
+            // control-tower portfolio derivations (monetary figures at selling price â€” no cost data)
             weekly_sales_total: Array.from({ length: 12 }, (_, w) => flatVariants.reduce((a, v) => a + (v.weekly_sales[w] || 0), 0)),
             sales_30_total: flatVariants.reduce((a, v) => a + v.sales30, 0),
             sales_7_total: flatVariants.reduce((a, v) => a + v.sales7, 0),
@@ -7766,7 +8102,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
                 units: rsUnits
             }
         };
-        setCache(cacheKey, response, 'stats', 60 * 60 * 1000); // 1 hour — inventory data changes slowly, cache aggressively
+        setCache(cacheKey, response, 'stats', 60 * 60 * 1000); // 1 hour â€” inventory data changes slowly, cache aggressively
         res.json(response);
     } catch (error) {
         console.error('Inventory intelligence error:', error);
@@ -7774,7 +8110,7 @@ router.get('/inventory', verifyToken, async (req, res) => {
     }
 });
 
-// ── Inventory Name Aliases (admin) ──
+// â”€â”€ Inventory Name Aliases (admin) â”€â”€
 // Human-confirmed mappings between order-item names and the real Shopify
 // catalog variant.  Fixes "0 selling" SKUs whose stored order names no
 // longer match the catalog.  Both /inventory and /inventory/movements
@@ -7833,7 +8169,7 @@ router.post('/inventory/name-aliases', verifyToken, async (req, res) => {
             [String(raw_name).trim(), String(raw_size || '').trim(), product_id, variant_id, performedBy]
         );
         invalidateInventoryIntelCache();
-        res.json({ success: true, message: `Mapped "${raw_name}" — inventory will refresh on next load` });
+        res.json({ success: true, message: `Mapped "${raw_name}" â€” inventory will refresh on next load` });
     } catch (error) {
         console.error('Name alias save error:', error);
         res.status(500).json({ success: false, error: 'Failed to save name alias' });
@@ -7851,7 +8187,7 @@ router.delete('/inventory/name-aliases/:id', verifyToken, async (req, res) => {
     }
 });
 
-// ── Manual Inventory Management Endpoints ──
+// â”€â”€ Manual Inventory Management Endpoints â”€â”€
 // These endpoints manage the manual inventory system independent of Shopify.
 // Used for bulk inventory-in operations and syncing from external inventory sheets.
 
@@ -7886,7 +8222,7 @@ router.get('/inventory/manual', verifyToken, async (req, res) => {
         sql += ' ORDER BY product_name, size';
 
         const items = await dbAdapter.query(sql, params);
-        
+
         // Compute summary stats
         const totalSkus = items.length;
         const totalUnits = items.reduce((sum, i) => sum + (i.quantity || 0), 0);
@@ -7913,7 +8249,7 @@ router.get('/inventory/manual', verifyToken, async (req, res) => {
 router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
     try {
         const { items, reference, notes, performed_by } = req.body;
-        
+
         if (!items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ success: false, error: 'items array is required' });
         }
@@ -7921,9 +8257,9 @@ router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
         // Validate each item
         for (const item of items) {
             if (!item.sku_key || !item.product_name || !item.size || typeof item.quantity !== 'number' || item.quantity <= 0) {
-                return res.status(400).json({ 
-                    success: false, 
-                    error: 'Each item requires sku_key, product_name, size, and positive quantity (number)' 
+                return res.status(400).json({
+                    success: false,
+                    error: 'Each item requires sku_key, product_name, size, and positive quantity (number)'
                 });
             }
         }
@@ -7934,20 +8270,20 @@ router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
 
         for (const item of items) {
             const { sku_key, product_name, size, quantity, category } = item;
-            
+
             // Get current inventory (or create if doesn't exist)
             let current = await dbAdapter.query(
                 'SELECT * FROM manual_inventory WHERE sku_key = $1',
                 [sku_key]
             );
-            
+
             let quantityBefore = 0;
             let quantityAfter;
-            
+
             if (current.length > 0) {
                 quantityBefore = current[0].quantity || 0;
                 quantityAfter = quantityBefore + quantity;
-                
+
                 // Update existing inventory
                 await dbAdapter.query(
                     'UPDATE manual_inventory SET quantity = $1, updated_at = $2 WHERE sku_key = $3',
@@ -7955,7 +8291,7 @@ router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
                 );
             } else {
                 quantityAfter = quantity;
-                
+
                 // Insert new inventory record
                 await dbAdapter.query(
                     `INSERT INTO manual_inventory (product_name, category, size, sku_key, quantity, reorder_level, updated_at)
@@ -7963,15 +8299,15 @@ router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
                     [product_name, category || null, size, sku_key, quantity, 0, timestamp]
                 );
             }
-            
+
             // Log the adjustment
             await dbAdapter.query(
-                `INSERT INTO inventory_adjustments 
+                `INSERT INTO inventory_adjustments
                  (sku_key, product_name, size, adjustment_type, quantity_change, quantity_before, quantity_after, reference, notes, performed_by, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
                 [sku_key, product_name, size, 'bulk_in', quantity, quantityBefore, quantityAfter, reference || null, notes || null, performed_by || 'admin', timestamp]
             );
-            
+
             results.push({
                 sku_key,
                 product_name,
@@ -7980,7 +8316,7 @@ router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
                 quantity_before,
                 quantity_after
             });
-            
+
             adjustmentRecords.push({
                 sku_key,
                 product_name,
@@ -8042,7 +8378,7 @@ router.post('/inventory/bulk-out', verifyToken, async (req, res) => {
             );
 
             if (current.length === 0) {
-                return res.status(400).json({ success: false, error: `SKU ${sku_key} not found in inventory — cannot subtract from zero` });
+                return res.status(400).json({ success: false, error: `SKU ${sku_key} not found in inventory â€” cannot subtract from zero` });
             }
 
             const quantityBefore = current[0].quantity || 0;
@@ -8089,7 +8425,7 @@ router.post('/inventory/sync-from-shopify', verifyToken, async (req, res) => {
     try {
         const shopifyService = require('../services/shopifyService');
         const catalog = await shopifyService.getProductCatalog(true); // Force refresh to get latest products
-        
+
         if (!catalog || catalog.length === 0) {
             return res.status(400).json({ success: false, error: 'No products found in Shopify catalog' });
         }
@@ -8102,16 +8438,16 @@ router.post('/inventory/sync-from-shopify', verifyToken, async (req, res) => {
         // Process each product and its variants
         for (const product of catalog) {
             const variants = product.variants || [];
-            
+
             for (const variant of variants) {
                 // Build SKU key: product_handle-variant_title or product_handle if no variant
-                const variantTitle = variant.title && variant.title !== 'Default Title' 
-                    ? variant.title 
+                const variantTitle = variant.title && variant.title !== 'Default Title'
+                    ? variant.title
                     : '';
-                const skuKey = variantTitle 
+                const skuKey = variantTitle
                     ? `${product.handle}-${variantTitle}`.toLowerCase().replace(/\s+/g, '-')
                     : product.handle.toLowerCase();
-                
+
                 // Check if already exists in manual_inventory
                 const existing = await dbAdapter.query(
                     'SELECT sku_key FROM manual_inventory WHERE sku_key = $1',
@@ -8148,7 +8484,7 @@ router.post('/inventory/sync-from-shopify', verifyToken, async (req, res) => {
 
                 // Log the sync as an adjustment
                 await dbAdapter.query(
-                    `INSERT INTO inventory_adjustments 
+                    `INSERT INTO inventory_adjustments
                      (sku_key, product_name, size, adjustment_type, quantity_change, quantity_before, quantity_after, reference, notes, performed_by, created_at)
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
                     [skuKey, product.title, size, 'sync', 0, 0, 0, 'shopify_sync', `Imported from Shopify catalog`, 'system', timestamp]
@@ -8189,7 +8525,7 @@ router.post('/inventory/sync-from-shopify', verifyToken, async (req, res) => {
 router.post('/inventory/sync', verifyToken, async (req, res) => {
     try {
         const { items, reference, notes, performed_by, dry_run } = req.body;
-        
+
         if (!items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ success: false, error: 'items array is required' });
         }
@@ -8213,7 +8549,7 @@ router.post('/inventory/sync', verifyToken, async (req, res) => {
 
         for (const item of items) {
             const { sku_key, product_name, size, quantity, category, reorder_level } = item;
-            
+
             if (!sku_key || !product_name || !size || typeof quantity !== 'number') {
                 mismatches.push({ item, issue: 'invalid_data' });
                 continue;
@@ -8223,7 +8559,7 @@ router.post('/inventory/sync', verifyToken, async (req, res) => {
                 'SELECT * FROM manual_inventory WHERE sku_key = $1',
                 [sku_key]
             );
-            
+
             const quantityBefore = current.length > 0 ? (current[0].quantity || 0) : 0;
             const quantityAfter = quantity;
             const change = quantityAfter - quantityBefore;
@@ -8245,7 +8581,7 @@ router.post('/inventory/sync', verifyToken, async (req, res) => {
 
                 // Log the sync adjustment
                 await dbAdapter.query(
-                    `INSERT INTO inventory_adjustments 
+                    `INSERT INTO inventory_adjustments
                      (sku_key, product_name, size, adjustment_type, quantity_change, quantity_before, quantity_after, reference, notes, performed_by, created_at)
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
                     [sku_key, product_name, size, 'sync', change, quantityBefore, quantityAfter, reference || 'sheet_sync', notes || null, performed_by || 'admin', timestamp]
@@ -8270,8 +8606,8 @@ router.post('/inventory/sync', verifyToken, async (req, res) => {
         res.json({
             success: true,
             dry_run: !!dry_run,
-            message: dry_run 
-                ? `Dry run: ${results.length} SKU(s) would be synced` 
+            message: dry_run
+                ? `Dry run: ${results.length} SKU(s) would be synced`
                 : `Sync completed for ${results.length} SKU(s)`,
             processed: results.length,
             items: results,
@@ -8314,14 +8650,14 @@ router.get('/inventory/adjustments', verifyToken, async (req, res) => {
             sql += ' WHERE ' + conditions.join(' AND ');
         }
         sql += ' ORDER BY created_at DESC';
-        
+
         const lim = Math.min(parseInt(limit) || 100, 500);
         const off = parseInt(offset) || 0;
         sql += ` LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
         params.push(lim, off);
 
         const adjustments = await dbAdapter.query(sql, params);
-        
+
         // Get total count
         let countSql = 'SELECT COUNT(*) as total FROM inventory_adjustments';
         const countConditions = [];
@@ -8371,7 +8707,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
         const fromDate = new Date(from);
         const toDate = to ? new Date(to) : new Date(from);
         if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
-            return res.status(400).json({ success: false, error: 'Invalid date format — use YYYY-MM-DD' });
+            return res.status(400).json({ success: false, error: 'Invalid date format â€” use YYYY-MM-DD' });
         }
         // Normalize: from = start of day, to = end of day
         const fromIso = fromDate.toISOString();
@@ -8380,7 +8716,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
         // Cache key based on date range
         const cacheKey = `movements:${fromIso}:${toEndIso}`;
         const { caches } = require('../utils/cache');
-        
+
         const cachedResult = await caches.inventory.getOrLoad(cacheKey, async () => {
             const { extractItemSize } = require('../utils/orderItems');
             const shopifyService = require('../services/shopifyService');
@@ -8506,7 +8842,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
                     const color = parts[0] || '';
                     const size = parts.slice(1).join(' / ') || '';
-                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const displayName = resolved.v.title ? `${resolved.p.title} â€” ${resolved.v.title}` : resolved.p.title;
                     const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
                     const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_out += qty; m.out_breakdown.delivered += qty;
@@ -8523,7 +8859,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
                     const color = parts[0] || '';
                     const size = parts.slice(1).join(' / ') || '';
-                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const displayName = resolved.v.title ? `${resolved.p.title} â€” ${resolved.v.title}` : resolved.p.title;
                     const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
                     const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_in += qty; m.in_breakdown.rto += qty;
@@ -8540,7 +8876,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
                     const color = parts[0] || '';
                     const size = parts.slice(1).join(' / ') || '';
-                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const displayName = resolved.v.title ? `${resolved.p.title} â€” ${resolved.v.title}` : resolved.p.title;
                     const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
                     const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_in += qty; m.in_breakdown.returns += qty;
@@ -8557,7 +8893,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
                     const color = parts[0] || '';
                     const size = parts.slice(1).join(' / ') || '';
-                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const displayName = resolved.v.title ? `${resolved.p.title} â€” ${resolved.v.title}` : resolved.p.title;
                     const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
                     const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_in += qty; m.in_breakdown.exchange_in += qty;
@@ -8571,7 +8907,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                     const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
                     const color = parts[0] || '';
                     const size = parts.slice(1).join(' / ') || '';
-                    const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                    const displayName = resolved.v.title ? `${resolved.p.title} â€” ${resolved.v.title}` : resolved.p.title;
                     const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
                     const m = ensureMov(vKey, sku, displayName, color, size);
                     m.qty_out += qty; m.out_breakdown.exchange_out += qty;
@@ -8579,7 +8915,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
             }
         }
 
-        // 3) External returns server — Shopify portal return/exchange requests
+        // 3) External returns server â€” Shopify portal return/exchange requests
         //    (separate system; no overlap with the local returns/exchanges tables)
         if (rsPipeline.connected && Array.isArray(rsPipeline.requests)) {
             for (const request of rsPipeline.requests) {
@@ -8599,7 +8935,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                             const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
                             const color = parts[0] || '';
                             const size = parts.slice(1).join(' / ') || '';
-                            const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                            const displayName = resolved.v.title ? `${resolved.p.title} â€” ${resolved.v.title}` : resolved.p.title;
                             const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
                             const m = ensureMov(vKey, sku, displayName, color, size);
                             m.qty_in += qty; m.in_breakdown.returns += qty;
@@ -8616,7 +8952,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                             const parts = String(resolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
                             const color = parts[0] || '';
                             const size = parts.slice(1).join(' / ') || '';
-                            const displayName = resolved.v.title ? `${resolved.p.title} — ${resolved.v.title}` : resolved.p.title;
+                            const displayName = resolved.v.title ? `${resolved.p.title} â€” ${resolved.v.title}` : resolved.p.title;
                             const sku = resolved.v.sku || `${resolved.p.title}-${resolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
                             const m = ensureMov(vKey, sku, displayName, color, size);
                             m.qty_in += qty; m.in_breakdown.exchange_in += qty;
@@ -8635,7 +8971,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
                                 const rparts = String(replResolved.v.title || '').split('/').map(x => x.trim()).filter(Boolean);
                                 const rcolor = rparts[0] || '';
                                 const rsize = rparts.slice(1).join(' / ') || '';
-                                const rdisplayName = replResolved.v.title ? `${replResolved.p.title} — ${replResolved.v.title}` : replResolved.p.title;
+                                const rdisplayName = replResolved.v.title ? `${replResolved.p.title} â€” ${replResolved.v.title}` : replResolved.p.title;
                                 const rsku = replResolved.v.sku || `${replResolved.p.title}-${replResolved.v.title}`.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
                                 const m = ensureMov(rvKey, rsku, rdisplayName, rcolor, rsize);
                                 m.qty_out += qty; m.out_breakdown.exchange_out += qty;
@@ -8661,7 +8997,7 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
             sku_count: result.length
         };
         }, 120000); // 2 minute TTL
-        
+
         res.json({
             success: true,
             ...cachedResult
@@ -8676,16 +9012,16 @@ router.get('/inventory/movements', verifyToken, async (req, res) => {
 router.post('/inventory/reconcile', verifyToken, async (req, res) => {
     try {
         const { expected_items } = req.body;
-        
+
         if (!expected_items || !Array.isArray(expected_items)) {
             return res.status(400).json({ success: false, error: 'expected_items array is required' });
         }
 
         const currentInventory = await dbAdapter.query('SELECT * FROM manual_inventory ORDER BY sku_key');
         const currentMap = new Map(currentInventory.map(i => [i.sku_key, i]));
-        
+
         const expectedMap = new Map(expected_items.map(i => [i.sku_key, i]));
-        
+
         const matched = [];
         const mismatched = [];
         const missing_in_hub = [];
@@ -8915,7 +9251,7 @@ router.post('/ig-comments/:id/create-ticket', verifyToken, async (req, res) => {
             const status = result.error === 'not_found' ? 404 : 500;
             return res.status(status).json({ success: false, error: result.error });
         }
-        logOperatorActivity(req, 'ig_comment_ticket', `Comment #${id} → ${result.ticketNumber || ''}`);
+        logOperatorActivity(req, 'ig_comment_ticket', `Comment #${id} â†’ ${result.ticketNumber || ''}`);
         res.json({
             success: true,
             ticketId: result.ticketId,
@@ -8947,11 +9283,11 @@ router.post('/ig-comments/:id/open-dm', verifyToken, async (req, res) => {
     }
 });
 
-// ════════════════════════════════════════════════════════════════
-// Widget Chats — sessions, conversations, analytics, settings
-// ════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Widget Chats â€” sessions, conversations, analytics, settings
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// GET /api/admin/widget-chats/sessions — paginated session list
+// GET /api/admin/widget-chats/sessions â€” paginated session list
 router.get('/widget-chats/sessions', verifyToken, async (req, res) => {
     try {
         const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -9006,7 +9342,7 @@ router.get('/widget-chats/sessions', verifyToken, async (req, res) => {
     }
 });
 
-// GET /api/admin/widget-chats/session/:sessionId — full conversation
+// GET /api/admin/widget-chats/session/:sessionId â€” full conversation
 router.get('/widget-chats/session/:sessionId', verifyToken, async (req, res) => {
     try {
         const { sessionId } = req.params;
@@ -9025,7 +9361,7 @@ router.get('/widget-chats/session/:sessionId', verifyToken, async (req, res) => 
     }
 });
 
-// GET /api/admin/widget-chats/related/:visitorId — other sessions from same visitor
+// GET /api/admin/widget-chats/related/:visitorId â€” other sessions from same visitor
 router.get('/widget-chats/related/:visitorId', verifyToken, async (req, res) => {
     try {
         const { visitorId } = req.params;
@@ -9048,7 +9384,7 @@ router.get('/widget-chats/related/:visitorId', verifyToken, async (req, res) => 
     }
 });
 
-// GET /api/admin/widget-chats/analytics — aggregated token/cost analytics
+// GET /api/admin/widget-chats/analytics â€” aggregated token/cost analytics
 router.get('/widget-chats/analytics', verifyToken, async (req, res) => {
     try {
         const { date_from, date_to } = req.query;
@@ -9144,7 +9480,7 @@ router.get('/widget-chats/analytics', verifyToken, async (req, res) => {
     }
 });
 
-// GET /api/admin/widget-chats/settings — current config
+// GET /api/admin/widget-chats/settings â€” current config
 router.get('/widget-chats/settings', verifyToken, async (req, res) => {
     try {
         const { getConfig } = require('../services/ai/aiClient');
@@ -9168,7 +9504,7 @@ router.get('/widget-chats/settings', verifyToken, async (req, res) => {
     }
 });
 
-// DELETE /api/admin/widget-chats/purge — purge chats older than N days
+// DELETE /api/admin/widget-chats/purge â€” purge chats older than N days
 router.delete('/widget-chats/purge', verifyToken, async (req, res) => {
     try {
         const days = Math.max(1, parseInt(req.query.days) || 90);
@@ -9187,11 +9523,11 @@ router.delete('/widget-chats/purge', verifyToken, async (req, res) => {
     }
 });
 
-// ════════════════════════════════════════════════════════════════
-// Live Chats — admin real-time monitoring + override
-// ════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Live Chats â€” admin real-time monitoring + override
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// GET /api/admin/widget-chats/live — active sessions (last 15 min)
+// GET /api/admin/widget-chats/live â€” active sessions (last 15 min)
 router.get('/widget-chats/live', verifyToken, async (req, res) => {
     try {
         const windowMs = 15 * 60 * 1000; // 15 minutes
@@ -9226,7 +9562,7 @@ router.get('/widget-chats/live', verifyToken, async (req, res) => {
     }
 });
 
-// POST /api/admin/widget-chats/admin-message — admin sends override message
+// POST /api/admin/widget-chats/admin-message â€” admin sends override message
 router.post('/widget-chats/admin-message', verifyToken, async (req, res) => {
     try {
         const { sessionId, message } = req.body;
@@ -9261,7 +9597,7 @@ router.post('/widget-chats/admin-message', verifyToken, async (req, res) => {
     }
 });
 
-// POST /api/admin/widget-chats/release/:sessionId — admin releases control back to AI
+// POST /api/admin/widget-chats/release/:sessionId â€” admin releases control back to AI
 router.post('/widget-chats/release/:sessionId', verifyToken, async (req, res) => {
     try {
         const { sessionId } = req.params;
@@ -9276,7 +9612,7 @@ router.post('/widget-chats/release/:sessionId', verifyToken, async (req, res) =>
     }
 });
 
-// ── Media Attachments (Admin Dashboard) ──────────────────────
+// â”€â”€ Media Attachments (Admin Dashboard) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Get attachments for a customer phone
 router.get('/support-tickets/:phone/attachments', verifyToken, async (req, res) => {
@@ -9296,7 +9632,7 @@ router.post('/support-tickets/send-image', verifyToken, uploadMedia.single('imag
     try {
         const { phone, caption = '' } = req.body;
         console.log(`[SEND-IMAGE] Request received:`, { phone, caption, hasFile: !!req.file, fileName: req.file?.originalname, fileSize: req.file?.size });
-        
+
         if (!phone || !req.file) return res.status(400).json({ error: 'Phone and image are required' });
 
         const mediaService = require('../services/mediaService');
@@ -9308,17 +9644,17 @@ router.post('/support-tickets/send-image', verifyToken, uploadMedia.single('imag
 
         const cleanPhone = phone.replace(/\D/g, '');
         const formattedPhone = cleanPhone.startsWith('91') ? `+${cleanPhone}` : `+91${cleanPhone}`;
-        
+
         // Check if file is an image or document (PDF, DOC, etc.)
         const isImage = uploaded.mimeType?.startsWith('image/');
-        console.log(`[SEND-IMAGE] Sending to WhatsApp:`, { 
-            to: formattedPhone, 
-            fileUrl: uploaded.fileUrl?.substring(0, 80) + '...', 
+        console.log(`[SEND-IMAGE] Sending to WhatsApp:`, {
+            to: formattedPhone,
+            fileUrl: uploaded.fileUrl?.substring(0, 80) + '...',
             mimeType: uploaded.mimeType,
             isImage,
-            caption 
+            caption
         });
-        
+
         if (isImage) {
             await whatsappService.sendImage(formattedPhone, uploaded.fileUrl, caption, 'manual_reply');
         } else {
@@ -9343,7 +9679,7 @@ router.post('/support-tickets/send-image', verifyToken, uploadMedia.single('imag
             direction: 'outgoing'
         });
 
-        console.log(`[SEND-IMAGE] ✓ Success for phone:`, phone);
+        console.log(`[SEND-IMAGE] âœ“ Success for phone:`, phone);
         res.json({ success: true, message: isImage ? 'Image sent' : 'Document sent', fileUrl: uploaded.fileUrl });
     } catch (error) {
         console.error('[SEND-IMAGE] Error:', error);
