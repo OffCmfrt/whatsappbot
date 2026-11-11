@@ -3205,12 +3205,14 @@ router.get('/shoppers/export', verifyToken, requirePermission('export'), async (
 
                     if (cursor) {
     if (cursor.createdAt === null) {
-        cursorClause = `
-            AND s.created_at IS NULL
-            AND s.id < ?
-        `;
-        batchParams.push(cursor.id);
-    } else {
+    cursorClause = `
+        AND (
+            (created_at IS NULL AND id < ?)
+            OR created_at IS NOT NULL
+        )
+    `;
+    batchParams.push(cursor.id);
+} else {
     cursorClause = `
         AND (
             s.created_at < ?
@@ -3429,6 +3431,126 @@ router.get('/inbox/export', verifyToken, requirePermission('export'), async (req
                 }
             }
         }
+        // Stream inbox CSV without loading the entire export into memory
+        if (format === 'csv') {
+            const columns = [
+                'Name', 'Phone', 'Order ID', 'Status', 'Order Total',
+                'Payment Method', 'Delivery Type', 'Confirmed By',
+                'Products', 'City', 'AWB', 'Courier', 'Customer Message',
+                'Order Date (IST)', 'Confirmed Date (IST)'
+            ];
+
+            const mapInboxRow = (s) => {
+                let productsStr = '';
+                try {
+                    const items = JSON.parse(s.items_json || '[]');
+                    productsStr = items.map(item => {
+                        let size = item.size || item.variant_size ||
+                            item.product_size || '';
+
+                        if (!size && item.variant_title) {
+                            const sizeMatch =
+                                item.variant_title.match(/Size:\s*(\w+)/i) ||
+                                item.variant_title.match(/\b(S|M|L|XL|XXS|XS|XXL|XXXL|Free Size|One Size)\b/i);
+
+                            if (sizeMatch) size = sizeMatch[1].toUpperCase();
+                        }
+
+                        const sizePart = size ? ` (${size})` : '';
+                        return `${item.title || item.name || 'Product'}${sizePart} x${item.quantity || 1}`;
+                    }).join('; ');
+                } catch (e) {
+                    productsStr = s.items_json || '';
+                }
+
+                const status = s.status || 'pending';
+
+                return [
+                    s.name || '',
+                    s.phone || '',
+                    s.order_id || '',
+                    status.charAt(0).toUpperCase() + status.slice(1),
+                    s.order_total || '',
+                    s.payment_method || '',
+                    s.delivery_type || 'Standard',
+                    s.confirmed_by || '',
+                    productsStr,
+                    s.city || '',
+                    s.awb || '',
+                    s.courier_name || '',
+                    s.customer_message || '',
+                    formatDateForExport(s.created_at) || '',
+                    formatDateForExport(s.updated_at) || ''
+                ];
+            };
+                        return await streamCsv(res, {
+                columns,
+                filename: `inbox_${tab}_${Date.now()}.csv`,
+                batchSize: 1000,
+                maxRows: 200000,
+                bom: false,
+
+                fetchBatch: async (cursor, limit) => {
+                    let cursorClause = '';
+                    const batchParams = [...params];
+
+                    if (cursor) {
+                        if (cursor.updatedAt === null) {
+                            cursorClause = `
+                                AND (
+                                    (s.updated_at IS NULL AND s.id < ?)
+                                    OR s.updated_at IS NOT NULL
+                                )`;
+                            batchParams.push(cursor.id);
+                        } else {
+                            cursorClause = `
+                                AND (
+                                    s.updated_at < ?
+                                    OR (s.updated_at = ? AND s.id < ?)
+                                )`;
+                            batchParams.push(
+                                cursor.updatedAt,
+                                cursor.updatedAt,
+                                cursor.id
+                            );
+                        }
+                    }
+
+                    const batchSql = `
+                        SELECT s.id, s.name, s.phone, s.email, s.order_id,
+                               s.address, s.city, s.province, s.zip,
+                               s.payment_method, s.items_json, s.status,
+                               s.created_at, s.customer_message,
+                               s.delivery_type, s.confirmed_by, s.updated_at,
+                               COALESCE(s.order_total, o.total) AS order_total,
+                               o.awb, o.courier_name
+                        FROM store_shoppers s
+                        INNER JOIN (
+                            SELECT order_id, MAX(updated_at) AS max_updated
+                            FROM store_shoppers
+                            GROUP BY order_id
+                        ) latest_s
+                            ON s.order_id = latest_s.order_id
+                            AND s.updated_at = latest_s.max_updated
+                        LEFT JOIN orders o ON s.order_id = o.order_id
+                        ${whereClause}
+                        ${cursorClause}
+                        ORDER BY s.updated_at DESC, s.id DESC
+                        LIMIT ?
+                    `;
+
+                    batchParams.push(limit);
+                    return dbAdapter.query(batchSql, batchParams);
+                },
+
+                getCursor: row => ({
+                    updatedAt: row.updated_at,
+                    id: row.id
+                }),
+
+                mapRow: mapInboxRow
+            });
+        }
 
         const sql = `
             SELECT s.name, s.phone, s.email, s.order_id, s.address, s.city, s.province, s.zip,
@@ -3503,8 +3625,15 @@ router.get('/inbox/export', verifyToken, requirePermission('export'), async (req
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=${tabLabel}_${istDate}.xlsx`);
         res.send(buffer);
-    } catch (error) {
+        } catch (error) {
         console.error('Inbox export error:', error);
+
+        if (res.destroyed) return;
+
+        if (res.headersSent) {
+            return res.destroy();
+        }
+
         res.status(500).json({ error: 'Failed to export inbox data' });
     }
 });
@@ -4703,14 +4832,14 @@ if (format === 'csv') {
 
             if (cursor) {
                 if (cursor.createdAt === null) {
-                    cursorClause = `
-                        AND (
-                            (created_at IS NULL AND id < ?)
-                            OR created_at IS NOT NULL
-                        )
-                    `;
-                    batchParams.push(cursor.id);
-                } else {
+    cursorClause = `
+        AND (
+            (created_at IS NULL AND id < ?)
+            OR created_at IS NOT NULL
+        )
+    `;
+    batchParams.push(cursor.id);
+} else {
                     cursorClause = `
                         AND (
                             created_at < ?
