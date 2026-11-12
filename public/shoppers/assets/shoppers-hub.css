@@ -6715,6 +6715,24 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
     font-size: 0.78rem; color: rgba(255,255,255,0.7); cursor: pointer;
 }
 .sr-bulk-shopify-toggle input { accent-color: #238636; }
+/* Shopify refused writes because the app lacks a scope: block the tab with
+   instructions instead of letting the operator run a doomed push. */
+.sw-access-block {
+    background: rgba(224, 36, 36, 0.09); border: 1px solid rgba(224, 36, 36, 0.4);
+    border-left: 3px solid #e02424; border-radius: 10px; padding: 0.85rem 1rem;
+    display: flex; flex-direction: column; gap: 0.55rem;
+}
+.sw-access-title { font-size: 0.82rem; font-weight: 700; color: #ff7b72; letter-spacing: 0.2px; }
+.sw-access-steps {
+    margin: 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: 0.3rem;
+    font-size: 0.76rem; line-height: 1.5; color: rgba(255, 255, 255, 0.82);
+}
+.sw-access-steps code { color: #ffd479; }
+.sw-access-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;
+    font-size: 0.74rem;
+}
+.sw-access-foot .ict-chip { border-color: rgba(224, 36, 36, 0.45); color: #ff9d95; }
 @media (max-width: 720px) {
     .sw-modal { width: 96%; max-height: 92vh; }
     .sw-search { width: 100%; }

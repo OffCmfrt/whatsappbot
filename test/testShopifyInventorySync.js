@@ -397,3 +397,117 @@ test('delta push still reports skipped-as-equal through the snapshot', async () 
     assert.equal(snap.skipped, 1);
     assert.equal(client.adjusts.length, 0);
 });
+
+/* ─────────────── push preflight: Shopify access scopes ─────────────── */
+
+// The live OFFCOMFRT app has read_inventory but NOT write_inventory, so every
+// push SKU came back "requires merchant approval for write_inventory scope".
+// The check has to fail open: a broken probe must never block a working push.
+test('readiness: unknown scopes stay permissive', () => {
+    for (const scopes of [null, undefined, [], 'nonsense']) {
+        const r = sync.evaluatePushReadiness(scopes);
+        assert.equal(r.known, false);
+        assert.equal(r.pushEnabled, true, 'an unknown probe may not refuse writes');
+        assert.deepEqual(r.missingScopes, []);
+    }
+});
+
+test('readiness: missing write_inventory names the scope and the fix steps', () => {
+    const r = sync.evaluatePushReadiness(['read_inventory', 'read_products', 'write_products', 'read_orders']);
+    assert.equal(r.known, true);
+    assert.equal(r.pushEnabled, false);
+    assert.deepEqual(r.missingScopes, ['write_inventory']);
+    assert.match(r.message, /write_inventory/);
+    assert.ok(r.fixSteps.some(s => /Develop apps/i.test(s)), 'operator gets the Shopify admin path');
+    assert.ok(r.fixSteps.some(s => /Reinstall/i.test(s)), 'scope edits only apply after a reinstall');
+    assert.ok(r.grantedScopes.includes('read_inventory'), 'pull side is still allowed, and the payload says so');
+});
+
+test('readiness: write_inventory is matched case-insensitively', () => {
+    const r = sync.evaluatePushReadiness(['READ_INVENTORY', 'Write_Inventory']);
+    assert.equal(r.pushEnabled, true);
+    assert.equal(r.message, null);
+    assert.deepEqual(r.fixSteps, []);
+});
+
+test('getPushReadiness tolerates clients with no scope probe at all', async () => {
+    const r = await sync.getPushReadiness(immediateClient()); // fake client lacks getAppScopes
+    assert.equal(r.known, false);
+    assert.equal(r.pushEnabled, true);
+
+    const blocked = await sync.getPushReadiness({ async getAppScopes() { return ['read_inventory']; } });
+    assert.equal(blocked.pushEnabled, false);
+
+    const broken = await sync.getPushReadiness({ async getAppScopes() { throw new Error('Shopify request failed'); } });
+    assert.equal(broken.pushEnabled, true, 'a throwing probe must read as unknown, not as denied');
+});
+
+/* ────────── live-API contract for the write (found in production) ────────── */
+
+// inventory_levels/adjust.json takes `available_adjustment`. Sending `available`
+// (the set.json param) is rejected for every SKU with "available_adjustment:
+// Required parameter missing or invalid", which looks like a broken sync.
+test('adjustInventoryLevel posts available_adjustment, not available', async () => {
+    const axios = require('axios');
+    const shopifyService = require('../src/services/shopifyService');
+    const saved = { store: process.env.SHOPIFY_STORE, token: process.env.SHOPIFY_ACCESS_TOKEN };
+    process.env.SHOPIFY_STORE = 'probe.myshopify.com';
+    process.env.SHOPIFY_ACCESS_TOKEN = 'shpat_probe_token';
+    const origPost = axios.post;
+    const sent = [];
+    axios.post = async (url, body) => {
+        sent.push({ url, body });
+        // real 2024-01 shape: the level is echoed with its resulting quantity
+        return { data: { inventory_level: { inventory_item_id: body.inventory_item_id, location_id: body.location_id, available: 71 } } };
+    };
+    try {
+        const res = await shopifyService.adjustInventoryLevel({ inventoryItemId: 5, locationId: 7, availableDelta: 3 });
+        assert.equal(sent.length, 1);
+        assert.match(sent[0].url, /inventory_levels\/adjust\.json$/);
+        assert.equal(sent[0].body.available_adjustment, 3);
+        assert.ok(!('available' in sent[0].body), 'available belongs to set.json and must never be sent here');
+        assert.equal(res.success, true);
+        assert.equal(res.availableAfterChange, 71, 'the echoed level is what the UI reports back');
+        assert.equal(res.appliedAdjustment, 3);
+    } finally {
+        axios.post = origPost;
+        if (saved.store) process.env.SHOPIFY_STORE = saved.store; else delete process.env.SHOPIFY_STORE;
+        if (saved.token) process.env.SHOPIFY_ACCESS_TOKEN = saved.token; else delete process.env.SHOPIFY_ACCESS_TOKEN;
+    }
+});
+
+// Shopify answers some failures with HTTP 200 + an errors body. Counting those
+// as writes is how a run of zero-applied SKUs got reported as a success.
+test('a 200 carrying an errors body is not counted as a completed write', async () => {
+    const axios = require('axios');
+    const shopifyService = require('../src/services/shopifyService');
+    const saved = { store: process.env.SHOPIFY_STORE, token: process.env.SHOPIFY_ACCESS_TOKEN };
+    process.env.SHOPIFY_STORE = 'probe.myshopify.com';
+    process.env.SHOPIFY_ACCESS_TOKEN = 'shpat_probe_token';
+    const origPost = axios.post;
+    axios.post = async () => ({ data: { errors: 'inventory_item_id is not a valid InventoryItem' } });
+    try {
+        const res = await shopifyService.adjustInventoryLevel({ inventoryItemId: 5, locationId: 7, availableDelta: 3 });
+        assert.equal(res.success, false);
+        assert.match(res.error, /not a valid InventoryItem/);
+    } finally {
+        axios.post = origPost;
+        if (saved.store) process.env.SHOPIFY_STORE = saved.store; else delete process.env.SHOPIFY_STORE;
+        if (saved.token) process.env.SHOPIFY_ACCESS_TOKEN = saved.token; else delete process.env.SHOPIFY_ACCESS_TOKEN;
+    }
+});
+
+test('push stops after the same non-scope rejection repeats 3× rather than all SKUs', async () => {
+    const msg = 'available_adjustment: Required parameter missing or invalid';
+    const client = immediateClient({
+        async adjustInventoryLevel(t) { client.adjusts.push(t); return { success: false, error: msg }; },
+    });
+    const tasks = Array.from({ length: 20 }, (_, i) => ({ sku_key: `s${i}`, product_name: 'P', size: 'M', inventory_item_id: 900 + i, delta: 1 }));
+    const job = await sync.runPushJob({ client, db: fakeDb(), tasks });
+    await until(() => job.finishedAt);
+    assert.equal(client.adjusts.length, 3, 'a systemic rejection is proven in three attempts, not two hundred');
+    assert.equal(job.status, 'failed');
+    assert.equal(sync.jobSnapshot(job).abortedRemaining, 17);
+    assert.match(job.error, /repeated on 3 SKU\(s\) in a row/);
+    assert.match(job.error, /Nothing further was written/i);
+});

@@ -10,6 +10,9 @@ class ShopifyService {
             minDelayMs: 550, // ~1.8 calls/sec to stay safely under the 2/sec limit
             queue: Promise.resolve()
         };
+        // Granted-scope probe cache (see getAppScopes)
+        this._scopesCache = null;
+        this._scopesCacheAt = 0;
     }
 
     /**
@@ -566,29 +569,80 @@ class ShopifyService {
     }
 
     /**
+     * The Admin API scopes this app installation actually holds, e.g.
+     * ['read_inventory', 'write_products']. Scope edits on a custom app need a
+     * merchant to save + reinstall, and the refusal only surfaces on the first
+     * write — so callers probe once and preflight instead of discovering it
+     * halfway through a 100-SKU job.
+     * Returns null when the store is unreachable or the query fails, so a
+     * broken probe can never block a write that would have worked.
+     * Cached 60s; forceRefresh after the merchant says the scopes changed.
+     */
+    async getAppScopes(forceRefresh = false) {
+        if (!forceRefresh && this._scopesCache && (Date.now() - this._scopesCacheAt) < 60 * 1000) {
+            return this._scopesCache;
+        }
+        try {
+            const data = await this.graphql('{ currentAppInstallation { accessScopes { handle } } }');
+            const scopes = (data?.currentAppInstallation?.accessScopes || [])
+                .map(s => String(s.handle || '').toLowerCase())
+                .filter(Boolean);
+            if (scopes.length === 0) return this._scopesCache; // keep the last known list
+            this._scopesCache = scopes;
+            this._scopesCacheAt = Date.now();
+            return this._scopesCache;
+        } catch (e) {
+            console.warn('[Shopify] access scope probe failed:', e.message);
+            return null;
+        }
+    }
+
+    /**
      * Adjust one inventory level by a signed delta on one location.
      * Uses REST inventory_levels/adjust.json (2024-01) through the shared
      * rate limiter, so bulk pushes queue at ~1.8 calls/sec and retry on 429.
-     * Returns { success, availableAfterChange?, error? } — never throws.
+     * NOTE the parameter is `available_adjustment`, NOT `available` — sending
+     * `available` is rejected with "available_adjustment: Required parameter
+     * missing or invalid" (only `inventory_levels/set.json` takes `available`).
+     * The 200 body echoes the adjustment, not the resulting level, so the write
+     * is confirmed by `appliedAdjustment` matching the request rather than by a
+     * post-quantity read (which would double the calls).
+     * Returns { success, appliedAdjustment?, availableAfterChange?, error? } —
+     * never throws.
      */
     async adjustInventoryLevel({ inventoryItemId, locationId, availableDelta }) {
-        const result = { success: false, availableAfterChange: null, error: null, permissionError: false };
+        const result = { success: false, availableAfterChange: null, appliedAdjustment: null, error: null, permissionError: false };
         const cfg = this._restConfig();
         if (!cfg) { result.error = 'Shopify credentials not configured'; return result; }
         if (!inventoryItemId || !locationId || !Number.isFinite(availableDelta) || availableDelta === 0) {
             result.error = 'inventoryItemId, locationId and a non-zero availableDelta are required';
             return result;
         }
+        const delta = Number(availableDelta);
         try {
             const res = await this._rateLimitedRequest(() =>
                 axios.post(`${cfg.base}/inventory_levels/adjust.json`, {
                     location_id: Number(locationId),
                     inventory_item_id: Number(inventoryItemId),
-                    available: Number(availableDelta)
+                    available_adjustment: delta
                 }, { headers: cfg.headers, timeout: 15000 })
             );
+            // Some Shopify failures arrive as a 200 with an errors body; never
+            // report those as a write that happened.
+            if (res.data?.errors) {
+                result.error = typeof res.data.errors === 'string'
+                    ? res.data.errors : JSON.stringify(res.data.errors);
+                return result;
+            }
+            const level = res.data?.inventory_level || {};
+            result.appliedAdjustment = Number.isFinite(Number(level.available_adjustment))
+                ? Number(level.available_adjustment) : delta;
+            if (Number.isFinite(Number(level.available))) result.availableAfterChange = Number(level.available);
+            if (result.appliedAdjustment !== delta) {
+                result.error = `Shopify applied ${result.appliedAdjustment} instead of the requested ${delta} — level left untouched by this app`;
+                return result;
+            }
             result.success = true;
-            result.availableAfterChange = res.data?.inventory_level?.available ?? null;
             return result;
         } catch (error) {
             result.error = this._withScopeHint(error, 'write_inventory');

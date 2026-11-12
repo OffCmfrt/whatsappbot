@@ -17,6 +17,9 @@
 // carrier/Zoho APIs before; the limiter serializes anyway, so nothing is lost.
 const MAX_JOBS_KEPT = 30;
 const MAX_RESULTS_KEPT = 1000;
+// Give up on a push once the same Shopify rejection comes back this many times
+// in a row — a real per-SKU problem varies, a systemic one does not.
+const IDENTICAL_ERROR_ABORT_AFTER = 3;
 
 /* ── shared key conventions (identical to sync-from-shopify) ── */
 function normKey(s) {
@@ -36,6 +39,41 @@ function inferCategory(productType) {
     if (t.includes('PANT') || t.includes('SHORT') || t.includes('LOWER')) return 'LOWER';
     if (t.includes('BUNDLE') || t.includes('SET')) return 'BUNDLE';
     return null;
+}
+
+/* ── push preflight: Shopify API access scopes ── */
+// Every inventory write endpoint (REST inventory_levels/adjust and GraphQL
+// inventorySetQuantities alike) needs write_inventory. read_products is NOT
+// enough, and a missing scope answers identically for all ~230 SKUs, so the
+// hub checks once up front and refuses to start a job that cannot succeed.
+const REQUIRED_PUSH_SCOPES = ['write_inventory'];
+
+const SCOPE_FIX_STEPS = [
+    'Shopify admin → Settings → Apps and sales channels → Develop apps',
+    'Open this app → Configuration → Admin API access scopes → add "Write inventory" (products)',
+    'Save, then click Reinstall so the new scopes are granted to the existing token',
+    'If Shopify issues a new Admin API access token on reinstall, update SHOPIFY_ACCESS_TOKEN and redeploy',
+];
+
+// scopes: array of granted scope handles, or null/undefined when unknown.
+// Unknown must stay permissive — a failed probe should not block real pushes.
+function evaluatePushReadiness(scopes) {
+    if (!Array.isArray(scopes) || scopes.length === 0) {
+        return { known: false, pushEnabled: true, missingScopes: [], checkedAt: new Date().toISOString() };
+    }
+    const have = new Set(scopes.map(s => String(s).toLowerCase()));
+    const missingScopes = REQUIRED_PUSH_SCOPES.filter(s => !have.has(s));
+    return {
+        known: true,
+        pushEnabled: missingScopes.length === 0,
+        missingScopes,
+        grantedScopes: scopes,
+        checkedAt: new Date().toISOString(),
+        message: missingScopes.length
+            ? `The Shopify app is missing the ${missingScopes.join(', ')} scope, so nothing can be pushed. ${SCOPE_FIX_STEPS[1]}`
+            : null,
+        fixSteps: missingScopes.length ? SCOPE_FIX_STEPS : [],
+    };
 }
 
 /* ── catalog indexing ── */
@@ -438,6 +476,12 @@ async function runPushJob({ client, db, tasks, reference, performedBy, mode, dir
                 job.done = job.total;
             }
 
+            // A deterministic Shopify rejection (missing scope, malformed body,
+            // unusable location) answers identically for every remaining SKU, and
+            // at ~2 writes/sec that is minutes of pointless calls. Stop early
+            // instead of reporting 230 failures for one underlying mistake.
+            let lastError = null;
+            let sameErrorStreak = 0;
             for (const task of refuseToGuess ? [] : work) {
                 if (job.cancelRequested) break;
                 const breakdown = levelsById.get(task.inventory_item_id) || [];
@@ -462,7 +506,8 @@ async function runPushJob({ client, db, tasks, reference, performedBy, mode, dir
                     });
                     rec = { sku_key: task.sku_key, product_name: task.product_name, size: task.size,
                         delta, locationId: target,
-                        ok: res.success, availableAfterChange: res.availableAfterChange, error: res.error || null };
+                        ok: res.success, availableAfterChange: res.availableAfterChange ?? null,
+                        applied: res.appliedAdjustment ?? null, error: res.error || null };
                 }
                 job.results.push(rec);
                 if (job.results.length > MAX_RESULTS_KEPT) job.results.splice(0, job.results.length - MAX_RESULTS_KEPT);
@@ -475,6 +520,19 @@ async function runPushJob({ client, db, tasks, reference, performedBy, mode, dir
                     job.error = rec.error;
                     job.abortedRemaining = job.total - job.done;
                     break;
+                }
+                if (!rec.ok && rec.error) {
+                    const norm = String(rec.error).trim();
+                    if (norm === lastError) sameErrorStreak++;
+                    else { lastError = norm; sameErrorStreak = 1; }
+                    if (sameErrorStreak >= IDENTICAL_ERROR_ABORT_AFTER) {
+                        job.error = `${norm} — repeated on ${sameErrorStreak} SKU(s) in a row, so it will not resolve itself. Nothing further was written.`;
+                        job.abortedRemaining = job.total - job.done;
+                        break;
+                    }
+                } else {
+                    lastError = null;
+                    sameErrorStreak = 0;
                 }
             }
             job.status = job.cancelRequested ? 'cancelled' : (job.error ? 'failed' : 'done');
@@ -540,9 +598,23 @@ function lazyDefaults() {
     };
 }
 
+// Probe the live installation and grade it. A client without the probe method
+// (older fakes, stubbed clients) reads as "unknown" = permissive.
+async function getPushReadiness(client) {
+    const svc = client || lazyDefaults().client;
+    let scopes = null;
+    try {
+        if (svc && typeof svc.getAppScopes === 'function') scopes = await svc.getAppScopes(false);
+    } catch (e) {
+        console.warn('[ShopifyInventorySync] readiness probe failed:', e.message);
+    }
+    return evaluatePushReadiness(scopes);
+}
+
 module.exports = {
     normKey, variantSkuKey, inferCategory, indexCatalog, matchHubRow,
     buildPullPlan, buildPushPlan, applyPullPlan,
     runPushJob, startAbsolutePushJob, startDeltaPushJob,
     getJob, getActivePushJob, cancelJob, jobSnapshot, lazyDefaults,
+    evaluatePushReadiness, getPushReadiness, REQUIRED_PUSH_SCOPES,
 };

@@ -8215,6 +8215,11 @@ async function queueBulkShopifyPush(deltas, reference, performedBy) {
         const shopifyService = require('../services/shopifyService');
         const active = sync.getActivePushJob();
         if (active) return { queued: false, alreadyRunning: true, jobId: active.id };
+        // Don't queue a job that is guaranteed to be refused by Shopify
+        const readiness = await sync.getPushReadiness(shopifyService);
+        if (!readiness.pushEnabled) {
+            return { queued: false, scopeMissing: true, missingScopes: readiness.missingScopes, error: readiness.message };
+        }
         const catalog = await shopifyService.getProductCatalog(false);
         const { job, unmatched } = await sync.startDeltaPushJob({
             client: shopifyService, db: dbAdapter, catalog, deltas,
@@ -8226,6 +8231,27 @@ async function queueBulkShopifyPush(deltas, reference, performedBy) {
         return { queued: false, error: e.message };
     }
 }
+
+// GET /api/admin/inventory/shopify-sync/scopes - what may this app actually write?
+// ?force=1 re-probes past the 60s cache — use it right after granting a scope in
+// the Shopify admin to confirm the grant landed before running a push again.
+router.get('/inventory/shopify-sync/scopes', verifyToken, async (req, res) => {
+    try {
+        const sync = require('../services/shopifyInventorySync');
+        const shopifyService = require('../services/shopifyService');
+        const force = req.query.force === '1' || req.query.force === 'true';
+        const scopes = await shopifyService.getAppScopes(force);
+        const readiness = sync.evaluatePushReadiness(scopes);
+        res.json({
+            success: true, pushReadiness: readiness,
+            canReadInventory: !Array.isArray(scopes) || scopes.includes('read_inventory'),
+            requiredScopes: sync.REQUIRED_PUSH_SCOPES,
+        });
+    } catch (error) {
+        console.error('Shopify scopes probe error:', error);
+        res.status(500).json({ success: false, error: 'Failed to probe Shopify scopes: ' + error.message });
+    }
+});
 
 // POST /api/admin/inventory/shopify-sync/plan - read-only comparison preview
 router.post('/inventory/shopify-sync/plan', verifyToken, async (req, res) => {
@@ -8262,6 +8288,9 @@ router.post('/inventory/shopify-sync/plan', verifyToken, async (req, res) => {
                 console.warn('[ShopifySync] level read failed, falling back to catalog cache:', e.message);
             }
             plan = sync.buildPushPlan(catalog, hubRows, totals);
+            // Tell the UI up front whether a push could even be written, so the
+            // Start button explains itself instead of failing 230 SKUs later.
+            plan.pushReadiness = await sync.getPushReadiness(shopifyService);
         } else {
             plan = sync.buildPullPlan(catalog, hubRows, { mode });
         }
@@ -8317,6 +8346,16 @@ router.post('/inventory/shopify-sync/push/start', verifyToken, async (req, res) 
             return res.status(409).json({
                 success: false, error: 'A Shopify push is already running', jobId: active.id,
                 progress: sync.jobSnapshot(active),
+            });
+        }
+        // Preflight the write scope: without it every SKU answers the same 403,
+        // so refuse before creating a job whose only output would be failures.
+        const readiness = await sync.getPushReadiness(shopifyService);
+        if (!readiness.pushEnabled) {
+            return res.status(403).json({
+                success: false, code: 'shopify_scope_missing', jobId: null,
+                error: readiness.message, missingScopes: readiness.missingScopes,
+                fixSteps: readiness.fixSteps, pushReadiness: readiness,
             });
         }
         const catalog = await shopifyService.getProductCatalog(req.body?.force === true);

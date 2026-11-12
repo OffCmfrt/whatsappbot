@@ -143,6 +143,7 @@
         push: { plan: null, selected: new Set(), filter: 'diff', search: '', page: 0, job: null, jobId: null, timer: null },
         history: { runs: [], loaded: false },
         lastResult: null,       // { kind, html } rendered under the controls
+        readiness: null,        // { known, pushEnabled, missingScopes, fixSteps } from /scopes
     };
 
     const SW_API = '/api/admin/inventory/shopify-sync';
@@ -186,10 +187,11 @@
         if (m) m.style.display = 'flex';
         SW.tab = tab;
         swSyncTabChrome();
-        if (opts.pushJobId) { swRender(); swAttachPushJob(opts.pushJobId); return; }
+        if (opts.pushJobId) { swEnsureReadiness(false); swRender(); swAttachPushJob(opts.pushJobId); return; }
         if (tab === 'history') { if (!SW.history.loaded) swLoadHistory(); else swRender(); }
         else {
             const side = SW[tab];
+            if (tab === 'push') swEnsureReadiness(false);
             if (opts.forcePlan || !side.plan) swFetchPlan(tab, !!opts.forcePlan);
             else swRender();
         }
@@ -209,6 +211,40 @@
         document.querySelectorAll('#srSyncModal .sw-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === SW.tab));
     }
 
+    /* ── Shopify write access probe ── */
+    // A missing write_inventory scope makes every SKU in a push fail the same
+    // way, minutes after the job starts, so ask Shopify what this app may
+    // actually write and explain it in the panel instead.
+    async function swEnsureReadiness(force) {
+        if (SW.readiness && !force) return SW.readiness;
+        try {
+            const data = await apiFetch(`${SW_API}/scopes${force ? '?force=1' : ''}`);
+            if (data && data.success) SW.readiness = data.pushReadiness || null;
+        } catch (e) {
+            // Unknown readiness must never block the workbench — the server
+            // still preflights before a push, so this is only a missing hint.
+        }
+        swRender();
+        return SW.readiness;
+    }
+
+    function swPushBlocked() {
+        return !!(SW.readiness && SW.readiness.known && !SW.readiness.pushEnabled);
+    }
+
+    function swRenderAccessBanner() {
+        if (!swPushBlocked()) return '';
+        const r = SW.readiness;
+        return `<div class="sw-access-block">
+            <div class="sw-access-title">⛔ Shopify pushes are blocked — the app lacks the ${(r.missingScopes || []).join(', ') || 'write_inventory'} scope</div>
+            <ol class="sw-access-steps">${(r.fixSteps || []).map(s => `<li>${esc(s)}</li>`).join('')}</ol>
+            <div class="sw-access-foot">
+                <span class="ict-muted">Reading stock still works — only hub → Shopify writes are refused. Pull stays available.</span>
+                <button class="ict-chip" data-sw="scopes-recheck" ${SW.busy ? 'disabled' : ''}>Re-check access</button>
+            </div>
+        </div>`;
+    }
+
     /* ── plan fetch ── */
     async function swFetchPlan(direction, force) {
         SW.busy = true;
@@ -220,6 +256,7 @@
             const res = await apiFetchFull(`${SW_API}/plan`, { method: 'POST', body: JSON.stringify(body) });
             if (!res.ok || !res.json?.success) throw new Error(res.json?.error || `HTTP ${res.status}`);
             SW[direction].plan = res.json.plan;
+            if (res.json.plan.pushReadiness) SW.readiness = res.json.plan.pushReadiness;
             if (res.json.warning) SW.lastResult = { kind: 'warn', html: esc(res.json.warning) };
             // default selection: every actionable row
             SW[direction].selected = new Set(
@@ -296,6 +333,14 @@
             const res = await apiFetchFull(`${SW_API}/push/start`, { method: 'POST', body: JSON.stringify({ sku_keys: keys }) });
             const d = res.json || {};
             if (res.status === 409 && d.jobId) { swAttachPushJob(d.jobId); SW.busy = false; swRender(); return; }
+            if (res.status === 403 && d.code === 'shopify_scope_missing') {
+                // Server refused before writing anything — show the steps, not a
+                // generic failure, and remember the answer for the banner.
+                SW.readiness = d.pushReadiness || { known: true, pushEnabled: false, missingScopes: d.missingScopes, fixSteps: d.fixSteps };
+                SW.lastResult = { kind: 'error', html: `Push not started: ${esc(d.error || 'missing Shopify write inventory scope')}` };
+                showToast('Shopify refused the push — missing write_inventory scope', 'error');
+                SW.busy = false; swRender(); return;
+            }
             if (!res.ok || !d.success) throw new Error(d.error || `HTTP ${res.status}`);
             if (d.unmatched?.length) SW.lastResult = { kind: 'warn', html: `${d.unmatched.length} hub SKU(s) had no Shopify match and were skipped` };
             if (d.total === 0 || d.status === 'done') {
@@ -335,6 +380,9 @@
                         : (j.status === 'done' && j.succeeded === 0 && j.total > 0) ? ' — nothing was written'
                           : '';
                     showToast(`Shopify push ${j.status}: ${j.succeeded}/${j.total} SKU(s) written${tail}`, tone);
+                    // A scope refusal mid-job means the grant was lost or never
+                    // applied — refresh the probe so the banner explains it.
+                    if (j.error && /merchant approval|scope/i.test(j.error)) swEnsureReadiness(true);
                 }
             } catch (e) {
                 swStopPolling();
@@ -431,6 +479,7 @@
                     <span class="ict-muted">as of ${new Date(side.plan.generatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>` : ''}
             ${SW.lastResult ? `<div class="sw-result sw-result-${SW.lastResult.kind}">${SW.lastResult.html}</div>` : ''}
+            ${isPull ? '' : swRenderAccessBanner()}
             ${jobRunning || (SW.push.job && !isPull) ? swRenderJobProgress() : ''}
             ${side.plan ? `
                 <div class="sw-filters">
@@ -463,7 +512,7 @@
                 ${isPull ? `
                     <button class="btn sw-apply-btn" data-sw="apply-pull" ${selCount === 0 || SW.busy ? 'disabled' : ''}>${'⬇ Pull ' + selCount + ' SKU(s) into Stock Room'}</button>`
                 : `
-                    <button class="btn sr-confirm-bulk-btn sw-push-btn" data-sw="push-start" ${selCount === 0 || SW.busy || jobRunning ? 'disabled' : ''}>${'⬆ Push ' + selCount + ' SKU(s) to Shopify'}</button>`}
+                    <button class="btn sr-confirm-bulk-btn sw-push-btn" data-sw="push-start" ${selCount === 0 || SW.busy || jobRunning || swPushBlocked() ? 'disabled' : ''} ${swPushBlocked() ? 'title="Shopify app is missing the write_inventory scope"' : ''}>${'⬆ Push ' + selCount + ' SKU(s) to Shopify'}</button>`}
             </div>`;
     }
 
@@ -577,6 +626,17 @@
             if (failed.length) { SW.push.selected = new Set(failed); swStartPush(); }
         } else if (action === 'hist-refresh') {
             swLoadHistory();
+        } else if (action === 'scopes-recheck') {
+            SW.busy = true; swRender();
+            swEnsureReadiness(true).then(r => {
+                SW.busy = false;
+                if (r && r.known) {
+                    showToast(r.pushEnabled ? 'Shopify write access confirmed' : `Still missing: ${(r.missingScopes || []).join(', ') || 'write_inventory'}`, r.pushEnabled ? 'success' : 'error');
+                } else {
+                    showToast('Could not re-check Shopify scopes', 'error');
+                }
+                swRender();
+            });
         }
     });
 
@@ -589,7 +649,7 @@
             const cnt = document.querySelector('.sw-controls .ict-toolbar-count');
             if (cnt) cnt.textContent = `${(SW[SW.tab].plan?.rows || []).filter(r => SW[SW.tab].selected.has(r.sku_key) && swActionable(SW.tab, r.action)).length} selected`;
             const applyBtn = document.querySelector('[data-sw="apply-pull"], [data-sw="push-start"]');
-            if (applyBtn) applyBtn.disabled = !SW[SW.tab].selected.size || SW.busy;
+            if (applyBtn) applyBtn.disabled = !SW[SW.tab].selected.size || SW.busy || (SW.tab === 'push' && swPushBlocked());
             return;
         }
         if (e.target.id === 'swMode') { SW.pull.mode = e.target.value; SW.pull.plan = null; swFetchPlan('pull', SW.pull.force); }
@@ -803,6 +863,8 @@
                     openSyncWorkbench('push', { pushJobId: ss.jobId });
                 } else if (ss && ss.alreadyRunning) {
                     showToast('A Shopify push is already running — bulk deltas will need a manual push afterwards', 'error');
+                } else if (ss && ss.scopeMissing) {
+                    showToast('Shopify push skipped — app is missing the write_inventory scope (see Shopify Sync → Push)', 'error');
                 } else if (ss && ss.error) {
                     showToast(`Shopify mirror failed: ${ss.error}`, 'error');
                 } else if (ss && ss.queued === false && ss.total === 0) {
