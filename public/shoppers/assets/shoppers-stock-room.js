@@ -258,10 +258,19 @@
             SW[direction].plan = res.json.plan;
             if (res.json.plan.pushReadiness) SW.readiness = res.json.plan.pushReadiness;
             if (res.json.warning) SW.lastResult = { kind: 'warn', html: esc(res.json.warning) };
-            // default selection: every actionable row
-            SW[direction].selected = new Set(
-                res.json.plan.rows.filter(r => swActionable(direction, r.action)).map(r => r.sku_key)
-            );
+            // A push preselects ONLY what the hub changed since the last push that
+            // wrote anything. Preselecting the whole diff is how one intended +40
+            // edit became 134 SKUs overwritten on the live store, 107 of them to 0.
+            // A pull keeps the full diff — importing Shopify's numbers cannot destroy
+            // storefront stock.
+            const actionableRows = res.json.plan.rows.filter(r => swActionable(direction, r.action));
+            const preferred = direction === 'push' ? actionableRows.filter(r => r.recent) : actionableRows;
+            SW[direction].selected = new Set(preferred.map(r => r.sku_key));
+            if (direction === 'push' && actionableRows.length && !preferred.length && !SW.lastResult) {
+                SW.lastResult = { kind: 'warn', html: res.json.plan.pushWindow?.sinceIso
+                    ? `${actionableRows.length} SKU(s) differ from Shopify, but none of them were changed in the Stock Room since the last push — so nothing is preselected. Tick what you meant to send, or Pull if Shopify is the side that is right.`
+                    : `${actionableRows.length} SKU(s) differ from Shopify. Nothing is preselected because no push has written to this store before — tick exactly the SKUs you mean to send.` };
+            }
             SW[direction].page = 0;
         } catch (e) {
             SW.lastResult = { kind: 'error', html: `Plan failed: ${esc(e.message)}` };
@@ -322,17 +331,47 @@
         swRender();
     }
 
+    // Impact of the current selection, measured from the plan the server built.
+    // The server re-measures against live levels before writing; this exists so
+    // the button can never offer "Push 138 SKU(s)" without saying what it removes.
+    function swPushImpact(direction) {
+        const side = SW[direction];
+        const rows = (side?.plan?.rows || [])
+            .filter(r => side.selected.has(r.sku_key) && swActionable(direction, r.action));
+        return {
+            skus: rows.length,
+            added: rows.reduce((s, r) => s + (r.delta > 0 ? r.delta : 0), 0),
+            removed: rows.reduce((s, r) => s + (r.delta < 0 ? -r.delta : 0), 0),
+            clears: rows.filter(r => r.action === 'decrease' && r.hub_qty === 0 && r.shopify_qty > 0).length,
+        };
+    }
+
     /* ── push job ── */
-    async function swStartPush() {
+    async function swStartPush(acknowledgeRemoval) {
         const keys = [...SW.push.selected];
         if (keys.length === 0) { showToast('Nothing selected to push', 'info'); return; }
-        if (!window.confirm(`Push ${keys.length} SKU(s) to Shopify?\n\nShopify stock will be adjusted so its totals match the hub. This runs in the background at Shopify's rate limit (~2 writes/sec).`)) return;
+        const imp = swPushImpact('push');
+        const warn = imp.removed
+            ? `\n\n⚠ This REMOVES ${num(imp.removed)} units from Shopify${imp.clears ? ` and clears ${imp.clears} SKU(s) the hub holds at 0` : ''}. If Shopify is the side that is right, close this and Pull instead.`
+            : '';
+        if (!window.confirm(`Push ${keys.length} SKU(s) to Shopify?\n\nShopify stock will be set to the hub quantity for those SKUs.${warn}\n\nThis runs in the background at Shopify's rate limit (~2 writes/sec).`)) return;
         SW.busy = true;
         swRender();
         try {
-            const res = await apiFetchFull(`${SW_API}/push/start`, { method: 'POST', body: JSON.stringify({ sku_keys: keys }) });
+            const res = await apiFetchFull(`${SW_API}/push/start`, { method: 'POST', body: JSON.stringify({ sku_keys: keys, acknowledgeRemoval: !!acknowledgeRemoval }) });
             const d = res.json || {};
             if (res.status === 409 && d.jobId) { swAttachPushJob(d.jobId); SW.busy = false; swRender(); return; }
+            if (d.code === 'shopify_push_needs_ack') {
+                // Measured against live levels, so this number replaces whatever the
+                // client estimated. Removing storefront stock needs a typed yes.
+                const ii = d.impact || {};
+                const typed = window.prompt(
+                    `${d.error || 'This push removes Shopify stock.'}\n\nType REMOVE to write ${num(ii.skus_up || 0)} increase(s) and ${num(ii.skus_down || 0)} decrease(s).`,
+                    '');
+                if (typed && typed.trim().toUpperCase() === 'REMOVE') { SW.busy = false; return swStartPush(true); }
+                SW.lastResult = { kind: 'warn', html: `Stopped before writing anything: ${esc(d.error || 'confirmation required')}` };
+                SW.busy = false; swRender(); return;
+            }
             if (res.status === 403 && d.code === 'shopify_scope_missing') {
                 // Server refused before writing anything — show the steps, not a
                 // generic failure, and remember the answer for the banner.
@@ -344,7 +383,7 @@
             if (!res.ok || !d.success) throw new Error(d.error || `HTTP ${res.status}`);
             if (d.unmatched?.length) SW.lastResult = { kind: 'warn', html: `${d.unmatched.length} hub SKU(s) had no Shopify match and were skipped` };
             if (d.total === 0 || d.status === 'done') {
-                SW.lastResult = { kind: 'ok', html: 'Nothing to push — Shopify already matches the hub for this selection' };
+                SW.lastResult = { kind: 'ok', html: `Nothing to push — Shopify already holds the hub quantity for all ${keys.length} selected SKU(s)` };
                 SW.busy = false; swRender(); return;
             }
             swAttachPushJob(d.jobId);
@@ -451,6 +490,7 @@
         const totalPages = Math.max(1, Math.ceil(rows.length / SW_PAGE));
         const pageRows = rows.slice(side.page * SW_PAGE, side.page * SW_PAGE + SW_PAGE);
         const selCount = (side.plan?.rows || []).filter(r => side.selected.has(r.sku_key) && swActionable(SW.tab, r.action)).length;
+        const impact = isPull ? null : swPushImpact('push');
 
         const chips = isPull
             ? [['diff', 'Differences'], ['adds', 'New in Shopify'], ['down', 'Decreases'], ['hubonly', 'Hub only'], ['all', 'All']]
@@ -464,7 +504,7 @@
                         <option value="fill_zero" ${side.mode === 'fill_zero' ? 'selected' : ''}>Fill zero-stock SKUs only</option>
                         <option value="new_only" ${side.mode === 'new_only' ? 'selected' : ''}>Import new products only</option>
                     </select>` : `
-                    <div class="sw-warn">${'⚠️ Writes to Shopify — hub stock becomes the source of truth for selected SKUs.'}</div>`}
+                    <div class="sw-warn">${'⚠️ Writes to Shopify: the hub quantity replaces whatever Shopify holds — a hub 0 clears that SKU on the storefront.'}</div>`}
                 <label class="sw-force"><input type="checkbox" id="swForce" ${side.force ? 'checked' : ''}> Refresh Shopify data</label>
                 <button class="btn sw-recompute-btn" data-sw="recompute" ${SW.busy ? 'disabled' : ''}>${side.plan ? 'Re-compare' : 'Compare with Shopify'}</button>
                 <span class="ict-toolbar-count">${selCount} selected</span>
@@ -472,10 +512,14 @@
             ${stats ? `
                 <div class="sw-stats">
                     <span>${num(stats.diff_rows ?? (stats.increase + stats.decrease))} differ</span>
-                    ${isPull ? `<span>+${num(stats.adds ?? stats.add ?? 0)} new</span>` : ''}
+                    ${isPull ? `<span>+${num(stats.adds ?? stats.add ?? 0)} new</span>`
+                             : `<span title="SKUs the Stock Room changed since the last push">${num(stats.recent_diffs ?? 0)} changed here</span>`}
                     <span>Hub ${num(stats.units_hub)} u</span>
                     <span>Shopify ${num(stats.units_shopify ?? 0)} u</span>
-                    <span class="${stats.net_delta >= 0 ? 'ict-healthy-text' : 'ict-critical-text'}">Net ${stats.net_delta >= 0 ? '+' : ''}${num(stats.net_delta)}</span>
+                    ${isPull
+                        ? `<span class="${stats.net_delta >= 0 ? 'ict-healthy-text' : 'ict-critical-text'}">Net ${stats.net_delta >= 0 ? '+' : ''}${num(stats.net_delta)}</span>`
+                        : `<span class="ict-healthy-text">+${num(stats.units_added ?? 0)} u onto Shopify</span>
+                           <span class="${stats.units_removed ? 'ict-critical-text' : 'ict-muted'}"${stats.will_clear ? ' title="SKUs the hub holds at 0 — pushing them clears them on the storefront"' : ''}>−${num(stats.units_removed ?? 0)} u off Shopify${stats.will_clear ? ` · clears ${num(stats.will_clear)}` : ''}</span>`}
                     <span class="ict-muted">as of ${new Date(side.plan.generatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>` : ''}
             ${SW.lastResult ? `<div class="sw-result sw-result-${SW.lastResult.kind}">${SW.lastResult.html}</div>` : ''}
@@ -485,6 +529,7 @@
                 <div class="sw-filters">
                     ${chips.map(([k, l]) => `<button class="ict-chip ${side.filter === k ? 'active' : ''}" data-sw="filter" data-key="${k}">${l}</button>`).join('')}
                     <input type="text" class="ict-input sw-search" id="swSearch" placeholder="Filter by product, SKU, size…" value="${esc(side.search)}">
+                    ${isPull || !stats ? '' : `<button class="ict-chip" data-sw="select-recent" ${stats.recent_diffs ? '' : 'disabled'} title="Hub rows edited since the last push">Only my changes (${num(stats.recent_diffs ?? 0)})</button>`}
                     <button class="ict-chip" data-sw="select-all">Select all shown</button>
                     <button class="ict-chip" data-sw="clear-sel">Clear</button>
                 </div>` : ''}
@@ -512,7 +557,7 @@
                 ${isPull ? `
                     <button class="btn sw-apply-btn" data-sw="apply-pull" ${selCount === 0 || SW.busy ? 'disabled' : ''}>${'⬇ Pull ' + selCount + ' SKU(s) into Stock Room'}</button>`
                 : `
-                    <button class="btn sr-confirm-bulk-btn sw-push-btn" data-sw="push-start" ${selCount === 0 || SW.busy || jobRunning || swPushBlocked() ? 'disabled' : ''} ${swPushBlocked() ? 'title="Shopify app is missing the write_inventory scope"' : ''}>${'⬆ Push ' + selCount + ' SKU(s) to Shopify'}</button>`}
+                    <button class="btn sr-confirm-bulk-btn sw-push-btn" data-sw="push-start" ${selCount === 0 || SW.busy || jobRunning || swPushBlocked() ? 'disabled' : ''} ${swPushBlocked() ? 'title="Shopify app is missing the write_inventory scope"' : ''}>${'⬆ Push ' + selCount + ' SKU(s) to Shopify' + (impact && impact.removed ? ` · removes ${num(impact.removed)} u` : '')}${impact && impact.clears ? ` · clears ${num(impact.clears)}` : ''}</button>`}
             </div>`;
     }
 
@@ -522,9 +567,11 @@
         const checked = side.selected.has(r.sku_key) ? 'checked' : '';
         const hub = r.hub_qty == null ? '<span class="ict-muted">—</span>' : num(r.hub_qty);
         const shop = r.shopify_qty == null ? '<span class="ict-muted">—</span>' : num(r.shopify_qty);
-        return `<tr class="${canPick && r.delta !== 0 && r.delta !== null ? (r.delta > 0 ? 'sw-row-up' : 'sw-row-down') : ''}">
+        // The one case that has actually hurt the store: hub empty, Shopify loaded.
+        const clears = !isPull && r.action === 'decrease' && r.hub_qty === 0 && r.shopify_qty > 0;
+        return `<tr class="${canPick && r.delta !== 0 && r.delta !== null ? (r.delta > 0 ? 'sw-row-up' : 'sw-row-down') : ''}${clears ? ' sw-row-clears' : ''}">
             <td>${canPick ? `<input type="checkbox" data-sw="row-toggle" data-sku="${esc(r.sku_key)}" ${checked}>` : ''}</td>
-            <td class="sr-product">${esc(r.product_name)}</td>
+            <td class="sr-product">${esc(r.product_name)}${clears ? ' <span class="sw-clears" title="The hub holds 0 for this SKU — pushing would clear it on the storefront">clears on Shopify</span>' : ''}${r.recent && !isPull ? ' <span class="sw-recent" title="Changed in the Stock Room since the last push">edited here</span>' : ''}</td>
             <td class="ict-muted">${esc(r.size || '—')}</td>
             <td class="ict-mono ict-muted"><code>${esc(r.sku_key)}</code></td>
             <td class="ict-num">${isPull ? hub : shop}</td>
@@ -612,6 +659,11 @@
             swRender();
         } else if (action === 'select-all') {
             swFilteredRows(SW.tab).filter(r => swActionable(SW.tab, r.action)).forEach(r => SW[SW.tab].selected.add(r.sku_key));
+            swRender();
+        } else if (action === 'select-recent') {
+            // "what I changed here" — the selection the operator usually means
+            SW[SW.tab].selected = new Set((SW[SW.tab].plan?.rows || [])
+                .filter(r => swActionable(SW.tab, r.action) && r.recent).map(r => r.sku_key));
             swRender();
         } else if (action === 'clear-sel') {
             SW[SW.tab].selected.clear(); swRender();

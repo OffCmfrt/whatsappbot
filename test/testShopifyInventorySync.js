@@ -511,3 +511,71 @@ test('push stops after the same non-scope rejection repeats 3× rather than all 
     assert.match(job.error, /repeated on 3 SKU\(s\) in a row/);
     assert.match(job.error, /Nothing further was written/i);
 });
+
+/* ─────────── what a push would do to the storefront ─────────── */
+
+// A push aligns Shopify to the hub, so a hub row sitting at 0 clears a SKU that
+// has real stock. That has to be visible as a number before the button is
+// pressed: 107 live SKUs were zeroed once when only the net figure was shown.
+test('planAbsolutePush totals units added, removed and SKUs cleared before writing', async () => {
+    const client = immediateClient(); // every item at 14
+    const { matched, unmatched, impact } = await sync.planAbsolutePush({
+        client, catalog: catalog(), hubRows: hubRows(),
+    });
+    // M 20 (+6), L 0 (−14), XL 9 (−5), TEE 30 (+16); discontinued-piece has no variant
+    assert.equal(matched.length, 4);
+    assert.deepEqual(unmatched, ['discontinued-piece']);
+    assert.equal(impact.skus_up, 2);
+    assert.equal(impact.units_added, 22);
+    assert.equal(impact.skus_down, 2);
+    assert.equal(impact.units_removed, 19, 'units that would leave the live store');
+    assert.equal(impact.will_clear, 1, 'only the SKU the hub holds at 0 gets cleared');
+    assert.equal(impact.levels_read, true);
+});
+
+test('impact falls back to the catalog cache and says the levels were not read', async () => {
+    const client = immediateClient({
+        async getInventoryLevels() { throw new Error('Shopify request failed'); },
+    });
+    const { impact } = await sync.planAbsolutePush({ client, catalog: catalog(), hubRows: hubRows() });
+    assert.equal(impact.levels_read, false);
+    // cached inventory: M 12 (+8), L 0 (0), XL 5 (+4), TEE 30 (0)
+    assert.equal(impact.unchanged, 2);
+    assert.equal(impact.units_added, 12);
+});
+
+test('a SKU already equal on Shopify is not counted as a push, so the total is honest', async () => {
+    const client = immediateClient({
+        async getInventoryLevels(iids) {
+            const byId = new Map(); const totals = new Map();
+            const equal = { 911: 20, 912: 0, 913: 9, 921: 30 };
+            for (const id of iids) { totals.set(id, equal[id]); byId.set(id, [{ locationId: 1, available: equal[id] }]); }
+            return { byId, totals };
+        },
+    });
+    const { job, impact } = await sync.startAbsolutePushJob({
+        client, db: fakeDb(), catalog: catalog(), hubRows: hubRows(),
+    });
+    await until(() => job.finishedAt);
+    assert.equal(impact.unchanged, 4);
+    assert.equal(job.total, 0, 'nothing to write means nothing is reported as a push');
+    assert.equal(client.adjusts.length, 0);
+});
+
+test('push plan marks hub rows changed since the last push and totals the removals', () => {
+    const totals = new Map([[911, 20], [912, 40], [913, 9], [921, 30]]);
+    const rows = hubRows().map(h => ({
+        ...h,
+        updated_at: h.sku_key === 'sweatshirt-001-black-l' ? '2026-11-12T09:00:00Z' : '2026-11-01T09:00:00Z',
+    }));
+    const since = Date.parse('2026-11-10T00:00:00Z');
+    const plan = sync.buildPushPlan(catalog(), rows, totals, { sinceMs: since });
+    const cleared = findRow(plan, 'sweatshirt-001-black-l');
+    assert.equal(cleared.recent, true, 'edited after the last push — this is the change the operator means to send');
+    assert.equal(findRow(plan, 'sweatshirt-001-black-m').recent, false);
+    assert.equal(plan.stats.units_removed, 40);
+    assert.equal(plan.stats.units_added, 0);
+    assert.equal(plan.stats.will_clear, 1);
+    assert.equal(plan.stats.recent_diffs, 1, 'one row to preselect, not the whole diff');
+    assert.equal(plan.stats.net_delta, -40);
+});

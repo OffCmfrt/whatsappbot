@@ -6687,6 +6687,15 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
 .sw-table-wrap { max-height: 44vh; overflow-y: auto; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; }
 .sw-row-up { background: rgba(46,160,67,0.045); }
 .sw-row-down { background: rgba(224,36,36,0.045); }
+/* A push that empties a SKU on the storefront is the one that has actually caused
+   damage, so it is labelled rather than only tinted. */
+.sw-row-clears { background: rgba(224,36,36,0.1); box-shadow: inset 3px 0 0 #e02424; }
+.sw-clears, .sw-recent {
+    display: inline-block; margin-left: 0.35rem; padding: 0.05rem 0.35rem; border-radius: 999px;
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase;
+}
+.sw-clears { background: rgba(224,36,36,0.16); border: 1px solid rgba(224,36,36,0.45); color: #ff7b72; }
+.sw-recent { background: rgba(88,166,255,0.12); border: 1px solid rgba(88,166,255,0.35); color: #79c0ff; font-weight: 600; }
 .sw-job {
     background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
     border-radius: 10px; padding: 0.8rem 1rem; display: flex; flex-direction: column; gap: 0.5rem;

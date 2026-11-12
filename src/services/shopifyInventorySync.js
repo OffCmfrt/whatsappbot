@@ -186,7 +186,16 @@ function buildPullPlan(catalog, hubRows, opts = {}) {
 /* ── push plan: hub → Shopify ── */
 // totals: Map inventory_item_id → summed available across locations. When an
 // item has no levels row, falls back to the catalog's computed inventory.
-function buildPushPlan(catalog, hubRows, totals) {
+function buildPushPlan(catalog, hubRows, totals, opts = {}) {
+    // `recent` marks a hub row edited after the last push that actually wrote
+    // something, i.e. a change made here that the operator probably wants to
+    // send. The workbench preselects only those: preselecting the entire diff is
+    // how one intended +40 edit once turned into 134 SKUs overwritten on Shopify.
+    const sinceMs = Number(opts.sinceMs) || 0;
+    const recency = hub => ({
+        hub_updated_at: (hub && hub.updated_at) || null,
+        recent: sinceMs > 0 && !!(hub && hub.updated_at) && Date.parse(hub.updated_at) > sinceMs,
+    });
     const index = indexCatalog(catalog);
     const rows = [];
     let matched = 0;
@@ -194,7 +203,7 @@ function buildPushPlan(catalog, hubRows, totals) {
         const m = matchHubRow(index, hub);
         if (!m) {
             rows.push({ sku_key: hub.sku_key, product_name: hub.product_name, size: hub.size,
-                hub_qty: Number(hub.quantity) || 0, shopify_qty: null, delta: null, action: 'no_match' });
+                hub_qty: Number(hub.quantity) || 0, shopify_qty: null, delta: null, action: 'no_match', ...recency(hub) });
             continue;
         }
         matched++;
@@ -202,7 +211,7 @@ function buildPushPlan(catalog, hubRows, totals) {
         const iid = entry.variant.inventory_item_id;
         if (!iid) {
             rows.push({ sku_key: hub.sku_key, product_name: hub.product_name, size: hub.size,
-                hub_qty: Number(hub.quantity) || 0, shopify_qty: null, delta: null, action: 'no_inv_item' });
+                hub_qty: Number(hub.quantity) || 0, shopify_qty: null, delta: null, action: 'no_inv_item', ...recency(hub) });
             continue;
         }
         const shopifyQty = totals && totals.has(iid) ? (totals.get(iid) || 0) : (Number(entry.variant.inventory) || 0);
@@ -211,12 +220,13 @@ function buildPushPlan(catalog, hubRows, totals) {
         rows.push({
             sku_key: hub.sku_key, product_name: hub.product_name, size: hub.size,
             inventory_item_id: iid, variant_id: entry.variant.id, hub_qty: hubQty,
-            shopify_qty: shopifyQty, delta, matched_via: m.via,
+            shopify_qty: shopifyQty, delta, matched_via: m.via, ...recency(hub),
             action: delta === 0 ? 'equal' : delta > 0 ? 'increase' : 'decrease',
         });
     }
     const counts = { increase: 0, decrease: 0, equal: 0, no_match: 0, no_inv_item: 0 };
     for (const r of rows) counts[r.action] = (counts[r.action] || 0) + 1;
+    const actionable = rows.filter(r => r.action === 'increase' || r.action === 'decrease');
     return {
         direction: 'push',
         generatedAt: new Date().toISOString(),
@@ -226,9 +236,60 @@ function buildPushPlan(catalog, hubRows, totals) {
             matched,
             units_hub: rows.reduce((s, r) => s + (r.hub_qty || 0), 0),
             units_shopify: rows.reduce((s, r) => s + (r.shopify_qty || 0), 0),
-            net_delta: rows.reduce((s, r) => s + (r.action === 'increase' || r.action === 'decrease' ? r.delta : 0), 0),
+            net_delta: actionable.reduce((s, r) => s + r.delta, 0),
+            // Splitting the net figure matters: a net of -5,567 hides that 107 SKUs
+            // were being set to zero while 23 were being raised.
+            units_added: actionable.reduce((s, r) => s + (r.delta > 0 ? r.delta : 0), 0),
+            units_removed: actionable.reduce((s, r) => s + (r.delta < 0 ? -r.delta : 0), 0),
+            will_clear: actionable.filter(r => r.hub_qty === 0 && r.shopify_qty > 0).length,
+            recent_diffs: actionable.filter(r => r.recent).length,
         },
     };
+}
+
+// Pair the rows a push would write with the live level each write starts from,
+// then total up what that push would do to the storefront. The route runs this
+// BEFORE creating a job so taking stock off Shopify is always a confirmed act.
+async function planAbsolutePush({ client, catalog, hubRows, selectedSkuKeys }) {
+    const index = indexCatalog(catalog);
+    const wanted = selectedSkuKeys && selectedSkuKeys.length ? new Set(selectedSkuKeys.map(normKey)) : null;
+    const matched = [];
+    const unmatched = [];
+    for (const hub of hubRows || []) {
+        if (wanted && !wanted.has(normKey(hub.sku_key))) continue;
+        const m = matchHubRow(index, hub);
+        if (!m || !m.entry.variant.inventory_item_id) { unmatched.push(hub.sku_key); continue; }
+        matched.push({
+            sku_key: hub.sku_key, product_name: hub.product_name, size: hub.size,
+            inventory_item_id: m.entry.variant.inventory_item_id,
+            target: Number(hub.quantity) || 0,
+            cached_qty: Number(m.entry.variant.inventory) || 0,
+        });
+    }
+    const svc = client || lazyDefaults().client;
+    let totals = null;
+    try {
+        totals = (await svc.getInventoryLevels(matched.map(t => t.inventory_item_id))).totals;
+    } catch (e) {
+        // The job re-reads levels and refuses to guess without them; the impact
+        // numbers below merely fall back to the (10 min old) catalog cache.
+        console.warn('[ShopifyInventorySync] impact level read failed:', e.message);
+    }
+    const impact = {
+        skus: matched.length, skus_up: 0, skus_down: 0, units_added: 0, units_removed: 0,
+        will_clear: 0, unchanged: 0, levels_read: !!totals,
+    };
+    for (const t of matched) {
+        const current = totals ? (totals.get(t.inventory_item_id) ?? t.cached_qty) : t.cached_qty;
+        t.current_qty = current;
+        t.delta = t.target - current;
+        if (t.delta === 0) { impact.unchanged++; continue; }
+        if (t.delta > 0) { impact.skus_up++; impact.units_added += t.delta; continue; }
+        impact.skus_down++;
+        impact.units_removed += -t.delta;
+        if (t.target === 0 && current > 0) impact.will_clear++;
+    }
+    return { matched, unmatched, impact };
 }
 
 /* ── pull apply: batched SQL, no per-SKU round trips ── */
@@ -550,28 +611,17 @@ async function runPushJob({ client, db, tasks, reference, performedBy, mode, dir
 
 // Absolute push: align Shopify totals to hub quantities for the given rows.
 // Reads Shopify levels fresh at start so plan drift since preview is corrected.
-async function startAbsolutePushJob({ client, db, catalog, hubRows, selectedSkuKeys, reference, performedBy }) {
-    const index = indexCatalog(catalog);
-    const wanted = selectedSkuKeys && selectedSkuKeys.length
-        ? new Set(selectedSkuKeys.map(normKey))
-        : null;
-    const tasks = [];
-    const unmatched = [];
-    for (const hub of hubRows || []) {
-        if (wanted && !wanted.has(normKey(hub.sku_key))) continue;
-        const m = matchHubRow(index, hub);
-        if (!m || !m.entry.variant.inventory_item_id) { unmatched.push(hub.sku_key); continue; }
-        tasks.push({
-            sku_key: hub.sku_key, product_name: hub.product_name, size: hub.size,
-            inventory_item_id: m.entry.variant.inventory_item_id,
-            // absolute jobs must not be pre-filtered on the stale catalog
-            // delta; the real delta is recomputed from fresh levels via target
-            delta: 1,
-            target: Number(hub.quantity) || 0,
-        });
-    }
+async function startAbsolutePushJob({ client, db, catalog, hubRows, selectedSkuKeys, reference, performedBy, preplan }) {
+    // Deltas come from live levels (planAbsolutePush), not the cached catalog, so a
+    // SKU that already matches Shopify never enters the job and the reported total
+    // means "writes about to happen" rather than "rows the operator selected".
+    const prepared = preplan || await planAbsolutePush({ client, catalog, hubRows, selectedSkuKeys });
+    const tasks = prepared.matched.filter(t => t.delta !== 0).map(t => ({
+        sku_key: t.sku_key, product_name: t.product_name, size: t.size,
+        inventory_item_id: t.inventory_item_id, delta: t.delta, target: t.target,
+    }));
     const job = await runPushJob({ client, db, tasks, reference, performedBy, mode: 'absolute', direction: 'push' });
-    return { job, unmatched };
+    return { job, unmatched: prepared.unmatched, impact: prepared.impact };
 }
 
 // Delta push: apply known deltas (Bulk In/Out) onto Shopify directly.
@@ -613,7 +663,7 @@ async function getPushReadiness(client) {
 
 module.exports = {
     normKey, variantSkuKey, inferCategory, indexCatalog, matchHubRow,
-    buildPullPlan, buildPushPlan, applyPullPlan,
+    buildPullPlan, buildPushPlan, planAbsolutePush, applyPullPlan,
     runPushJob, startAbsolutePushJob, startDeltaPushJob,
     getJob, getActivePushJob, cancelJob, jobSnapshot, lazyDefaults,
     evaluatePushReadiness, getPushReadiness, REQUIRED_PUSH_SCOPES,

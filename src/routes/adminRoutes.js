@@ -8287,7 +8287,11 @@ router.post('/inventory/shopify-sync/plan', verifyToken, async (req, res) => {
                 planWarning = `Live Shopify stock levels could not be read (${e.message}). Deltas use the 10-minute catalog cache.`;
                 console.warn('[ShopifySync] level read failed, falling back to catalog cache:', e.message);
             }
-            plan = sync.buildPushPlan(catalog, hubRows, totals);
+            const sinceMs = await lastPushWroteAt();
+            plan = sync.buildPushPlan(catalog, hubRows, totals, { sinceMs });
+            // The UI explains an empty preselection differently depending on whether
+            // a push has ever happened at all.
+            plan.pushWindow = { sinceIso: sinceMs ? new Date(sinceMs).toISOString() : null };
             // Tell the UI up front whether a push could even be written, so the
             // Start button explains itself instead of failing 230 SKUs later.
             plan.pushReadiness = await sync.getPushReadiness(shopifyService);
@@ -8300,6 +8304,25 @@ router.post('/inventory/shopify-sync/plan', verifyToken, async (req, res) => {
         res.status(500).json({ success: false, error: 'Failed to build sync plan: ' + error.message });
     }
 });
+
+// When the last push actually wrote something. Hub rows edited after that are
+// "my changes", which is what the workbench preselects for a push — preselecting
+// every difference instead once overwrote 134 live SKUs on Shopify.
+async function lastPushWroteAt() {
+    try {
+        // started_at, not finished_at: an edit made while a push was running is
+        // still unsent, and a push takes minutes.
+        const [row] = await dbAdapter.query(
+            `SELECT COALESCE(started_at, finished_at, created_at) AS at
+               FROM shopify_inventory_sync_runs
+              WHERE direction IN ('push', 'push_delta') AND skus_applied > 0
+              ORDER BY id DESC LIMIT 1`);
+        const at = row && row.at ? Date.parse(row.at) : 0;
+        return Number.isFinite(at) ? at : 0;
+    } catch (e) {
+        return 0; // no history table / no previous push → no recency hints
+    }
+}
 
 // POST /api/admin/inventory/shopify-sync/pull/apply - apply selected pull rows
 router.post('/inventory/shopify-sync/pull/apply', verifyToken, async (req, res) => {
@@ -8366,13 +8389,33 @@ router.post('/inventory/shopify-sync/push/start', verifyToken, async (req, res) 
         const hubRows = skuKeys
             ? await dbAdapter.query('SELECT product_name, size, sku_key, quantity FROM manual_inventory WHERE sku_key = ANY($1::text[])', [skuKeys])
             : await dbAdapter.query('SELECT product_name, size, sku_key, quantity FROM manual_inventory');
+        // Work out against live levels what this push would do to the storefront
+        // before writing anything. An absolute push sets Shopify to the hub value,
+        // so a hub row sitting at 0 clears a SKU that has real stock behind it —
+        // that has to be confirmed, never a side effect of "select all".
+        const prepared = await sync.planAbsolutePush({
+            client: shopifyService, catalog, hubRows, selectedSkuKeys: skuKeys,
+        });
+        const impact = prepared.impact;
+        if ((impact.units_removed > 0 || impact.will_clear > 0) && req.body?.acknowledgeRemoval !== true) {
+            return res.status(400).json({
+                success: false, code: 'shopify_push_needs_ack', jobId: null, impact,
+                error: `This push takes ${impact.units_removed} unit(s) off Shopify across ${impact.skus_down} SKU(s)`
+                    + (impact.will_clear ? ` and clears ${impact.will_clear} of them completely, because the hub holds 0 for them` : '')
+                    + '. Nothing has been written yet.',
+            });
+        }
         const { job, unmatched } = await sync.startAbsolutePushJob({
             client: shopifyService, db: dbAdapter, catalog, hubRows,
             selectedSkuKeys: skuKeys,
             reference: req.body?.reference || 'shopify_push',
             performedBy: req.admin?.username || 'hub_operator',
+            preplan: prepared,
         });
-        res.json({ success: true, jobId: job.id, total: job.total, skippedEqual: job.skipped, unmatched, status: job.status });
+        res.json({
+            success: true, jobId: job.id, total: job.total, skippedEqual: job.skipped,
+            unchanged: impact.unchanged, impact, unmatched, status: job.status,
+        });
     } catch (error) {
         console.error('Shopify push start error:', error);
         res.status(500).json({ success: false, error: 'Failed to start Shopify push: ' + error.message });
