@@ -220,6 +220,7 @@
             const res = await apiFetchFull(`${SW_API}/plan`, { method: 'POST', body: JSON.stringify(body) });
             if (!res.ok || !res.json?.success) throw new Error(res.json?.error || `HTTP ${res.status}`);
             SW[direction].plan = res.json.plan;
+            if (res.json.warning) SW.lastResult = { kind: 'warn', html: esc(res.json.warning) };
             // default selection: every actionable row
             SW[direction].selected = new Set(
                 res.json.plan.rows.filter(r => swActionable(direction, r.action)).map(r => r.sku_key)
@@ -326,7 +327,14 @@
                     swStopPolling();
                     SW.push.plan = null; // Shopify moved — force fresh compare
                     SW.history.loaded = false;
-                    showToast(`Shopify push ${SW.push.job.status}: ${SW.push.job.succeeded}/${SW.push.job.total} SKU(s)`, SW.push.job.status === 'done' && !SW.push.job.failed ? 'success' : 'error');
+                    const j = SW.push.job;
+                    // "done" with zero writes is a problem, not a success
+                    const tone = j.status === 'done' && (j.succeeded > 0 || j.total === 0)
+                        ? 'success' : 'error';
+                    const tail = j.error ? ` — ${j.error}`
+                        : (j.status === 'done' && j.succeeded === 0 && j.total > 0) ? ' — nothing was written'
+                          : '';
+                    showToast(`Shopify push ${j.status}: ${j.succeeded}/${j.total} SKU(s) written${tail}`, tone);
                 }
             } catch (e) {
                 swStopPolling();
@@ -483,16 +491,25 @@
         const pct = job.total ? Math.round((job.done / job.total) * 100) : 100;
         const eta = job.status === 'running' && job.total ? ` · ~${Math.ceil((job.total - job.done) * 0.6)}s left` : '';
         const failed = (job.results || []).filter(r => !r.ok);
+        // A job can finish "done" having written nothing: every SKU skipped as
+        // already equal, or the whole run aborted by Shopify. Never paint that
+        // green — say which happened.
+        const wroteNothing = job.status !== 'running' && job.total > 0 && job.succeeded === 0;
+        const banner = job.error
+            ? `<div class="sw-job-error">⚠ ${esc(job.error)}${job.abortedRemaining ? ` — the remaining ${job.abortedRemaining} SKU(s) were not attempted.` : ''}</div>`
+            : wroteNothing
+              ? `<div class="sw-job-error">Nothing was written. All ${job.total} SKU(s) were already equal on Shopify (${job.skipped || 0} skipped) — if that is wrong, Shopify stock is not being read; check the Shopify connection and re-open the compare.</div>`
+              : '';
         return `<div class="sw-job">
             <div class="sw-job-head">
                 <span>Push job <code>${esc(job.id)}</code> — ${esc(job.status)}</span>
-                <span>${job.done}/${job.total} SKU(s) · ${job.succeeded} ok · ${job.failed} failed${eta}</span>
+                <span>${job.done}/${job.total} SKU(s) · ${job.succeeded} written · ${job.failed} failed${eta}</span>
                 ${job.status === 'running' ? `<button class="ict-chip" data-sw="push-cancel">Cancel</button>`
                   : failed.length ? `<button class="ict-chip" data-sw="push-retry">Retry ${failed.length} failed</button>` : ''}
             </div>
-            <div class="sw-progress"><div class="sw-progress-fill" style="width:${pct}%"></div></div>
+            <div class="sw-progress"><div class="sw-progress-fill${wroteNothing ? ' sw-progress-empty' : ''}" style="width:${pct}%"></div></div>
+            ${banner}
             ${failed.length ? `<div class="sw-job-fails">${failed.slice(-8).map(f => `✗ ${esc(f.product_name || f.sku_key)} (${esc(f.size)}) — ${esc(f.error || 'failed')}`).join('<br>')}</div>` : ''}
-            ${job.error ? `<div class="sw-job-fails">${esc(job.error)}</div>` : ''}
         </div>`;
     }
 

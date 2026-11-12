@@ -337,3 +337,63 @@ test('job snapshots bound the result tail and expose progress counters', async (
     assert.equal(snap.succeeded, 250);
     assert.ok(snap.results.length <= 200, 'snapshot results are capped at 200');
 });
+
+/* ─────────────── production failures that looked like success ─────────────── */
+
+test('absolute push refuses to write when live levels cannot be read', async () => {
+    // Assuming 0 stock would have added the whole hub quantity on top of the
+    // real Shopify stock — the job must fail loudly instead.
+    const client = immediateClient({
+        async getInventoryLevels() { throw new Error('Shopify request failed'); },
+    });
+    const { job } = await sync.startAbsolutePushJob({
+        client, db: fakeDb(), catalog: catalog(), hubRows: hubRows(),
+        selectedSkuKeys: ['sweatshirt-001-black-m'],
+    });
+    await until(() => job.finishedAt);
+    assert.equal(client.adjusts.length, 0, 'no write may be attempted without live totals');
+    assert.equal(job.status, 'failed');
+    assert.match(job.error, /could not be read/);
+    assert.match(job.error, /nothing was written/);
+});
+
+test('push stops at the first missing-scope rejection instead of retrying every SKU', async () => {
+    const scopeMsg = 'This action requires merchant approval for write_inventory scope.';
+    const client = immediateClient({
+        async adjustInventoryLevel(t) {
+            client.adjusts.push(t);
+            return { success: false, error: scopeMsg, permissionError: true };
+        },
+    });
+    const tasks = [1, 2, 3, 4, 5].map(i => ({ sku_key: `s${i}`, product_name: 'P', size: 'M', inventory_item_id: i, delta: i }));
+    const job = await sync.runPushJob({ client, db: fakeDb(), tasks });
+    await until(() => job.finishedAt);
+    assert.equal(client.adjusts.length, 1, 'a scope error is identical for every SKU — one probe is enough');
+    assert.equal(job.status, 'failed');
+    assert.equal(job.error, scopeMsg);
+    assert.equal(sync.jobSnapshot(job).abortedRemaining, 4);
+});
+
+test('push works without read_locations by taking the location from the levels read', async () => {
+    const client = immediateClient({
+        async getLocations() { throw new Error('This action requires merchant approval for read_locations scope.'); },
+    });
+    const tasks = [{ sku_key: 'sweatshirt-001-black-m', product_name: 'S', size: 'M', inventory_item_id: 911, delta: 8 }];
+    const job = await sync.runPushJob({ client, db: fakeDb(), tasks });
+    await until(() => job.finishedAt);
+    assert.equal(job.succeeded, 1, 'the max-available location from inventory_levels is enough');
+    assert.equal(client.adjusts[0].locationId, 2);
+});
+
+test('delta push still reports skipped-as-equal through the snapshot', async () => {
+    // The zero-write completion must be distinguishable from a real success.
+    const client = immediateClient();
+    const tasks = [{ sku_key: 'a', product_name: 'A', size: 'M', inventory_item_id: 911, target: 14 }]; // already 14 on Shopify
+    const job = await sync.runPushJob({ client, db: fakeDb(), tasks, mode: 'absolute' });
+    await until(() => job.finishedAt);
+    const snap = sync.jobSnapshot(job);
+    assert.equal(snap.succeeded, 0);
+    assert.equal(snap.failed, 0);
+    assert.equal(snap.skipped, 1);
+    assert.equal(client.adjusts.length, 0);
+});

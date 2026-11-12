@@ -8233,6 +8233,8 @@ router.post('/inventory/shopify-sync/plan', verifyToken, async (req, res) => {
         const direction = req.body?.direction === 'push' ? 'push' : 'pull';
         const mode = ['match', 'fill_zero', 'new_only'].includes(req.body?.mode) ? req.body.mode : 'match';
         const force = req.body?.force === true;
+        let planWarning = null;
+        let totalsSource = null;
         const sync = require('../services/shopifyInventorySync');
         const shopifyService = require('../services/shopifyService');
 
@@ -8249,16 +8251,21 @@ router.post('/inventory/shopify-sync/plan', verifyToken, async (req, res) => {
             const index = sync.indexCatalog(catalog);
             const iids = [...index.byKey.values()].map(e => e.variant.inventory_item_id).filter(Boolean);
             let totals = new Map();
+            totalsSource = 'shopify_levels';
             try {
                 totals = (await shopifyService.getInventoryLevels(iids)).totals;
             } catch (e) {
+                // Catalog cache is 10 minutes old and only approximates Shopify;
+                // say so, because the deltas shown here drive what gets pushed.
+                totalsSource = 'catalog_cache';
+                planWarning = `Live Shopify stock levels could not be read (${e.message}). Deltas use the 10-minute catalog cache.`;
                 console.warn('[ShopifySync] level read failed, falling back to catalog cache:', e.message);
             }
             plan = sync.buildPushPlan(catalog, hubRows, totals);
         } else {
             plan = sync.buildPullPlan(catalog, hubRows, { mode });
         }
-        res.json({ success: true, plan });
+        res.json({ success: true, plan, warning: planWarning || undefined, totalsSource });
     } catch (error) {
         console.error('Shopify sync plan error:', error);
         res.status(500).json({ success: false, error: 'Failed to build sync plan: ' + error.message });

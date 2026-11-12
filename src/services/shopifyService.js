@@ -424,8 +424,11 @@ class ShopifyService {
                 for (let i = 0; i < allInventoryItemIds.length; i += 100) {
                     const batch = allInventoryItemIds.slice(i, i + 100);
                     try {
+                        // limit must be stated: the endpoint defaults to 50 rows, so
+                        // without it every batch past the 50th level silently fell
+                        // back to inventory_quantity in the cached catalog.
                         const ilRes = await http.get('/inventory_levels.json', {
-                            params: { inventory_item_ids: batch.join(',') }
+                            params: { inventory_item_ids: batch.join(','), limit: 250 }
                         });
                         for (const level of (ilRes.data?.inventory_levels || [])) {
                             const iid = level.inventory_item_id;
@@ -494,7 +497,10 @@ class ShopifyService {
 
     /**
      * Active stock locations (id, name). Cached 1h — locations change rarely.
-     * Requires read_inventory; the first location is treated as the default.
+     * Requires the read_locations scope, which a custom app only has once the
+     * merchant re-approves it; when that scope is absent the call throws and
+     * callers fall back to the location ids visible in their levels read.
+     * SHOPIFY_INVENTORY_LOCATION_ID pins the warehouse outright and skips the API.
      */
     async getLocations(forceRefresh = false) {
         if (!forceRefresh && this._locationsCache && (Date.now() - this._locationsCacheAt) < 60 * 60 * 1000) {
@@ -502,19 +508,31 @@ class ShopifyService {
         }
         const cfg = this._restConfig();
         if (!cfg) throw new Error('Shopify credentials not configured');
-        const res = await this._rateLimitedRequest(() =>
-            axios.get(`${cfg.base}/locations.json?limit=50&fields=id,name`, { headers: cfg.headers, timeout: 15000 })
-        );
-        const locations = (res.data?.locations || []).map(l => ({ id: l.id, name: l.name || '' }));
-        this._locationsCache = locations;
-        this._locationsCacheAt = Date.now();
-        return locations;
+        const configured = Number(process.env.SHOPIFY_INVENTORY_LOCATION_ID);
+        if (Number.isFinite(configured) && configured > 0) {
+            this._locationsCache = [{ id: configured, name: 'configured' }];
+            this._locationsCacheAt = Date.now();
+            return this._locationsCache;
+        }
+        try {
+            const res = await this._rateLimitedRequest(() =>
+                axios.get(`${cfg.base}/locations.json?limit=50&fields=id,name`, { headers: cfg.headers, timeout: 15000 })
+            );
+            const locations = (res.data?.locations || []).map(l => ({ id: l.id, name: l.name || '' }));
+            this._locationsCache = locations;
+            this._locationsCacheAt = Date.now();
+            return locations;
+        } catch (e) {
+            throw new Error(this._withScopeHint(e, 'read_locations'));
+        }
     }
 
     /**
      * Per-location inventory levels for the given inventory item IDs.
-     * Batched 100 IDs per call (Shopify limit). Returns Map<iid, [{locationId, available}]>
+     * Batched 100 IDs per call. Returns Map<iid, [{locationId, available}]>
      * and the summed available per item — the real Shopify-side stock for sync.
+     * NOTE: inventory_levels.json rejects limit > 250 with a 400, which would
+     * fail the whole batch and read back as "this item has no stock".
      */
     async getInventoryLevels(inventoryItemIds) {
         const byId = new Map();
@@ -529,7 +547,7 @@ class ShopifyService {
         for (let i = 0; i < ids.length; i += 100) {
             const batch = ids.slice(i, i + 100);
             const levels = [];
-            let pageUrl = `${cfg.base}/inventory_levels.json?inventory_item_ids=${batch.join(',')}&limit=1000`;
+            let pageUrl = `${cfg.base}/inventory_levels.json?inventory_item_ids=${batch.join(',')}&limit=250`;
             while (pageUrl) {
                 const res = await this._rateLimitedRequest(() => http.get(pageUrl, { headers: cfg.headers }));
                 levels.push(...(res.data?.inventory_levels || []));
@@ -554,7 +572,7 @@ class ShopifyService {
      * Returns { success, availableAfterChange?, error? } — never throws.
      */
     async adjustInventoryLevel({ inventoryItemId, locationId, availableDelta }) {
-        const result = { success: false, availableAfterChange: null, error: null };
+        const result = { success: false, availableAfterChange: null, error: null, permissionError: false };
         const cfg = this._restConfig();
         if (!cfg) { result.error = 'Shopify credentials not configured'; return result; }
         if (!inventoryItemId || !locationId || !Number.isFinite(availableDelta) || availableDelta === 0) {
@@ -573,7 +591,12 @@ class ShopifyService {
             result.availableAfterChange = res.data?.inventory_level?.available ?? null;
             return result;
         } catch (error) {
-            result.error = this._shopifyErrorMsg(error);
+            result.error = this._withScopeHint(error, 'write_inventory');
+            // A missing scope answers identically for every SKU ("requires
+            // merchant approval for write_inventory scope"), so flag it and let
+            // the job stop instead of re-probing at 2 calls/sec for minutes.
+            const raw = this._shopifyErrorMsg(error);
+            result.permissionError = /requires merchant approval|_inventory scope|Permission/i.test(raw);
             return result;
         }
     }
@@ -1497,6 +1520,20 @@ class ShopifyService {
             await axios.post(`${cfg.base}/orders/${order.id}/cancel.json`, {}, { headers: cfg.headers, timeout: 20000 });
             return 'cancelled via REST fallback';
         }
+    }
+
+    /**
+     * Error text with an actionable hint when Shopify rejected the call for a
+     * missing scope. A 403 "requires merchant approval for X scope" is not a
+     * transient failure: it needs the app's scopes edited in the Shopify admin,
+     * so every surface that shows the message should say so.
+     */
+    _withScopeHint(err, scope) {
+        const msg = this._shopifyErrorMsg(err);
+        if (/requires merchant approval|scope/i.test(msg) && new RegExp(scope, 'i').test(msg)) {
+            return `${msg} — the Shopify app is missing the ${scope} scope. Add it under Settings → Apps → (this app) → Configuration → Admin API access scopes, then save and reinstall the app.`;
+        }
+        return msg;
     }
 
     _shopifyErrorMsg(err) {

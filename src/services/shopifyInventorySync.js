@@ -325,7 +325,9 @@ function jobSnapshot(job) {
         id: job.id, kind: job.kind, direction: job.direction, status: job.status,
         reference: job.reference, performedBy: job.performedBy,
         total: job.total, done: job.done, succeeded: job.succeeded, failed: job.failed,
+        skipped: job.skipped,
         unitsDelta: job.unitsDelta, cancelRequested: job.cancelRequested,
+        abortedRemaining: job.abortedRemaining || 0,
         error: job.error, createdAt: job.createdAt, finishedAt: job.finishedAt,
         results: job.results.slice(-200), // tail sample for the UI; full set in the run row
     };
@@ -383,6 +385,7 @@ async function runPushJob({ client, db, tasks, reference, performedBy, mode, dir
         reference: reference || 'shopify_push', performedBy: performedBy || 'admin',
         total: work.length, done: 0, succeeded: 0, failed: 0, skipped,
         unitsDelta: 0, results: [], cancelRequested: false,
+        abortedRemaining: 0,
         error: null, createdAt: new Date().toISOString(), finishedAt: null, runId: null,
     };
     _jobs.set(job.id, job);
@@ -400,24 +403,47 @@ async function runPushJob({ client, db, tasks, reference, performedBy, mode, dir
         try {
             const iids = [...new Set(work.map(t => t.inventory_item_id))];
             let levelsById = new Map();
-            let defaultLocationId = null;
+            let totalsById = new Map();
+            let levelReadError = null;
             try {
                 const levels = await client.getInventoryLevels(iids);
                 levelsById = levels.byId;
+                totalsById = levels.totals || new Map();
             } catch (e) {
-                console.warn('[ShopifyInventorySync] level read failed, using default location:', e.message);
+                levelReadError = e.message;
+                console.warn('[ShopifyInventorySync] level read failed:', e.message);
             }
+            // Default location for items that have no level row yet. /locations
+            // needs the read_locations scope, which this app may not carry, so
+            // fall back to a location id already visible in the levels read —
+            // a single-warehouse store then needs no extra scope at all.
+            let defaultLocationId = null;
             try {
                 const locations = await client.getLocations();
                 defaultLocationId = locations[0] ? locations[0].id : null;
             } catch (e) {
-                console.warn('[ShopifyInventorySync] locations read failed:', e.message);
+                const seen = [...levelsById.values()].flat().map(l => l.locationId).filter(Boolean);
+                defaultLocationId = seen[0] || null;
+                if (!defaultLocationId) console.warn('[ShopifyInventorySync] locations unavailable:', e.message);
             }
 
-            for (const task of work) {
+            // An absolute push aligns Shopify to the hub number, so it must know
+            // the live total first: assuming 0 after a failed read would ADD the
+            // whole hub quantity on top of real stock. Refuse to write instead.
+            const needsLiveTotals = work.some(t => Number.isFinite(Number(t.target)));
+            const refuseToGuess = Boolean(levelReadError) && needsLiveTotals;
+            if (refuseToGuess) {
+                job.error = `Shopify stock levels could not be read (${levelReadError}) — nothing was written, so no quantity was guessed.`;
+                job.failed = job.total;
+                job.done = job.total;
+            }
+
+            for (const task of refuseToGuess ? [] : work) {
                 if (job.cancelRequested) break;
                 const breakdown = levelsById.get(task.inventory_item_id) || [];
-                const currentTotal = breakdown.reduce((s, l) => s + (Number(l.available) || 0), 0);
+                const currentTotal = breakdown.length
+                    ? breakdown.reduce((s, l) => s + (Number(l.available) || 0), 0)
+                    : (totalsById.get(task.inventory_item_id) || 0);
                 let delta = Number(task.delta);
                 if (Number.isFinite(Number(task.target))) delta = Number(task.target) - currentTotal;
                 if (delta === 0) { job.skipped++; job.done++; continue; }
@@ -427,7 +453,8 @@ async function runPushJob({ client, db, tasks, reference, performedBy, mode, dir
                 let rec;
                 if (!target) {
                     rec = { sku_key: task.sku_key, product_name: task.product_name, size: task.size,
-                        delta, ok: false, error: 'No inventory location available' };
+                        delta, ok: false,
+                        error: 'No inventory location available — set SHOPIFY_INVENTORY_LOCATION_ID or grant the app read_locations' };
                 } else {
                     const res = await client.adjustInventoryLevel({
                         inventoryItemId: task.inventory_item_id, locationId: target,
@@ -441,6 +468,14 @@ async function runPushJob({ client, db, tasks, reference, performedBy, mode, dir
                 if (job.results.length > MAX_RESULTS_KEPT) job.results.splice(0, job.results.length - MAX_RESULTS_KEPT);
                 if (rec.ok) { job.succeeded++; job.unitsDelta += delta; } else { job.failed++; }
                 job.done++;
+                // A rejected scope fails identically for every remaining SKU, and
+                // at ~2 writes/sec that is minutes of pointless calls: stop on the
+                // first one and surface the instruction instead of a failed count.
+                if (!rec.ok && rec.error && /merchant approval|scope/i.test(rec.error)) {
+                    job.error = rec.error;
+                    job.abortedRemaining = job.total - job.done;
+                    break;
+                }
             }
             job.status = job.cancelRequested ? 'cancelled' : (job.error ? 'failed' : 'done');
         } catch (e) {

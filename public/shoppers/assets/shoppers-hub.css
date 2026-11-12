@@ -6693,8 +6693,16 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
 }
 .sw-job-head { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; font-size: 0.78rem; color: rgba(255,255,255,0.75); justify-content: space-between; }
 .sw-job-fails { font-size: 0.72rem; color: #ff7b72; line-height: 1.6; }
+/* Run-level blocker banner: scope/permission errors and zero-write completions. */
+.sw-job-error {
+    font-size: 0.76rem; line-height: 1.5; color: #f0b72f;
+    background: rgba(240, 183, 47, 0.08); border: 1px solid rgba(240, 183, 47, 0.35);
+    border-radius: 6px; padding: 0.6rem 0.75rem;
+}
 .sw-progress { height: 6px; border-radius: 4px; background: rgba(255,255,255,0.08); overflow: hidden; }
 .sw-progress-fill { height: 100%; background: linear-gradient(90deg, #1a7f37, #2ea043); border-radius: 4px; transition: width 0.5s ease; }
+/* Full bar but nothing written — must not read as a green success. */
+.sw-progress-fill.sw-progress-empty { background: linear-gradient(90deg, #9e6a03, #bb8009); }
 .sw-footer {
     display: flex; justify-content: flex-end; gap: 0.75rem;
     padding: 1rem 0 1.25rem; position: sticky; bottom: 0;
