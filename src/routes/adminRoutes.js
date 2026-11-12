@@ -7977,8 +7977,8 @@ router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
                 product_name,
                 size,
                 quantity_added: quantity,
-                quantity_before,
-                quantity_after
+                quantity_before: quantityBefore,
+                quantity_after: quantityAfter
             });
             
             adjustmentRecords.push({
@@ -7987,8 +7987,8 @@ router.post('/inventory/bulk-in', verifyToken, async (req, res) => {
                 size,
                 adjustment_type: 'bulk_in',
                 quantity_change: quantity,
-                quantity_before,
-                quantity_after
+                quantity_before: quantityBefore,
+                quantity_after: quantityAfter
             });
         }
 
