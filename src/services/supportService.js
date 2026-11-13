@@ -518,6 +518,60 @@ async function listOrdersByPhone(phone) {
     return Object.values(byId).map(mapCachedOrder).sort((a, b) => (b.placed || 0) - (a.placed || 0));
 }
 
+// ---------- product thumbnails for the storefront order picker ----------
+// Hub items_json and pre-projection cache rows carry no image URL, so fill
+// missing item thumbnails from the same cached Shopify product catalog the
+// Shoppers Hub picker uses, matched on product title. The catalog call rides
+// the service's 10-min cache; on a cold cache we wait only a small budget and
+// let the fetch finish in the background, so a customer never pays catalog
+// build time — the next page load picks up the warmed map.
+const CATALOG_IMG_BUDGET = 1500;
+const SIZE_SUFFIX_RE = /\s*[-\u2013]\s*(?:xxs|xs|s|m|l|xl|xxl|xxxl|free size|one size)$/i;
+// Titles drift in spacing, not letters: catalog says "HENLEY - 001 ( B )",
+// line items say "HENLEY - 001 (B) - XS" — collapse paren padding and
+// whitespace runs so both sides land on the same key.
+const canonTitle = t => String(t || '').toLowerCase()
+    .replace(/\(\s+/g, '(').replace(/\s+\)/g, ')')
+    .replace(/\s+/g, ' ').trim();
+let catalogImgInFlight = null;
+
+async function attachItemImages(orders = []) {
+    if (!orders.some(o => (o.items || []).some(i => !i.img && i.n))) return orders;
+    const Shopify = require('./shopifyService');
+    // One shared in-flight build: concurrent cold requests piggyback on it
+    // instead of each stampeding the Shopify products API.
+    if (!catalogImgInFlight) {
+        catalogImgInFlight = Shopify.getProductCatalog().catch(() => null)
+            .finally(() => { catalogImgInFlight = null; });
+    }
+    let timer;
+    const budget = new Promise(res => { timer = setTimeout(() => res(null), CATALOG_IMG_BUDGET); if (timer.unref) timer.unref(); });
+    const catalog = await Promise.race([catalogImgInFlight, budget]);
+    clearTimeout(timer);
+    if (!catalog || !catalog.length) return orders;
+    const byTitle = new Map();
+    catalog.forEach(p => {
+        const t = canonTitle(p.title);
+        if (t && p.image && !byTitle.has(t)) byTitle.set(t, p.image);
+    });
+    const lookup = (name) => {
+        const k = canonTitle(name);
+        if (!k) return '';
+        if (byTitle.has(k)) return byTitle.get(k);
+        const stripped = k.replace(SIZE_SUFFIX_RE, '');
+        if (stripped && byTitle.has(stripped)) return byTitle.get(stripped);
+        // line-item names sometimes append size/colour after the product title
+        for (const t of byTitle.keys()) {
+            if (k.startsWith(t + ' ') || k.startsWith(t + ' -') || k.startsWith(t + '\u2013')) return byTitle.get(t);
+        }
+        return '';
+    };
+    orders.forEach(o => (o.items || []).forEach(i => {
+        if (!i.img && i.n) i.img = lookup(i.n);
+    }));
+    return orders;
+}
+
 // One order with the hub context merged when the customer's phone is known
 // (the catalog and desk routes pass it). Falls back to the cache, then to a
 // live Shopify read, so nothing here needs the webhook cache to have run.
@@ -1007,7 +1061,7 @@ module.exports = {
     getSetting, getAllSettings, putSetting, fillTemplate,
     riskOf, econOf, slaOf, ticketBase, nextTicketNumber,
     listOrdersByPhone, getOrderByNumber, patchCachedOrder, customerHistory, mapCachedOrder, cacheRowsFor, getCacheRow, listOrderCache,
-    contextFor, normOrderId,
+    contextFor, normOrderId, attachItemImages,
     isWhitelisted, listWhitelist, addWhitelist, removeWhitelist,
     listTicketsByPhone, countTicketsByPhone, getTicket, getTicketByNumber, openTicketForOrder,
     createTicket, updateTicket, listTicketImages, deskQueryTickets, deskStatsAgg, publicTicket, customerTicket

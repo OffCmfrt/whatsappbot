@@ -101,6 +101,7 @@ router.get('/orders', verifyCustomerPhone, async (req, res) => {
                 return res.status(404).json({ error: 'Order not found' });
             }
             const existing = await Support.openTicketForOrder(order.id);
+            await Support.attachItemImages([order]);
             return res.json({
                 orders: [{
                     ...order,
@@ -123,8 +124,12 @@ router.get('/orders', verifyCustomerPhone, async (req, res) => {
             openByOrder[key(t.order_id)] = { id: t.id, number: t.ticket_number, status: t.status };
         });
         const withTickets = orders.map(o => ({ ...o, openTicket: openByOrder[key(o.id)] || null }));
+        const pageRows = withTickets.slice(offset, offset + limit);
+        // Thumbnails are only resolved for the page being returned — the
+        // catalog map is process-cached, so this stays a pure lookup.
+        await Support.attachItemImages(pageRows);
         res.json({
-            orders: withTickets.slice(offset, offset + limit),
+            orders: pageRows,
             page, limit,
             total: withTickets.length,
             hasMore: offset + limit < withTickets.length
