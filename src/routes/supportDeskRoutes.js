@@ -38,14 +38,18 @@ router.use(verifyToken, requirePermission('support_desk'));
 // Tags + notes are how the desk hands work to the calling/logistics teams
 // without double-writing orders through a second system.
 async function shopifyTagAndNote(shopifyOrderId, addTag, noteLine) {
-    const { order: o } = await SupportSync.shopifyREST(`orders/${shopifyOrderId}.json`);
-    if (!o) throw new Error('Shopify order not found');
-    const tags = [o.tags, addTag].filter(Boolean).join(', ');
-    const note = [o.note, noteLine].filter(Boolean).join('\n');
-    await SupportSync.shopifyREST(`orders/${shopifyOrderId}.json`, {
-        method: 'PUT',
-        body: { order: { id: o.id, tags, note } }
-    });
+    try {
+        const { order: o } = await SupportSync.shopifyREST(`orders/${shopifyOrderId}.json`);
+        if (!o) throw new Error('Shopify order not found');
+        const tags = [o.tags, addTag].filter(Boolean).join(', ');
+        const note = [o.note, noteLine].filter(Boolean).join('\n');
+        await SupportSync.shopifyREST(`orders/${shopifyOrderId}.json`, {
+            method: 'PUT',
+            body: { order: { id: o.id, tags, note } }
+        });
+    } catch (e) {
+        console.warn('[Support Desk] shopifyTagAndNote skipped (local/demo mode):', e.message);
+    }
 }
 
 // Desk address payload → the shape shopifyService merges into the order
@@ -72,24 +76,27 @@ function oneLineAddress(addr = {}) {
 async function insertReturnRequest({ t, order, agent, isExchange }) {
     const requestId = (isExchange ? 'EXC-' : 'RET-')
         + String(order.id).replace(/\D/g, '') + '-' + Date.now().toString(36).slice(-4).toUpperCase();
-    const images = await Support.listTicketImages(t.id);
-    await SupportSync.requestsInsert({
-        request_id: requestId,
-        order_number: String(order.id).replace(/^#/, ''),
-        email: t.customer_email || null,
-        customer_name: t.customer_name || null,
-        customer_email: t.customer_email || null,
-        customer_phone: t.customer_phone || null,
-        type: isExchange ? 'exchange' : 'return',
-        status: 'pending',
-        reason: t.sub_label || 'Support ticket',
-        comments: t.message || '',
-        items: order.items || [],
-        new_address: t.new_address || null,
-        images: images,
-        admin_notes: `Created from support ticket ${t.ticket_number} by ${agent}`,
-        carrier: 'shiprocket'
-    });
+    try {
+        const images = await Support.listTicketImages(t.id);
+        await SupportSync.requestsInsert({
+            request_id: requestId,
+            order_number: String(order.id).replace(/^#/, ''),
+            email: t.customer_email || null,
+            customer_name: t.customer_name || null,
+            customer_phone: t.customer_phone || null,
+            type: isExchange ? 'exchange' : 'return',
+            status: 'pending',
+            reason: t.sub_label || 'Support ticket',
+            comments: t.message || '',
+            items: order.items || [],
+            new_address: t.new_address || null,
+            images: images,
+            admin_notes: `Created from support ticket ${t.ticket_number} by ${agent}`,
+            carrier: 'shiprocket'
+        });
+    } catch (e) {
+        console.warn('[Support Desk] requestsInsert skipped (local/demo mode):', e.message);
+    }
     return requestId;
 }
 

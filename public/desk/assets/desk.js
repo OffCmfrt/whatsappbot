@@ -23,6 +23,9 @@
     detail: null,
     settings: { teams: {}, canned: [], templates: {}, sla: {} },
     composer: { mode: 'reply', text: '' },
+    orderExpanded: false,
+    customerExpanded: true,
+    pollInterval: null,
     modal: null,          // { tab: 'sla'|'teams'|'canned'|'templates'|'cost'|'whitelist' }
     mobileShow: 'queue'   // queue | detail (small screens)
   };
@@ -59,7 +62,7 @@
     t.className = 'desk-toast' + (isErr ? ' err' : '');
     t.textContent = msg;
     document.body.appendChild(t);
-    setTimeout(function () { t.remove(); }, 3200);
+    setTimeout(function () { if (t) { t.remove(); t = null; } }, 3200);
   }
   var STAGE_LABELS = {
     unshipped: 'Not shipped', shipped: 'In transit', out_for_delivery: 'Out for delivery',
@@ -73,9 +76,15 @@
 
   // ---------- auth ----------
   function logout() {
+    if (S.pollInterval) {
+      clearInterval(S.pollInterval);
+      S.pollInterval = null;
+    }
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     S.token = '';
+    S.detail = null;
+    S.tickets = [];
     showLogin();
   }
   function showLogin(errMsg) {
@@ -111,10 +120,17 @@
 
   // ---------- boot ----------
   function bootDesk() {
+    if (S.pollInterval) {
+      clearInterval(S.pollInterval);
+      S.pollInterval = null;
+    }
     loadSettings().then(function () {
       renderShell();
       refreshAll();
-      setInterval(function () { refreshStats(); }, 30000);
+      // Memory & network smart polling: pause when tab is in background
+      S.pollInterval = setInterval(function () {
+        if (!document.hidden && S.token) refreshStats();
+      }, 30000);
     });
   }
   function refreshAll() { refreshStats(); loadTickets(); }
@@ -167,14 +183,18 @@
     var root = $('DeskRoot');
     root.innerHTML = '<div class="desk-shell">'
       + '<div class="desk-topbar">'
-      +   '<h1>Support Desk</h1>'
-      +   '<span class="desk-tag">' + esc(S.user) + '</span>'
-      +   '<span class="spacer"></span>'
-      +   '<button class="desk-btn-plain" onclick="DESK.syncOrders()">Sync orders</button>'
-      +   '<button class="desk-btn-plain" onclick="DESK.openSettings()">Settings</button>'
-      +   '<button class="desk-btn-plain" onclick="DESK.logout()">Sign out</button>'
+      +   '<div class="desk-topbar-brand">'
+      +     '<span class="desk-logo-mark">OF</span>'
+      +     '<h1>Support Desk</h1>'
+      +     '<span class="desk-user-tag">' + esc(S.user) + '</span>'
+      +   '</div>'
+      +   '<div class="desk-kpi-strip" id="DeskKpis">' + kpiHtml() + '</div>'
+      +   '<div class="desk-topbar-actions">'
+      +     '<button class="desk-btn-plain" onclick="DESK.syncOrders()">Sync orders</button>'
+      +     '<button class="desk-btn-plain" onclick="DESK.openSettings()">Settings</button>'
+      +     '<button class="desk-btn-plain" onclick="DESK.logout()">Sign out</button>'
+      +   '</div>'
       + '</div>'
-      + '<div class="desk-kpis" id="DeskKpis">' + kpiHtml() + '</div>'
       + '<div class="desk-main">'
       +   '<div class="desk-queue" id="DeskQueue"><div class="desk-loading"><span class="desk-spin"></span>Loading queue\u2026</div></div>'
       +   '<div class="desk-detail" id="DeskDetail"><div class="desk-empty-detail">Select a ticket from the queue to see the full order, issue and conversation context.</div></div>'
@@ -183,15 +203,12 @@
   }
   function kpiHtml() {
     var s = S.stats || {};
-    return kpi(s.open, 'Open')
-      + kpi(s.awaiting, 'Awaiting')
-      + kpi(s.sla, 'Past SLA', s.sla > 0)
-      + kpi(s.requests, 'To approve')
-      + kpi(s.closedToday, 'Closed today')
-      + '<div class="desk-kpi"><div class="n">' + (s.avgCsat == null ? '\u2013' : s.avgCsat + '/5') + '</div><div class="l">Avg CSAT</div></div>';
-  }
-  function kpi(n, l, bad) {
-    return '<div class="desk-kpi' + (bad ? ' bad' : '') + '"><div class="n">' + (n || 0) + '</div><div class="l">' + l + '</div></div>';
+    return '<div class="desk-kpi-pill"><span class="lbl">Open</span><span class="val">' + (s.open || 0) + '</span></div>'
+      + '<div class="desk-kpi-pill"><span class="lbl">Awaiting</span><span class="val">' + (s.awaiting || 0) + '</span></div>'
+      + '<div class="desk-kpi-pill' + (s.sla > 0 ? ' bad' : '') + '"><span class="lbl">Past SLA</span><span class="val">' + (s.sla || 0) + '</span></div>'
+      + '<div class="desk-kpi-pill"><span class="lbl">To approve</span><span class="val">' + (s.requests || 0) + '</span></div>'
+      + '<div class="desk-kpi-pill"><span class="lbl">Closed today</span><span class="val">' + (s.closedToday || 0) + '</span></div>'
+      + '<div class="desk-kpi-pill"><span class="lbl">Avg CSAT</span><span class="val">' + (s.avgCsat == null ? '\u2013' : s.avgCsat + '/5') + '</span></div>';
   }
 
   // ---------- queue ----------
@@ -230,21 +247,66 @@
   }
   function rowHtml(t) {
     var sel = t.id === S.selectedId ? ' selected' : '';
-    var sla = t.sla ? (t.sla.bad
-      ? '<span class="desk-tag sla-bad">' + esc(t.sla.label) + '</span>'
-      : '<span class="desk-tag sla-ok">' + esc(t.sla.label) + '</span>') : '';
-    return '<div class="desk-row' + sel + '" onclick="DESK.select(' + t.id + ')">'
-      + '<div class="desk-row-top"><span class="desk-row-num">' + esc(t.ticket_number) + '</span>'
-      + '<span class="desk-row-time">' + fmtTime(t.updated_at) + '</span></div>'
-      + '<div class="desk-row-cust">' + esc(t.customer_name || t.customer_phone) + '</div>'
-      + '<div class="desk-row-issue">' + esc(t.sub_label || t.reason_label || '') + '</div>'
-      + '<div class="desk-row-meta">'
-      +   (t.priority === 'high' ? '<span class="desk-tag high">High</span>' : '')
-      +   (t.isRequest ? '<span class="desk-tag request">Request</span>' : '')
-      +   (t.channel === 'whatsapp' ? '<span class="desk-tag ch-whatsapp">WA</span>' : '')
-      +   sla
-      +   (t.order ? '<span class="desk-tag">' + esc(STAGE_LABELS[t.order.stage] || t.order.stage) + '</span>' : '')
-      + '</div></div>';
+
+    // Top line: Customer Name in bold alongside Ticket ID in muted monospace on left; timestamp on right
+    var custName = t.customer_name || t.customer_phone || 'Customer';
+    var ticketNum = t.ticket_number ? (String(t.ticket_number).charAt(0) === '#' ? t.ticket_number : '#' + t.ticket_number) : ('#' + t.id);
+    var timeStr = fmtTime(t.updated_at || t.created_at);
+
+    // Middle line: 1-line truncated preview of actual customer issue / subject
+    var previewSubject = '';
+    if (t.sub_label && t.preview && t.preview.text && t.preview.text !== t.sub_label) {
+      previewSubject = t.sub_label + ' \u2014 ' + t.preview.text;
+    } else {
+      previewSubject = t.sub_label || (t.preview && t.preview.text) || t.reason_label || 'Support inquiry';
+    }
+
+    // Bottom line: Single horizontal row of compact, soft-pastel pill badges
+    // 1. Ticket Type badge (REQUEST / ISSUE)
+    var typeBadge = t.isRequest
+      ? '<span class="desk-pill-badge pill-request">REQUEST</span>'
+      : '<span class="desk-pill-badge pill-issue">ISSUE</span>';
+
+    // 2. SLA status badge (e.g. DUE IN 11D / OVERDUE +45M)
+    var slaBadge = '';
+    if (t.sla) {
+      var slaTxt = (t.sla.label || (t.sla.bad ? 'OVERDUE' : 'ON TIME')).toUpperCase();
+      slaBadge = t.sla.bad
+        ? '<span class="desk-pill-badge pill-sla-bad">' + esc(slaTxt) + '</span>'
+        : '<span class="desk-pill-badge pill-sla-ok">' + esc(slaTxt) + '</span>';
+    }
+
+    // 3. Fulfillment status badge (e.g. NOT SHIPPED / DELIVERED / IN TRANSIT)
+    var fBadge = '';
+    if (t.order && t.order.stage) {
+      var stg = String(t.order.stage).toLowerCase();
+      var stgLabel = (STAGE_LABELS[stg] || stg.replace(/_/g, ' ')).toUpperCase();
+      var stgClass = 'pill-stg-default';
+      if (stg === 'delivered') stgClass = 'pill-stg-delivered';
+      else if (stg === 'shipped' || stg === 'out_for_delivery') stgClass = 'pill-stg-transit';
+      else if (stg === 'rto' || stg === 'cancelled') stgClass = 'pill-stg-rto';
+      fBadge = '<span class="desk-pill-badge ' + stgClass + '">' + esc(stgLabel) + '</span>';
+    }
+
+    return '<div class="desk-row' + sel + '" data-id="' + t.id + '" onclick="DESK.select(' + t.id + ')">'
+      + '<div class="desk-row-line desk-row-top">'
+      +   '<div class="desk-row-top-left">'
+      +     '<span class="desk-row-cust">' + esc(custName) + '</span>'
+      +     '<span class="desk-row-num">' + esc(ticketNum) + '</span>'
+      +   '</div>'
+      +   '<span class="desk-row-time">' + esc(timeStr) + '</span>'
+      + '</div>'
+      + '<div class="desk-row-line desk-row-mid">'
+      +   '<span class="desk-row-preview" title="' + esc(previewSubject) + '">' + esc(previewSubject) + '</span>'
+      + '</div>'
+      + '<div class="desk-row-line desk-row-bot">'
+      +   '<div class="desk-pill-strip">'
+      +     typeBadge
+      +     slaBadge
+      +     fBadge
+      +   '</div>'
+      + '</div>'
+      + '</div>';
   }
   function setStatus(st) { S.filters.status = st; loadTickets(); }
   function setFilter(key, val) { S.filters[key] = val; loadTickets(); }
@@ -257,6 +319,8 @@
     if (window.innerWidth < 980) { if (q) q.classList.add('hide-mobile'); if (d) d.classList.remove('hide-mobile'); }
     var rows = document.querySelectorAll('.desk-row');
     rows.forEach(function (r) { r.classList.remove('selected'); });
+    var target = document.querySelector('.desk-row[data-id="' + id + '"]');
+    if (target) target.classList.add('selected');
     loadDetail(id);
   }
   function backToQueue() {
@@ -270,111 +334,516 @@
     var el = $('DeskDetail');
     if (!el || !S.detail) return;
     var d = S.detail, t = d.ticket, o = d.order || {}, h = d.history || {};
-    var custHtml = customerCard(d, t, h);
-    var orderHtml = orderCard(d, t, o);
-    var approveHtml = d.requestKey ? approveCard(d, t) : '';
-    var riskHtml = riskCard(d);
-    var issueHtml = issueCard(d, t);
-    var contextHtml = contextCard(d);
-    var threadHtml = threadCard(d, t);
+
+    // Reorganized Main Workspace:
+    // 1. Unified Ticket Header (Status, Priority, Team, Category, SLA in one clean header)
+    // 2. Action Column (Left): Unified Issue & Reply Box (Problem Statement + Conversation + Reply in ONE card)
+    // 3. Context Column (Right): Customer Details + Order History (hides past orders if 1 order) + Economic Cost & Risk
     el.innerHTML = ''
-      + '<div class="desk-card desk-detail-head">'
-      +   '<button class="desk-btn-plain" style="display:none" id="DeskBack" onclick="DESK.backToQueue()">\u2190 Queue</button>'
-      +   '<span class="t">' + esc(t.ticket_number) + '</span>'
-      +   '<span class="desk-pill ' + t.status + '">' + t.status + '</span>'
-      +   (t.priority === 'high' ? '<span class="desk-tag high">HIGH</span>' : '')
-      +   '<span class="sub">' + esc(t.reason_label || '') + '</span>'
-      +   '<span style="flex:1"></span>'
-      +   priorityControls(t)
-      + '</div>'
-      + '<div class="desk-grid2">' + custHtml + orderHtml + '</div>'
-      + approveHtml
-      + '<div class="desk-grid2">' + riskHtml + issueHtml + '</div>'
-      + contextHtml
-      + threadHtml;
-    if (window.innerWidth < 980) { var b = $('DeskBack'); if (b) b.style.display = ''; }
+      + unifiedTicketHeader(d, t)
+      + '<div class="desk-workspace-split">'
+      +   '<div class="desk-action-col">'
+      +     issueAndConversationCard(d, t)
+      +   '</div>'
+      +   '<div class="desk-context-col">'
+      +     customerCard(d, t, h, o)
+      +     orderHistoryCard(d, t, o)
+      +     riskCard(d)
+      +   '</div>'
+      + '</div>';
+
+    if (window.innerWidth < 980) {
+      var b = $('DeskBack');
+      if (b) b.style.display = 'inline-flex';
+    }
   }
 
   function priorityControls(t) {
     var teams = Object.keys(S.settings.teams);
-    return '<select class="desk-select" style="max-width:130px" onchange="DESK.patchTicket({priority:this.value})">'
+    return '<div class="desk-control-group">'
+      + '<label class="desk-control-lbl">Priority</label>'
+      + '<select class="desk-select desk-select-sm" onchange="DESK.patchTicket({priority:this.value})">'
       + '<option value="normal"' + (t.priority !== 'high' ? ' selected' : '') + '>Normal</option>'
       + '<option value="high"' + (t.priority === 'high' ? ' selected' : '') + '>High</option>'
       + '</select>'
-      + '<select class="desk-select" style="max-width:170px" onchange="DESK.patchTicket({team:this.value})">'
+      + '</div>'
+      + '<div class="desk-control-group">'
+      + '<label class="desk-control-lbl">Team</label>'
+      + '<select class="desk-select desk-select-sm" onchange="DESK.patchTicket({team:this.value})">'
       + '<option value="">Unassigned</option>'
       + teams.map(function (k) { return '<option value="' + k + '"' + (t.team === k ? ' selected' : '') + '>' + esc(S.settings.teams[k]) + '</option>'; }).join('')
-      + '</select>';
-  }
-
-  function customerCard(d, t, h) {
-    var phone10 = String(t.customer_phone || '').replace(/\D/g, '').slice(-10);
-    return '<div class="desk-card"><h3>Customer</h3>'
-      + '<div class="desk-kv"><span class="k">Name</span><span class="v">' + esc(t.customer_name || '\u2013') + '</span></div>'
-      + '<div class="desk-kv"><span class="k">Phone</span><span class="v"><a href="tel:+' + esc(t.customer_phone) + '">+' + esc(t.customer_phone) + '</a></span></div>'
-      + (t.customer_email ? '<div class="desk-kv"><span class="k">Email</span><span class="v">' + esc(t.customer_email) + '</span></div>' : '')
-      + '<div class="desk-kv"><span class="k">Prefers</span><span class="v">' + (t.contact_via === 'phone' ? 'Phone call' : 'WhatsApp') + '</span></div>'
-      + '<div class="desk-kv"><span class="k">History</span><span class="v">' + (h.orders || 0) + ' orders \u00b7 ' + (h.delivered || 0) + ' delivered \u00b7 ' + (h.rto || 0) + ' RTO</span></div>'
-      + '<div class="desk-kv"><span class="k">Tickets</span><span class="v">' + (d.ticketCount || 1) + ' lifetime</span></div>'
-      + '<div style="margin-top:9px"><a class="desk-btn desk-btn-ghost desk-btn-sm" target="_blank" rel="noopener" href="https://wa.me/91' + esc(phone10) + '">WhatsApp chat</a></div>'
+      + '</select>'
       + '</div>';
   }
 
-  function orderCard(d, t, o) {
+  // ── Unified Ticket Header (Single clean header bar: Status, Priority, Team, Category, SLA) ──
+  function unifiedTicketHeader(d, t) {
+    var sla = d.sla || t.sla;
+    var slaHtml = sla ? (sla.bad
+      ? '<span class="desk-pill-badge pill-sla-bad" title="Overdue SLA">' + esc((sla.label || 'OVERDUE').toUpperCase()) + '</span>'
+      : '<span class="desk-pill-badge pill-sla-ok" title="Within SLA">' + esc((sla.label || 'ON TIME').toUpperCase()) + '</span>') : '';
+
+    var chBadge = (t.channel === 'whatsapp')
+      ? '<span class="desk-ch-badge ch-wa"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2z"/></svg> WhatsApp</span>'
+      : '<span class="desk-ch-badge ch-web">Website</span>';
+
+    var statusPill = '<span class="desk-pill ' + esc(t.status) + '"><span class="desk-status-indicator"></span>' + esc(t.status) + '</span>';
+
+    var ticketNum = t.ticket_number ? (String(t.ticket_number).charAt(0) === '#' ? t.ticket_number : '#' + t.ticket_number) : ('#' + t.id);
+
+    return '<div class="desk-unified-head">'
+      + '<div class="desk-unified-head-top">'
+      +   '<div class="desk-head-left">'
+      +     '<button class="desk-btn-plain desk-back-btn" id="DeskBack" style="display:none" onclick="DESK.backToQueue()">&larr; Queue</button>'
+      +     '<span class="desk-ticket-tag">TICKET</span>'
+      +     '<h2 class="desk-head-num">' + esc(ticketNum) + '</h2>'
+      +     statusPill
+      +     slaHtml
+      +     chBadge
+      +   '</div>'
+      +   '<div class="desk-head-controls">'
+      +     priorityControls(t)
+      +   '</div>'
+      + '</div>'
+      + '<div class="desk-unified-head-meta">'
+      +   '<div class="desk-meta-item"><span class="lbl">Category</span><span class="val"><strong>' + esc(t.reason_label || t.reason || 'General') + '</strong> &rsaquo; ' + esc(t.sub_label || t.sub || 'Inquiry') + '</span></div>'
+      +   '<div class="desk-meta-item"><span class="lbl">Assigned Team</span><span class="val">' + esc(t.team && S.settings.teams[t.team] ? S.settings.teams[t.team] : (t.team || 'Unassigned')) + '</span></div>'
+      +   '<div class="desk-meta-item"><span class="lbl">Created</span><span class="val">' + fmtTime(t.created_at) + '</span></div>'
+      +   '<div class="desk-meta-item"><span class="lbl">Updated</span><span class="val">' + fmtTime(t.updated_at) + '</span></div>'
+      + '</div>'
+      + '</div>';
+  }
+
+  // ── 2. Customer Details (Dark Card Design matching mockup) ──
+  function extractLocation(addr) {
+    if (!addr || typeof addr !== 'string') return '\u2013';
+    var parts = addr.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (!parts.length) return '\u2013';
+    var cleanParts = parts.filter(function (p) {
+      if (/^\d{5,6}$/.test(p)) return false;
+      if (/^(india|bharat|in)$/i.test(p)) return false;
+      return true;
+    });
+    if (cleanParts.length >= 2) {
+      return cleanParts[cleanParts.length - 2] + ', ' + cleanParts[cleanParts.length - 1];
+    }
+    if (cleanParts.length === 1) {
+      return cleanParts[0];
+    }
+    return parts.slice(-2).join(', ');
+  }
+
+  function toggleCustomerInfo(forceExpand) {
+    if (typeof forceExpand === 'boolean') {
+      S.customerExpanded = forceExpand;
+    } else {
+      S.customerExpanded = (S.customerExpanded === undefined) ? false : !S.customerExpanded;
+    }
+    var card = $('DeskCustomerCard');
+    if (card) {
+      if (S.customerExpanded) {
+        card.classList.remove('is-collapsed');
+        card.classList.add('is-expanded');
+        var hint = card.querySelector('.desk-cust-collapse-hint');
+        if (hint) hint.textContent = 'Click to collapse';
+      } else {
+        card.classList.remove('is-expanded');
+        card.classList.add('is-collapsed');
+        var hint = card.querySelector('.desk-cust-collapse-hint');
+        if (hint) hint.textContent = 'Click to expand';
+      }
+    }
+  }
+
+  function customerCard(d, t, h, o) {
+    o = o || d.order || {};
+    var name = (t.customer_name || (o && o.customer_name) || 'Customer').toUpperCase();
+    var phone = String(t.customer_phone || (o && o.phone) || '\u2013').replace(/^\+/, '');
+    var email = t.customer_email || (o && o.email) || '\u2013';
+    var location = extractLocation(o.address || t.new_address);
+    var orderNum = String(o.id || t.order_id || '\u2013').replace(/^#/, '');
+    var rawStage = String(o.stage || t.status || 'CONFIRMED').toLowerCase();
+    var orderStatus = 'CONFIRMED';
+    if (rawStage === 'unshipped') {
+      orderStatus = (o.confirmed === false) ? 'UNCONFIRMED' : 'CONFIRMED';
+    } else if (rawStage === 'delivered') {
+      orderStatus = 'DELIVERED';
+    } else if (rawStage === 'shipped') {
+      orderStatus = 'SHIPPED';
+    } else if (rawStage === 'in_transit') {
+      orderStatus = 'IN TRANSIT';
+    } else if (rawStage === 'cancelled') {
+      orderStatus = 'CANCELLED';
+    } else if (STAGE_LABELS[rawStage]) {
+      orderStatus = STAGE_LABELS[rawStage].toUpperCase();
+    } else if (rawStage) {
+      orderStatus = rawStage.toUpperCase();
+    }
+
+    var ctx = d.context || {};
+    var ordersCount = Number(h.orders) || (ctx.orders && ctx.orders.length) || 1;
+    var returnsCount = (ctx.returns && ctx.returns.length) || (ctx.exchanges && ctx.exchanges.length) || Number(h.rto) || 0;
+    var phone10 = phone.replace(/\D/g, '').slice(-10);
+    var isExpanded = (S.customerExpanded !== false);
+
+    return '<div class="desk-card desk-customer-info-card' + (isExpanded ? ' is-expanded' : ' is-collapsed') + '" id="DeskCustomerCard">'
+      // Clickable Header Bar with smooth arrow animation & summary info
+      + '<div class="desk-card-head desk-collapsible-bar" onclick="DESK.toggleCustomerInfo()" role="button" tabindex="0" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();DESK.toggleCustomerInfo();}" title="Click to ' + (isExpanded ? 'collapse' : 'expand') + ' customer details">'
+      +   '<div class="desk-card-title">'
+      +     '<span class="desk-head-icon">&#128100;</span> Customer Info'
+      +     '<span class="desk-collapse-hint desk-cust-collapse-hint">' + (isExpanded ? 'Click to collapse' : 'Click to expand') + '</span>'
+      +   '</div>'
+      +   '<div class="desk-order-bar-actions">'
+      +     '<span class="desk-order-chip">' + esc(name) + '</span>'
+      +     (phone !== '\u2013' ? '<span class="desk-order-chip">+' + esc(phone) + '</span>' : '')
+      +     '<span class="desk-pill stage">' + ordersCount + ' ' + (ordersCount === 1 ? 'order' : 'orders') + '</span>'
+      +     (phone10 ? '<a class="desk-btn desk-btn-wa desk-btn-sm" target="_blank" rel="noopener" href="https://wa.me/91' + esc(phone10) + '" onclick="event.stopPropagation()" title="Open WhatsApp Chat"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2z"/></svg> WhatsApp</a>' : '')
+      +     '<span class="desk-collapse-arrow">&#9662;</span>'
+      +   '</div>'
+      + '</div>'
+      // Smoothly Animated Collapsible Body
+      + '<div class="desk-customer-body" id="DeskCustomerBody">'
+      +   '<div class="desk-ci-panel">'
+      +     '<div class="desk-ci-row"><span class="ci-lbl">Name:</span><span class="ci-val">' + esc(name) + '</span></div>'
+      +     '<div class="desk-ci-row"><span class="ci-lbl">Phone:</span><span class="ci-val">' + (phone !== '\u2013' ? '<a href="tel:+' + esc(phone) + '">' + esc(phone) + '</a>' : '\u2013') + '</span></div>'
+      +     '<div class="desk-ci-row"><span class="ci-lbl">Email:</span><span class="ci-val">' + (email !== '\u2013' ? '<a href="mailto:' + esc(email) + '">' + esc(email) + '</a>' : '\u2013') + '</span></div>'
+      +     '<div class="desk-ci-row"><span class="ci-lbl">Location:</span><span class="ci-val">' + esc(location) + '</span></div>'
+      +     '<div class="desk-ci-row"><span class="ci-lbl">Order:</span><span class="ci-val"><span class="desk-order-chip">#' + esc(orderNum) + '</span></span></div>'
+      +     '<div class="desk-ci-row"><span class="ci-lbl">Status:</span><span class="ci-val"><span class="desk-pill stage">' + esc(orderStatus) + '</span></span></div>'
+      +     '<div class="desk-ci-stats-grid">'
+      +       '<div class="desk-ci-stat-tile">'
+      +         '<div class="ci-stat-num">' + ordersCount + '</div>'
+      +         '<div class="ci-stat-lbl">ORDERS</div>'
+      +       '</div>'
+      +       '<div class="desk-ci-stat-tile">'
+      +         '<div class="ci-stat-num">' + returnsCount + '</div>'
+      +         '<div class="ci-stat-lbl">RETURNS</div>'
+      +       '</div>'
+      +     '</div>'
+      +   '</div>'
+      +   '<div class="desk-ci-actions">'
+      +     '<button type="button" class="desk-btn-ci-outline" onclick="DESK.toggleOrderHistory()">VIEW ORDER DETAILS</button>'
+      +     '<button type="button" class="desk-btn-ci-solid" onclick="DESK.openResolve()">MARK AS RESOLVED</button>'
+      +   '</div>'
+      + '</div>'
+      + '</div>';
+  }
+
+  // ── 3. Order History (Current Order + Past Orders Context, Collapsible) ──
+  function toggleOrderHistory(forceExpand) {
+    if (typeof forceExpand === 'boolean') {
+      S.orderExpanded = forceExpand;
+    } else {
+      S.orderExpanded = !S.orderExpanded;
+    }
+    var card = $('DeskOrderCard');
+    if (card) {
+      if (S.orderExpanded) {
+        card.classList.remove('is-collapsed');
+        card.classList.add('is-expanded');
+        var hint = card.querySelector('.desk-collapse-hint');
+        if (hint) hint.textContent = 'Click to collapse';
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else {
+        card.classList.remove('is-expanded');
+        card.classList.add('is-collapsed');
+        var hint = card.querySelector('.desk-collapse-hint');
+        if (hint) hint.textContent = 'Click to expand';
+      }
+    }
+  }
+
+  function orderHistoryCard(d, t, o) {
     var items = (o.items || []).map(function (i) {
-      return '<tr><td>' + esc(i.n) + (i.v ? ' <span style="color:#999">(' + esc(i.v) + ')</span>' : '') + '</td>'
-        + '<td class="num">x' + (i.q || 1) + '</td><td class="num">' + money(i.p) + '</td></tr>';
+      return '<tr>'
+        + '<td><strong>' + esc(i.n) + '</strong>' + (i.v ? ' <span class="desk-item-var">(' + esc(i.v) + ')</span>' : '') + '</td>'
+        + '<td class="num">x' + (i.q || 1) + '</td>'
+        + '<td class="num">' + money(i.p) + '</td>'
+        + '<td class="num">' + money((i.p || 0) * (i.q || 1)) + '</td>'
+        + '</tr>';
     }).join('');
-    var track = o.awb && /delhivery/i.test(o.courier || '')
-      ? '<a href="https://www.delhivery.com/track/package/' + esc(o.awb) + '" target="_blank" rel="noopener">' + esc(o.awb) + '</a>' : esc(o.awb || '\u2013');
-    return '<div class="desk-card"><h3>Order</h3>'
-      + '<div class="desk-kv"><span class="k">Number</span><span class="v">#' + esc(o.id || t.order_id) + '</span></div>'
-      + '<div class="desk-kv"><span class="k">Payment</span><span class="v">' + esc(o.payment || '\u2013') + ' \u00b7 ' + money(o.total) + '</span></div>'
-      + '<div class="desk-kv"><span class="k">Stage</span><span class="v"><span class="desk-pill stage">' + esc(STAGE_LABELS[o.stage] || o.stage || '\u2013') + '</span></span></div>'
-      + '<div class="desk-kv"><span class="k">Courier</span><span class="v">' + esc(o.courier || '\u2013') + ' \u00b7 ' + track + '</span></div>'
-      + (o.address ? '<div class="desk-kv"><span class="k">Address</span><span class="v">' + esc(o.address) + '</span></div>' : '')
-      + (o.placed ? '<div class="desk-kv"><span class="k">Placed</span><span class="v">' + fmtTime(o.placed) + '</span></div>' : '')
-      + (items ? '<table class="desk-items"><tr><th>Item</th><th class="num">Qty</th><th class="num">Price</th></tr>' + items + '</table>' : '')
-      + '</div>';
-  }
 
-  // Shoppers Hub customer context — the same orders / returns / exchanges /
-  // RTO aggregation the Shoppers Hub chat sidebar renders for this phone.
-  function contextCard(d) {
-    var ctx = d.context;
-    if (!ctx) return '';
-    var tid = String(d.ticket.order_id || '').replace(/^#/, '');
-    var orderRows = (ctx.orders || []).map(function (o) {
-      var st = String(o.status || '').toLowerCase();
+    var track = o.awb && /delhivery/i.test(o.courier || '')
+      ? '<a class="desk-track-link" href="https://www.delhivery.com/track/package/' + esc(o.awb) + '" target="_blank" rel="noopener">' + esc(o.awb) + ' &UpperRightArrow;</a>'
+      : (o.awb ? '<span class="desk-mono">' + esc(o.awb) + '</span>' : '<span class="desk-hint">&ndash;</span>');
+
+    var currentOrderId = String(o.id || t.order_id || '').replace(/^#/, '');
+
+    // Past orders from Shoppers Hub context
+    var ctx = d.context || {};
+    var pastOrders = (ctx.orders || []).map(function (po) {
+      var st = String(po.status || '').toLowerCase();
       var label = STAGE_LABELS[st] || st.replace(/_/g, ' ');
-      var cur = String(o.order_id || '').replace(/^#/, '') === tid;
-      return '<div class="desk-ctx-row' + (cur ? ' current' : '') + '">'
-        + '<span class="o">#' + esc(o.order_id) + (cur ? ' \u00b7 this ticket' : '') + '</span>'
-        + '<span class="s">' + esc(label) + '</span>'
-        + '<span class="t">' + (o.awb ? esc(o.awb) + ' \u00b7 ' : '') + money(o.total) + '</span>'
+      var isCurrent = String(po.order_id || '').replace(/^#/, '') === currentOrderId;
+      var awbStr = po.awb ? (po.courier_name ? po.courier_name + ': ' : '') + po.awb : '';
+      return '<div class="desk-history-row' + (isCurrent ? ' current-order-highlight' : '') + '">'
+        + '<div class="history-main">'
+        +   '<span class="history-id">#' + esc(po.order_id) + '</span>'
+        +   (isCurrent ? '<span class="desk-tag highlight-tag">This Ticket</span>' : '')
+        +   '<span class="desk-pill stage">' + esc(label) + '</span>'
+        + '</div>'
+        + '<div class="history-sub">'
+        +   (awbStr ? '<span class="history-awb">' + esc(awbStr) + '</span> &middot; ' : '')
+        +   (po.created_at ? '<span class="history-date">' + fmtTime(po.created_at) + '</span> &middot; ' : '')
+        +   '<span class="history-total">' + money(po.total) + '</span>'
+        + '</div>'
         + '</div>';
     }).join('');
+
+    // Open/past returns & exchanges
     var reqs = [];
     (ctx.returns || []).forEach(function (r) { reqs.push({ kind: 'Return', r: r }); });
     (ctx.exchanges || []).forEach(function (r) { reqs.push({ kind: 'Exchange', r: r }); });
     reqs.sort(function (a, b) { return new Date(b.r.created_at || 0) - new Date(a.r.created_at || 0); });
-    var reqRows = reqs.slice(0, 6).map(function (x) {
-      return '<div class="desk-ctx-row">'
-        + '<span class="o">' + x.kind + ' #' + esc(x.r.order_id) + '</span>'
-        + '<span class="s">' + esc(String(x.r.status || '').replace(/_/g, ' ')) + '</span>'
-        + '<span class="t">' + (x.r.source === 'portal' ? 'portal' : 'local') + ' \u00b7 ' + fmtTime(x.r.created_at) + '</span>'
+
+    var reqRows = reqs.map(function (x) {
+      return '<div class="desk-history-row req-row">'
+        + '<div class="history-main">'
+        +   '<span class="desk-tag request">' + x.kind + '</span>'
+        +   '<span class="history-id">#' + esc(x.r.order_id) + '</span>'
+        +   '<span class="desk-pill">' + esc(String(x.r.status || '').replace(/_/g, ' ')) + '</span>'
+        + '</div>'
+        + '<div class="history-sub">'
+        +   '<span class="history-src">' + (x.r.source === 'portal' ? 'Portal request' : 'Support request') + '</span> &middot; '
+        +   '<span class="history-date">' + fmtTime(x.r.created_at) + '</span>'
+        + '</div>'
         + '</div>';
     }).join('');
-    var chips = [];
-    if ((ctx.returns || []).length) chips.push(ctx.returns.length + ' return' + (ctx.returns.length > 1 ? 's' : ''));
-    if ((ctx.exchanges || []).length) chips.push(ctx.exchanges.length + ' exchange' + (ctx.exchanges.length > 1 ? 's' : ''));
-    if ((ctx.rto || []).length) chips.push(ctx.rto.length + ' RTO');
-    return '<div class="desk-card"><h3>Customer history <span class="ctx-sub">(Shoppers Hub)</span></h3>'
-      + '<div class="desk-ctx-summary">' + (ctx.orders || []).length + ' orders' + (chips.length ? ' \u00b7 ' + chips.join(' \u00b7 ') : '') + '</div>'
-      + (reqRows ? '<div class="desk-ctx-sec">Open returns &amp; exchanges</div>' + reqRows : '')
-      + (orderRows ? '<div class="desk-ctx-sec">Orders</div>' + orderRows : '')
+
+    var totalPastCount = (ctx.orders || []).length;
+    var isExpanded = !!S.orderExpanded;
+    var orderNum = o.id || t.order_id;
+    var stageLabel = o.stage ? (STAGE_LABELS[o.stage] || o.stage) : '';
+
+    return '<div class="desk-card desk-order-card' + (isExpanded ? ' is-expanded' : ' is-collapsed') + '" id="DeskOrderCard">'
+      // Clickable Order History Bar (goes down and shows details on click)
+      + '<div class="desk-card-head desk-collapsible-bar" onclick="DESK.toggleOrderHistory()" role="button" tabindex="0" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();DESK.toggleOrderHistory();}" title="Click to ' + (isExpanded ? 'collapse' : 'expand') + ' order details">'
+      +   '<div class="desk-card-title">'
+      +     '<span class="desk-head-icon">&#128230;</span> Order History'
+      +     '<span class="desk-collapse-hint">' + (isExpanded ? 'Click to collapse' : 'Click to expand') + '</span>'
+      +   '</div>'
+      +   '<div class="desk-order-bar-actions">'
+      +     (orderNum ? '<span class="desk-order-chip">#' + esc(orderNum) + '</span>' : '')
+      +     (stageLabel ? '<span class="desk-pill stage">' + esc(stageLabel) + '</span>' : '')
+      +     (o.total != null ? '<span class="desk-order-chip price">' + money(o.total) + '</span>' : '')
+      +     '<span class="desk-collapse-arrow">&#9662;</span>'
+      +   '</div>'
+      + '</div>'
+      // Collapsible Order Details Body
+      + '<div class="desk-order-body" id="DeskOrderBody">'
+      // Current Order Details Subsection
+      +   '<div class="desk-current-order-box">'
+      +     '<div class="desk-order-header-row">'
+      +       '<div class="order-id-group">'
+      +         '<span class="order-prefix">Order</span>'
+      +         '<span class="order-num">#' + esc(o.id || t.order_id || '\u2013') + '</span>'
+      +         '<span class="desk-pill stage">' + esc(STAGE_LABELS[o.stage] || o.stage || 'Processing') + '</span>'
+      +       '</div>'
+      +       '<div class="order-finance-group">'
+      +         '<span class="desk-payment-pill">' + esc(o.payment || 'COD') + '</span>'
+      +         '<span class="order-total-price">' + money(o.total) + '</span>'
+      +       '</div>'
+      +     '</div>'
+      +     '<div class="desk-order-details-grid">'
+      +       '<div class="desk-kv"><span class="k">Courier &amp; AWB</span><span class="v">' + esc(o.courier || 'Courier') + ' &middot; ' + track + '</span></div>'
+      +       (o.placed ? '<div class="desk-kv"><span class="k">Order Placed</span><span class="v">' + fmtTime(o.placed) + '</span></div>' : '')
+      +       (o.address ? '<div class="desk-kv full-w"><span class="k">Shipping Address</span><span class="v">&#128205; ' + esc(o.address) + '</span></div>' : '')
+      +     '</div>'
+      +     (items ? '<div class="desk-items-wrap"><div class="desk-items-title">Ordered Items</div><table class="desk-items"><thead><tr><th>Item Details</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th></tr></thead><tbody>' + items + '</tbody></table></div>' : '')
+      +   '</div>'
+      // Past Order History Subsection (hidden when only 1 order exists and no returns/exchanges)
+      +   (totalPastCount > 1 || reqs.length > 0 ? (
+            '<div class="desk-past-orders-section">'
+            + '<div class="desk-section-subhead">Customer Order &amp; Request History <span class="desk-muted">(' + totalPastCount + ' recorded)</span></div>'
+            + (reqRows ? '<div class="desk-sub-section-title">Returns &amp; Exchanges</div><div class="desk-history-list">' + reqRows + '</div>' : '')
+            + (pastOrders ? '<div class="desk-sub-section-title" style="margin-top:10px">Past Orders</div><div class="desk-history-list">' + pastOrders + '</div>' : '')
+            + '</div>'
+          ) : '')
+      +   '</div>'
       + '</div>';
   }
+
+  // ── 4. Unified Conversation & Issue Details Card (Interactive Dialogue Look) ──
+  function issueAndConversationCard(d, t) {
+    var images = t.images || [];
+    var imagesHtml = images.length ? (
+      '<div class="desk-proof-section">'
+      + '<div class="desk-section-subhead">&#128247; Proof &amp; Attachments <span class="desk-muted">(' + images.length + ' image' + (images.length > 1 ? 's' : '') + ')</span></div>'
+      + '<div class="desk-imggrid">'
+      +   images.map(function (u) {
+            return '<div class="desk-proof-thumb" onclick="DESK.lightbox(\'' + esc(u) + '\')" title="Click to enlarge"><img src="' + esc(u) + '" alt="proof"><span class="zoom-icon">&#128269;</span></div>';
+          }).join('')
+      + '</div>'
+      + '</div>'
+    ) : '';
+
+    var approveHtml = d.requestKey ? approveCard(d, t) : '';
+
+    var rawThread = Array.isArray(t.thread) ? t.thread : [];
+    var notes = Array.isArray(t.notes) ? t.notes : [];
+
+    var custName = t.customer_name || 'Customer';
+    var custInitials = custName.split(' ').map(function (w) { return w[0]; }).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'C';
+
+    var chBadge = (t.channel === 'whatsapp')
+      ? '<span class="desk-ch-badge ch-wa"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2z"/></svg> WhatsApp</span>'
+      : '<span class="desk-ch-badge ch-web">Website</span>';
+
+    // Build chronological chat stream
+    // 1. Initial customer problem statement is message #1
+    var threadHtml = '';
+    var hasProblemInThread = rawThread.some(function (m) {
+      return m.role === 'customer' && m.text && m.text.trim() === (t.message || '').trim();
+    });
+
+    var problemText = t.message ? esc(t.message) : '<em>No issue description message recorded.</em>';
+    var problemMeta = '';
+    if (t.preference) {
+      problemMeta += '<div class="desk-bubble-detail"><strong>Requested Preference:</strong> ' + esc(t.preference) + '</div>';
+    }
+    if (t.new_address) {
+      problemMeta += '<div class="desk-bubble-detail"><strong>Requested New Address:</strong> &#128205; ' + esc(t.new_address) + '</div>';
+    }
+    if (t.video_url) {
+      problemMeta += '<div class="desk-bubble-detail">&#127916; <strong>Unboxing Video Proof Attached</strong></div>';
+    }
+    if (imagesHtml) {
+      problemMeta += imagesHtml;
+    }
+
+    // Always render initial customer problem as the conversation starter
+    threadHtml += '<div class="desk-msg-row cust-row">'
+      + '<div class="desk-chat-avatar cust" title="' + esc(custName) + '">' + esc(custInitials) + '</div>'
+      + '<div class="desk-msg-content">'
+      +   '<div class="desk-msg-sender">'
+      +     '<span class="sender-name">' + esc(custName) + '</span>'
+      +     '<span class="sender-pill">Customer</span>'
+      +     '<span class="sender-tag-initial">Initial Issue</span>'
+      +     chBadge
+      +     '<span class="sender-time">' + fmtTime(t.created_at) + '</span>'
+      +   '</div>'
+      +   '<div class="desk-msg-bubble cust-bubble">'
+      +     '<div class="bubble-text">' + problemText + '</div>'
+      +     problemMeta
+      +   '</div>'
+      + '</div>'
+      + '</div>';
+
+    // Follow-up thread messages
+    rawThread.forEach(function (m) {
+      if (hasProblemInThread && m.role === 'customer' && m.text && m.text.trim() === (t.message || '').trim()) {
+        return;
+      }
+      if (m.kind === 'event') {
+        threadHtml += '<div class="desk-ev"><span class="ev-dot">&bull;</span> ' + esc(m.text) + ' &middot; ' + fmtTime(m.at) + '</div>';
+      } else if (m.role === 'customer') {
+        threadHtml += '<div class="desk-msg-row cust-row">'
+          + '<div class="desk-chat-avatar cust" title="' + esc(custName) + '">' + esc(custInitials) + '</div>'
+          + '<div class="desk-msg-content">'
+          +   '<div class="desk-msg-sender">'
+          +     '<span class="sender-name">' + esc(custName) + '</span>'
+          +     '<span class="sender-pill">Customer</span>'
+          +     '<span class="sender-time">' + fmtTime(m.at) + '</span>'
+          +   '</div>'
+          +   '<div class="desk-msg-bubble cust-bubble">'
+          +     '<div class="bubble-text">' + esc(m.text) + '</div>'
+          +   '</div>'
+          + '</div>'
+          + '</div>';
+      } else {
+        var agentName = esc(m.agentId || 'Support Team');
+        var agentInitials = agentName.split(' ').map(function (w) { return w[0]; }).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'ST';
+        threadHtml += '<div class="desk-msg-row agent-row">'
+          + '<div class="desk-msg-content agent-content">'
+          +   '<div class="desk-msg-sender agent-sender">'
+          +     '<span class="sender-time">' + fmtTime(m.at) + '</span>'
+          +     (m.ask ? '<span class="desk-tag ask-tag">Asked Customer</span> ' : '')
+          +     '<span class="sender-pill agent-pill">Support Team</span>'
+          +     '<span class="sender-name">' + agentName + '</span>'
+          +   '</div>'
+          +   '<div class="desk-msg-bubble agent-bubble">'
+          +     '<div class="bubble-text">' + esc(m.text) + '</div>'
+          +   '</div>'
+          + '</div>'
+          + '<div class="desk-chat-avatar agent" title="' + agentName + '">' + esc(agentInitials) + '</div>'
+          + '</div>';
+      }
+    });
+
+    if (t.status === 'closed' && t.resolution_label) {
+      threadHtml += '<div class="desk-ev desk-ev-closed">'
+        + '<strong>Ticket Resolved:</strong> ' + esc(t.resolution_label) + ' &middot; ' + fmtTime(t.resolution_at)
+        + (t.csat ? ' &middot; <span class="desk-csat-stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span> Rated ' + t.csat + '/5' : '')
+        + '</div>';
+    }
+
+    notes.forEach(function (n) {
+      threadHtml += '<div class="desk-msg-row note-row">'
+        + '<div class="desk-msg-note-box">'
+        +   '<div class="desk-note-header">'
+        +     '<span>&#128274; Internal Team Note (Team Only &middot; Hidden from customer)</span>'
+        +     '<span>' + esc(n.agentId || 'Agent') + ' &middot; ' + fmtTime(n.at) + '</span>'
+        +   '</div>'
+        +   '<div class="desk-note-body">' + esc(n.text) + '</div>'
+        + '</div>'
+        + '</div>';
+    });
+
+    var totalMsgCount = 1 + (hasProblemInThread ? rawThread.length - 1 : rawThread.length) + notes.length;
+
+    // Composer (only when not closed)
+    var composerHtml = '';
+    if (t.status !== 'closed') {
+      var canned = S.settings.canned.filter(function (c) { return !c.mode || c.mode === S.composer.mode; });
+      var placeholder = S.composer.mode === 'note'
+        ? 'Write a private internal note for the team (never sent to customer)\u2026'
+        : (S.composer.mode === 'ask'
+            ? 'Ask ' + esc(custName) + ' for missing details or photos\u2026'
+            : 'Type your reply to ' + esc(custName) + '\u2026');
+
+      composerHtml = '<div class="desk-composer">'
+        + '<div class="desk-composer-toolbar">'
+        +   '<div class="desk-composer-modes">'
+        +     '<button class="desk-mode' + (S.composer.mode === 'reply' ? ' active' : '') + '" onclick="DESK.setMode(\'reply\')">Reply</button>'
+        +     '<button class="desk-mode' + (S.composer.mode === 'ask' ? ' active' : '') + '" onclick="DESK.setMode(\'ask\')">Ask Customer</button>'
+        +     '<button class="desk-mode mode-note' + (S.composer.mode === 'note' ? ' active' : '') + '" onclick="DESK.setMode(\'note\')">&#128274; Internal Note</button>'
+        +   '</div>'
+        +   (canned.length ? '<select class="desk-select desk-canned-select" onchange="DESK.useCanned(this.value)"><option value="">&plusmn; Insert Saved Reply\u2026</option>'
+        +     canned.map(function (c) { return '<option value="' + esc(c.key) + '">' + esc(c.label) + '</option>'; }).join('') + '</select>' : '')
+        + '</div>'
+        + '<textarea id="DeskMsg" class="desk-composer-textarea" placeholder="' + esc(placeholder) + '" oninput="DESK.setMsg(this.value)">' + esc(S.composer.text) + '</textarea>'
+        + '<div class="desk-composer-actions">'
+        +   '<button class="desk-btn desk-btn-ghost" onclick="DESK.openResolve()">Resolve &amp; Close Ticket</button>'
+        +   '<button class="desk-btn' + (S.composer.mode === 'note' ? ' desk-btn-note' : '') + '" onclick="DESK.sendComposer()">'
+        +     (S.composer.mode === 'note' ? 'Add Internal Note' : (S.composer.mode === 'ask' ? 'Send Question' : 'Send Reply'))
+        +   '</button>'
+        + '</div>'
+        + '</div>';
+    } else {
+      composerHtml = '<div class="desk-composer-closed">'
+        + '<div class="closed-notice">This ticket is currently <strong>closed</strong>. You can reopen it if the customer responds or needs further help.</div>'
+        + '<button class="desk-btn desk-btn-ghost desk-btn-sm" onclick="DESK.agentReopen()">Reopen Ticket</button>'
+        + '</div>';
+    }
+
+    return '<div class="desk-card desk-issue-card desk-merged-card">'
+      + '<div class="desk-card-head">'
+      +   '<div class="desk-card-title"><span class="desk-head-icon">&#128172;</span> Conversation</div>'
+      +   '<div class="desk-card-head-right" style="display:flex;align-items:center;gap:6px">'
+      +     (d.requestKey ? '<span class="desk-pill-badge pill-request">Action Required</span>' : '')
+      +     '<span class="desk-tag">' + totalMsgCount + ' ' + (totalMsgCount === 1 ? 'message' : 'messages') + '</span>'
+      +   '</div>'
+      + '</div>'
+      + approveHtml
+      + '<div class="desk-thread-wrap">'
+      +   '<div class="desk-thread" id="DeskThread">' + threadHtml + '</div>'
+      + '</div>'
+      + composerHtml
+      + '</div>';
+  }
+
+  function issueDetailsCard(d, t) { return issueAndConversationCard(d, t); }
+  function conversationCard(d, t) { return ''; }
 
   function approveCard(d, t) {
     var key = d.requestKey;
@@ -408,91 +877,37 @@
           + '<div class="desk-set-sub">Approving creates a pending entry in the returns panel; the pickup flow takes over from there.</div>';
         break;
     }
-    return '<div class="desk-card desk-approve"><h3>Request approval</h3>'
-      + '<div class="req-title">' + esc(d.requestLabel) + '</div>'
+    return '<div class="desk-approve">'
+      + '<div class="desk-approve-head"><span class="badge">&#9889; Action Required</span><span class="req-title">' + esc(d.requestLabel) + '</span></div>'
       + inner
       + '<div class="desk-approve-actions">'
-      +   '<button class="desk-btn" onclick="DESK.approve()">Approve</button>'
+      +   '<button class="desk-btn" onclick="DESK.approve()">Approve Request</button>'
       +   '<button class="desk-btn desk-btn-danger" onclick="DESK.decline()">Decline</button>'
       + '</div></div>';
   }
 
+  // ── Dedicated Context: Economic Cost & Risk Analysis Card ──
   function riskCard(d) {
     var r = d.risk || { level: 'Low', factors: [] };
     var econ = d.econ || { rows: [], tip: '' };
-    return '<div class="desk-card"><h3>Cost &amp; risk</h3>'
-      + '<span class="desk-pill risk-' + r.level.toLowerCase() + '">' + r.level + ' risk</span>'
+    var riskLvl = String(r.level || 'Low').toLowerCase();
+    return '<div class="desk-card desk-risk-card">'
+      + '<div class="desk-card-head">'
+      +   '<div class="desk-card-title"><span class="desk-head-icon">&#128200;</span> Economic Cost &amp; Risk</div>'
+      +   '<span class="desk-pill risk-' + esc(riskLvl) + '">' + esc(r.level || 'Low') + ' Risk</span>'
+      + '</div>'
       + '<div class="desk-risk-factors">' + (r.factors || []).map(function (f) { return '<span class="desk-tag">' + esc(f) + '</span>'; }).join('') + '</div>'
-      + '<table class="desk-econ"><tr><th>Option</th><th>Est. cost</th><th>Why</th></tr>'
-      + (econ.rows || []).map(function (row) {
-          return '<tr><td>' + esc(row[0]) + '</td><td class="cost">' + money(row[1]) + '</td><td>' + esc(row[2]) + '</td></tr>';
-        }).join('')
-      + '</table>'
-      + (econ.tip ? '<div class="desk-tip">' + esc(econ.tip) + '</div>' : '')
+      + ((econ.rows && econ.rows.length) ? (
+          '<table class="desk-econ"><thead><tr><th>Resolution Route</th><th>Est. Cost</th><th>Rationale</th></tr></thead><tbody>'
+          + econ.rows.map(function (row) {
+              return '<tr><td><strong>' + esc(row[0]) + '</strong></td><td class="cost">' + money(row[1]) + '</td><td>' + esc(row[2]) + '</td></tr>';
+            }).join('')
+          + '</tbody></table>'
+        ) : '')
+      + (econ.tip ? '<div class="desk-tip">&#128161; <strong>Tip:</strong> ' + esc(econ.tip) + '</div>' : '')
       + '</div>';
   }
 
-  function issueCard(d, t) {
-    return '<div class="desk-card"><h3>Issue details</h3>'
-      + '<div class="desk-kv"><span class="k">Category</span><span class="v">' + esc(t.reason_label || '\u2013') + '</span></div>'
-      + '<div class="desk-kv"><span class="k">Sub-issue</span><span class="v">' + esc(t.sub_label || '\u2013') + '</span></div>'
-      + (t.preference ? '<div class="desk-kv"><span class="k">Preference</span><span class="v">' + esc(t.preference) + '</span></div>' : '')
-      + (t.new_address ? '<div class="desk-kv"><span class="k">New address</span><span class="v">' + esc(t.new_address) + '</span></div>' : '')
-      + (t.video_url ? '<div class="desk-kv"><span class="k">Video</span><span class="v"><a href="' + esc(t.video_url) + '" target="_blank" rel="noopener">Unboxing video</a></span></div>' : '')
-      + (t.message ? '<div class="desk-kv"><span class="k">Description</span><span class="v">' + esc(t.message) + '</span></div>' : '')
-      + ((t.images || []).length ? '<div class="desk-imggrid">' + t.images.map(function (u) { return '<img src="' + esc(u) + '" onclick="DESK.lightbox(\'' + esc(u) + '\')">'; }).join('') + '</div>' : '')
-      + '</div>';
-  }
-
-  function threadCard(d, t) {
-    var thread = Array.isArray(t.thread) ? t.thread : [];
-    var notes = Array.isArray(t.notes) ? t.notes : [];
-    var html = '<div class="desk-card"><h3>Conversation</h3><div class="desk-thread" id="DeskThread">';
-    thread.forEach(function (m) {
-      if (m.kind === 'event') {
-        html += '<div class="desk-ev">' + esc(m.text) + ' \u00b7 ' + fmtTime(m.at) + '</div>';
-      } else if (m.role === 'customer') {
-        html += '<div class="desk-msg desk-msg-cust"><div class="desk-msg-bubble">' + esc(m.text) + '</div>'
-          + '<div class="desk-msg-meta">' + esc(t.customer_name || 'Customer') + ' \u00b7 ' + fmtTime(m.at) + '</div></div>';
-      } else {
-        html += '<div class="desk-msg desk-msg-agent"><div class="desk-msg-bubble">' + esc(m.text) + '</div>'
-          + '<div class="desk-msg-meta">' + esc(m.agentId || 'agent') + (m.ask ? ' \u00b7 asked customer' : '') + ' \u00b7 ' + fmtTime(m.at) + '</div></div>';
-      }
-    });
-    if (t.status === 'closed' && t.resolution_label) {
-      html += '<div class="desk-ev">Closed: ' + esc(t.resolution_label) + ' \u00b7 ' + fmtTime(t.resolution_at) + (t.csat ? ' \u00b7 rated ' + t.csat + '/5' : '') + '</div>';
-    }
-    notes.forEach(function (n) {
-      html += '<div class="desk-msg desk-msg-note"><div class="desk-msg-bubble">' + esc(n.text) + '</div>'
-        + '<div class="desk-msg-meta">Internal note \u00b7 ' + esc(n.agentId || '') + ' \u00b7 ' + fmtTime(n.at) + '</div></div>';
-    });
-    html += '</div>';
-
-    // composer (only when not closed)
-    if (t.status !== 'closed') {
-      var canned = S.settings.canned.filter(function (c) { return !c.mode || c.mode === S.composer.mode; });
-      html += '<div class="desk-composer" style="margin-top:12px">'
-        + '<div class="desk-composer-row">'
-        +   '<button class="desk-mode' + (S.composer.mode === 'reply' ? ' active' : '') + '" onclick="DESK.setMode(\'reply\')">Reply</button>'
-        +   '<button class="desk-mode' + (S.composer.mode === 'ask' ? ' active' : '') + '" onclick="DESK.setMode(\'ask\')">Ask customer</button>'
-        +   '<button class="desk-mode mode-note' + (S.composer.mode === 'note' ? ' active' : '') + '" onclick="DESK.setMode(\'note\')">Internal note</button>'
-        +   '<span style="flex:1"></span>'
-        +   (canned.length ? '<select class="desk-select" onchange="DESK.useCanned(this.value)"><option value="">Saved replies\u2026</option>'
-        +     canned.map(function (c) { return '<option value="' + esc(c.key) + '">' + esc(c.label) + '</option>'; }).join('') + '</select>' : '')
-        + '</div>'
-        + '<textarea id="DeskMsg" placeholder="' + (S.composer.mode === 'note' ? 'Visible to the team only\u2026' : 'Message the customer\u2026') + '" oninput="DESK.setMsg(this.value)">' + esc(S.composer.text) + '</textarea>'
-        + '<div class="desk-composer-row">'
-        +   '<button class="desk-btn desk-btn-ghost" onclick="DESK.openResolve()">Resolve &amp; close</button>'
-        +   '<span style="flex:1"></span>'
-        +   '<button class="desk-btn" onclick="DESK.sendComposer()">' + (S.composer.mode === 'note' ? 'Add note' : 'Send') + '</button>'
-        + '</div></div>';
-    } else {
-      html += '<div class="desk-composer" style="margin-top:10px">'
-        + '<button class="desk-btn desk-btn-ghost desk-btn-sm" onclick="DESK.agentReopen()">Reopen ticket</button></div>';
-    }
-    html += '</div>';
-    return html;
-  }
 
   // ---------- composer actions ----------
   function setMode(m) { S.composer.mode = m; S.composer.text = ''; renderDetail(); }
@@ -541,17 +956,20 @@
     ov.innerHTML = '<div class="desk-modal"><div class="desk-modal-head"><h2>Resolve &amp; close</h2>'
       + '<button class="desk-btn-plain" onclick="DESK.closeModal()">Close</button></div>'
       + '<div class="desk-modal-body">'
-      + '<label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888">Resolution</label>'
+      + '<label class="desk-control-lbl">Resolution</label>'
       + '<select class="desk-select" style="max-width:100%;width:100%;margin:6px 0 12px" onchange="DESK.pickResolution(this.value)">'
       + keys.map(function (k) { return '<option value="' + k + '">' + k.replace(/_/g, ' ') + '</option>'; }).join('')
       + '</select>'
       + (keys[0] === 'store_credit' ? '<div class="desk-set-sub">Create the store credit code in Shopify (titled with the order number) before closing.</div>' : '')
-      + '<label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888">Message to customer</label>'
+      + '<label class="desk-control-lbl">Message to customer</label>'
       + '<textarea id="RslMsg" class="desk-input" style="margin-top:6px;min-height:100px"></textarea>'
       + '</div><div class="desk-modal-foot">'
       + '<button class="desk-btn" onclick="DESK.confirmResolve()">Close ticket</button>'
       + '</div></div>';
     document.body.appendChild(ov);
+    function onEsc(e) { if (e.key === 'Escape') closeModal(); }
+    ov._escHandler = onEsc;
+    document.addEventListener('keydown', onEsc);
     pickResolution(keys[0] || '');
   }
   function pickResolution(key) {
@@ -623,6 +1041,9 @@
       + '<button class="desk-btn-plain" onclick="DESK.closeModal()">Close</button></div>'
       + '<div class="desk-modal-body" id="DeskSetBody"></div></div>';
     document.body.appendChild(ov);
+    function onEsc(e) { if (e.key === 'Escape') closeModal(); }
+    ov._escHandler = onEsc;
+    document.addEventListener('keydown', onEsc);
     renderSettingsTab();
   }
   function setTab(tab) { S.modal.tab = tab; renderSettingsTab(); }
@@ -645,8 +1066,8 @@
           + '<input type="text" value="' + esc(st.teams[k]) + '" data-v data-k="' + esc(k) + '">'
           + '<button class="desk-btn-plain" onclick="DESK.delTeam(\'' + esc(k) + '\')">Remove</button></div></div>';
       }).join('') + '</div>'
-        + '<div class="row" style="display:flex;gap:8px;margin:10px 0"><input id="NewTeamKey" placeholder="key (e.g. social)" style="flex:0 0 160px;padding:8px 10px;border:1px solid #e8e8e8;border-radius:8px;font-size:12.5px">'
-        + '<input id="NewTeamLabel" placeholder="Label (e.g. Social support)" style="flex:1;padding:8px 10px;border:1px solid #e8e8e8;border-radius:8px;font-size:12.5px">'
+        + '<div class="row" style="display:flex;gap:8px;margin:10px 0"><input id="NewTeamKey" class="desk-input" placeholder="key (e.g. social)" style="flex:0 0 160px;margin-bottom:0">'
+        + '<input id="NewTeamLabel" class="desk-input" placeholder="Label (e.g. Social support)" style="flex:1;margin-bottom:0">'
         + '<button class="desk-btn-plain" onclick="DESK.addTeam()">Add</button></div>'
         + '<button class="desk-btn" onclick="DESK.saveTeams()">Save teams</button>';
     } else if (S.modal.tab === 'canned') {
@@ -680,8 +1101,8 @@
     } else if (S.modal.tab === 'whitelist') {
       html += '<div class="desk-set-sub">Only these phone numbers see the Help &amp; Tickets tab in the customer account. Add the number with country code (e.g. 919876543210).</div>'
         + '<div class="row" style="display:flex;gap:8px;margin-bottom:14px">'
-        + '<input id="WlPhone" placeholder="919876543210" style="flex:0 0 200px;padding:9px 11px;border:1px solid #e8e8e8;border-radius:9px;font-size:13px">'
-        + '<input id="WlNote" placeholder="Note (optional)" style="flex:1;padding:9px 11px;border:1px solid #e8e8e8;border-radius:9px;font-size:13px">'
+        + '<input id="WlPhone" class="desk-input" placeholder="919876543210" style="flex:0 0 200px;margin-bottom:0">'
+        + '<input id="WlNote" class="desk-input" placeholder="Note (optional)" style="flex:1;margin-bottom:0">'
         + '<button class="desk-btn" onclick="DESK.addWl()">Add</button></div>'
         + '<div id="WlList"><div class="desk-loading"><span class="desk-spin"></span>Loading\u2026</div></div>';
       loadWhitelist();
@@ -796,7 +1217,10 @@
   }
   function closeModal() {
     var m = $('DeskModal');
-    if (m) m.remove();
+    if (m) {
+      if (m._escHandler) document.removeEventListener('keydown', m._escHandler);
+      m.remove();
+    }
     S.modal = null;
   }
   function syncOrders() {
@@ -809,7 +1233,13 @@
     var lb = document.createElement('div');
     lb.className = 'desk-lightbox';
     lb.innerHTML = '<img src="' + esc(url) + '">';
-    lb.onclick = function () { lb.remove(); };
+    function closeLb() {
+      document.removeEventListener('keydown', onLbKey);
+      if (lb) { lb.remove(); lb = null; }
+    }
+    function onLbKey(e) { if (e.key === 'Escape') closeLb(); }
+    lb.onclick = closeLb;
+    document.addEventListener('keydown', onLbKey);
     document.body.appendChild(lb);
   }
 
@@ -817,6 +1247,8 @@
   window.DESK = {
     login: login, logout: logout, setStatus: setStatus, setFilter: setFilter,
     select: select, backToQueue: backToQueue, patchTicket: patchTicket,
+    toggleCustomerInfo: toggleCustomerInfo,
+    toggleOrderHistory: toggleOrderHistory,
     setMode: setMode, setMsg: setMsg, useCanned: useCanned, sendComposer: sendComposer,
     openResolve: openResolve, pickResolution: pickResolution, confirmResolve: confirmResolve,
     agentReopen: agentReopen, approve: approve, decline: decline,
