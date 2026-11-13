@@ -36,6 +36,9 @@
     activeShifts: null,   // cached GET /support-portals/active-shifts
     distStats: null,
     analytics: null,      // cached GET /support-portals/analytics
+    logins: null,         // cached GET /api/support/admin/login-stats (7d)
+    loginsWide: null,     // days -> wider-window login-stats payloads (30/90)
+    loginWindow: 7,       // days shown in the Logins tab (1 | 7 | 30 | 90)
     shifts: [],           // in-progress shift editor rows (Distribution tab)
     mobileShow: 'queue'   // queue | detail (small screens)
   };
@@ -48,6 +51,20 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   function money(n) { return '\u20B9' + (Math.round(Number(n) || 0)).toLocaleString('en-IN'); }
+  function istDateKey(d) {
+    return Intl.DateTimeFormat ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d) : '';
+  }
+  // "Logins today" for the KPI pill, derived from the cached 7-day trend so
+  // the pill costs no extra request. null = panel data not loaded yet.
+  function loginsToday() {
+    if (!S.logins) return null;
+    var todayKey = istDateKey(new Date());
+    var rows = S.logins.trend || [];
+    for (var i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].date === todayKey) return rows[i].logins;
+    }
+    return 0;
+  }
   function fmtTime(ts) {
     if (!ts) return '';
     return new Date(ts).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -152,6 +169,7 @@
     loadSettings().then(function () {
       renderShell();
       refreshAll();
+      refreshLogins();
       // Memory & network smart polling: pause when tab is in background
       S.pollInterval = setInterval(function () {
         if (!document.hidden && S.token) refreshStats();
@@ -174,6 +192,16 @@
   function refreshStats() {
     api('/api/support/admin/stats').then(function (st) {
       S.stats = st;
+      var k = $('DeskKpis');
+      if (k) k.innerHTML = kpiHtml();
+    }).catch(function () {});
+  }
+  // Website account logins (storefront OTP) come from the returns server via
+  // the desk proxy; loaded once per boot and on demand from the Logins tab —
+  // no need to poll it with the ticket stats.
+  function refreshLogins() {
+    return api('/api/support/admin/login-stats?days=7').then(function (d) {
+      S.logins = d;
       var k = $('DeskKpis');
       if (k) k.innerHTML = kpiHtml();
     }).catch(function () {});
@@ -234,7 +262,8 @@
       + '<div class="desk-kpi-pill' + (s.sla > 0 ? ' bad' : '') + '"><span class="lbl">Past SLA</span><span class="val">' + (s.sla || 0) + '</span></div>'
       + '<div class="desk-kpi-pill"><span class="lbl">To approve</span><span class="val">' + (s.requests || 0) + '</span></div>'
       + '<div class="desk-kpi-pill"><span class="lbl">Closed today</span><span class="val">' + (s.closedToday || 0) + '</span></div>'
-      + '<div class="desk-kpi-pill"><span class="lbl">Avg CSAT</span><span class="val">' + (s.avgCsat == null ? '\u2013' : s.avgCsat + '/5') + '</span></div>';
+      + '<div class="desk-kpi-pill"><span class="lbl">Avg CSAT</span><span class="val">' + (s.avgCsat == null ? '\u2013' : s.avgCsat + '/5') + '</span></div>'
+      + '<div class="desk-kpi-pill desk-kpi-click" title="Website account logins \u2014 click for the full panel" onclick="DESK.openSettings(\'logins\')"><span class="lbl">Logins today</span><span class="val">' + (loginsToday() == null ? '\u2013' : loginsToday()) + '</span></div>';
   }
 
   // ---------- queue ----------
@@ -1076,7 +1105,7 @@
   function renderSettingsTab() {
     var el = $('DeskSetBody');
     if (!el) return;
-    var tabs = [['sla', 'SLA'], ['teams', 'Teams'], ['canned', 'Saved replies'], ['templates', 'Resolutions'], ['cost', 'Cost & risk'], ['portals', 'Portals & Shifts'], ['distribute', 'Distribution'], ['panalytics', 'Analytics'], ['whitelist', 'Access']];
+    var tabs = [['sla', 'SLA'], ['teams', 'Teams'], ['canned', 'Saved replies'], ['templates', 'Resolutions'], ['cost', 'Cost & risk'], ['portals', 'Portals & Shifts'], ['distribute', 'Distribution'], ['panalytics', 'Analytics'], ['logins', 'Logins'], ['whitelist', 'Access']];
     var html = '<div class="desk-set-nav">'
       + tabs.map(function (x) { return '<button class="desk-mode' + (S.modal.tab === x[0] ? ' active' : '') + '" onclick="DESK.setTab(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join('')
       + '</div>';
@@ -1130,6 +1159,8 @@
       html += '<div id="DistributeBody">' + (S.portals ? distributeHtml() : '<div class="desk-loading"><span class="desk-spin"></span>Loading portals\u2026</div>') + '</div>';
     } else if (S.modal.tab === 'panalytics') {
       html += '<div id="AnalyticsBody">' + (S.analytics ? analyticsHtml() : '<div class="desk-loading"><span class="desk-spin"></span>Loading analytics\u2026</div>') + '</div>';
+    } else if (S.modal.tab === 'logins') {
+      html += '<div id="LoginsBody">' + (S.logins ? loginsHtml() : '<div class="desk-loading"><span class="desk-spin"></span>Loading login activity\u2026</div>') + '</div>';
     } else if (S.modal.tab === 'whitelist') {
       html += '<div class="desk-set-sub">Only these phone numbers see the Help &amp; Tickets tab in the customer account. Add the number with country code (e.g. 919876543210).</div>'
         + '<div class="row" style="display:flex;gap:8px;margin-bottom:14px">'
@@ -1144,6 +1175,84 @@
     if (S.modal.tab === 'portals' && !S.portals) loadPortalsTab();
     if (S.modal.tab === 'distribute') loadDistributeTab();
     if (S.modal.tab === 'panalytics' && !S.analytics) loadAnalytics();
+    if (S.modal.tab === 'logins' && !S.logins) loadLoginsTab();
+  }
+
+  // ---------- Logins tab (website account logins, via the returns server) ----------
+  var LOGIN_WINDOWS = [[1, 'Today'], [7, '7 days'], [30, '30 days'], [90, '90 days']];
+  // The boot fetch is 7d; wider windows are fetched lazily and cached per
+  // window in S.loginsWide. "Today" is just the 7d trend sliced client-side.
+  function activeLogins() {
+    var wide = S.loginsWide && S.loginsWide[S.loginWindow];
+    return wide || S.logins || {};
+  }
+  function loginsHtml() {
+    var d = activeLogins();
+    var t = d.totals || {};
+    var win = S.loginWindow || 7;
+    var html = '<div class="desk-set-sub">How many customers logged into their website account (phone OTP) on the Offcomfrt storefront.</div>';
+    html += '<div class="desk-chips">' + LOGIN_WINDOWS.map(function (w) {
+      return '<button class="desk-mode' + (win === w[0] ? ' active' : '') + '" style="min-width:70px" onclick="DESK.setLoginWindow(' + w[0] + ')">' + w[1] + '</button>';
+    }).join('') + '<button class="desk-mode" style="min-width:60px" onclick="DESK.refreshLoginsPanel()" title="Reload">\u21bb</button></div>';
+    var rows = (d.trend || []).slice(-win);
+    var winTotal = 0;
+    rows.forEach(function (r) { winTotal += r.logins || 0; });
+    var winDistinct = 0;
+    rows.forEach(function (r) { winDistinct += r.distinct_logins || 0; });
+    html += '<div class="desk-chips">' + chip(loginsToday() || 0, 'Logged in today') + chip(winTotal, 'Logins in ' + win + 'd') + chip(winDistinct, 'People (per-day) in ' + win + 'd') + chip(t.otp_sent, 'OTPs sent in window') + '</div>';
+    html += '<div class="desk-set-sec">Daily logins (IST)</div>';
+    if (!rows.length) {
+      html += '<div class="desk-set-sub">No logins recorded in this window yet.</div>';
+    } else {
+      var max = 1;
+      rows.forEach(function (r) { if ((r.logins || 0) > max) max = r.logins; });
+      html += '<div class="desk-login-bars">' + rows.map(function (r) {
+        var label = String(r.date || '').slice(5);
+        return '<div class="desk-login-bar" title="' + esc(r.date) + ' \u2014 ' + r.logins + ' logins, ' + (r.distinct_logins || 0) + ' people">'
+          + '<div class="bar" style="height:' + Math.max(3, Math.round((r.logins || 0) / max * 100)) + '%"></div>'
+          + '<span class="n">' + (r.logins || 0) + '</span><span class="x">' + esc(label) + '</span></div>';
+      }).join('') + '</div>';
+    }
+    var recent = (d.recent || []).slice(0, 30);
+    html += '<div class="desk-set-sec">Recent logins</div>';
+    html += recent.length
+      ? '<div class="desk-tblwrap"><table class="desk-tbl"><tr><th>When</th><th>Customer</th><th>Phone</th></tr>'
+        + recent.map(function (r) {
+            return '<tr><td>' + fmtTime(r.at) + '</td><td>' + esc(r.name || '\u2013') + '</td><td style="font-family:monospace">' + esc(r.phone) + '</td></tr>';
+          }).join('') + '</table></div>'
+      : '<div class="desk-set-sub">No logins recorded yet \u2014 the table fills as customers sign in.</div>';
+    return html;
+  }
+  function loadLoginsTab() {
+    refreshLogins().then(function () {
+      renderLoginsBody();
+    });
+  }
+  function setLoginWindow(days) {
+    S.loginWindow = days;
+    if (days > 7 && !(S.loginsWide && S.loginsWide[days])) {
+      var el = $('LoginsBody');
+      if (el) el.innerHTML = '<div class="desk-loading"><span class="desk-spin"></span>Loading login activity\u2026</div>';
+      api('/api/support/admin/login-stats?days=' + days).then(function (d) {
+        S.loginsWide = S.loginsWide || {};
+        S.loginsWide[days] = d;
+        renderSettingsTab();
+      }).catch(function (e) {
+        var b = $('LoginsBody');
+        if (b) b.innerHTML = '<div class="desk-set-sub">' + esc(e.message) + '</div>';
+      });
+    } else {
+      renderSettingsTab();
+    }
+  }
+  function refreshLoginsPanel() {
+    S.loginsWide = null;
+    if (S.loginWindow > 7) { S.loginWindow = 7; }
+    loadLoginsTab();
+  }
+  function renderLoginsBody() {
+    var el = $('LoginsBody');
+    if (el && S.modal && S.modal.tab === 'logins') el.innerHTML = loginsHtml();
   }
   function cf(id, label, val) {
     return '<div><label>' + label + '</label><input id="Cf' + id + '" type="number" step="any" value="' + (val != null ? val : '') + '"></div>';
@@ -1702,6 +1811,7 @@
     copyText: copyText, portalCreate: portalCreate, portalActive: portalActive, portalMax: portalMax,
     portalShiftEdit: portalShiftEdit, portalPass: portalPass, portalSplit: portalSplit,
     portalClear: portalClear, portalDelete: portalDelete,
+    setLoginWindow: setLoginWindow, refreshLoginsPanel: refreshLoginsPanel,
     saveAutopilot: saveAutopilot, distMode: syncDistMode, addShiftRow: addShiftRow, delShiftRow: delShiftRow,
     runDistribute: runDistribute, runRebalance: runRebalance, runTransfer: runTransfer, runAssignUnassigned: runAssignUnassigned
   };

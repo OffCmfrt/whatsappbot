@@ -114,6 +114,81 @@ router.get('/stats', async (req, res) => {
     }
 });
 
+// ── Customer login activity (website account logins) ──
+// The events live in the returns app's database (storefront OTP login writes
+// customer_login_events there), so this proxies the shared internal endpoint
+// over x-internal-token — same contract as SupportSync's other cross-server
+// reads. Purely additive: the desk stays fully functional when the returns
+// server is unreachable (the tab shows the error, the KPI pill goes quiet).
+// Cached 60s per window because the panel polls and several agents may have
+// the desk open at once.
+const loginStatsCache = new Map(); // days -> { at, body }
+router.get('/login-stats', async (req, res) => {
+    try {
+        const days = [1, 7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+        const cached = loginStatsCache.get(days);
+        if (cached && Date.now() - cached.at < 60000) return res.json(cached.body);
+
+        const baseUrl = process.env.RETURNS_SERVER_URL;
+        if (!baseUrl) return res.status(503).json({ error: 'Returns server not configured on this desk' });
+        const axios = require('axios');
+        const resp = await axios.get(`${baseUrl.replace(/\/$/, '')}/api/internal/login-stats`, {
+            params: { days },
+            headers: { 'x-internal-token': process.env.WHATSAPP_INTERNAL_TOKEN || '' },
+            timeout: 15000
+        });
+        const data = resp.data || {};
+        if (!data.success) return res.status(502).json({ error: 'Returns server returned an error' });
+
+        // Enrich recent logins with names from the shared shoppers table —
+        // phones there are stored in wildly different formats, so match on
+        // digits via the functional index idx_ss_phone_digits (same pattern
+        // as customerContextService).
+        const recent = (data.recent || []).slice(0, 50).map(r => ({
+            phone: String(r.phone || '').replace(/\D/g, ''),
+            at: r.at
+        })).filter(r => r.phone.length >= 10);
+        const digitKeys = [...new Set(recent.flatMap(r => {
+            const intl = r.phone.startsWith('91') ? r.phone : '91' + r.phone;
+            const local = r.phone.startsWith('91') && r.phone.length > 10 ? r.phone.slice(2) : r.phone;
+            return [r.phone, intl, local];
+        }))];
+        const nameByDigits = new Map();
+        if (digitKeys.length) {
+            try {
+                const { dbAdapter } = require('../database/db');
+                const placeholders = digitKeys.map((_, i) => '$' + (i + 1)).join(',');
+                const rows = await dbAdapter.query(
+                    `SELECT DISTINCT ON (REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'))
+                            phone, name
+                     FROM store_shoppers
+                     WHERE REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g') IN (${placeholders})
+                       AND NULLIF(TRIM(COALESCE(name, '')), '') IS NOT NULL
+                     ORDER BY REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), created_at DESC`,
+                    digitKeys
+                );
+                for (const row of (rows || [])) {
+                    nameByDigits.set(String(row.phone).replace(/\D/g, ''), row.name);
+                }
+            } catch (nameErr) {
+                console.warn('[Support Desk] login name enrichment skipped:', nameErr.message);
+            }
+        }
+        const body = {
+            ...data,
+            recent: recent.map(r => ({
+                ...r,
+                name: nameByDigits.get(r.phone) || nameByDigits.get(r.phone.replace(/^91/, '')) || null
+            }))
+        };
+        loginStatsCache.set(days, { at: Date.now(), body });
+        res.json(body);
+    } catch (error) {
+        console.error('[Support Desk] login-stats error:', error.message);
+        res.status(502).json({ error: 'Login stats unavailable: ' + error.message });
+    }
+});
+
 // ── Queue with filters ──
 router.get('/tickets', async (req, res) => {
     try {
