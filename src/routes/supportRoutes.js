@@ -85,18 +85,50 @@ router.get('/whitelist-check', async (req, res) => {
 });
 
 // ── Customer orders (read from the webhook-fed cache) ──
+// Paginated: the storefront picker walks pages (default 5 per page) instead of
+// shipping every cached order at once. ?orderId= returns just that one order —
+// the per-order "Need Help?" flow uses it so a match on a later page never
+// forces the whole history down the wire.
 router.get('/orders', verifyCustomerPhone, async (req, res) => {
     try {
+        const key = Support.normOrderId;
+        if (req.query.orderId) {
+            const order = await Support.getOrderByNumber(req.query.orderId, req.customerPhone);
+            // Hub-sourced orders are already inside this phone's customer
+            // context, so ownership is proven by construction (same rule as
+            // /catalog; a cache-only order must match the requesting phone).
+            if (!order || (!order.hubSourced && order.customerKey !== req.customerPhone)) {
+                return res.status(404).json({ error: 'Order not found' });
+            }
+            const existing = await Support.openTicketForOrder(order.id);
+            return res.json({
+                orders: [{
+                    ...order,
+                    openTicket: existing ? { id: existing.id, number: existing.ticket_number, status: existing.status } : null
+                }],
+                page: 1, limit: 1, total: 1, hasMore: false
+            });
+        }
+
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 5, 1), 20);
+        const offset = (page - 1) * limit;
+
         const [orders, tickets] = await Promise.all([
             Support.listOrdersByPhone(req.customerPhone),
             Support.listTicketsByPhone(req.customerPhone)
         ]);
         const openByOrder = {};
-        const key = Support.normOrderId;
         tickets.filter(t => t.status !== 'closed').forEach(t => {
             openByOrder[key(t.order_id)] = { id: t.id, number: t.ticket_number, status: t.status };
         });
-        res.json({ orders: orders.map(o => ({ ...o, openTicket: openByOrder[key(o.id)] || null })) });
+        const withTickets = orders.map(o => ({ ...o, openTicket: openByOrder[key(o.id)] || null }));
+        res.json({
+            orders: withTickets.slice(offset, offset + limit),
+            page, limit,
+            total: withTickets.length,
+            hasMore: offset + limit < withTickets.length
+        });
     } catch (error) {
         console.error('[Support] orders error:', error.message);
         res.status(500).json({ error: 'Failed to load orders' });

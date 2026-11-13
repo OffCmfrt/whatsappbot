@@ -168,7 +168,9 @@ function slimOrderJson(order) {
         paid_via: (order.payment_gateway_names && order.payment_gateway_names[0]) || null,
         line_items: (order.line_items || []).map(i => ({
             name: i.name, title: i.title, variant_title: i.variant_title,
-            quantity: i.quantity, price: i.price
+            quantity: i.quantity, price: i.price,
+            // CDN URL only — the storefront picker shows product thumbnails
+            image: i.image || null
         })),
         shipping_address: addr ? {
             address1: addr.address1, address2: addr.address2, city: addr.city,

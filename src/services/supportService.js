@@ -347,7 +347,8 @@ function mapCachedOrder(row) {
     if (!row) return null;
     const json = row.order_json || {};
     const items = (json.line_items || []).map(i => ({
-        n: i.name || i.title, v: [i.variant_title].filter(Boolean).join(', ') || '', q: i.quantity || 1, p: Number(i.price || 0)
+        n: i.name || i.title, v: [i.variant_title].filter(Boolean).join(', ') || '', q: i.quantity || 1, p: Number(i.price || 0),
+        img: i.image || ''
     }));
     // Stage preference: cache column wins, but replacement bookkeeping may override
     let stage = row.stage || 'unshipped';
@@ -429,7 +430,8 @@ function hubExtrasFor(ctx, orderId) {
 // Full order from the hub row alone (order not in the cache at all).
 function orderFromHub(r, extras) {
     const items = parseHubItems(r.items_json).map(i => ({
-        n: i.name || i.title || 'Item', v: i.variant_title || i.size || '', q: Number(i.quantity) || 1, p: Number(i.price || 0)
+        n: i.name || i.title || 'Item', v: i.variant_title || i.size || '', q: Number(i.quantity) || 1, p: Number(i.price || 0),
+        img: i.image_url || i.image || ''
     }));
     const ts = v => { const t = v ? new Date(v).getTime() : NaN; return Number.isNaN(t) ? null : t; };
     return {
