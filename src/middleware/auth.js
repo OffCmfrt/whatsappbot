@@ -171,7 +171,10 @@ const ROUTE_PERMISSIONS = [
     { prefix: '/settings', key: null },
     { prefix: '/templates', key: null },
     { prefix: '/broadcast', key: null },
-    { prefix: '/support-portals', key: null },
+    // Support Desk agents get READ access to the portal engine (the desk
+    // settings mirror the Command dashboard); mutations + password reads are
+    // locked to the master admin by an extra guard in adminRoutes.
+    { prefix: '/support-portals', key: 'support_desk' },
     { prefix: '/support-tickets/send-image', key: 'send_messages' },
     { prefix: '/support-tickets', key: null },
     { prefix: '/ig-comments', key: null },

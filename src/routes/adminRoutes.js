@@ -4468,12 +4468,33 @@ router.get('/follow-up/campaigns/:id/export', verifyToken, async (req, res) => {
 // Support Portal Management Endpoints
 // ============================================
 
+// Support Desk agents (permission 'support_desk') may READ the portal engine
+// (the desk Settings tabs mirror this dashboard), but every mutation — and the
+// plain-password reveal — stays master-admin only. permissionGate has already
+// verified the JWT and set req.admin for every request under /api/admin.
+router.use('/support-portals', (req, res, next) => {
+    if (req.admin && req.admin.role === 'admin') return next();
+    const isPasswordRead = req.method === 'GET' && /\/\d+\/password(?:\?.*)?$/.test(req.originalUrl || req.url || '');
+    if (req.method === 'GET' && !isPasswordRead) return next();
+    return res.status(403).json({
+        success: false,
+        error: 'Portal and distribution changes are master-admin only. Desk agents have read-only access.'
+    });
+});
+
 // Helper to generate a random slug
 function generateSlug(name) {
     const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     const suffix = Math.random().toString(36).substring(2, 8);
     return `${base}-${suffix}`;
 }
+
+// Bulk distribution tools (auto-distribute / rebalance / assign-unassigned) act
+// on accounts-section tickets only — the storefront Help & Tickets queue the
+// desk shows. Widget-bot tickets share channel='website' (they carry 'WDG-'
+// numbers and are portal-assigned at creation), and WhatsApp/Instagram rows are
+// already separated by channel, so both stay out of every bulk sweep.
+const ACCOUNTS_SCOPE_SQL = "channel = 'website' AND ticket_number NOT LIKE 'WDG-%'";
 
 // Helper to generate a random password
 function generatePassword(length = 10) {
@@ -5019,8 +5040,8 @@ router.post('/support-portals/auto-distribute', verifyToken, async (req, res) =>
             return res.status(400).json({ success: false, error: 'Count must be between 2 and 20' });
         }
 
-        // Build ticket query based on filters
-        let ticketQuery = "SELECT id, created_at, status FROM support_tickets WHERE status = 'open'";
+        // Build ticket query based on filters (accounts-section tickets only)
+        let ticketQuery = `SELECT id, created_at, status FROM support_tickets WHERE status = 'open' AND ${ACCOUNTS_SCOPE_SQL}`;
         const queryParams = [];
 
         // Apply date/time filters
@@ -5417,7 +5438,7 @@ router.post('/support-portals/rebalance', verifyToken, async (req, res) => {
         }
 
         const tickets = await dbAdapter.query(
-            `SELECT id FROM support_tickets WHERE ${whereClause} AND status = 'open' ORDER BY created_at ASC`
+            `SELECT id FROM support_tickets WHERE ${whereClause} AND status = 'open' AND ${ACCOUNTS_SCOPE_SQL} ORDER BY created_at ASC`
         );
 
         if (!tickets || tickets.length === 0) {
@@ -5591,7 +5612,7 @@ router.post('/support-portals/assign-unassigned', verifyToken, async (req, res) 
             return res.status(404).json({ success: false, error: 'Portal not found' });
         }
 
-        let sql = 'UPDATE support_tickets SET portal_id = ? WHERE portal_id IS NULL';
+        let sql = `UPDATE support_tickets SET portal_id = ? WHERE portal_id IS NULL AND ${ACCOUNTS_SCOPE_SQL}`;
         const params = [portalId];
 
         if (status) {
@@ -5600,7 +5621,7 @@ router.post('/support-portals/assign-unassigned', verifyToken, async (req, res) 
         }
 
         if (limit && Number.isFinite(limit)) {
-            sql = `UPDATE support_tickets SET portal_id = ? WHERE id IN (SELECT id FROM support_tickets WHERE portal_id IS NULL${status ? ' AND status = ?' : ''} ORDER BY created_at DESC LIMIT ?)`;
+            sql = `UPDATE support_tickets SET portal_id = ? WHERE id IN (SELECT id FROM support_tickets WHERE portal_id IS NULL AND ${ACCOUNTS_SCOPE_SQL}${status ? ' AND status = ?' : ''} ORDER BY created_at DESC LIMIT ?)`;
             params.length = 0;
             params.push(portalId);
             if (status) params.push(status);

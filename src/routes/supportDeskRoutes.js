@@ -474,7 +474,9 @@ router.post('/upload', upload.array('images', 4), async (req, res) => {
 });
 
 // ── Admin settings ──
-const SETTING_KEYS = ['sla', 'teams', 'canned_responses', 'resolution_templates', 'cost_config'];
+// 'portal_routing' is the desk auto-pilot toggle consumed by
+// Support.autoRouteTicket when a new ticket is created.
+const SETTING_KEYS = ['sla', 'teams', 'canned_responses', 'resolution_templates', 'cost_config', 'portal_routing'];
 router.get('/settings', async (req, res) => {
     try {
         res.json(await Support.getAllSettings());

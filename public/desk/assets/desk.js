@@ -2,7 +2,11 @@
    Offcomfrt Support Desk — agent dashboard
    Login → KPI bar → queue (left) → full ticket context (right).
    Admin settings modal: SLA, teams, canned responses, resolution
-   templates, cost config, whitelist, order sync.
+   templates, cost config, portals & shifts, ticket distribution,
+   portal analytics, whitelist, order sync.
+   The portal tabs mirror the Support Command dashboard via the
+   /api/admin/support-portals engine; mutations stay master-admin
+   only (server-enforced), regular agents see a read-only view.
    ============================================================ */
 (function () {
   'use strict';
@@ -16,17 +20,23 @@
   var S = {
     token: localStorage.getItem(TOKEN_KEY) || '',
     user: localStorage.getItem(USER_KEY) || 'agent',
+    role: '',               // from the JWT: 'admin' = full portal control
     stats: null,
     tickets: [],
     filters: { status: 'open', q: '', team: '', priority: '', category: '' },
     selectedId: null,
     detail: null,
-    settings: { teams: {}, canned: [], templates: {}, sla: {} },
+    settings: { teams: {}, canned: [], templates: {}, sla: {}, cost: {}, portalRouting: {} },
     composer: { mode: 'reply', text: '' },
     orderExpanded: false,
     customerExpanded: true,
     pollInterval: null,
-    modal: null,          // { tab: 'sla'|'teams'|'canned'|'templates'|'cost'|'whitelist' }
+    modal: null,          // { tab: 'sla'|'teams'|'canned'|'templates'|'cost'|'portals'|'distribute'|'panalytics'|'whitelist' }
+    portals: null,        // cached GET /support-portals rows
+    activeShifts: null,   // cached GET /support-portals/active-shifts
+    distStats: null,
+    analytics: null,      // cached GET /support-portals/analytics
+    shifts: [],           // in-progress shift editor rows (Distribution tab)
     mobileShow: 'queue'   // queue | detail (small screens)
   };
 
@@ -50,13 +60,27 @@
       opts.body = JSON.stringify(opts.body);
     }
     return fetch(API + path, opts).then(function (r) {
-      if (r.status === 401) { logout(); throw new Error('Session expired — sign in again'); }
+      if (r.status === 401) { logout(); throw new Error('Session expired \u2014 sign in again'); }
       return r.json().catch(function () { return {}; }).then(function (data) {
         if (!r.ok) { var e = new Error(data.error || ('Request failed (' + r.status + ')')); e.status = r.status; throw e; }
         return data;
       });
     });
   }
+  // The portal engine lives on the admin API (same JWT, mounted /api/admin).
+  // GETs are open to support_desk agents; the server 403s any non-admin write.
+  function adminApi(path, opts) { return api('/api/admin' + path, opts); }
+  // Role comes straight from the signed JWT payload (display only \u2014 the
+  // server is the real gate). 'admin' = master admin = full portal control.
+  function jwtRole(token) {
+    try {
+      var part = String(token || '').split('.')[1] || '';
+      var payload = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
+      return payload.role || '';
+    } catch (e) { return ''; }
+  }
+  function isAdmin() { return S.role === 'admin'; }
+  function dis() { return isAdmin() ? '' : ' disabled'; }
   function toast(msg, isErr) {
     var t = document.createElement('div');
     t.className = 'desk-toast' + (isErr ? ' err' : '');
@@ -124,6 +148,7 @@
       clearInterval(S.pollInterval);
       S.pollInterval = null;
     }
+    S.role = jwtRole(S.token);
     loadSettings().then(function () {
       renderShell();
       refreshAll();
@@ -141,7 +166,8 @@
         canned: st.canned_responses || [],
         templates: st.resolution_templates || {},
         sla: st.sla || {},
-        cost: st.cost_config || {}
+        cost: st.cost_config || {},
+        portalRouting: st.portal_routing || {}
       };
     }).catch(function (e) { toast(e.message, true); });
   }
@@ -1050,7 +1076,7 @@
   function renderSettingsTab() {
     var el = $('DeskSetBody');
     if (!el) return;
-    var tabs = [['sla', 'SLA'], ['teams', 'Teams'], ['canned', 'Saved replies'], ['templates', 'Resolutions'], ['cost', 'Cost & risk'], ['whitelist', 'Access']];
+    var tabs = [['sla', 'SLA'], ['teams', 'Teams'], ['canned', 'Saved replies'], ['templates', 'Resolutions'], ['cost', 'Cost & risk'], ['portals', 'Portals & Shifts'], ['distribute', 'Distribution'], ['panalytics', 'Analytics'], ['whitelist', 'Access']];
     var html = '<div class="desk-set-nav">'
       + tabs.map(function (x) { return '<button class="desk-mode' + (S.modal.tab === x[0] ? ' active' : '') + '" onclick="DESK.setTab(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join('')
       + '</div>';
@@ -1098,6 +1124,12 @@
         + cf('RtoRatePre', 'RTO rate prepaid (0-1)', c.rto_rate_prepaid) + cf('HighValue', 'High value threshold', c.high_value)
         + cf('ReturnWindow', 'Return window (days)', c.return_window_days) + cf('DnrDays', 'DNR report (days)', c.dnr_report_days)
         + '</div><div style="margin-top:14px"><button class="desk-btn" onclick="DESK.saveCost()">Save cost config</button></div>';
+    } else if (S.modal.tab === 'portals') {
+      html += '<div id="PortalsBody">' + (S.portals ? portalsHtml() : '<div class="desk-loading"><span class="desk-spin"></span>Loading portals\u2026</div>') + '</div>';
+    } else if (S.modal.tab === 'distribute') {
+      html += '<div id="DistributeBody">' + (S.portals ? distributeHtml() : '<div class="desk-loading"><span class="desk-spin"></span>Loading portals\u2026</div>') + '</div>';
+    } else if (S.modal.tab === 'panalytics') {
+      html += '<div id="AnalyticsBody">' + (S.analytics ? analyticsHtml() : '<div class="desk-loading"><span class="desk-spin"></span>Loading analytics\u2026</div>') + '</div>';
     } else if (S.modal.tab === 'whitelist') {
       html += '<div class="desk-set-sub">Only these phone numbers see the Help &amp; Tickets tab in the customer account. Add the number with country code (e.g. 919876543210).</div>'
         + '<div class="row" style="display:flex;gap:8px;margin-bottom:14px">'
@@ -1108,6 +1140,10 @@
       loadWhitelist();
     }
     el.innerHTML = html;
+    // Post-render hooks for the async portal tabs (fill containers by id).
+    if (S.modal.tab === 'portals' && !S.portals) loadPortalsTab();
+    if (S.modal.tab === 'distribute') loadDistributeTab();
+    if (S.modal.tab === 'panalytics' && !S.analytics) loadAnalytics();
   }
   function cf(id, label, val) {
     return '<div><label>' + label + '</label><input id="Cf' + id + '" type="number" step="any" value="' + (val != null ? val : '') + '"></div>';
@@ -1243,6 +1279,412 @@
     document.body.appendChild(lb);
   }
 
+  // ============================================================
+  // Portal engine tabs — the desk mirror of the Command dashboard.
+  // Reads go to /api/admin/support-portals (same JWT). Mutations
+  // are master-admin only server-side; non-admins get a read-only
+  // rendering (controls hidden or disabled).
+  // ============================================================
+  function roNote() {
+    return isAdmin() ? '' : '<div class="desk-ro-note">Read-only \u2014 portal changes and ticket distribution are reserved for the master admin.</div>';
+  }
+  function fmtShiftRange(start, end) {
+    if (!start || !end) return '\u2013';
+    return String(start) + '\u2013' + String(end);
+  }
+  function portalShift(p) {
+    var c = p.config || {};
+    if (p.type === 'time_based' && (c.time_start || c.time_end)) return fmtShiftRange(c.time_start, c.time_end);
+    return fmtShiftRange(p.shift_start, p.shift_end);
+  }
+  function utilCell(p) {
+    var open = Number(p.assigned_count || 0), max = Number(p.max_tickets || 0);
+    if (!max) return '<span class="num">' + open + '</span>';
+    var pct = Math.min(100, Math.round(open / max * 100));
+    return '<div class="desk-util"><span class="track"><i style="width:' + pct + '%' + (pct >= 100 ? ';background:var(--desk-red)' : '') + '"></i></span><span>' + open + '/' + max + '</span></div>';
+  }
+  function copyText(t) {
+    if (!navigator.clipboard) return toast('Clipboard unavailable', true);
+    navigator.clipboard.writeText(String(t)).then(function () { toast('Copied'); });
+  }
+  function portalOptions(list) {
+    if (!list.length) return '<option value="">no portals yet</option>';
+    return list.map(function (p) {
+      return '<option value="' + p.id + '">' + esc(p.name) + ' (' + (p.assigned_count || 0) + ' open)</option>';
+    }).join('');
+  }
+
+  // ---------- Portals & Shifts tab ----------
+  function portalsHtml() {
+    var ps = S.portals || [], sh = S.activeShifts || {};
+    var live = (sh.activePortals || []).map(function (p) { return esc(p.name); });
+    var pr = S.settings.portalRouting || {};
+    var html = roNote();
+    html += '<div class="desk-kv"><span class="k">Live shift</span><span class="v">' + (sh.currentTime ? esc(sh.currentTime) + ' server time \u00b7 ' : '') + (live.length ? live.join(', ') : 'no auto-shift portals live right now') + '</span></div>'
+      + '<div class="desk-kv"><span class="k">Auto-pilot</span><span class="v">' + (pr.enabled ? 'ON \u2014 new tickets route to the least-loaded live portal' : 'OFF \u2014 manage it in the Distribution tab') + '</span></div>';
+    if (isAdmin()) {
+      html += '<div class="desk-set-sec">New portal</div><div class="desk-form-grid">'
+        + '<div><label>Name</label><input id="PNewName" placeholder="Morning Desk"></div>'
+        + '<div><label>Type</label><select id="PNewType"><option value="time_based">Shift (time-based)</option><option value="auto">Auto (distributed)</option><option value="manual">Manual</option></select></div>'
+        + '<div><label>Shift start</label><input id="PNewStart" type="time" value="09:00"></div>'
+        + '<div><label>Shift end</label><input id="PNewEnd" type="time" value="17:00"></div>'
+        + '<div><label>Password (optional)</label><input id="PNewPass" placeholder="auto-generated"></div>'
+        + '</div><div style="margin-top:8px"><button class="desk-btn" onclick="DESK.portalCreate()">Create portal</button></div>';
+    }
+    html += '<div class="desk-set-sec">Portals (' + ps.length + ')</div><div class="desk-tblwrap"><table class="desk-tbl"><tr><th>Portal</th><th>Type</th><th>Shift</th><th class="num">Open</th><th class="num">Total</th><th>Load</th><th>Live</th><th></th></tr>';
+    ps.forEach(function (p) {
+      var actions = isAdmin()
+        ? '<button class="desk-btn-plain" onclick="DESK.portalSplit(' + p.id + ')">Split</button>'
+          + '<button class="desk-btn-plain" onclick="DESK.portalMax(' + p.id + ')">Cap</button>'
+          + '<button class="desk-btn-plain" onclick="DESK.portalShiftEdit(' + p.id + ')">Shift</button>'
+          + '<button class="desk-btn-plain" onclick="DESK.portalPass(' + p.id + ')">Pwd</button>'
+          + '<button class="desk-btn-plain" onclick="DESK.portalClear(' + p.id + ')">Clear</button>'
+          + '<button class="desk-btn-plain danger" onclick="DESK.portalDelete(' + p.id + ')">Del</button>'
+        : '';
+      html += '<tr>'
+        + '<td><a href="' + esc(p.url || ('/portal/support/?slug=' + p.slug)) + '" target="_blank" rel="noopener">' + esc(p.name) + '</a></td>'
+        + '<td><span class="desk-tag">' + esc(p.type) + '</span></td>'
+        + '<td>' + esc(portalShift(p)) + '</td>'
+        + '<td class="num">' + (p.assigned_count || 0) + '</td>'
+        + '<td class="num">' + (p.ticket_count || 0) + '</td>'
+        + '<td>' + utilCell(p) + '</td>'
+        + '<td><input type="checkbox"' + (p.is_active ? ' checked' : '') + dis() + ' onchange="DESK.portalActive(' + p.id + ',this.checked)"></td>'
+        + '<td class="acts">' + actions + '</td></tr>';
+    });
+    html += '</table></div>' + (ps.length ? '' : '<div class="desk-set-sub">No portals yet \u2014 create one above or run a distribution from the Distribution tab.</div>');
+    html += '<div id="PortalResult"></div>';
+    return html;
+  }
+  function loadPortalsTab() {
+    var el = $('PortalsBody');
+    if (!el) return;
+    el.innerHTML = '<div class="desk-loading"><span class="desk-spin"></span>Loading portals\u2026</div>';
+    Promise.all([
+      adminApi('/support-portals'),
+      adminApi('/support-portals/active-shifts').catch(function () { return {}; })
+    ]).then(function (res) {
+      S.portals = res[0].portals || [];
+      S.activeShifts = res[1] || {};
+      el.innerHTML = portalsHtml();
+    }).catch(function (e) { el.innerHTML = '<div class="desk-set-sub">' + esc(e.message) + '</div>'; });
+  }
+  function ensurePortals(cb) {
+    if (S.portals) { cb(); return; }
+    adminApi('/support-portals').then(function (d) { S.portals = d.portals || []; cb(); }).catch(function (e) { toast(e.message, true); });
+  }
+  function portalResult(html) { var el = $('PortalResult'); if (el) el.innerHTML = html; }
+  function createdPortalsHtml(list) {
+    if (!list || !list.length) return '';
+    return '<div class="desk-set-sec">New portals</div>' + list.map(function (p) {
+      return '<div class="desk-set-item"><b>' + esc(p.name) + '</b> \u00b7 ' + (p.ticketCount || 0) + ' tickets \u00b7 <a href="' + esc(p.url) + '" target="_blank" rel="noopener">open link</a>' + (p.password ? ' \u00b7 pw <code>' + esc(p.password) + '</code> <button class="desk-btn-plain" onclick="DESK.copyText(\'' + p.password + '\')">Copy</button>' : '') + '</div>';
+    }).join('');
+  }
+  function portalCreate() {
+    var name = (($('PNewName') || {}).value || '').trim();
+    if (!name) return toast('Portal name required', true);
+    var type = ($('PNewType') || {}).value || 'time_based';
+    var body = { name: name, type: type };
+    var pw = (($('PNewPass') || {}).value || '').trim();
+    if (pw) body.password = pw;
+    var st = ($('PNewStart') || {}).value, en = ($('PNewEnd') || {}).value;
+    if (type !== 'manual' && st && en) body.config = { time_start: st, time_end: en, timezone: 'Asia/Kolkata' };
+    adminApi('/support-portals', { method: 'POST', body: body }).then(function (d) {
+      toast('Portal created');
+      S.portals = null; S.activeShifts = null;
+      loadPortalsTab();
+      portalResult('<div class="desk-set-item"><b>' + esc(d.portal.name) + '</b> \u00b7 <a href="' + esc(d.url) + '" target="_blank" rel="noopener">open link</a> \u00b7 pw <code>' + esc(d.password) + '</code> <button class="desk-btn-plain" onclick="DESK.copyText(\'' + d.password + '\')">Copy</button> \u2014 share both with the agent.</div>');
+    }).catch(function (e) { toast(e.message, true); });
+  }
+  function portalActive(id, on) {
+    adminApi('/support-portals/' + id + '/update-rules', { method: 'POST', body: { isActive: on } })
+      .then(function () { toast(on ? 'Portal is live' : 'Portal paused'); })
+      .catch(function (e) { toast(e.message, true); S.portals = null; loadPortalsTab(); });
+  }
+  function portalMax(id) {
+    var v = window.prompt('Max open tickets for this portal (blank = unlimited):');
+    if (v === null) return;
+    var body = {};
+    if (String(v).trim()) {
+      var n = Number(v);
+      if (!Number.isFinite(n) || n < 0) return toast('Enter a number', true);
+      body.maxTickets = n;
+    } else body.maxTickets = null;
+    adminApi('/support-portals/' + id + '/update-rules', { method: 'POST', body: body })
+      .then(function () { toast('Capacity saved'); S.portals = null; loadPortalsTab(); })
+      .catch(function (e) { toast(e.message, true); });
+  }
+  function portalShiftEdit(id) {
+    var v = window.prompt('Shift window (HH:MM-HH:MM, overnight ok \u2014 e.g. 17:00-01:00):');
+    if (!v) return;
+    var m = String(v).trim().match(/^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/);
+    if (!m) return toast('Use HH:MM-HH:MM', true);
+    adminApi('/support-portals/' + id, { method: 'PUT', body: { config: { time_start: m[1], time_end: m[2], timezone: 'Asia/Kolkata' } } })
+      .then(function () { return adminApi('/support-portals/' + id + '/update-rules', { method: 'POST', body: { shiftStart: m[1], shiftEnd: m[2] } }); })
+      .then(function () { toast('Shift window saved'); S.portals = null; S.activeShifts = null; loadPortalsTab(); })
+      .catch(function (e) { toast(e.message, true); });
+  }
+  function portalPass(id) {
+    adminApi('/support-portals/' + id + '/password').then(function (d) {
+      if (!d.password) return toast('Password not stored \u2014 set a new one first', true);
+      portalResult('<div class="desk-set-item">Portal password: <code>' + esc(d.password) + '</code> <button class="desk-btn-plain" onclick="DESK.copyText(\'' + d.password + '\')">Copy</button></div>');
+    }).catch(function (e) { toast(e.message, true); });
+  }
+  function portalSplit(id) {
+    var v = window.prompt('Split this portal\u2019s open tickets across how many new portals? (2-10)');
+    if (!v) return;
+    var count = Number(v);
+    if (!count || count < 2 || count > 10) return toast('Pick a number between 2 and 10', true);
+    adminApi('/support-portals/' + id + '/split', { method: 'POST', body: { count: count, onlyOpen: true } }).then(function (d) {
+      toast(d.message || 'Split done');
+      S.portals = null; S.activeShifts = null; S.distStats = null;
+      loadPortalsTab();
+      portalResult(createdPortalsHtml(d.portals));
+    }).catch(function (e) { toast(e.message, true); });
+  }
+  function portalClear(id) {
+    if (!window.confirm('Unassign every ticket from this portal? They move to the unassigned pool.')) return;
+    adminApi('/support-portals/' + id + '/clear', { method: 'POST', body: {} })
+      .then(function () { toast('Tickets cleared from portal'); S.portals = null; loadPortalsTab(); })
+      .catch(function (e) { toast(e.message, true); });
+  }
+  function portalDelete(id) {
+    if (!window.confirm('Delete this portal? Its tickets fall back to Unassigned.')) return;
+    adminApi('/support-portals/' + id, { method: 'DELETE' })
+      .then(function () { toast('Portal deleted'); S.portals = null; S.activeShifts = null; loadPortalsTab(); })
+      .catch(function (e) { toast(e.message, true); });
+  }
+
+  // ---------- Distribution tab ----------
+  function distributeHtml() {
+    var all = S.portals || [];
+    var dynamic = all.filter(function (p) { return p.type !== 'manual'; });
+    var pr = S.settings.portalRouting || {};
+    var html = roNote();
+    html += '<div class="desk-set-sec">Auto-pilot for new tickets</div>'
+      + '<div class="desk-set-sub">When on, every ticket raised from the website drops straight into the live shift portal with the fewest open tickets (caps respected, IST windows). Unmatched tickets stay unassigned for manual distribution.</div>'
+      + '<label class="desk-check"><input type="checkbox" id="ApEnabled"' + (pr.enabled ? ' checked' : '') + dis() + '> Route new tickets automatically</label>'
+      + '<div style="margin-top:8px"><button class="desk-btn" onclick="DESK.saveAutopilot()"' + (isAdmin() ? '' : ' disabled') + '>Save auto-pilot</button></div>';
+    html += '<div class="desk-set-sec">Create portals &amp; distribute open tickets</div><div class="desk-form-grid">'
+      + '<div><label>Mode</label><select id="DistMode" onchange="DESK.distMode()"><option value="round_robin">Round robin \u2014 N new portals</option><option value="workload_balanced">Least load \u2014 N new portals</option><option value="shift_based">By shift windows</option><option value="filter_based">Filtered slice \u2014 round robin</option></select></div>'
+      + '<div id="DistCountWrap"><label>Portals (2-20)</label><input id="DistCount" type="number" min="2" max="20" value="2"></div>'
+      + '<div><label>Name prefix</label><input id="DistPrefix" placeholder="Agent"></div>'
+      + '<div><label>Max per portal</label><input id="DistMax" type="number" min="1" placeholder="unlimited"></div>'
+      + '<div><label>From date</label><input id="DistFrom" type="date"></div>'
+      + '<div><label>To date</label><input id="DistTo" type="date"></div>'
+      + '<div><label>Time from</label><input id="DistTFrom" type="time"></div>'
+      + '<div><label>Time to</label><input id="DistTTo" type="time"></div>'
+      + '</div><div id="ShiftRows"></div>'
+      + '<div style="margin-top:10px"><button class="desk-btn" onclick="DESK.runDistribute()"' + (isAdmin() ? '' : ' disabled') + '>Distribute now</button></div>'
+      + '<div id="DistResult"></div>';
+    html += '<div class="desk-set-sec">Rebalance across existing portals</div>'
+      + '<div class="desk-filters"><select id="RbScope" onchange="var p=document.getElementById(\'RbPick\');if(p)p.style.display=this.value===\'custom\'?\'\':\'none\'">'
+      + '<option value="">All auto &amp; shift portals</option><option value="morning">Morning window (09-17)</option><option value="evening">Evening window (17-21)</option>'
+      + (dynamic.length > 1 ? '<option value="custom">Choose portals\u2026</option>' : '') + '</select></div>'
+      + '<div id="RbPick" style="display:none">' + dynamic.map(function (p) {
+          return '<label class="desk-check"><input type="checkbox" value="' + p.id + '" data-rb> ' + esc(p.name) + ' (' + (p.assigned_count || 0) + ')</label>';
+        }).join('') + '</div>'
+      + '<div style="margin-top:8px"><button class="desk-btn desk-btn-ghost" onclick="DESK.runRebalance()"' + (isAdmin() ? '' : ' disabled') + '>Rebalance round-robin</button></div>';
+    html += '<div class="desk-set-sec">Transfer tickets between portals</div><div class="desk-form-grid">'
+      + '<div><label>From</label><select id="TrFrom">' + portalOptions(all) + '</select></div>'
+      + '<div><label>To</label><select id="TrTo">' + portalOptions(all) + '</select></div>'
+      + '<div><label>Count (blank = all)</label><input id="TrCount" type="number" min="1"></div>'
+      + '<div><label>Only open</label><select id="TrOpen"><option value="1">Yes</option><option value="0">No \u2014 include follow_up</option></select></div>'
+      + '</div><div style="margin-top:8px"><button class="desk-btn desk-btn-ghost" onclick="DESK.runTransfer()"' + (isAdmin() ? '' : ' disabled') + '>Move oldest first</button></div>';
+    html += '<div class="desk-set-sec">Sweep unassigned tickets</div><div class="desk-form-grid">'
+      + '<div><label>To portal</label><select id="AuTo">' + portalOptions(all) + '</select></div>'
+      + '<div><label>Status</label><select id="AuStatus"><option value="open">Open</option><option value="follow_up">Follow-up</option><option value="">Any</option></select></div>'
+      + '<div><label>Limit (blank = all)</label><input id="AuLimit" type="number" min="1"></div>'
+      + '</div><div style="margin-top:8px"><button class="desk-btn desk-btn-ghost" onclick="DESK.runAssignUnassigned()"' + (isAdmin() ? '' : ' disabled') + '>Assign</button></div>';
+    html += '<div class="desk-set-sec">Recent distributions</div><div id="DistHistory"><div class="desk-loading"><span class="desk-spin"></span>Loading\u2026</div></div>';
+    return html;
+  }
+  function loadDistributeTab() {
+    ensurePortals(function () {
+      var b = $('DistributeBody');
+      if (!b) return;
+      b.innerHTML = distributeHtml();
+      syncDistMode();
+      loadDistHistory();
+    });
+  }
+  function syncDistMode() {
+    var m = (($('DistMode') || {}).value) || 'round_robin';
+    var isShift = m === 'shift_based';
+    var c = $('DistCountWrap'); if (c) c.style.display = isShift ? 'none' : '';
+    var r = $('ShiftRows');
+    if (r) {
+      if (isShift) {
+        if (!S.shifts.length) S.shifts.push({ name: 'Morning', start: '09:00', end: '17:00', portalCount: 1 }, { name: 'Evening', start: '17:00', end: '21:00', portalCount: 1 });
+        r.innerHTML = shiftRowsHtml();
+      } else r.innerHTML = '';
+    }
+  }
+  function shiftRowsHtml() {
+    return '<div class="desk-set-sec">Shift windows</div><div class="desk-set-sub">Tickets inside a window split only across that window\u2019s own portals \u2014 no cross-shift mixing.</div>'
+      + S.shifts.map(function (s, i) {
+          return '<div class="desk-shift-row">'
+            + '<input placeholder="Name" value="' + esc(s.name) + '" data-s="name">'
+            + '<input type="time" value="' + esc(s.start) + '" data-s="start">'
+            + '<input type="time" value="' + esc(s.end) + '" data-s="end">'
+            + '<input type="number" min="1" max="10" value="' + (s.portalCount || 1) + '" data-s="count" title="Portals in this window">'
+            + '<button class="desk-btn-plain danger" onclick="DESK.delShiftRow(' + i + ')">x</button></div>';
+        }).join('')
+      + '<button class="desk-btn-plain" onclick="DESK.addShiftRow()">+ Add window</button>';
+  }
+  function collectShifts() {
+    var out = [];
+    document.querySelectorAll('#ShiftRows .desk-shift-row').forEach(function (row) {
+      var g = function (k) { var el = row.querySelector('[data-s="' + k + '"]'); return el ? el.value : ''; };
+      if (g('start') && g('end')) out.push({ name: g('name') || ('Shift ' + (out.length + 1)), start: g('start'), end: g('end'), portalCount: Number(g('count')) || 1 });
+    });
+    return out;
+  }
+  function addShiftRow() {
+    S.shifts = collectShifts();
+    S.shifts.push({ name: 'Shift ' + (S.shifts.length + 1), start: '09:00', end: '17:00', portalCount: 1 });
+    var r = $('ShiftRows'); if (r) r.innerHTML = shiftRowsHtml();
+  }
+  function delShiftRow(i) {
+    S.shifts = collectShifts();
+    S.shifts.splice(i, 1);
+    var r = $('ShiftRows'); if (r) r.innerHTML = shiftRowsHtml();
+  }
+  function saveAutopilot() {
+    var value = { enabled: !!($('ApEnabled') || {}).checked };
+    api('/api/support/admin/settings/portal_routing', { method: 'PUT', body: { value: value } })
+      .then(function () { toast(value.enabled ? 'Auto-pilot ON \u2014 new tickets route to live shift portals' : 'Auto-pilot off'); return loadSettings(); })
+      .catch(function (e) { toast(e.message, true); });
+  }
+  function runDistribute() {
+    var mode = (($('DistMode') || {}).value) || 'round_robin';
+    var body = { distributionMode: mode, filters: {} };
+    var prefix = (($('DistPrefix') || {}).value || '').trim();
+    if (prefix) body.namePrefix = prefix;
+    var max = Number(($('DistMax') || {}).value);
+    if (max) body.portalSettings = { maxTickets: max };
+    if (($('DistFrom') || {}).value) body.filters.dateFrom = $('DistFrom').value;
+    if (($('DistTo') || {}).value) body.filters.dateTo = $('DistTo').value;
+    if (($('DistTFrom') || {}).value) body.filters.timeFrom = $('DistTFrom').value;
+    if (($('DistTTo') || {}).value) body.filters.timeTo = $('DistTTo').value;
+    if (mode === 'shift_based') {
+      body.shifts = collectShifts();
+      if (!body.shifts.length) return toast('Add at least one shift window', true);
+    } else {
+      body.count = Number(($('DistCount') || {}).value);
+      if (!body.count || body.count < 2 || body.count > 20) return toast('Portals must be 2-20', true);
+    }
+    var el = $('DistResult');
+    if (el) el.innerHTML = '<div class="desk-loading"><span class="desk-spin"></span>Distributing\u2026</div>';
+    adminApi('/support-portals/auto-distribute', { method: 'POST', body: body }).then(function (d) {
+      toast(d.message || 'Distributed');
+      S.portals = null; S.activeShifts = null; S.distStats = null;
+      if (el) el.innerHTML = createdPortalsHtml(d.portals)
+        + (d.stats && d.stats.portalBreakdown ? '<table class="desk-tbl"><tr><th>Portal</th><th class="num">Tickets</th><th class="num">Utilisation</th></tr>'
+          + d.stats.portalBreakdown.map(function (b) {
+              return '<tr><td>' + esc(b.name) + '</td><td class="num">' + b.ticketCount + '</td><td class="num">' + (b.utilization == null ? '\u2013' : b.utilization + '%') + '</td></tr>';
+            }).join('') + '</table>' : '');
+      loadDistHistory();
+    }).catch(function (e) { if (el) el.innerHTML = '<div class="desk-set-sub">' + esc(e.message) + '</div>'; });
+  }
+  function runRebalance() {
+    var scope = (($('RbScope') || {}).value) || '';
+    var body = {};
+    if (scope === 'custom') {
+      var ids = [];
+      document.querySelectorAll('#RbPick [data-rb]:checked').forEach(function (c) { ids.push(Number(c.value)); });
+      if (ids.length < 2) return toast('Tick at least 2 portals', true);
+      body.portalIds = ids;
+    } else if (scope) body.shift = scope;
+    adminApi('/support-portals/rebalance', { method: 'POST', body: body }).then(function (d) {
+      toast(d.message || 'Rebalanced');
+      S.portals = null; S.activeShifts = null;
+      loadDistHistory();
+    }).catch(function (e) { toast(e.message, true); });
+  }
+  function runTransfer() {
+    var from = ($('TrFrom') || {}).value, to = ($('TrTo') || {}).value;
+    if (!from || !to) return toast('Need portals on both sides', true);
+    if (String(from) === String(to)) return toast('Pick different portals', true);
+    var body = { fromPortalId: Number(from), toPortalId: Number(to), onlyOpen: ($('TrOpen') || {}).value !== '0' };
+    var n = Number(($('TrCount') || {}).value);
+    if (n) body.count = n;
+    adminApi('/support-portals/transfer', { method: 'POST', body: body }).then(function (d) {
+      toast(d.message || 'Transferred');
+      S.portals = null;
+      loadDistHistory();
+    }).catch(function (e) { toast(e.message, true); });
+  }
+  function runAssignUnassigned() {
+    var to = ($('AuTo') || {}).value;
+    if (!to) return toast('Pick a portal', true);
+    var body = { portalId: Number(to) };
+    if (($('AuStatus') || {}).value) body.status = $('AuStatus').value;
+    var lim = Number(($('AuLimit') || {}).value);
+    if (lim) body.limit = lim;
+    adminApi('/support-portals/assign-unassigned', { method: 'POST', body: body }).then(function (d) {
+      toast(d.message || 'Assigned');
+      S.portals = null;
+      loadDistHistory();
+    }).catch(function (e) { toast(e.message, true); });
+  }
+  function loadDistHistory() {
+    adminApi('/support-portals/distribution-stats').then(function (d) {
+      var el = $('DistHistory');
+      if (!el) return;
+      var s = d.summary || {};
+      var rows = (d.history || []).slice(0, 12).map(function (h) {
+        return '<tr><td>' + esc(h.distribution_type) + '</td><td class="num">' + h.portal_count + '</td><td class="num">' + h.ticket_count + '</td><td>' + fmtTime(h.created_at) + '</td></tr>';
+      }).join('');
+      el.innerHTML = '<div class="desk-ctx-summary">' + (s.totalDistributions || 0) + ' distributions \u00b7 ' + (s.totalPortals || 0) + ' auto portals \u00b7 avg utilisation ' + (s.avgUtilization || 0) + '%</div>'
+        + (rows ? '<table class="desk-tbl"><tr><th>Type</th><th class="num">Portals</th><th class="num">Tickets</th><th>When</th></tr>' + rows + '</table>' : '<div class="desk-set-sub">No distributions yet.</div>');
+    }).catch(function () {});
+  }
+
+  // ---------- Analytics tab ----------
+  function analyticsHtml() {
+    var a = S.analytics;
+    if (!a) return '<div class="desk-loading"><span class="desk-spin"></span>Loading analytics\u2026</div>';
+    var g = a.global || {};
+    var html = '<div class="desk-chips">' + chip(g.total_cnt, 'Total') + chip(g.open_cnt, 'Open') + chip(g.resolved_cnt, 'Resolved') + chip(g.unread_cnt, 'Unread') + chip(g.today_cnt, 'Today') + '</div>';
+    html += '<div class="desk-set-sec">Per portal</div><div class="desk-tblwrap"><table class="desk-tbl"><tr><th>Portal</th><th>Type</th><th>Shift</th><th>Live</th><th class="num">Total</th><th class="num">Open</th><th class="num">Resolved</th><th class="num">Unread</th><th class="num">Today</th></tr>';
+    (a.portals || []).forEach(function (p) {
+      html += '<tr><td>' + esc(p.name) + '</td><td><span class="desk-tag">' + esc(p.type) + '</span></td>'
+        + '<td>' + esc(fmtShiftRange(p.shift_start, p.shift_end)) + '</td>'
+        + '<td>' + (p.is_active ? 'yes' : '\u2013') + '</td>'
+        + '<td class="num">' + (p.total || 0) + '</td><td class="num">' + (p.open || 0) + '</td><td class="num">' + (p.resolved || 0) + '</td><td class="num">' + (p.unread || 0) + '</td><td class="num">' + (p.today || 0) + '</td></tr>';
+    });
+    html += '</table></div>';
+    html += '<div class="desk-set-sec">Unassigned by IST hour</div>' + hoursHtml((a.unassigned || {}).byHour, 'open_cnt');
+    html += '<div class="desk-set-sec">Today\u2019s volume by IST hour</div>' + hoursHtml(a.todayByHour, 'cnt');
+    var daily = (a.unassigned || {}).daily || [];
+    if (daily.length) {
+      html += '<div class="desk-set-sec">Unassigned \u2014 last 7 days</div><table class="desk-tbl"><tr><th>Day</th><th class="num">Tickets</th><th class="num">Still open</th></tr>'
+        + daily.map(function (r) { return '<tr><td>' + esc(r.ist_date) + '</td><td class="num">' + r.cnt + '</td><td class="num">' + r.open_cnt + '</td></tr>'; }).join('') + '</table>';
+    }
+    return html;
+  }
+  function chip(n, l) { return '<div class="desk-chip"><b>' + (n || 0) + '</b><span>' + l + '</span></div>'; }
+  function hoursHtml(rows, key) {
+    var map = {};
+    (rows || []).forEach(function (r) { map[Number(r.ist_hour)] = Number(r[key] != null ? r[key] : r.cnt) || 0; });
+    var max = 1;
+    for (var i = 0; i < 24; i++) { map[i] = map[i] || 0; if (map[i] > max) max = map[i]; }
+    var bars = '';
+    for (var h = 0; h < 24; h++) {
+      bars += '<div class="b" title="' + h + ':00 \u2014 ' + map[h] + '" style="height:' + Math.max(2, Math.round(map[h] / max * 100)) + '%"></div>';
+    }
+    return '<div class="desk-hours">' + bars + '</div><div class="desk-hours-x"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>';
+  }
+  function loadAnalytics() {
+    var el = $('AnalyticsBody');
+    if (!el) return;
+    el.innerHTML = '<div class="desk-loading"><span class="desk-spin"></span>Loading analytics\u2026</div>';
+    adminApi('/support-portals/analytics').then(function (d) {
+      S.analytics = d;
+      el.innerHTML = analyticsHtml();
+    }).catch(function (e) { el.innerHTML = '<div class="desk-set-sub">' + esc(e.message) + '</div>'; });
+  }
+
   // ---------- exports / boot ----------
   window.DESK = {
     login: login, logout: logout, setStatus: setStatus, setFilter: setFilter,
@@ -1255,7 +1697,13 @@
     openSettings: openSettings, setTab: setTab, saveSla: saveSla, saveTeams: saveTeams,
     addTeam: addTeam, delTeam: delTeam, addCanned: addCanned, delCanned: delCanned, saveCanned: saveCanned,
     saveTemplates: saveTemplates, saveCost: saveCost, addWl: addWl, delWl: delWl,
-    closeModal: closeModal, syncOrders: syncOrders, lightbox: lightbox
+    closeModal: closeModal, syncOrders: syncOrders, lightbox: lightbox,
+    // portal engine tabs
+    copyText: copyText, portalCreate: portalCreate, portalActive: portalActive, portalMax: portalMax,
+    portalShiftEdit: portalShiftEdit, portalPass: portalPass, portalSplit: portalSplit,
+    portalClear: portalClear, portalDelete: portalDelete,
+    saveAutopilot: saveAutopilot, distMode: syncDistMode, addShiftRow: addShiftRow, delShiftRow: delShiftRow,
+    runDistribute: runDistribute, runRebalance: runRebalance, runTransfer: runTransfer, runAssignUnassigned: runAssignUnassigned
   };
 
   if (document.readyState === 'loading') {

@@ -721,6 +721,77 @@ async function openTicketForOrder(orderId) {
     return rows[0] || null;
 }
 
+// ---------- auto-routing (desk "portal_routing" setting) ----------
+// When enabled in Desk settings, a freshly created ticket is dropped straight
+// into the active shift portal carrying the fewest open tickets (oldest
+// portal wins ties), respecting each portal's max_tickets cap. Portals with no
+// shift window are treated as always-on. Shift windows are matched in IST, the
+// same timezone the Command dashboard analytics use. Never throws — routing
+// must not break ticket creation.
+function istMinutesOf(dateLike) {
+    const d = new Date(dateLike);
+    if (isNaN(d)) return null;
+    const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000); // UTC+5:30
+    return ist.getUTCHours() * 60 + ist.getUTCMinutes();
+}
+
+function shiftWindowCovers(mins, start, end) {
+    if (!start || !end) return true; // no window = always active
+    const [sh, sm] = String(start).split(':').map(Number);
+    const [eh, em] = String(end).split(':').map(Number);
+    if ([sh, sm, eh, em].some(n => !Number.isFinite(n))) return true;
+    const s = sh * 60 + sm, e = eh * 60 + em;
+    // Overnight windows (e.g. 17:00-01:00) wrap around midnight
+    return s <= e ? (mins >= s && mins < e) : (mins >= s || mins < e);
+}
+
+async function autoRouteTicket(created) {
+    try {
+        const cfg = await getSetting('portal_routing');
+        if (!cfg || cfg.enabled !== true) return created;
+        const portals = await dbAdapter.query(
+            "SELECT id, name, type, config, shift_start, shift_end, max_tickets FROM support_portals WHERE is_active = true AND type IN ('time_based', 'auto')"
+        );
+        if (!portals.length) return created;
+        const mins = istMinutesOf(created.created_at || new Date());
+        const candidates = portals.filter(p => {
+            let start = p.shift_start, end = p.shift_end;
+            if (p.type === 'time_based') {
+                try {
+                    const c = p.config ? (typeof p.config === 'string' ? JSON.parse(p.config) : p.config) : {};
+                    if (c.time_start || c.time_end) { start = c.time_start; end = c.time_end; }
+                } catch { /* fall back to the shift columns */ }
+            }
+            return mins == null || shiftWindowCovers(mins, start, end);
+        });
+        if (!candidates.length) return created;
+        const ids = candidates.map(p => p.id);
+        const counts = await dbAdapter.query(
+            `SELECT portal_id, COUNT(*)::int AS open_cnt FROM support_tickets
+             WHERE portal_id IN (${ids.map(() => '?').join(',')}) AND status = 'open' GROUP BY portal_id`,
+            ids
+        );
+        const openMap = {};
+        counts.forEach(r => { openMap[r.portal_id] = r.open_cnt; });
+        let best = null, bestCount = Infinity;
+        for (const p of candidates) {
+            const c = openMap[p.id] || 0;
+            if (p.max_tickets && c >= p.max_tickets) continue; // portal is full
+            if (c < bestCount || (c === bestCount && best && p.id < best.id)) {
+                best = p; bestCount = c;
+            }
+        }
+        if (!best) return created;
+        const thread = Array.isArray(created.thread) ? created.thread : [];
+        thread.push({ kind: 'event', text: 'Auto-routed to ' + best.name + ' (shift portal, least load)', at: Date.now() });
+        const updated = await updateTicket(created.id, { portal_id: best.id, thread });
+        return updated || created;
+    } catch (e) {
+        console.warn('[Support] auto-route skipped:', e.message);
+        return created;
+    }
+}
+
 async function createTicket(payload) {
     const now = Date.now();
     const thread = [{ kind: 'event', text: payload.requestLabel ? 'Request raised: ' + payload.requestLabel : 'Ticket raised', at: now }];
@@ -768,6 +839,8 @@ async function createTicket(payload) {
             await dbAdapter.run('INSERT INTO ticket_attachments (ticket_id, image_url) VALUES (?, ?)', [created.id, url]);
         }
     }
+    // Auto-pilot: drop the ticket into the live shift portal when enabled
+    if (created && !payload.portalId) return await autoRouteTicket(created);
     return created;
 }
 
@@ -815,8 +888,17 @@ const QUEUE_COLS = [
     'id', 'ticket_number', 'order_id', 'reason', 'reason_label', 'sub', 'sub_label',
     'status', 'priority', 'team', 'created_at', 'updated_at', 'last_customer_at',
     'resolution_type', 'resolution_label', 'resolution_at', 'csat', 'reopen_count',
-    'thread', 'customer_name', 'customer_phone', 'channel', 'has_images'
+    'thread', 'customer_name', 'customer_phone', 'channel', 'source', 'has_images'
 ].join(', ');
+
+// The desk's default "website" lane is the storefront Help & Tickets (accounts)
+// section only. The website chat widget raises tickets through createWidgetTicket,
+// which shares channel='website' (and for the testbot even source='website'), so
+// widget tickets are told apart by their 'WDG-' ticket-number prefix — every
+// widget path uses it, while account tickets are numbered from the order id.
+// Choosing whatsapp/instagram narrows normally; channel='all' deliberately keeps
+// widget tickets visible so nothing becomes unreachable from the desk.
+const DESK_WEBSITE_COND = "channel = 'website' AND ticket_number NOT LIKE 'WDG-%'";
 
 // Customer-safe detail projection. The desk row carries internal columns
 // (notes, assigned_to, the customer snapshot in history) that must never be
@@ -842,7 +924,8 @@ async function deskQueryTickets(filters = {}) {
     const conditions = [];
     const params = [];
     const ch = filters.channel === 'all' ? null : (filters.channel || 'website');
-    if (ch) { conditions.push('channel = ?'); params.push(ch); }
+    if (ch === 'website') { conditions.push(DESK_WEBSITE_COND); }
+    else if (ch) { conditions.push('channel = ?'); params.push(ch); }
     if (filters.status && filters.status !== 'all') { conditions.push('status = ?'); params.push(filters.status); }
     if (filters.team) { conditions.push('team = ?'); params.push(filters.team); }
     if (filters.priority) { conditions.push('priority = ?'); params.push(filters.priority); }
@@ -888,7 +971,8 @@ async function deskStatsAgg(slaCfg = {}, channel = 'website', requestPairs = [])
     params.push(todayStart.toISOString());
 
     const conditions = [];
-    if (ch) { conditions.push('channel = ?'); params.push(ch); }
+    if (ch === 'website') { conditions.push(DESK_WEBSITE_COND); }
+    else if (ch) { conditions.push('channel = ?'); params.push(ch); }
 
     const rows = await dbAdapter.query(
         `SELECT
