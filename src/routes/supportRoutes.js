@@ -36,7 +36,10 @@ async function verifyCustomerPhone(req, res, next) {
         if (!raw) return res.status(401).json({ error: 'Phone required' });
         const phone = Support.normalizePhone(raw);
         if (!phone || phone.length < 10) return res.status(401).json({ error: 'Invalid phone' });
-        if (!(await Support.isWhitelisted(phone))) {
+        // 60s in-memory whitelist snapshot (same one the webhooks use) — every
+        // customer request used to pay a DB round trip here, which dominates
+        // latency when the Render pool is cold. Revocations take up to 60s.
+        if (!(await SupportSync.isWhitelistedCached(phone))) {
             return res.status(403).json({ error: 'Support access not enabled' });
         }
         req.customerPhone = phone;
@@ -56,7 +59,7 @@ router.get('/whitelist-check', async (req, res) => {
     try {
         const phone = Support.normalizePhone(req.query.phone || '');
         if (!phone) return res.json({ allowed: false });
-        if (!(await Support.isWhitelisted(phone))) return res.json({ allowed: false });
+        if (!(await SupportSync.isWhitelistedCached(phone))) return res.json({ allowed: false });
 
         const cached = verifiedCustomers.get(phone);
         if (cached && Date.now() - cached.ts < VERIFY_TTL) {

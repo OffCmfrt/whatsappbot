@@ -1194,6 +1194,24 @@ async function initializePerformanceIndexes() {
     // it INCLUDEs items_json) and the count took 4.4s instead of ~140ms. ──
     await pool.query('CREATE INDEX IF NOT EXISTS idx_ss_status_order ON store_shoppers(status, order_id)');
 
+    // ── store_shoppers: functional index on digits-only phone. customerContextService
+    // matches phones via REGEXP_REPLACE, which no plain index can serve — the planner
+    // walked the whole table by created_at and regexp-filtered all ~52k rows (2-6s per
+    // customer-context rebuild, directly on the storefront Help tab's critical path).
+    // EXPLAIN-verified: the CTE-shaped query Bitmap Index Scans this in ~3ms.
+    // Built CONCURRENTLY (no write lock on the hot shoppers table), so it needs a
+    // dedicated client and must never run inside a transaction.
+    try {
+      const idxClient = await pool.connect();
+      try {
+        await idxClient.query("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ss_phone_digits ON store_shoppers (regexp_replace(COALESCE(phone, '')::text, '[^0-9]', '', 'g'))");
+      } finally {
+        idxClient.release();
+      }
+    } catch (idxErr) {
+      console.warn('⚠️ idx_ss_phone_digits build skipped:', idxErr.message);
+    }
+
     // ── shipments: sort key for the Shipped Orders list (was a full seq scan +
     // sort of 34k rows on every refresh: ~900ms) ──
     await pool.query('CREATE INDEX IF NOT EXISTS idx_shipments_created_at ON shipments(created_at DESC)');

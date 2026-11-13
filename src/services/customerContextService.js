@@ -44,7 +44,19 @@ async function build(rawPhone) {
 
     // 1) All orders from store_shoppers (authoritative order source)
     //    Enriched with AWB/tracking from orders table.
-    const ordersRows = await dbAdapter.query(`
+    // Runs concurrently with the returns/exchanges scans below — the three
+    // are independent, and one cold rebuild of this context sits on the
+    // storefront Help tab's critical path.
+    // The phone match is isolated in a MATERIALIZED CTE on the digits-only
+    // functional index (idx_ss_phone_digits): with ORDER BY in the same
+    // block the planner prefers a full created_at walk and regexp-filters
+    // all ~52k rows (2-6s); this shape runs in single-digit ms.
+    const [ordersRows, localReturns, localExchanges] = await Promise.all([
+        dbAdapter.query(`
+        WITH matched AS MATERIALIZED (
+            SELECT id FROM store_shoppers s
+            WHERE REGEXP_REPLACE(COALESCE(s.phone,''),'[^0-9]','','g') IN ($1, $2, $3)
+        )
         SELECT
             s.order_id, s.name, s.phone, s.email, s.status AS shopper_status,
             s.items_json, s.order_total, s.payment_method, s.delivery_type,
@@ -52,28 +64,29 @@ async function build(rawPhone) {
             o.awb, o.tracking_url, o.courier_name,
             o.status AS order_status, o.delivered_at
         FROM store_shoppers s
+        JOIN matched m ON m.id = s.id
         LEFT JOIN orders o ON o.order_id = s.order_id
-        WHERE REGEXP_REPLACE(COALESCE(s.phone,''),'[^0-9]','','g') IN ($1, $2)
-           OR REGEXP_REPLACE(COALESCE(s.phone,''),'[^0-9]','','g') = $3
         ORDER BY s.created_at DESC
         LIMIT 50
-    `, [phone, `91${phone}`, phone.replace(/^91/, '')]);
+    `, [phone, `91${phone}`, phone.replace(/^91/, '')]).catch(() => null),
 
     // 2) Local returns
-    const localReturns = await dbAdapter.query(`
+    dbAdapter.query(`
         SELECT return_id, order_id, items, reason, status, refund_amount, refund_status, created_at, updated_at
         FROM returns
         WHERE REGEXP_REPLACE(COALESCE(customer_phone,''),'[^0-9]','','g') IN ($1, $2, $3)
         ORDER BY created_at DESC LIMIT 30
-    `, [phone, `91${phone}`, phone.replace(/^91/, '')]);
+    `, [phone, `91${phone}`, phone.replace(/^91/, '')]),
 
     // 3) Local exchanges
-    const localExchanges = await dbAdapter.query(`
+    dbAdapter.query(`
         SELECT exchange_id, order_id, old_items, new_items, reason, status, price_difference, payment_status, created_at, updated_at
         FROM exchanges
         WHERE REGEXP_REPLACE(COALESCE(customer_phone,''),'[^0-9]','','g') IN ($1, $2, $3)
         ORDER BY created_at DESC LIMIT 30
-    `, [phone, `91${phone}`, phone.replace(/^91/, '')]);
+    `, [phone, `91${phone}`, phone.replace(/^91/, '')])
+    ]);
+    if (!ordersRows) throw new Error('customer context order scan failed');
 
     // 4) External returns server pipeline (Shopify portal submissions)
     let rsRequests = [];
