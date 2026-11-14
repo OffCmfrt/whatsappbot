@@ -6,7 +6,7 @@
     <title>Shopper Management | OFFCOMFRT</title>
     <!-- Google Fonts: Outfit, Inter, Archivo Narrow -->
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=Inter:wght@400;500;600&family=Archivo+Narrow:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?build=20261112-shopifysync4">
+        <link rel="stylesheet" href="/shoppers/assets/shoppers-hub.css?build=20261114-itemreq2">
 </head>
 <body class="dark-theme">
     <!-- Login View -->
@@ -64,6 +64,11 @@
                     <button id="shippedOrdersBtn" class="sidebar-item" data-nav="shipped" title="Shipped Orders">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
                         <span>Shipped</span>
+                    </button>
+                    <button id="itemRequestsBtn" class="sidebar-item" title="Item change requests from the website">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>
+                        <span>Item Requests</span>
+                        <span id="itemReqBadge" class="sidebar-badge" style="display: none;">0</span>
                     </button>
                 </div>
                 <div class="sidebar-section">
@@ -315,6 +320,7 @@
                     </div>
                     <div id="editAddrSyncStatus" class="addr-sync-status"></div>
                 </div>
+                <div id="editReqBanner"></div>
                 <div id="productEditor">
                     <div id="editOrderEditor"></div>
                 </div>
@@ -323,6 +329,27 @@
                     <button type="submit" class="btn btn-primary">Save Details</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Item Change Requests Modal (website edit-panel queue) -->
+    <div id="itemRequestsModal">
+        <div class="modal-content irm-content">
+            <div class="irm-head">
+                <h3>Item Change Requests</h3>
+                <div class="irm-head-actions">
+                    <button type="button" class="btn btn-outline" id="irmRefreshBtn" title="Reload requests from the server">⟳ Refresh</button>
+                    <button type="button" class="btn btn-outline" id="irmCloseBtn">Close</button>
+                </div>
+            </div>
+            <div class="irm-tabs">
+                <button type="button" class="irm-tab active" data-irm-status="pending">Pending <span id="irmCountPending"></span></button>
+                <button type="button" class="irm-tab" data-irm-status="history">History</button>
+            </div>
+            <div id="irmList" class="irm-list">
+                <div class="table-loading"><div class="spinner"></div><span>Loading requests…</span></div>
+            </div>
+            <p class="irm-foot">Applying a request updates the hub row and mirrors the new items to Shopify <strong>and GoKwik</strong>, moves the order from the Edits queue to <strong>Confirmed</strong>, then notifies the customer on WhatsApp. “Open in Editor” lets you tweak sizes, prices or totals first — saving the editor syncs the same way, confirms the order and closes the request.</p>
         </div>
     </div>
 
@@ -2003,7 +2030,7 @@
     </section>
 
     <!-- Scripts -->
-    <script src="/shoppers/assets/shoppers-app.js?build=20261114-ordersearch1"></script>
+    <script src="/shoppers/assets/shoppers-app.js?build=20261114-itemreq2"></script>
     <script src="/shoppers/assets/shoppers-forecast-engine.js?v=20261024-1"></script>
     <script src="/shoppers/assets/shoppers-forecast-workspace.js?v=20261024-1"></script>
     <script src="/shoppers/assets/shoppers-inventory-tower.js?v=20261024-forecast1"></script>

@@ -2566,6 +2566,302 @@ router.put('/shoppers/:id', verifyToken, requirePermission('edit_orders'), async
     }
 });
 
+// ============================================================
+// Order item change requests — the queue behind the website
+// order-confirmation edit panel (size / qty / remove on existing
+// lines plus new items picked from the live Shopify catalog).
+// Rows land in order_item_requests; the hub applies them with one
+// click, which mirrors the swap to Shopify AND GoKwik exactly like
+// saving in the edit modal (PUT /shoppers/:id above).
+// ============================================================
+
+function normalizeItemTitle(t) {
+    return String(t == null ? '' : t).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Parse store_shoppers.items_json defensively (GoKwik / Shopify / manual shapes)
+function parseShopperItems(itemsJson) {
+    try {
+        const parsed = JSON.parse(itemsJson || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+        return [];
+    }
+}
+
+// Apply a pending request to the shopper's CURRENT items → final items array
+// in the hub items_json shape. Unmatched titles are skipped (the request card
+// shows them as "not found on the order" so ops can handle manually).
+function computeRequestedItems(currentItems, request) {
+    const req = request || {};
+    const items = (Array.isArray(currentItems) ? currentItems : []).map(i => ({ ...i }));
+    const unmatched = [];
+    (req.items || []).forEach((ch) => {
+        const match = items.find(i => !i.__removed && normalizeItemTitle(i.title || i.name) === normalizeItemTitle(ch.title));
+        if (!match) { unmatched.push(ch.title); return; }
+        if (ch.remove) { match.__removed = true; return; }
+        if (ch.toVariantTitle) {
+            match.size = ch.toVariantTitle;
+            match.variant_title = ch.toVariantTitle;
+        }
+        if (ch.qty != null && !isNaN(parseInt(ch.qty, 10))) {
+            match.quantity = Math.max(0, parseInt(ch.qty, 10));
+        }
+    });
+    const finalItems = items
+        .filter(i => !i.__removed && (parseInt(i.quantity, 10) || 0) > 0)
+        .map(({ __removed, ...rest }) => rest);
+    (req.adds || []).forEach((ad) => {
+        if (!ad || !ad.title) return;
+        finalItems.push({
+            title: ad.title,
+            name: ad.title,
+            quantity: Math.max(1, parseInt(ad.quantity, 10) || 1),
+            price: parseFloat(ad.price) || 0,
+            size: ad.variantTitle || null,
+            variant_title: ad.variantTitle || null,
+            variant_id: ad.variantId || null,
+            product_id: ad.productId || null,
+            requested_add: true
+        });
+    });
+    return { items: finalItems, unmatched };
+}
+
+function requestItemsTotal(items) {
+    return Math.round(items.reduce((sum, i) => sum + (parseFloat(i.price) || 0) * (parseInt(i.quantity, 10) || 1), 0) * 100) / 100;
+}
+
+// List requests (hub queue). status=pending|applied|dismissed|all (default pending)
+router.get('/order-item-requests', verifyToken, async (req, res) => {
+    try {
+        const status = String(req.query.status || 'pending').toLowerCase();
+        const params = [];
+        let whereClause = '';
+        if (status !== 'all') {
+            whereClause = 'WHERE r.status = ?';
+            params.push(status);
+        }
+        const rows = await dbAdapter.query(
+            `SELECT r.id, r.shopper_id, r.order_id, r.phone, r.request, r.summary, r.status,
+                    r.created_at, r.resolved_at, r.resolved_by, r.resolution_note,
+                    s.name AS customer_name, s.payment_method, s.order_total, s.status AS shopper_status,
+                    s.items_json, o.awb
+             FROM order_item_requests r
+             LEFT JOIN store_shoppers s ON s.id = r.shopper_id
+             LEFT JOIN orders o ON o.order_id = s.order_id
+             ${whereClause}
+             ORDER BY r.created_at DESC
+             LIMIT 200`,
+            params
+        );
+        // Attach the live item snapshot so the hub can render current → requested
+        const requests = (rows || []).map(r => {
+            let request = r.request;
+            if (typeof request === 'string') { try { request = JSON.parse(request); } catch (_) { request = { items: [], adds: [] }; } }
+            const currentItems = parseShopperItems(r.items_json);
+            const preview = computeRequestedItems(currentItems, request);
+            return {
+                ...r,
+                request,
+                current_items: currentItems,
+                proposed_items: preview.items,
+                proposed_total: requestItemsTotal(preview.items),
+                unmatched_titles: preview.unmatched,
+                shipped: !!r.awb
+            };
+        });
+        res.json({ success: true, requests });
+    } catch (error) {
+        console.error('Item requests fetch error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch item requests' });
+    }
+});
+
+// One-click apply: writes the requested items onto the hub row, mirrors to
+// Shopify + GoKwik, acks the customer on WhatsApp. Optional body overrides
+// { items?, order_total?, payment_method? } when the admin tweaked in the picker.
+router.post('/order-item-requests/:id/apply', verifyToken, requirePermission('edit_orders'), async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!id) return res.status(400).json({ error: 'Invalid request id' });
+
+        const reqRows = await dbAdapter.query('SELECT * FROM order_item_requests WHERE id = ?', [id]);
+        const requestRow = reqRows && reqRows[0];
+        if (!requestRow) return res.status(404).json({ error: 'Request not found' });
+        if (requestRow.status !== 'pending') {
+            return res.status(409).json({ error: `Request already ${requestRow.status}` });
+        }
+
+        const shopperRows = await dbAdapter.query(
+            'SELECT * FROM store_shoppers WHERE id = ? OR order_id = ? ORDER BY created_at DESC LIMIT 1',
+            [String(requestRow.shopper_id || ''), requestRow.order_id]
+        );
+        const shopper = shopperRows && shopperRows[0];
+        if (!shopper) return res.status(404).json({ error: 'Shopper row not found' });
+
+        // A cancelled order must not be resurrected by a one-click apply
+        if (String(shopper.status || '').toLowerCase() === 'cancelled') {
+            return res.status(409).json({ error: 'Order is cancelled in the hub — resolve that first' });
+        }
+
+        // Fail-closed shipped check (same rule as the website endpoints)
+        const shippedRows = await dbAdapter.query(
+            `SELECT 1 FROM orders WHERE order_id = ? AND (awb IS NOT NULL OR status = 'shipped') LIMIT 1`,
+            [shopper.order_id]
+        );
+        if (shippedRows && shippedRows.length) {
+            return res.status(409).json({ error: 'Order already shipped — apply is closed', shipped: true });
+        }
+
+        let request = requestRow.request;
+        if (typeof request === 'string') { try { request = JSON.parse(request); } catch (_) { request = { items: [], adds: [] }; } }
+
+        // Final items: admin-provided array wins (they may have adjusted price/qty
+        // in the editor); otherwise compute current + request.
+        let finalItems;
+        if (Array.isArray(req.body && req.body.items) && req.body.items.length) {
+            finalItems = req.body.items.slice(0, 30).map(i => ({
+                title: String(i.title || i.name || 'Product').trim().slice(0, 150),
+                quantity: Math.min(50, Math.max(1, parseInt(i.quantity, 10) || 1)),
+                price: Math.min(999999, Math.max(0, parseFloat(i.price) || 0)),
+                size: i.size || i.variant_title || null,
+                variant_title: i.variant_title || i.size || null,
+                product_id: i.product_id || null,
+                variant_id: i.variant_id || null
+            }));
+        } else {
+            finalItems = computeRequestedItems(parseShopperItems(shopper.items_json), request).items;
+        }
+        if (!finalItems.length) {
+            return res.status(400).json({ error: 'Applying this request would leave the order with no items' });
+        }
+
+        const itemsJson = JSON.stringify(finalItems);
+        const newTotal = req.body && req.body.order_total != null && !isNaN(parseFloat(req.body.order_total))
+            ? Math.max(0, parseFloat(req.body.order_total))
+            : requestItemsTotal(finalItems);
+        const paymentMethod = req.body && ['COD', 'Prepaid'].includes(req.body.payment_method) ? req.body.payment_method : null;
+        const nowIso = new Date().toISOString();
+
+        // Applying an approved request IS the customer's confirmation with the new
+        // items, so the order leaves the "Edits" queue and becomes confirmed.
+        const nowConfirmed = String(shopper.status || '') === 'edit_details';
+
+        const updateData = {
+            items_json: itemsJson,
+            order_total: newTotal,
+            updated_at: nowIso,
+            customer_message: `Customer item change request applied by ${req.admin && req.admin.username ? req.admin.username : 'team'} (request #${id})${nowConfirmed ? ' — order confirmed' : ''}`
+        };
+        if (nowConfirmed) updateData.status = 'confirmed';
+        if (paymentMethod) updateData.payment_method = paymentMethod;
+        await dbAdapter.update('store_shoppers', updateData, { id: shopper.id });
+        invalidateCache('shoppers');
+
+        // Mirror to Shopify, then GoKwik — same pair of calls the edit modal uses
+        let shopifySync = null;
+        let gokwikSync = null;
+        try {
+            const shopifyService = require('../services/shopifyService');
+            shopifySync = await shopifyService.syncOrderEdits(shopper.order_id, {
+                items: finalItems,
+                paymentMethod
+            });
+        } catch (syncError) {
+            console.error('⚠️ Shopify item-request sync error (hub still updated):', syncError.message);
+            shopifySync = { success: false, actions: [], warnings: [syncError.message] };
+        }
+        try {
+            const gokwikService = require('../services/gokwikService');
+            gokwikSync = await gokwikService.notifyOrderUpdate(shopper.order_id, {
+                items: finalItems,
+                orderTotal: newTotal,
+                ...(paymentMethod ? { paymentMethod } : {})
+            });
+        } catch (gkError) {
+            console.error('⚠️ GoKwik item-request sync error (hub still updated):', gkError.message);
+            gokwikSync = { success: false, skipped: false, reason: gkError.message };
+        }
+
+        await dbAdapter.query(
+            `UPDATE order_item_requests
+             SET status = 'applied', resolved_at = ?, resolved_by = ?, resolution_note = ?
+             WHERE id = ?`,
+            [nowIso, String((req.admin && (req.admin.username || req.admin.role)) || 'team'), `total ₹${newTotal}`, id]
+        );
+
+        // Ack the customer on WhatsApp (best effort, like the other actions)
+        try {
+            const phone = String(shopper.phone || '').replace(/\D/g, '').slice(-10);
+            if (phone.length === 10) {
+                await whatsappService.sendMessage(phone, `✏️ *Edit Applied — Order ${shopper.order_id}*\n\n▫️ Your item changes have been applied to the order.\n▫️ Updated total: ₹${newTotal}${nowConfirmed ? '\n▫️ Your order is now *confirmed*.' : '\n▫️ We will ship the updated items. Thank you!'}`);
+            }
+        } catch (waErr) {
+            console.warn('[ItemRequests] WhatsApp ack skipped:', waErr.message);
+        }
+
+        logOperatorActivity(req, 'item_request_apply', `Applied request #${id} for ${shopper.order_id} (total ₹${newTotal})${nowConfirmed ? ' — order confirmed' : ''}`);
+        res.json({
+            success: true,
+            items: finalItems,
+            order_total: newTotal,
+            order_status: nowConfirmed ? 'confirmed' : shopper.status,
+            shopify_sync: shopifySync,
+            gokwik_sync: gokwikSync
+        });
+    } catch (error) {
+        console.error('Item request apply error:', error);
+        res.status(500).json({ error: 'Failed to apply item request' });
+    }
+});
+
+// Close a request without applying (declined, or applied through another path
+// such as the edit modal which already synced Shopify + GoKwik itself)
+router.post('/order-item-requests/:id/dismiss', verifyToken, requirePermission('edit_orders'), async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!id) return res.status(400).json({ error: 'Invalid request id' });
+        const status = req.body && req.body.status === 'applied' ? 'applied' : 'dismissed';
+        const note = String((req.body && req.body.note) || '').slice(0, 300);
+        const requestRows = await dbAdapter.query('SELECT shopper_id, order_id FROM order_item_requests WHERE id = ?', [id]);
+        if (!requestRows || !requestRows.length) return res.status(404).json({ error: 'Item request not found' });
+        const result = await dbAdapter.query(
+            `UPDATE order_item_requests
+             SET status = ?, resolved_at = ?, resolved_by = ?, resolution_note = ?
+             WHERE id = ? AND status = 'pending'
+             RETURNING id`,
+            [status, new Date().toISOString(), String((req.admin && (req.admin.username || req.admin.role)) || 'team'), note, id]
+        );
+        if (!result || !result.length) return res.status(409).json({ error: 'Request is no longer pending' });
+
+        // Closing a request as applied ("saved through the editor") is the same
+        // approval — an order sitting in the Edits queue moves to Confirmed.
+        let orderConfirmed = false;
+        if (status === 'applied') {
+            try {
+                const flip = await dbAdapter.query(
+                    `UPDATE store_shoppers
+                     SET status = 'confirmed', updated_at = ?
+                     WHERE status = 'edit_details' AND (id = ? OR order_id = ?)
+                     RETURNING id`,
+                    [new Date().toISOString(), String(requestRows[0].shopper_id || ''), String(requestRows[0].order_id || '')]
+                );
+                orderConfirmed = !!(flip && flip.length);
+                if (orderConfirmed) invalidateCache('shoppers');
+            } catch (flipErr) {
+                console.warn('[ItemRequests] auto-confirm on close failed (non-fatal):', flipErr.message);
+            }
+        }
+
+        logOperatorActivity(req, 'item_request_dismiss', `Closed request #${id} as ${status}${note ? ` (${note})` : ''}${orderConfirmed ? ' — order confirmed' : ''}`);
+        res.json({ success: true, status, order_confirmed: orderConfirmed });
+    } catch (error) {
+        console.error('Item request dismiss error:', error);
+        res.status(500).json({ error: 'Failed to close item request' });
+    }
+});
+
 // Live shipping address from the Shopify order — used by the edit modal's
 // "Pull from Shopify" button so hub address fields can be re-synced
 router.get('/shoppers/:id/shopify-address', verifyToken, async (req, res) => {

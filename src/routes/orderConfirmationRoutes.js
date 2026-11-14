@@ -167,7 +167,7 @@ function buildOrderUpdate(order, changes) {
 }
 
 // Structured item-change lines for the Shopify note (ops hand-applies them)
-function buildItemNote(orderName, items) {
+function buildItemNote(orderName, items, adds) {
     const lines = items.map((it, i) => {
         const parts = [];
         if (it.remove) parts.push('REMOVE');
@@ -177,8 +177,107 @@ function buildItemNote(orderName, items) {
         }
         return `  ${i + 1}. ${it.title}: ${parts.join(', ')}`;
     });
+    (adds || []).forEach((ad) => {
+        lines.push(`  ${lines.length + 1}. ${ad.title}${ad.variantTitle ? ` (${ad.variantTitle})` : ''}: ADD x${ad.quantity} \u2014 from live catalog, price \u20b9${ad.price}`);
+    });
     return `Website edit request ${orderName} (items, apply manually):\n${lines.join('\n')}`;
 }
+
+// Resolve requested catalog adds against the LIVE Shopify catalog so the team
+// always sees canonical titles/prices. Falls back to the client-submitted
+// values (clamped) when the catalog lookup fails — the request is still logged.
+async function resolveAdds(rawAdds) {
+    const list = (Array.isArray(rawAdds) ? rawAdds : []).slice(0, 10);
+    if (!list.length) return [];
+    let catalog = null;
+    try {
+        const shopifyService = require('../services/shopifyService');
+        catalog = await shopifyService.getProductCatalog();
+    } catch (err) {
+        console.warn('[OrderConfirmWeb] catalog lookup for adds failed:', err.message);
+    }
+    const resolved = [];
+    for (const raw of list) {
+        const quantity = Math.min(10, Math.max(1, parseInt(raw && raw.quantity, 10) || 1));
+        const variantId = String((raw && raw.variantId) || '').replace(/\D/g, '');
+        if (!variantId && !(raw && raw.title)) continue;
+        let match = null;
+        if (catalog && catalog.length) {
+            outer: for (const p of catalog) {
+                for (const v of (p.variants || [])) {
+                    if (String(v.id) === variantId) { match = { p, v }; break outer; }
+                }
+            }
+        }
+        if (match) {
+            resolved.push({
+                title: clean(match.p.title, 150),
+                variantTitle: clean(match.v.title, 120),
+                price: Math.round((parseFloat(match.v.price) || 0) * 100) / 100,
+                variantId,
+                productId: String((raw && raw.productId) || match.p.id || '').replace(/\D/g, '') || null,
+                inStock: !!match.v.available && (match.v.inventory > 0 || match.v.available),
+                quantity
+            });
+        } else {
+            const fallback = {
+                title: clean(raw && raw.title, 150),
+                variantTitle: clean(raw && raw.variantTitle, 120),
+                price: Math.min(999999, Math.max(0, parseFloat(raw && raw.price) || 0)),
+                variantId,
+                productId: String((raw && raw.productId) || '').replace(/\D/g, '') || null,
+                quantity
+            };
+            if (fallback.title) resolved.push(fallback);
+        }
+    }
+    return resolved;
+}
+
+// ── GET /catalog?phone=&order= — sellable Shopify catalog for the edit panel's
+// "add item" picker. Gated on the same phone + order-number claim as the other
+// endpoints so the store's own catalog isn't served to anonymous callers. ──
+router.get('/catalog', async (req, res) => {
+    try {
+        const phone = normalizePhone(req.query.phone || '');
+        const digits = orderDigits(req.query.order);
+        if (!phone || phone.length < 10 || !digits) {
+            return res.status(400).json({ error: 'phone and order are required' });
+        }
+        const row = await findShopperRow(phone, digits);
+        if (!row) return res.status(404).json({ error: 'Order not found for this account' });
+        if (await isOrderShipped(row.order_id)) {
+            return res.status(409).json({ error: 'Order already shipped', shipped: true });
+        }
+        const shopifyService = require('../services/shopifyService');
+        const catalog = await shopifyService.getProductCatalog();
+        // Lean shape for the storefront picker: only products with at least one
+        // sellable variant, only the fields the picker renders.
+        const products = [];
+        for (const p of catalog) {
+            const variants = (p.variants || [])
+                .filter(v => v.available)
+                .map(v => ({
+                    id: String(v.id),
+                    title: v.title || '',
+                    price: parseFloat(v.price) || 0,
+                    stock: Math.max(0, parseInt(v.inventory, 10) || 0)
+                }));
+            if (!variants.length) continue;
+            products.push({
+                id: String(p.id),
+                title: p.title,
+                type: p.product_type || '',
+                image: p.image || null,
+                variants
+            });
+        }
+        res.json({ success: true, products });
+    } catch (error) {
+        console.error('[OrderConfirmWeb] catalog error:', error.message);
+        res.status(500).json({ error: 'Failed to load the product catalog' });
+    }
+});
 
 // ── GET /status?phone=&order= — current confirmation state for one order ──
 router.get('/status', async (req, res) => {
@@ -269,8 +368,12 @@ router.post('/action', async (req, res) => {
                 }))
                 .filter((it) => it.title && (it.remove || it.variantChanged || it.qtyChanged));
 
+            // New items picked from the live Shopify catalog (title/price are
+            // re-resolved server-side, never trusted from the browser)
+            const adds = await resolveAdds(changes.adds);
+
             const hasContact = !!(changes.address || changes.phone || changes.email);
-            if (!items.length && !hasContact && !flatNote) {
+            if (!items.length && !adds.length && !hasContact && !flatNote) {
                 return res.status(400).json({ error: 'Nothing to change' });
             }
 
@@ -296,11 +399,11 @@ router.post('/action', async (req, res) => {
                 if (built.applied.length) updates.push({ order: built.body });
             }
 
-            if (liveOrder && items.length) {
+            if (liveOrder && (items.length || adds.length)) {
                 // Hand items to ops the desk way: tag + structured note line
                 const tags = String(liveOrder.tags || '').split(',').map(t => t.trim()).filter(Boolean);
                 if (!tags.includes('customer-edit-requested')) tags.push('customer-edit-requested');
-                const noteLine = buildItemNote(liveOrder.name, items);
+                const noteLine = buildItemNote(liveOrder.name, items, adds);
                 updates.push({
                     order: {
                         id: liveOrder.id,
@@ -325,16 +428,22 @@ router.post('/action', async (req, res) => {
                     warnings.push(`Shopify write rejected (${detail}). The request is still logged for our team.`);
                 }
             }
-            if (!liveOrder && (items.length || hasContact)) {
+            if (!liveOrder && (items.length || adds.length || hasContact)) {
                 warnings.push('Order not found live in Shopify — the request is recorded for the team.');
             }
 
             editOutcome = {
                 applied: applied.filter(a => a !== 'item changes'),
-                routedToTeam: items.map(it => ({
-                    title: it.title,
-                    change: it.remove ? 'remove' : [it.variantChanged ? `variant → ${it.toVariantTitle}` : null, it.qtyChanged ? `qty ${it.fromQty} → ${it.toQty}` : null].filter(Boolean).join(', ')
-                })),
+                routedToTeam: [
+                    ...items.map(it => ({
+                        title: it.title,
+                        change: it.remove ? 'remove' : [it.variantChanged ? `variant → ${it.toVariantTitle}` : null, it.qtyChanged ? `qty ${it.fromQty} → ${it.toQty}` : null].filter(Boolean).join(', ')
+                    })),
+                    ...adds.map(ad => ({
+                        title: `${ad.title}${ad.variantTitle ? ` (${ad.variantTitle})` : ''}`,
+                        change: `add x${ad.quantity}`
+                    }))
+                ],
                 warnings
             };
             messageLine += `\n${EDIT_JSON_MARKER}${JSON.stringify({
@@ -347,9 +456,50 @@ router.post('/action', async (req, res) => {
                     toVariantTitle: it.variantChanged ? it.toVariantTitle : null,
                     qty: it.qtyChanged ? it.toQty : null
                 })),
+                adds: adds.map(ad => ({
+                    title: ad.title, variantTitle: ad.variantTitle || '',
+                    price: ad.price, quantity: ad.quantity,
+                    variantId: ad.variantId || null, productId: ad.productId || null
+                })),
                 note: flatNote || null,
                 outcome: editOutcome
             })}`;
+
+            // Queue the structured request for Shoppers Hub (one row per edit
+            // submission that touches items). Best effort — never fail the
+            // customer's action on a queue write.
+            if (items.length || adds.length) {
+                try {
+                    const summaryParts = [];
+                    items.forEach((it) => {
+                        summaryParts.push(it.remove ? `Remove ${it.title}`
+                            : [it.variantChanged ? `${it.title} → ${it.toVariantTitle}` : null,
+                               it.qtyChanged ? `${it.title} qty ${it.fromQty} → ${it.toQty}` : null].filter(Boolean).join('; '));
+                    });
+                    adds.forEach((ad) => summaryParts.push(`Add ${ad.title}${ad.variantTitle ? ` (${ad.variantTitle})` : ''} x${ad.quantity}`));
+                    await dbAdapter.insert('order_item_requests', {
+                        shopper_id: String(row.id),
+                        order_id: row.order_id,
+                        phone,
+                        request: JSON.stringify({
+                            items: items.map(it => ({
+                                title: it.title, remove: it.remove,
+                                toVariantTitle: it.variantChanged ? it.toVariantTitle : null,
+                                qty: it.qtyChanged ? it.toQty : null
+                            })),
+                            adds: adds.map(ad => ({
+                                title: ad.title, variantTitle: ad.variantTitle || '',
+                                price: ad.price, quantity: ad.quantity,
+                                variantId: ad.variantId || null, productId: ad.productId || null
+                            })),
+                            note: flatNote || null
+                        }),
+                        summary: summaryParts.filter(Boolean).join(' · ').slice(0, 500)
+                    });
+                } catch (qErr) {
+                    console.error('[OrderConfirmWeb] item request queue write failed:', qErr.message);
+                }
+            }
 
             // Detailed WhatsApp ack: tell them exactly what moved where
             const ackLines = [];

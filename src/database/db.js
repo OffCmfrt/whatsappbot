@@ -351,6 +351,9 @@ async function initializeDatabase() {
     // Initialize Shopper Confirmations Table
     await initializeShopperConfirmationsTable();
     
+    // Initialize Order Item Change Requests Table (website edit-panel item swaps)
+    await initializeOrderItemRequestsTable();
+    
     // Initialize Follow-Up Campaigns Tables
     await initializeFollowUpTables();
     
@@ -482,6 +485,38 @@ async function initializeShopperConfirmationsTable() {
     console.log('✅ Shopper confirmations table initialized');
   } catch (error) {
     console.error('❌ Failed to initialize shopper_confirmations table:', error.message);
+  }
+}
+
+// Structured item-change requests raised by the website order-confirmation
+// edit panel (size/qty/remove on existing lines + new items picked from the
+// Shopify catalog). The hub queue works off these rows; the full request text
+// also stays in the store_shoppers message log as EDIT_REQUEST_JSON for the
+// customer-facing "Latest edit request" block.
+async function initializeOrderItemRequestsTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS order_item_requests (
+        id BIGSERIAL PRIMARY KEY,
+        shopper_id TEXT,
+        order_id TEXT NOT NULL,
+        phone TEXT,
+        request JSONB NOT NULL,
+        summary TEXT,
+        status VARCHAR(20) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        resolved_at TIMESTAMP,
+        resolved_by TEXT,
+        resolution_note TEXT
+      )
+    `);
+
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_order_item_requests_status ON order_item_requests(status)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_order_item_requests_order_id ON order_item_requests(order_id)');
+
+    console.log('✅ Order item requests table initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize order_item_requests table:', error.message);
   }
 }
 

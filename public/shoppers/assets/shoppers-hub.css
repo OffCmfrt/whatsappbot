@@ -6747,3 +6747,57 @@ tr.ict-detail-row td { background: rgba(255,255,255,0.02); padding: 1rem 1.1rem;
     .sw-search { width: 100%; }
     .sw-table-wrap { max-height: 38vh; }
 }
+
+/* ══ Item Change Requests queue (website edit-panel requests) ══ */
+#itemRequestsModal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(10px); z-index: 1000; justify-content: center; align-items: center; }
+#itemRequestsModal.active { display: flex; }
+#itemRequestsModal .modal-content { max-width: 860px; width: 92%; padding: 1.5rem 1.75rem; }
+.irm-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.irm-head h3 { margin: 0; }
+.irm-head-actions { display: flex; gap: 0.5rem; }
+.irm-tabs { display: flex; gap: 0.5rem; margin: 1rem 0 0.75rem; }
+.irm-tab { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); color: #aaa; border-radius: 20px; padding: 5px 16px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; cursor: pointer; font-family: 'Archivo Narrow', sans-serif; }
+.irm-tab.active { background: #fff; color: #000; border-color: #fff; }
+.irm-list { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 0.9rem; }
+.irm-none, .irm-empty { color: #888; font-size: 0.85rem; padding: 0.75rem 0; }
+.irm-card { border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 0.9rem 1rem; background: rgba(255,255,255,0.03); }
+.irm-card.irm-locked { opacity: 0.65; }
+.irm-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+.irm-order { font-family: 'Outfit', sans-serif; font-weight: 700; letter-spacing: 1px; margin-right: 0.5rem; }
+.irm-customer { color: #aaa; font-size: 0.8rem; }
+.irm-head-right { display: flex; align-items: center; gap: 0.6rem; }
+.irm-time { color: #777; font-size: 0.72rem; }
+.irm-lines { margin: 0.6rem 0 0.2rem; }
+.irm-line { font-size: 0.82rem; color: #e5e5e5; padding: 2px 0; }
+.irm-warn { margin: 0.5rem 0; font-size: 0.78rem; color: #ffb84d; }
+.irm-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; margin-top: 0.7rem; }
+@media (max-width: 640px) { .irm-cols { grid-template-columns: 1fr; } }
+.irm-col { border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.6rem 0.7rem; background: rgba(0,0,0,0.35); }
+.irm-col-title { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 0.4rem; font-family: 'Archivo Narrow', sans-serif; }
+.irm-item { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.8rem; padding: 2px 0; color: #ddd; }
+.irm-item-name { flex: 1; min-width: 0; }
+.irm-item-qty { color: #999; }
+.irm-item-price { color: #bbb; }
+.irm-item-added { color: #7ee2a8; }
+.irm-item-tag { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 1px; background: rgba(37,211,102,0.15); color: #25d366; border-radius: 8px; padding: 1px 6px; }
+.irm-actions { display: flex; gap: 0.5rem; margin-top: 0.8rem; flex-wrap: wrap; }
+.irm-btn-apply { background: #25d366; border-color: #25d366; color: #00220f; font-weight: 700; }
+.irm-btn-dismiss:hover { border-color: #ff6b6b; color: #ff6b6b; }
+.irm-resolved { margin-top: 0.7rem; font-size: 0.75rem; color: #888; }
+.irm-foot { margin: 0.9rem 0 0; font-size: 0.72rem; color: #777; line-height: 1.5; }
+.irm-edit-banner { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; border: 1px dashed rgba(37,211,102,0.5); background: rgba(37,211,102,0.07); color: #b7f0cc; border-radius: 8px; padding: 0.55rem 0.75rem; margin: 0 0 0.9rem; font-size: 0.8rem; text-align: left; }
+.irm-edit-banner .btn { font-size: 0.7rem; padding: 4px 10px; white-space: nowrap; }
+#editReqBanner:empty { display: none; }
+
+/* Queue chip on item-request cards: order currently sits in Edits */
+.irm-queue-chip {
+    display: inline-block;
+    margin-right: 8px;
+    padding: 2px 8px;
+    border: 1px dashed rgba(37, 211, 102, 0.55);
+    border-radius: 999px;
+    font-size: 11px;
+    color: #7ee2a8;
+    background: rgba(37, 211, 102, 0.08);
+    vertical-align: middle;
+}

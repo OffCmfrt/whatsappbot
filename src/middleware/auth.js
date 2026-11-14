@@ -162,6 +162,9 @@ const ROUTE_PERMISSIONS = [
     { prefix: '/inbox/export', key: 'export' },
     { prefix: '/shoppers/multi-orders', key: 'multi_orders' },
     { prefix: '/shoppers', key: 'shoppers' },
+    // Website item-change queue: anyone who can see shoppers can see the
+    // requests; apply/dismiss carry their own edit_orders guard.
+    { prefix: '/order-item-requests', key: ['shoppers', 'edit_orders'] },
     { prefix: '/chat', key: 'inbox' },
     { prefix: '/follow-up', key: 'follow_up' },
     { prefix: '/shipping', key: 'shipped' },

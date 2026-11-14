@@ -320,18 +320,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupEventListeners();
         setupModalEvents();
         setupChatEvents();
-        // Deep link: /shoppers/?search=<order id> pre-fills the search box so
-        // the first fetch lands straight on that order (the support desk
-        // links here when an agent clicks an order id).
+        // Deep link: /shoppers/?search=<order id> pre-fills the search box and
+        // then auto-opens that exact order's detail card, so a support-desk
+        // order click lands straight on the single order (the first fetch is
+        // already server-filtered on order_id — no extra roundtrip).
         const searchParam = (urlParams.get('search') || '').trim();
         if (searchParam) {
             const searchEl = document.getElementById('searchInput');
             if (searchEl) searchEl.value = searchParam;
         }
         // Smart login: only load data for pages this identity may access
-        if (hubHasPerm('shoppers')) fetchShoppersData();
         if (hubHasPerm('analytics')) fetchAnalytics();
         if (hubHasPerm('inbox')) fetchInboxCounts();
+        if (hubHasPerm('shoppers')) fetchItemRequests();
+        if (hubHasPerm('shoppers')) {
+            // Awaited (unlike the fire-and-forget panels above) only because a
+            // deep link needs the filtered rows in hand before auto-opening.
+            await fetchShoppersData();
+            if (searchParam && hubHasPerm('edit_orders')) autoOpenOrderDetail(searchParam);
+        }
         console.log('✅ Dashboard Initialized Successfully');
     } catch (e) {
         console.error('❌ Dashboard Init Failed:', e);
@@ -801,10 +808,23 @@ function setupModalEvents() {
                 if (data.success) {
                     hideModal();
                     fetchShoppersData();
+                    // An opened-from-the-queue request is closed by the save itself:
+                    // the PUT above already mirrored items to Shopify + GoKwik
+                    let irmConfirmedNote = '';
+                    if (irmLinkedRequestId) {
+                        const linked = irmLinkedRequestId;
+                        irmLinkedRequestId = null;
+                        try {
+                            const closeRes = await apiCall(`/order-item-requests/${linked}/dismiss`, 'POST', { status: 'applied', note: 'Saved through order editor' });
+                            if (closeRes && closeRes.order_confirmed) irmConfirmedNote = 'Order moved to Confirmed ✔';
+                        } catch (irmErr) { /* request stays pending — admin can retry from the queue */ }
+                        fetchItemRequests();
+                    }
                     // Surface Shopify/GoKwik sync outcome (edits are pushed to both)
                     const sync = data.shopify_sync;
                     const gkSync = data.gokwik_sync;
                     const notes = [];
+                    if (irmConfirmedNote) notes.push(irmConfirmedNote);
                     if (sync && sync.warnings && sync.warnings.length) notes.push(...sync.warnings);
                     if (gkSync && !gkSync.success && !gkSync.skipped) notes.push(`GoKwik sync failed: ${gkSync.reason}`);
                     if (notes.length) {
@@ -2899,8 +2919,26 @@ function renderCards(shoppers, total, append = false) {
     }
 }
 
+// Open one order's detail card straight from the already-loaded rows: used
+// by the ?search= deep link after the filtered fetch renders. Falls back to
+// the filtered grid silently when there is no exact order-id match.
+function autoOpenOrderDetail(orderNum) {
+    const want = String(orderNum || '').replace(/\D/g, '');
+    if (!want) return;
+    const row = allLoadedShoppers.find(s => String(s.order_id || '').replace(/\D/g, '') === want);
+    if (!row) return;
+    openEditModal(row.id, encodeURIComponent(row.name || ''), row.phone || '', row.order_id || '',
+        encodeURIComponent(row.address || ''), encodeURIComponent(row.items_json || ''),
+        encodeURIComponent(row.customer_message || ''), row.last_response_at || '',
+        encodeURIComponent(row.payment_method || ''), row.order_total || 0);
+}
+
 function openEditModal(id, nameEnc, phone, orderId, addressEnc, itemsEnc, messageEnc, msgTime, paymentEnc, orderTotal) {
     if (!hubRequirePerm('edit_orders', 'edit shopper details')) return;
+    // Fresh open — this save must not auto-close a queue request unless the
+    // admin explicitly previews one (irmOpenInEditor sets it afterwards)
+    irmLinkedRequestId = null;
+    renderEditReqBanner(orderId);
     document.getElementById('editShopperId').value = id;
     document.getElementById('editName').value = nameEnc ? decodeURIComponent(nameEnc) : '';
     document.getElementById('editPhone').value = phone;
@@ -9235,4 +9273,267 @@ function getStatusClass(status) {
     if (['pending', 'initiated', 'pickup_pending'].includes(s)) return 'ctx-status-warning';
     return 'ctx-status-neutral';
 }
+
+// ════════════════════════════════════════════════════════════════
+// Item change requests — the queue behind the website edit panel's
+// "change size / qty / remove / add a product from the store"
+// requests. Applying one writes the final items onto the hub row
+// and mirrors them to Shopify AND GoKwik server-side (same trio the
+// edit-modal save performs), then acks the customer on WhatsApp.
+// ════════════════════════════════════════════════════════════════
+let irmPending = [];
+let irmAll = null;                 // history-tab cache, dropped on every fetch
+let irmActiveStatus = 'pending';
+let irmLinkedRequestId = null;     // set when the editor was opened FROM a request
+let irmBusy = false;
+
+async function fetchItemRequests() {
+    try {
+        const data = await apiCall('/order-item-requests?status=pending');
+        irmPending = (data && data.success) ? (data.requests || []) : [];
+    } catch (err) {
+        irmPending = [];
+    }
+    irmAll = null;
+    irmUpdateBadge();
+    const modal = document.getElementById('itemRequestsModal');
+    if (modal && modal.classList.contains('active')) renderItemRequests();
+}
+
+function irmUpdateBadge() {
+    const badge = document.getElementById('itemReqBadge');
+    if (!badge) return;
+    const n = irmPending.filter(r => !r.shipped).length;
+    badge.textContent = n;
+    badge.style.display = n > 0 ? 'inline-flex' : 'none';
+}
+
+function irmItemsListHtml(items, highlightAdds) {
+    if (!Array.isArray(items) || !items.length) return '<div class="irm-empty">no items</div>';
+    return items.map(i => {
+        const size = i.size || i.variant_title || '';
+        const added = highlightAdds && i.requested_add;
+        return `<div class="irm-item${added ? ' irm-item-added' : ''}">`
+            + `<span class="irm-item-name">${escapeHtml(i.title || i.name || 'Product')}${size ? ` · ${escapeHtml(String(size))}` : ''}</span>`
+            + `<span class="irm-item-qty">×${parseInt(i.quantity, 10) || 1}</span>`
+            + `<span class="irm-item-price">₹${(Math.round((parseFloat(i.price) || 0) * (parseInt(i.quantity, 10) || 1) * 100) / 100).toLocaleString('en-IN')}</span>`
+            + (added ? '<span class="irm-item-tag">new</span>' : '')
+            + '</div>';
+    }).join('');
+}
+
+function irmRequestCardHtml(r) {
+    const pending = r.status === 'pending';
+    const locked = pending && r.shipped;
+    const req = r.request || {};
+    const lines = [];
+    (req.items || []).forEach((ch) => {
+        if (ch.remove) lines.push(`Remove <strong>${escapeHtml(ch.title)}</strong>`);
+        else {
+            const bits = [];
+            if (ch.toVariantTitle) bits.push(`size → ${escapeHtml(ch.toVariantTitle)}`);
+            if (ch.qty != null) bits.push(`qty → ${ch.qty}`);
+            if (bits.length) lines.push(`${escapeHtml(ch.title)}: ${bits.join(', ')}`);
+        }
+    });
+    (req.adds || []).forEach((ad) => {
+        lines.push(`Add <strong>${escapeHtml(ad.title)}${ad.variantTitle ? ` · ${escapeHtml(ad.variantTitle)}` : ''}</strong> ×${ad.quantity || 1} (₹${(parseFloat(ad.price) || 0).toLocaleString('en-IN')} each)`);
+    });
+    if (req.note) lines.push(`Customer note: “${escapeHtml(req.note)}”`);
+    const actions = pending ? `
+        <div class="irm-actions">
+            <button type="button" class="btn btn-primary irm-btn-apply" data-irm-apply="${r.id}" ${locked ? 'disabled' : ''}>✔ Apply &amp; Sync GoKwik</button>
+            <button type="button" class="btn btn-outline" data-irm-edit="${r.id}" ${locked ? 'disabled' : ''}>Open in Editor</button>
+            <button type="button" class="btn btn-outline irm-btn-dismiss" data-irm-dismiss="${r.id}" ${locked ? 'disabled' : ''}>Dismiss</button>
+        </div>` : `
+        <div class="irm-resolved">${r.status === 'applied' ? '✔ Applied' : '✕ Dismissed'} by ${escapeHtml(r.resolved_by || 'team')}${r.resolved_at ? ` · ${formatDate(r.resolved_at)}` : ''}${r.resolution_note ? ` · ${escapeHtml(r.resolution_note)}` : ''}</div>`;
+    return `
+    <div class="irm-card${locked ? ' irm-locked' : ''}">
+        <div class="irm-card-head">
+            <div>
+                <span class="irm-order">${escapeHtml(r.order_id || '')}</span>
+                <span class="irm-customer">${escapeHtml(r.customer_name || 'Customer')} · ${escapeHtml(r.phone || '')}</span>
+            </div>
+            <div class="irm-head-right">
+                ${pending && String(r.shopper_status || '') === 'edit_details' ? '<span class="irm-queue-chip" title="Applying this request moves the order to Confirmed">in Edits queue</span>' : ''}
+                <span class="badge badge-status ${pending ? 'pending' : (r.status === 'applied' ? 'confirmed' : 'cancelled')}">${pending ? 'PENDING' : r.status.toUpperCase()}</span>
+                <span class="irm-time">${formatDate(r.created_at)}</span>
+            </div>
+        </div>
+        <div class="irm-lines">${lines.map(l => `<div class="irm-line">→ ${l}</div>`).join('')}</div>
+        ${r.unmatched_titles && r.unmatched_titles.length ? `<div class="irm-warn">⚠ Not found on the current order (apply by hand): ${r.unmatched_titles.map(t => escapeHtml(t)).join(', ')}</div>` : ''}
+        ${locked ? '<div class="irm-warn">⚠ Order already shipped — actions are closed.</div>' : ''}
+        <div class="irm-cols">
+            <div class="irm-col"><div class="irm-col-title">Current items · ₹${(parseFloat(r.order_total) || 0).toLocaleString('en-IN')}</div>${irmItemsListHtml(r.current_items, false)}</div>
+            <div class="irm-col"><div class="irm-col-title">After applying · ₹${(parseFloat(r.proposed_total) || 0).toLocaleString('en-IN')}</div>${irmItemsListHtml(r.proposed_items, true)}</div>
+        </div>
+        ${actions}
+    </div>`;
+}
+
+async function renderItemRequests() {
+    const listEl = document.getElementById('irmList');
+    if (!listEl) return;
+    const countEl = document.getElementById('irmCountPending');
+    if (countEl) countEl.textContent = irmPending.length ? `(${irmPending.length})` : '';
+    if (irmActiveStatus === 'pending') {
+        listEl.innerHTML = irmPending.length
+            ? irmPending.map(irmRequestCardHtml).join('')
+            : '<div class="irm-none">No pending item change requests. 🎉</div>';
+        return;
+    }
+    if (!irmAll) {
+        listEl.innerHTML = '<div class="table-loading"><div class="spinner"></div><span>Loading history…</span></div>';
+        try {
+            const data = await apiCall('/order-item-requests?status=all');
+            irmAll = (data && data.success) ? (data.requests || []) : [];
+        } catch (err) {
+            listEl.innerHTML = '<div class="irm-none">Failed to load history.</div>';
+            return;
+        }
+    }
+    listEl.innerHTML = irmAll.length
+        ? irmAll.map(irmRequestCardHtml).join('')
+        : '<div class="irm-none">No requests yet.</div>';
+}
+
+function openItemRequestsModal() {
+    const modal = document.getElementById('itemRequestsModal');
+    if (!modal) return;
+    modal.classList.add('active');
+    renderItemRequests();
+    fetchItemRequests();
+}
+
+function closeItemRequestsModal() {
+    document.getElementById('itemRequestsModal')?.classList.remove('active');
+}
+
+async function irmApply(id) {
+    if (!hubRequirePerm('edit_orders', 'apply item change requests')) return;
+    if (irmBusy) return;
+    const r = irmPending.find(x => String(x.id) === String(id));
+    if (!r) return;
+    const total = (parseFloat(r.proposed_total) || 0).toLocaleString('en-IN');
+    const confirmHead = String(r.shopper_status || '') === 'edit_details'
+        ? 'Apply this request — the order moves to Confirmed and syncs Shopify + GoKwik?'
+        : 'Apply this request and sync Shopify + GoKwik?';
+    if (!confirm(`${confirmHead}\n\n${r.summary || 'Item changes'}\n\nNew order total: ₹${total}`)) return;
+    irmBusy = true;
+    try {
+        const data = await apiCall(`/order-item-requests/${id}/apply`, 'POST', {});
+        if (data && data.success) {
+            const notes = [];
+            if (data.order_status === 'confirmed') notes.push('Order moved to Confirmed ✔');
+            if (data.shopify_sync && data.shopify_sync.warnings && data.shopify_sync.warnings.length) notes.push(...data.shopify_sync.warnings);
+            const gk = data.gokwik_sync;
+            if (gk && gk.success) notes.push('GoKwik synced ✔');
+            else if (gk && gk.skipped) notes.push(`GoKwik sync skipped (${gk.reason || 'not configured'}) — GoKwik follows the Shopify order`);
+            else if (gk && !gk.success) notes.push(`⚠ GoKwik sync failed: ${gk.reason}`);
+            alert(`Request applied for ${r.order_id}. New total ₹${(parseFloat(data.order_total) || 0).toLocaleString('en-IN')}.\n\n${notes.join('\n') || 'Shopify sync OK.'}`);
+            await fetchItemRequests();
+            fetchShoppersData();
+        } else {
+            alert((data && data.error) || 'Failed to apply request');
+        }
+    } catch (err) {
+        alert('Error applying request');
+    } finally {
+        irmBusy = false;
+    }
+}
+
+async function irmDismiss(id) {
+    if (!hubRequirePerm('edit_orders', 'close item change requests')) return;
+    const note = prompt('Close this request without applying. Reason (optional, kept for the audit trail):', '');
+    if (note === null) return;
+    try {
+        const data = await apiCall(`/order-item-requests/${id}/dismiss`, 'POST', { note });
+        if (data && data.success) {
+            await fetchItemRequests();
+        } else {
+            alert((data && data.error) || 'Failed to close request');
+        }
+    } catch (err) {
+        alert('Error closing request');
+    }
+}
+
+// Open the request in the normal order editor with the proposed items
+// pre-loaded; saving the editor syncs Shopify + GoKwik (existing PUT) and
+// auto-closes the request as applied.
+function irmOpenInEditor(id) {
+    if (!hubRequirePerm('edit_orders', 'edit order details')) return;
+    const r = irmPending.find(x => String(x.id) === String(id));
+    if (!r || !r.shopper_id) { alert('Shopper row not found for this request'); return; }
+    closeItemRequestsModal();
+    openEditModal(
+        r.shopper_id,
+        encodeURIComponent(r.customer_name || ''),
+        r.phone || '',
+        r.order_id || '',
+        '', // address is filled by fillEditAddressFields(id)
+        encodeURIComponent(JSON.stringify(r.proposed_items || [])),
+        '', '',
+        encodeURIComponent(r.payment_method || ''),
+        r.proposed_total || r.order_total || 0
+    );
+    irmLinkedRequestId = r.id;
+}
+
+// "Preview in editor" from the banner inside the edit modal — swaps the rows
+// already mounted without re-opening the modal.
+function irmPreviewInEditor(id) {
+    const r = (irmPending || []).find(x => String(x.id) === String(id));
+    if (!r) return;
+    mountOrderEditor('editOrderEditor', {
+        items: JSON.stringify(r.proposed_items || []),
+        orderTotal: r.proposed_total || 0,
+        paymentMethod: oeState ? oeState.originalPayment : ''
+    });
+    irmLinkedRequestId = r.id;
+    renderEditReqBanner(document.getElementById('editOrderId')?.value);
+}
+
+// Banner inside the edit modal: pending requests attached to this order
+function renderEditReqBanner(orderId) {
+    const el = document.getElementById('editReqBanner');
+    if (!el) return;
+    const want = String(orderId || '').replace(/\D/g, '');
+    const reqs = (irmPending || []).filter(x => String(x.order_id || '').replace(/\D/g, '') === want && x.status === 'pending');
+    if (!reqs.length) { el.innerHTML = ''; return; }
+    el.innerHTML = reqs.map(x => `
+        <div class="irm-edit-banner">
+            <span>🔧 Customer requested (website): <strong>${escapeHtml(x.summary || 'item changes')}</strong> — new total ₹${(parseFloat(x.proposed_total) || 0).toLocaleString('en-IN')}</span>
+            <button type="button" class="btn btn-outline" onclick="irmPreviewInEditor(${x.id})">Preview in editor</button>
+        </div>`).join('');
+}
+
+// Queue interactions (delegated — cards re-render constantly)
+(function initItemRequests() {
+    const modal = document.getElementById('itemRequestsModal');
+    const btn = document.getElementById('itemRequestsBtn');
+    if (!modal || !btn) return;
+    btn.addEventListener('click', openItemRequestsModal);
+    document.getElementById('irmCloseBtn')?.addEventListener('click', closeItemRequestsModal);
+    document.getElementById('irmRefreshBtn')?.addEventListener('click', () => fetchItemRequests());
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) { closeItemRequestsModal(); return; }
+        const tab = e.target.closest('.irm-tab');
+        if (tab) {
+            modal.querySelectorAll('.irm-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            irmActiveStatus = tab.dataset.irmStatus || 'pending';
+            renderItemRequests();
+            return;
+        }
+        const applyBtn = e.target.closest('[data-irm-apply]');
+        if (applyBtn) { irmApply(applyBtn.dataset.irmApply); return; }
+        const editBtn = e.target.closest('[data-irm-edit]');
+        if (editBtn) { irmOpenInEditor(editBtn.dataset.irmEdit); return; }
+        const dismissBtn = e.target.closest('[data-irm-dismiss]');
+        if (dismissBtn) irmDismiss(dismissBtn.dataset.irmDismiss);
+    });
+})();
+
 
