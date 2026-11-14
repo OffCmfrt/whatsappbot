@@ -535,6 +535,12 @@ body {
     gap: 12px;
     margin-bottom: 20px;
     animation: fadeInUp 0.5s var(--ease-out) 0.2s both;
+    /* fill-both animation makes this a stacking context; without an explicit
+       z-index the later .tickets-container (same pattern) paints its rows ON
+       top of the date-range popover no matter how high the popover's own
+       z-index is — that z-index only ranks inside this context */
+    position: relative;
+    z-index: 30;
 }
 .toolbar-search {
     position: relative;
