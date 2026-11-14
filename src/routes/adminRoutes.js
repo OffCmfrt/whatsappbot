@@ -1600,6 +1600,38 @@ function timeRangeSqlClause(config, col = 'created_at') {
 // it is NOT resolved and still counts toward the portal's active workload.
 const SUPPORT_TICKET_STATUSES = ['open', 'resolved', 'closed', 'follow_up'];
 
+// ── Date range filter helpers for support tickets ──
+// Dates are YYYY-MM-DD calendar days in IST (what the dashboard shows).
+// Boundaries are shifted to UTC on the PARAMETER side (`?::date - interval`),
+// never on created_at, so the index on created_at stays usable (sargable).
+// This also fixes the old UTC-vs-IST day-edge mismatch with the analytics.
+const IST_OFFSET_SQL = "INTERVAL '5 hours 30 minutes'";
+function isYmdDate(v) { return /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')); }
+function isHmTime(v) { return /^([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(v || '')); }
+// Returns [{ clause, param }] for a column, e.g. 'created_at' or 't.created_at'
+function istRangeClauses(col, date_from, date_to) {
+    const out = [];
+    if (isYmdDate(date_from)) {
+        out.push({ clause: `${col} >= (?::date - ${IST_OFFSET_SQL})`, param: date_from });
+    }
+    if (isYmdDate(date_to)) {
+        out.push({ clause: `${col} < ((?::date + INTERVAL '1 day') - ${IST_OFFSET_SQL})`, param: date_to });
+    }
+    return out;
+}
+// Time-of-day bounds (HH:MM, IST). Inherently a column-side cast, but they only
+// ever narrow an already date-range-bounded scan, so the index still drives the row fetch.
+function istTimeClauses(col, time_from, time_to) {
+    const out = [];
+    if (isHmTime(time_from)) {
+        out.push({ clause: `(${col} + ${IST_OFFSET_SQL})::time >= ?::time`, param: time_from });
+    }
+    if (isHmTime(time_to)) {
+        out.push({ clause: `(${col} + ${IST_OFFSET_SQL})::time < ((?::time + INTERVAL '1 minute'))`, param: time_to });
+    }
+    return out;
+}
+
 router.get('/support-tickets', verifyToken, async (req, res) => {
     try {
         const { status, is_read, date_from, date_to, time_from, time_to, search, portal, sort, urgent, urgent_filter, channel } = req.query;
@@ -1647,25 +1679,12 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
             params.push(is_read === 'true');
         }
 
-        if (date_from) {
-            conditions.push('created_at::date >= ?::date');
-            params.push(date_from);
-        }
-
-        if (date_to) {
-            conditions.push('created_at::date <= ?::date');
-            params.push(date_to);
-        }
-
-        if (time_from) {
-            conditions.push('created_at::time >= ?::time');
-            params.push(time_from);
-        }
-
-        if (time_to) {
-            conditions.push('created_at::time <= ?::time');
-            params.push(time_to);
-        }
+        // Date range (inclusive days, IST) + optional time-of-day window
+        [...istRangeClauses('created_at', date_from, date_to),
+         ...istTimeClauses('created_at', time_from, time_to)].forEach(c => {
+            conditions.push(c.clause);
+            params.push(c.param);
+        });
 
         if (search && String(search).trim()) {
             const like = `%${String(search).trim()}%`;
@@ -1803,7 +1822,7 @@ router.get('/support-tickets', verifyToken, async (req, res) => {
 // ── Export Support Tickets (with chat) as Excel or CSV ──────────────────────
 router.get('/support-tickets/export', verifyToken, requirePermission('export'), async (req, res) => {
     try {
-        const { status, date_from, date_to, search, portal, channel, format = 'xlsx', urgent } = req.query;
+        const { status, date_from, date_to, time_from, time_to, search, portal, channel, format = 'xlsx', urgent } = req.query;
         logOperatorActivity(req, 'export', `Support tickets export (status: ${status || 'all'}, format: ${format})`);
 
         // ── Build WHERE clause (mirrors the list endpoint filters) ──
@@ -1811,8 +1830,11 @@ router.get('/support-tickets/export', verifyToken, requirePermission('export'), 
         const params = [];
 
         if (status) { conditions.push('t.status = ?'); params.push(status); }
-        if (date_from) { conditions.push('t.created_at::date >= ?::date'); params.push(date_from); }
-        if (date_to) { conditions.push('t.created_at::date <= ?::date'); params.push(date_to); }
+        [...istRangeClauses('t.created_at', date_from, date_to),
+         ...istTimeClauses('t.created_at', time_from, time_to)].forEach(c => {
+            conditions.push(c.clause);
+            params.push(c.param);
+        });
         if (channel) { conditions.push('t.channel = ?'); params.push(channel); }
         if (search && String(search).trim()) {
             const like = `%${String(search).trim()}%`;
@@ -5766,18 +5788,24 @@ router.get('/support-analytics/ai-overview', verifyToken, async (req, res) => {
         const cached = getCached(cacheKey);
         if (cached) return res.json(cached);
 
-        // Build reusable date filter
-        const dateClauses = [];
-        const dateParams = [];
-        if (date_from) {
-            dateClauses.push('created_at >= ?::date AT TIME ZONE \'Asia/Kolkata\'');
-            dateParams.push(date_from);
-        }
-        if (date_to) {
-            dateClauses.push('created_at < (?::date + INTERVAL \'1 day\') AT TIME ZONE \'Asia/Kolkata\'');
-            dateParams.push(date_to);
-        }
+        // Build reusable date filter — validated YYYY-MM-DD IST days with the
+        // offset applied to the parameters, so created_at stays index-friendly
+        // (the old `?::date AT TIME ZONE` form forced a timestamptz cast on the column)
+        const dateFilters = istRangeClauses('created_at', date_from, date_to);
+        const dateClauses = dateFilters.map(f => f.clause);
+        const dateParams = dateFilters.map(f => f.param);
         const dateWhere = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
+        // Portal perf JOIN needs the same bounds on t.created_at, parameterized
+        // (the previous version interpolated date_from as a literal and dropped date_to)
+        const tRange = istRangeClauses('t.created_at', date_from, date_to);
+        const portalJoinDateFilter = tRange.length ? ' AND ' + tRange.map(c => c.clause).join(' AND ') : '';
+        const portalJoinDateParams = tRange.map(c => c.param);
+        // Resolution trend follows the selected range (by updated_at), else last 7 days
+        const updRange = istRangeClauses('updated_at', date_from, date_to);
+        const trendWhere = updRange.length
+            ? ' AND ' + updRange.map(c => c.clause).join(' AND ')
+            : " AND updated_at >= NOW() - INTERVAL '7 days'";
+        const trendParams = updRange.map(c => c.param);
 
         const [
             totalStats,
@@ -5855,9 +5883,9 @@ router.get('/support-analytics/ai-overview', verifyToken, async (req, res) => {
                 COUNT(t.id) FILTER (WHERE t.status = 'open')::int AS open_count,
                 COUNT(t.id) FILTER (WHERE t.is_read = false)::int AS unread
             FROM support_portals p
-            LEFT JOIN support_tickets t ON t.portal_id = p.id${dateWhere ? ` AND t.created_at >= '${date_from || '1970-01-01'}'::date AT TIME ZONE 'Asia/Kolkata'` : ''}
+            LEFT JOIN support_tickets t ON t.portal_id = p.id${portalJoinDateFilter}
             GROUP BY p.id, p.name
-            ORDER BY assigned DESC`),
+            ORDER BY assigned DESC`, portalJoinDateParams),
 
             // AI confidence distribution
             dbAdapter.query(`SELECT
@@ -5872,15 +5900,15 @@ router.get('/support-analytics/ai-overview', verifyToken, async (req, res) => {
             GROUP BY tier
             ORDER BY tier ASC`, dateParams),
 
-            // Resolution trend (last 7 days)
+            // Resolution trend (in-range when a range is set, else last 7 days)
             dbAdapter.query(`SELECT
                 TO_CHAR(DATE(updated_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD') AS day,
                 COUNT(*) FILTER (WHERE status = 'resolved')::int AS resolved,
                 COUNT(*)::int AS total
             FROM support_tickets
-            WHERE updated_at >= NOW() - INTERVAL '7 days'
+            WHERE 1=1${trendWhere}
             GROUP BY DATE(updated_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')
-            ORDER BY day ASC`),
+            ORDER BY day ASC`, trendParams),
 
             // Today's stats
             dbAdapter.query(`SELECT
@@ -5895,7 +5923,7 @@ router.get('/support-analytics/ai-overview', verifyToken, async (req, res) => {
             dbAdapter.query(`SELECT
                 ROUND(AVG(EXTRACT(EPOCH FROM (updated_at - created_at)))::numeric, 0)::int AS avg_seconds
             FROM support_tickets
-            WHERE status = 'resolved' AND updated_at > created_at${dateWhere.replace('created_at', 'created_at')}`, dateParams),
+            WHERE status = 'resolved' AND updated_at > created_at${dateWhere}`, dateParams),
 
             // Peak day
             dbAdapter.query(`SELECT

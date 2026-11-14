@@ -911,6 +911,117 @@ body {
     font-weight: 500;
 }
 
+/* Analytics custom date range */
+.analytics-custom-range {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 5px 10px;
+}
+.analytics-custom-range input {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 12px;
+    padding: 4px 8px;
+    color-scheme: dark;
+}
+.range-arrow {
+    color: var(--text-tertiary);
+    font-size: 12px;
+}
+
+/* Ticket toolbar date range popover */
+.daterange-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+.daterange-chip {
+    margin-left: 6px;
+    padding: 3px 9px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 999px;
+    background: var(--accent-dim);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+}
+.daterange-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    width: 300px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    animation: fadeInUp 0.18s var(--ease-out);
+}
+.daterange-presets {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-bottom: 12px;
+}
+.daterange-presets button {
+    padding: 6px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    white-space: nowrap;
+}
+.daterange-presets button:hover { color: var(--text-primary); background: var(--accent-dim); }
+.daterange-presets button.active { color: var(--text-primary); border-color: var(--border-active); background: var(--accent-dim); }
+.daterange-custom {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.daterange-custom label {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    letter-spacing: 0.3px;
+}
+.daterange-custom input {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 12px;
+    padding: 5px 6px;
+    color-scheme: dark;
+    width: 100%;
+}
+.daterange-hint {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    line-height: 1.4;
+    margin-bottom: 10px;
+}
+.daterange-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 .analytics-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;

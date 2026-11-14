@@ -67,6 +67,7 @@ function setupEventListeners() {
     document.getElementById('urgentFilterBtn')?.addEventListener('click', function() { this.classList.toggle('active'); ticketsPage = 1; loadTickets(); });
     document.getElementById('unreadFilterBtn')?.addEventListener('click', function() { this.classList.toggle('active'); ticketsPage = 1; loadTickets(); });
     document.getElementById('resetFiltersBtn')?.addEventListener('click', resetTicketFilters);
+    initTicketDateFilter();
     document.getElementById('showMoreBtn')?.addEventListener('click', () => { ticketsPage++; loadTickets(true); });
     document.getElementById('selectAllTickets')?.addEventListener('change', toggleSelectAll);
 
@@ -294,6 +295,7 @@ async function loadTickets(append = false) {
     if (urgentActive) params.set('urgent_filter', '1');
     if (unreadActive) params.set('is_read', 'false');
     if (urgentKeywords.length) params.set('urgent', urgentKeywords.join(','));
+    appendTicketDateParams(params);
 
     try {
         const data = await apiFetch(`/support-tickets?${params}`);
@@ -430,8 +432,120 @@ function resetTicketFilters() {
     document.getElementById('ticketSortBy').value = 'newest';
     document.getElementById('urgentFilterBtn').classList.remove('active');
     document.getElementById('unreadFilterBtn').classList.remove('active');
+    clearTicketDateFilter();
     ticketsPage = 1;
     loadTickets();
+}
+
+// ── Ticket date range filter ──────────────────────────────────────────
+// Dates are IST calendar days (what the dashboard displays); times are optional
+// HH:MM windows inside those days. The server shifts everything to UTC itself.
+let ticketDateFilter = { from: '', to: '', timeFrom: '', timeTo: '' };
+
+function fmtYmd(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function ticketPresetRange(preset) {
+    const now = new Date();
+    switch (preset) {
+        case 'today': return { from: fmtYmd(now), to: fmtYmd(now) };
+        case 'yesterday': { const y = new Date(now); y.setDate(y.getDate() - 1); return { from: fmtYmd(y), to: fmtYmd(y) }; }
+        case '7d': { const s = new Date(now); s.setDate(s.getDate() - 6); return { from: fmtYmd(s), to: fmtYmd(now) }; }
+        case '30d': { const s = new Date(now); s.setDate(s.getDate() - 29); return { from: fmtYmd(s), to: fmtYmd(now) }; }
+        case 'this_month': return { from: fmtYmd(new Date(now.getFullYear(), now.getMonth(), 1)), to: fmtYmd(now) };
+        case 'last_month': return { from: fmtYmd(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: fmtYmd(new Date(now.getFullYear(), now.getMonth(), 0)) };
+        default: return { from: '', to: '' };
+    }
+}
+
+function ticketDateSummary(f) {
+    if (!f.from && !f.to && !f.timeFrom && !f.timeTo) return '';
+    const short = d => { const [y, m, day] = String(d).split('-'); return `${Number(day)} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(m) - 1]}`; };
+    let label;
+    if (f.from && f.to) label = f.from === f.to ? short(f.from) : `${short(f.from)} – ${short(f.to)}`;
+    else if (f.from) label = `from ${short(f.from)}`;
+    else if (f.to) label = `until ${short(f.to)}`;
+    else label = 'time window';
+    if (f.timeFrom || f.timeTo) {
+        const tt = [f.timeFrom, f.timeTo].filter(Boolean).map(t => t.slice(0, 5)).join('–');
+        label += ` ${tt}`;
+    }
+    return label;
+}
+
+function appendTicketDateParams(params) {
+    if (ticketDateFilter.from) params.set('date_from', ticketDateFilter.from);
+    if (ticketDateFilter.to) params.set('date_to', ticketDateFilter.to);
+    if (ticketDateFilter.timeFrom) params.set('time_from', ticketDateFilter.timeFrom);
+    if (ticketDateFilter.timeTo) params.set('time_to', ticketDateFilter.timeTo);
+}
+
+function updateTicketDateChip() {
+    const btn = document.getElementById('ticketDateBtn');
+    const chip = document.getElementById('ticketDateChip');
+    if (!btn || !chip) return;
+    const summary = ticketDateSummary(ticketDateFilter);
+    chip.textContent = summary;
+    chip.style.display = summary ? '' : 'none';
+    btn.classList.toggle('active', !!summary);
+}
+
+function clearTicketDateFilter() {
+    ticketDateFilter = { from: '', to: '', timeFrom: '', timeTo: '' };
+    ['ticketDateFrom', 'ticketDateTo', 'ticketTimeFrom', 'ticketTimeTo'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = '';
+    });
+    document.querySelectorAll('#ticketDatePopover .daterange-presets button').forEach(b => b.classList.remove('active'));
+    updateTicketDateChip();
+}
+
+function initTicketDateFilter() {
+    const btn = document.getElementById('ticketDateBtn');
+    const popover = document.getElementById('ticketDatePopover');
+    if (!btn || !popover || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        popover.style.display = popover.style.display === 'none' ? 'block' : 'none';
+    });
+    popover.addEventListener('click', (e) => e.stopPropagation());
+    document.addEventListener('click', () => { popover.style.display = 'none'; });
+
+    // Presets fill the custom inputs (user can still tweak before Apply)
+    popover.querySelectorAll('.daterange-presets button').forEach(b => {
+        b.addEventListener('click', () => {
+            popover.querySelectorAll('.daterange-presets button').forEach(x => x.classList.remove('active'));
+            b.classList.add('active');
+            const r = ticketPresetRange(b.dataset.preset);
+            document.getElementById('ticketDateFrom').value = r.from;
+            document.getElementById('ticketDateTo').value = r.to;
+        });
+    });
+
+    document.getElementById('ticketDateApply')?.addEventListener('click', () => {
+        let from = document.getElementById('ticketDateFrom').value;
+        let to = document.getElementById('ticketDateTo').value;
+        if (from && to && from > to) [from, to] = [to, from]; // tolerate reversed pickers
+        ticketDateFilter = {
+            from,
+            to,
+            timeFrom: document.getElementById('ticketTimeFrom').value,
+            timeTo: document.getElementById('ticketTimeTo').value
+        };
+        updateTicketDateChip();
+        popover.style.display = 'none';
+        ticketsPage = 1;
+        loadTickets();
+    });
+
+    document.getElementById('ticketDateClear')?.addEventListener('click', () => {
+        clearTicketDateFilter();
+        popover.style.display = 'none';
+        ticketsPage = 1;
+        loadTickets();
+    });
 }
 
 function isUrgent(msg) {
@@ -471,6 +585,7 @@ function exportTickets(format) {
     if (search) params.set('search', search);
     if (currentChannel && currentChannel !== 'all') params.set('channel', currentChannel);
     if (urgentActive) params.set('urgent', (urgentKeywords || []).join(','));
+    appendTicketDateParams(params);
 
     // Trigger file download via hidden anchor
     const url = `${API}/support-tickets/export?${params}`;
@@ -1284,25 +1399,67 @@ function loadUrgentKeywordsPreview() {
 // AI Analytics
 // ===================================
 let analyticsDateRange = 'all';
+let analyticsCustomDates = { from: '', to: '' };
+
+function shortYmd(d) {
+    if (!d) return '';
+    const [, m, day] = String(d).split('-');
+    return `${Number(day)} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(m) - 1]}`;
+}
+
+function updateAnalyticsInfo(presetLabel) {
+    const info = document.getElementById('analyticsDateInfo');
+    if (!info) return;
+    if (analyticsDateRange === 'custom') {
+        const { from, to } = analyticsCustomDates;
+        info.textContent = (from || to)
+            ? `Showing ${shortYmd(from) || 'start'} – ${shortYmd(to) || 'today'}`
+            : 'Pick a range, then Apply';
+    } else if (presetLabel) {
+        info.textContent = `Showing ${presetLabel.toLowerCase()}`;
+    }
+}
 
 function initAnalyticsDateFilter() {
     const group = document.getElementById('analyticsDateFilter');
-    if (!group) return;
+    if (!group || group.dataset.bound) return; // bind once — was re-bound on every tab visit
+    group.dataset.bound = '1';
+    const customRow = document.getElementById('analyticsCustomRange');
+
     group.addEventListener('click', (e) => {
         const btn = e.target.closest('.date-filter-btn');
         if (!btn) return;
         group.querySelectorAll('.date-filter-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         analyticsDateRange = btn.dataset.range;
-        const info = document.getElementById('analyticsDateInfo');
-        if (info) info.textContent = `Showing ${btn.textContent.toLowerCase()}`;
+        if (analyticsDateRange === 'custom') {
+            if (customRow) customRow.style.display = 'flex';
+            updateAnalyticsInfo('');
+            // Wait for Apply before refetching, unless a range is already set
+            if (analyticsCustomDates.from || analyticsCustomDates.to) loadAiAnalytics();
+            return;
+        }
+        if (customRow) customRow.style.display = 'none';
+        updateAnalyticsInfo(btn.textContent);
+        loadAiAnalytics();
+    });
+
+    document.getElementById('analyticsCustomApply')?.addEventListener('click', () => {
+        let from = document.getElementById('analyticsDateFrom').value;
+        let to = document.getElementById('analyticsDateTo').value;
+        if (from && to && from > to) [from, to] = [to, from];
+        analyticsCustomDates = { from, to };
+        analyticsDateRange = 'custom';
+        group.querySelectorAll('.date-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.range === 'custom'));
+        if (customRow) customRow.style.display = 'flex';
+        updateAnalyticsInfo('');
         loadAiAnalytics();
     });
 }
 
 function getDateRangeParams() {
     const now = new Date();
-    const fmt = d => d.toISOString().split('T')[0];
+    const fmt = fmtYmd; // local calendar day — toISOString() would shift by UTC near midnight IST
     switch (analyticsDateRange) {
         case 'today':
             return { date_from: fmt(now), date_to: fmt(now) };
@@ -1330,6 +1487,12 @@ function getDateRangeParams() {
             const s = new Date(now.getFullYear(), now.getMonth() - 1, 1);
             const e = new Date(now.getFullYear(), now.getMonth(), 0);
             return { date_from: fmt(s), date_to: fmt(e) };
+        }
+        case 'custom': {
+            const out = {};
+            if (analyticsCustomDates.from) out.date_from = analyticsCustomDates.from;
+            if (analyticsCustomDates.to) out.date_to = analyticsCustomDates.to;
+            return out;
         }
         default:
             return {};
