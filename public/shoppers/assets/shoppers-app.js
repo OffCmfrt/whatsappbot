@@ -320,6 +320,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupEventListeners();
         setupModalEvents();
         setupChatEvents();
+        // Deep link: /shoppers/?search=<order id> pre-fills the search box so
+        // the first fetch lands straight on that order (the support desk
+        // links here when an agent clicks an order id).
+        const searchParam = (urlParams.get('search') || '').trim();
+        if (searchParam) {
+            const searchEl = document.getElementById('searchInput');
+            if (searchEl) searchEl.value = searchParam;
+        }
         // Smart login: only load data for pages this identity may access
         if (hubHasPerm('shoppers')) fetchShoppersData();
         if (hubHasPerm('analytics')) fetchAnalytics();

@@ -649,7 +649,7 @@
       +     '<div class="desk-ci-row"><span class="ci-lbl">Phone:</span><span class="ci-val">' + (phone !== '\u2013' ? '<a href="tel:+' + esc(phone) + '">' + esc(phone) + '</a>' : '\u2013') + '</span></div>'
       +     '<div class="desk-ci-row"><span class="ci-lbl">Email:</span><span class="ci-val">' + (email !== '\u2013' ? '<a href="mailto:' + esc(email) + '">' + esc(email) + '</a>' : '\u2013') + '</span></div>'
       +     '<div class="desk-ci-row"><span class="ci-lbl">Location:</span><span class="ci-val">' + esc(location) + '</span></div>'
-      +     '<div class="desk-ci-row"><span class="ci-lbl">Order:</span><span class="ci-val"><span class="desk-order-chip">#' + esc(orderNum) + '</span></span></div>'
+      +     '<div class="desk-ci-row"><span class="ci-lbl">Order:</span><span class="ci-val">' + orderAnchor(hubOrderHref(orderNum), '<span class="desk-order-chip">#' + esc(orderNum) + '</span>') + '</span></div>'
       +     '<div class="desk-ci-row"><span class="ci-lbl">Status:</span><span class="ci-val"><span class="desk-pill stage">' + esc(orderStatus) + '</span></span></div>'
       +     '<div class="desk-ci-stats-grid">'
       +       '<div class="desk-ci-stat-tile">'
@@ -697,6 +697,19 @@
   // ── 3. Order History (ticket order first, newest next; every row expands
   //    inline to its full detail from the already-loaded context) ──
   function normId(v) { return String(v == null ? '' : v).replace(/^#/, '').trim(); }
+
+  // Order ids link straight into the Shoppers Hub: the hub's main grid
+  // filters by order id through its search box (served same-origin), so one
+  // anchor opens a hub tab landed on that exact order with its action
+  // buttons. Plain target=_blank links — zero click-time work.
+  function hubOrderHref(orderNum) {
+    var id = normId(orderNum);
+    return id ? '/shoppers/?search=' + encodeURIComponent(id) : '';
+  }
+  function orderAnchor(href, inner, title) {
+    if (!href) return inner;
+    return '<a class="desk-orderext" href="' + esc(href) + '" target="_blank" rel="noopener noreferrer" title="' + esc(title || 'Open in Shoppers Hub') + '" onclick="event.stopPropagation()">' + inner + '</a>';
+  }
 
   function orderRowOpen(id, isTicket) {
     return isTicket ? S.expandedOrders[id] !== false : !!S.expandedOrders[id];
@@ -752,7 +765,7 @@
       return '<div class="desk-orow' + (open ? ' open' : '') + (isTicket ? ' ticket-order' : '') + '">'
         + '<div class="desk-orow-head" role="button" tabindex="0" title="Click to ' + (open ? 'hide' : 'show') + ' order details" '
         +   'onclick="DESK.toggleOrderRow(\'' + esc(id) + '\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();DESK.toggleOrderRow(\'' + esc(id) + '\');}">'
-        +   '<span class="history-id">#' + esc(ord.id) + '</span>'
+        +   orderAnchor(hubOrderHref(ord.id), '<span class="history-id">#' + esc(ord.id) + '</span>', 'Open order #' + normId(ord.id) + ' in Shoppers Hub')
         +   (isTicket ? '<span class="desk-tag highlight-tag">This Ticket</span>' : '')
         +   '<span class="desk-pill stage">' + esc(stageLabel) + '</span>'
         +   '<span class="desk-orow-spacer"></span>'
@@ -775,7 +788,7 @@
       return '<div class="desk-history-row req-row">'
         + '<div class="history-main">'
         +   '<span class="desk-tag request">' + x.kind + '</span>'
-        +   '<span class="history-id">#' + esc(x.r.order_id) + '</span>'
+        +   orderAnchor(hubOrderHref(x.r.order_id), '<span class="history-id">#' + esc(x.r.order_id) + '</span>')
         +   '<span class="desk-pill">' + esc(String(x.r.status || '').replace(/_/g, ' ')) + '</span>'
         + '</div>'
         + '<div class="history-sub">'
@@ -797,7 +810,7 @@
       +     '<span class="desk-collapse-hint">' + (isExpanded ? 'Click to collapse' : 'Click to expand') + '</span>'
       +   '</div>'
       +   '<div class="desk-order-bar-actions">'
-      +     (orderNum ? '<span class="desk-order-chip">#' + esc(orderNum) + '</span>' : '')
+      +     (orderNum ? orderAnchor(hubOrderHref(orderNum), '<span class="desk-order-chip">#' + esc(orderNum) + '</span>') : '')
       +     (stageLabel ? '<span class="desk-pill stage">' + esc(stageLabel) + '</span>' : '')
       +     (o && o.total != null ? '<span class="desk-order-chip price">' + money(o.total) + '</span>' : '')
       +     '<span class="desk-collapse-arrow">' + IC.chevron + '</span>'
