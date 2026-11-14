@@ -26,9 +26,12 @@
     filters: { status: 'open', q: '', team: '', priority: '', category: '' },
     selectedId: null,
     detail: null,
+    detailReady: false,      // heavy order/customer context merged into detail?
+    expandedOrders: {},      // order-history rows opened by order id (per ticket)
+    pendingContext: null,    // context payload that landed before the core did
     settings: { teams: {}, canned: [], templates: {}, sla: {}, cost: {}, portalRouting: {} },
     composer: { mode: 'reply', text: '' },
-    orderExpanded: false,
+    orderExpanded: true,
     customerExpanded: true,
     pollInterval: null,
     modal: null,          // { tab: 'sla'|'teams'|'canned'|'templates'|'cost'|'portals'|'distribute'|'panalytics'|'whitelist' }
@@ -114,6 +117,24 @@
     order: 'Order', delivery: 'Delivery', product: 'Product', fit: 'Size & fit',
     return: 'Return', credit: 'Credit', other: 'Other'
   };
+
+  // Monochrome inline SVG icon set — every surface icon is stroke-based and
+  // inherits currentColor, so nothing on the desk carries hue or emoji.
+  var IC = {
+    person: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+    box: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
+    chart: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>',
+    chat: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    image: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>',
+    search: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+    lock: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+    bulb: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.4 1 2.3h6c0-.9.4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg>',
+    pin: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+    video: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>',
+    zap: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    chevron: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>'
+  };
+  function headIcon(svg) { return '<span class="desk-head-icon">' + svg + '</span>'; }
 
   // ---------- auth ----------
   function logout() {
@@ -222,14 +243,52 @@
   }
   function loadDetail(id) {
     var el = $('DeskDetail');
-    if (el) el.innerHTML = '<div class="desk-loading"><span class="desk-spin"></span>Loading full ticket context\u2026</div>';
+    if (el) el.innerHTML = '<div class="desk-loading"><span class="desk-spin"></span>Loading ticket\u2026</div>';
+    S.detail = null;
+    S.detailReady = false;
+    S.expandedOrders = {};
+    S.pendingContext = null;
+    // Phase 1: cheap reads only \u2014 header, thread and composer render at once.
     api('/api/support/admin/tickets/' + id).then(function (d) {
+      if (S.selectedId !== id) return;
       S.detail = d;
       S.composer = { mode: 'reply', text: '' };
       renderDetail();
+      // Context landed before the core did \u2014 merge it now.
+      if (S.pendingContext && S.pendingContext.id === id) applyContext(S.pendingContext.data);
     }).catch(function (e) {
       if (el) el.innerHTML = '<div class="desk-empty-detail">' + esc(e.message) + '</div>';
     });
+    // Phase 2: the hub aggregation fills the right rail independently, so a
+    // cold customer-context build never blocks opening the ticket.
+    loadContext(id);
+  }
+  function loadContext(id) {
+    api('/api/support/admin/tickets/' + id + '/context').then(function (c) {
+      if (!S.detail || S.detail.ticket.id !== id) {
+        if (S.selectedId === id) S.pendingContext = { id: id, data: c };
+        return;
+      }
+      applyContext(c);
+    }).catch(function (e) {
+      if (!S.detail || S.detail.ticket.id !== id) return;
+      S.detail.contextError = e.message;
+      renderContextCol();
+    });
+  }
+  function applyContext(c) {
+    S.pendingContext = null;
+    Object.assign(S.detail, c);
+    S.detailReady = true;
+    renderContextCol();
+    patchReqNote();
+  }
+  function reloadContext() {
+    if (S.detail && S.detail.ticket) loadContext(S.detail.ticket.id);
+  }
+  function patchReqNote() {
+    var el = $('DeskReqNote');
+    if (el && S.detail && S.detail.requestNote) el.textContent = S.detail.requestNote;
   }
 
   // ---------- shell ----------
@@ -237,8 +296,8 @@
     var root = $('DeskRoot');
     root.innerHTML = '<div class="desk-shell">'
       + '<div class="desk-topbar">'
-      +   '<div class="desk-topbar-brand">'
-      +     '<span class="desk-logo-mark">OF</span>'
+      + '<div class="desk-topbar-brand">'
+      +     '<span class="desk-wordmark">OFFCOMFRT</span>'
       +     '<h1>Support Desk</h1>'
       +     '<span class="desk-user-tag">' + esc(S.user) + '</span>'
       +   '</div>'
@@ -388,29 +447,56 @@
   function renderDetail() {
     var el = $('DeskDetail');
     if (!el || !S.detail) return;
-    var d = S.detail, t = d.ticket, o = d.order || {}, h = d.history || {};
+    var d = S.detail, t = d.ticket;
 
-    // Reorganized Main Workspace:
+    // Two-column workspace:
     // 1. Unified Ticket Header (Status, Priority, Team, Category, SLA in one clean header)
-    // 2. Action Column (Left): Unified Issue & Reply Box (Problem Statement + Conversation + Reply in ONE card)
-    // 3. Context Column (Right): Customer Details + Order History (hides past orders if 1 order) + Economic Cost & Risk
+    // 2. Action Column (Left): Conversation + composer, served by the core read
+    // 3. Context Column (Right): customer + orders + risk, filled by the lazy
+    //    context read (skeleton until it lands)
     el.innerHTML = ''
       + unifiedTicketHeader(d, t)
       + '<div class="desk-workspace-split">'
       +   '<div class="desk-action-col">'
       +     issueAndConversationCard(d, t)
       +   '</div>'
-      +   '<div class="desk-context-col">'
-      +     customerCard(d, t, h, o)
-      +     orderHistoryCard(d, t, o)
-      +     riskCard(d)
-      +   '</div>'
+      +   '<div class="desk-context-col" id="DeskContextCol">' + contextColHtml() + '</div>'
       + '</div>';
 
     if (window.innerWidth < 980) {
       var b = $('DeskBack');
       if (b) b.style.display = 'inline-flex';
     }
+  }
+
+  // ---------- context column (lazy) ----------
+  function contextColHtml() {
+    var d = S.detail;
+    if (!d) return '';
+    if (!S.detailReady) {
+      if (d.contextError) {
+        return '<div class="desk-card desk-ctx-error">'
+          + '<div class="desk-card-title">' + headIcon(IC.box) + ' Order context</div>'
+          + '<div class="desk-set-sub">' + esc(d.contextError) + '</div>'
+          + '<button class="desk-btn desk-btn-ghost" onclick="DESK.reloadContext()">Retry</button>'
+          + '</div>';
+      }
+      return '<div class="desk-card desk-ctx-skeleton">'
+        + '<div class="sk-line" style="width:45%"></div>'
+        + '<div class="sk-line" style="width:72%"></div>'
+        + '<div class="sk-block"></div>'
+        + '<div class="sk-block tall"></div>'
+        + '<div class="sk-note"><span class="desk-spin"></span>Loading customer &amp; order context\u2026</div>'
+        + '</div>';
+    }
+    var t = d.ticket, o = d.order || {}, h = d.history || {};
+    return customerCard(d, t, h, o)
+      + orderHistoryCard(d, t, o)
+      + riskCard(d);
+  }
+  function renderContextCol() {
+    var el = $('DeskContextCol');
+    if (el) el.innerHTML = contextColHtml();
   }
 
   function priorityControls(t) {
@@ -536,7 +622,7 @@
     }
 
     var ctx = d.context || {};
-    var ordersCount = Number(h.orders) || (ctx.orders && ctx.orders.length) || 1;
+    var ordersCount = Number(h.orders) || (d.orders && d.orders.length) || 1;
     var returnsCount = (ctx.returns && ctx.returns.length) || (ctx.exchanges && ctx.exchanges.length) || Number(h.rto) || 0;
     var phone10 = phone.replace(/\D/g, '').slice(-10);
     var isExpanded = (S.customerExpanded !== false);
@@ -545,7 +631,7 @@
       // Clickable Header Bar with smooth arrow animation & summary info
       + '<div class="desk-card-head desk-collapsible-bar" onclick="DESK.toggleCustomerInfo()" role="button" tabindex="0" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();DESK.toggleCustomerInfo();}" title="Click to ' + (isExpanded ? 'collapse' : 'expand') + ' customer details">'
       +   '<div class="desk-card-title">'
-      +     '<span class="desk-head-icon">&#128100;</span> Customer Info'
+      +     headIcon(IC.person) + ' Customer Info'
       +     '<span class="desk-collapse-hint desk-cust-collapse-hint">' + (isExpanded ? 'Click to collapse' : 'Click to expand') + '</span>'
       +   '</div>'
       +   '<div class="desk-order-bar-actions">'
@@ -553,7 +639,7 @@
       +     (phone !== '\u2013' ? '<span class="desk-order-chip">+' + esc(phone) + '</span>' : '')
       +     '<span class="desk-pill stage">' + ordersCount + ' ' + (ordersCount === 1 ? 'order' : 'orders') + '</span>'
       +     (phone10 ? '<a class="desk-btn desk-btn-wa desk-btn-sm" target="_blank" rel="noopener" href="https://wa.me/91' + esc(phone10) + '" onclick="event.stopPropagation()" title="Open WhatsApp Chat"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2z"/></svg> WhatsApp</a>' : '')
-      +     '<span class="desk-collapse-arrow">&#9662;</span>'
+      +     '<span class="desk-collapse-arrow">' + IC.chevron + '</span>'
       +   '</div>'
       + '</div>'
       // Smoothly Animated Collapsible Body
@@ -608,8 +694,22 @@
     }
   }
 
-  function orderHistoryCard(d, t, o) {
-    var items = (o.items || []).map(function (i) {
+  // ── 3. Order History (ticket order first, newest next; every row expands
+  //    inline to its full detail from the already-loaded context) ──
+  function normId(v) { return String(v == null ? '' : v).replace(/^#/, '').trim(); }
+
+  function orderRowOpen(id, isTicket) {
+    return isTicket ? S.expandedOrders[id] !== false : !!S.expandedOrders[id];
+  }
+  function toggleOrderRow(id) {
+    if (!S.detail) return;
+    var tid = normId(S.detail.ticket.order_id);
+    S.expandedOrders[id] = !orderRowOpen(id, id === tid);
+    renderContextCol();
+  }
+
+  function orderRowDetail(ord) {
+    var items = (ord.items || []).map(function (i) {
       return '<tr>'
         + '<td><strong>' + esc(i.n) + '</strong>' + (i.v ? ' <span class="desk-item-var">(' + esc(i.v) + ')</span>' : '') + '</td>'
         + '<td class="num">x' + (i.q || 1) + '</td>'
@@ -617,35 +717,55 @@
         + '<td class="num">' + money((i.p || 0) * (i.q || 1)) + '</td>'
         + '</tr>';
     }).join('');
+    var track = ord.awb && /delhivery/i.test(ord.courier || '')
+      ? '<a class="desk-track-link" href="https://www.delhivery.com/track/package/' + esc(ord.awb) + '" target="_blank" rel="noopener">' + esc(ord.awb) + ' &UpperRightArrow;</a>'
+      : (ord.awb ? '<span class="desk-mono">' + esc(ord.awb) + '</span>' : '<span class="desk-hint">&ndash;</span>');
+    return '<div class="desk-order-details-grid">'
+      + '<div class="desk-kv"><span class="k">Courier &amp; AWB</span><span class="v">' + esc(ord.courier || 'Courier') + ' &middot; ' + track + '</span></div>'
+      + '<div class="desk-kv"><span class="k">Payment</span><span class="v">' + esc(ord.payment || 'COD') + ' &middot; ' + money(ord.total) + '</span></div>'
+      + (ord.placed ? '<div class="desk-kv"><span class="k">Order Placed</span><span class="v">' + fmtTime(ord.placed) + '</span></div>' : '')
+      + (ord.deliveredAt ? '<div class="desk-kv"><span class="k">Delivered</span><span class="v">' + fmtTime(ord.deliveredAt) + '</span></div>' : '')
+      + (ord.address ? '<div class="desk-kv full-w"><span class="k">Shipping Address</span><span class="v">' + IC.pin + ' ' + esc(ord.address) + '</span></div>' : '')
+      + '</div>'
+      + (items
+          ? '<div class="desk-items-wrap"><div class="desk-items-title">Ordered Items</div><table class="desk-items"><thead><tr><th>Item Details</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th></tr></thead><tbody>' + items + '</tbody></table></div>'
+          : '<div class="desk-set-sub" style="margin-top:10px">No itemised record for this order.</div>');
+  }
 
-    var track = o.awb && /delhivery/i.test(o.courier || '')
-      ? '<a class="desk-track-link" href="https://www.delhivery.com/track/package/' + esc(o.awb) + '" target="_blank" rel="noopener">' + esc(o.awb) + ' &UpperRightArrow;</a>'
-      : (o.awb ? '<span class="desk-mono">' + esc(o.awb) + '</span>' : '<span class="desk-hint">&ndash;</span>');
+  function orderHistoryCard(d, t, o) {
+    var ticketOrderId = normId((o && o.id) || t.order_id);
+    var orders = (d.orders && d.orders.length ? d.orders : (o && o.id ? [o] : [])).slice();
+    // The order this ticket is about leads; everything else newest-first.
+    orders.sort(function (a, b) {
+      var ap = normId(a.id) === ticketOrderId ? 1 : 0;
+      var bp = normId(b.id) === ticketOrderId ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      return (b.placed || 0) - (a.placed || 0);
+    });
 
-    var currentOrderId = String(o.id || t.order_id || '').replace(/^#/, '');
-
-    // Past orders from Shoppers Hub context
-    var ctx = d.context || {};
-    var pastOrders = (ctx.orders || []).map(function (po) {
-      var st = String(po.status || '').toLowerCase();
-      var label = STAGE_LABELS[st] || st.replace(/_/g, ' ');
-      var isCurrent = String(po.order_id || '').replace(/^#/, '') === currentOrderId;
-      var awbStr = po.awb ? (po.courier_name ? po.courier_name + ': ' : '') + po.awb : '';
-      return '<div class="desk-history-row' + (isCurrent ? ' current-order-highlight' : '') + '">'
-        + '<div class="history-main">'
-        +   '<span class="history-id">#' + esc(po.order_id) + '</span>'
-        +   (isCurrent ? '<span class="desk-tag highlight-tag">This Ticket</span>' : '')
-        +   '<span class="desk-pill stage">' + esc(label) + '</span>'
+    var rows = orders.map(function (ord) {
+      var id = normId(ord.id);
+      var isTicket = id === ticketOrderId;
+      var open = orderRowOpen(id, isTicket);
+      var st = String(ord.stage || '').toLowerCase();
+      var stageLabel = STAGE_LABELS[st] || (st ? st.replace(/_/g, ' ') : 'processing');
+      return '<div class="desk-orow' + (open ? ' open' : '') + (isTicket ? ' ticket-order' : '') + '">'
+        + '<div class="desk-orow-head" role="button" tabindex="0" title="Click to ' + (open ? 'hide' : 'show') + ' order details" '
+        +   'onclick="DESK.toggleOrderRow(\'' + esc(id) + '\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();DESK.toggleOrderRow(\'' + esc(id) + '\');}">'
+        +   '<span class="history-id">#' + esc(ord.id) + '</span>'
+        +   (isTicket ? '<span class="desk-tag highlight-tag">This Ticket</span>' : '')
+        +   '<span class="desk-pill stage">' + esc(stageLabel) + '</span>'
+        +   '<span class="desk-orow-spacer"></span>'
+        +   '<span class="history-date">' + fmtTime(ord.placed) + '</span>'
+        +   '<span class="history-total">' + money(ord.total) + '</span>'
+        +   '<span class="desk-orow-chev">' + IC.chevron + '</span>'
         + '</div>'
-        + '<div class="history-sub">'
-        +   (awbStr ? '<span class="history-awb">' + esc(awbStr) + '</span> &middot; ' : '')
-        +   (po.created_at ? '<span class="history-date">' + fmtTime(po.created_at) + '</span> &middot; ' : '')
-        +   '<span class="history-total">' + money(po.total) + '</span>'
-        + '</div>'
+        + (open ? '<div class="desk-orow-detail">' + orderRowDetail(ord) + '</div>' : '')
         + '</div>';
     }).join('');
 
     // Open/past returns & exchanges
+    var ctx = d.context || {};
     var reqs = [];
     (ctx.returns || []).forEach(function (r) { reqs.push({ kind: 'Return', r: r }); });
     (ctx.exchanges || []).forEach(function (r) { reqs.push({ kind: 'Exchange', r: r }); });
@@ -665,55 +785,29 @@
         + '</div>';
     }).join('');
 
-    var totalPastCount = (ctx.orders || []).length;
     var isExpanded = !!S.orderExpanded;
-    var orderNum = o.id || t.order_id;
-    var stageLabel = o.stage ? (STAGE_LABELS[o.stage] || o.stage) : '';
+    var orderNum = (o && o.id) || t.order_id;
+    var stageLabel = o && o.stage ? (STAGE_LABELS[o.stage] || o.stage) : '';
 
     return '<div class="desk-card desk-order-card' + (isExpanded ? ' is-expanded' : ' is-collapsed') + '" id="DeskOrderCard">'
       // Clickable Order History Bar (goes down and shows details on click)
       + '<div class="desk-card-head desk-collapsible-bar" onclick="DESK.toggleOrderHistory()" role="button" tabindex="0" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();DESK.toggleOrderHistory();}" title="Click to ' + (isExpanded ? 'collapse' : 'expand') + ' order details">'
       +   '<div class="desk-card-title">'
-      +     '<span class="desk-head-icon">&#128230;</span> Order History'
+      +     headIcon(IC.box) + ' Order History'
       +     '<span class="desk-collapse-hint">' + (isExpanded ? 'Click to collapse' : 'Click to expand') + '</span>'
       +   '</div>'
       +   '<div class="desk-order-bar-actions">'
       +     (orderNum ? '<span class="desk-order-chip">#' + esc(orderNum) + '</span>' : '')
       +     (stageLabel ? '<span class="desk-pill stage">' + esc(stageLabel) + '</span>' : '')
-      +     (o.total != null ? '<span class="desk-order-chip price">' + money(o.total) + '</span>' : '')
-      +     '<span class="desk-collapse-arrow">&#9662;</span>'
+      +     (o && o.total != null ? '<span class="desk-order-chip price">' + money(o.total) + '</span>' : '')
+      +     '<span class="desk-collapse-arrow">' + IC.chevron + '</span>'
       +   '</div>'
       + '</div>'
       // Collapsible Order Details Body
       + '<div class="desk-order-body" id="DeskOrderBody">'
-      // Current Order Details Subsection
-      +   '<div class="desk-current-order-box">'
-      +     '<div class="desk-order-header-row">'
-      +       '<div class="order-id-group">'
-      +         '<span class="order-prefix">Order</span>'
-      +         '<span class="order-num">#' + esc(o.id || t.order_id || '\u2013') + '</span>'
-      +         '<span class="desk-pill stage">' + esc(STAGE_LABELS[o.stage] || o.stage || 'Processing') + '</span>'
-      +       '</div>'
-      +       '<div class="order-finance-group">'
-      +         '<span class="desk-payment-pill">' + esc(o.payment || 'COD') + '</span>'
-      +         '<span class="order-total-price">' + money(o.total) + '</span>'
-      +       '</div>'
-      +     '</div>'
-      +     '<div class="desk-order-details-grid">'
-      +       '<div class="desk-kv"><span class="k">Courier &amp; AWB</span><span class="v">' + esc(o.courier || 'Courier') + ' &middot; ' + track + '</span></div>'
-      +       (o.placed ? '<div class="desk-kv"><span class="k">Order Placed</span><span class="v">' + fmtTime(o.placed) + '</span></div>' : '')
-      +       (o.address ? '<div class="desk-kv full-w"><span class="k">Shipping Address</span><span class="v">&#128205; ' + esc(o.address) + '</span></div>' : '')
-      +     '</div>'
-      +     (items ? '<div class="desk-items-wrap"><div class="desk-items-title">Ordered Items</div><table class="desk-items"><thead><tr><th>Item Details</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th></tr></thead><tbody>' + items + '</tbody></table></div>' : '')
-      +   '</div>'
-      // Past Order History Subsection (hidden when only 1 order exists and no returns/exchanges)
-      +   (totalPastCount > 1 || reqs.length > 0 ? (
-            '<div class="desk-past-orders-section">'
-            + '<div class="desk-section-subhead">Customer Order &amp; Request History <span class="desk-muted">(' + totalPastCount + ' recorded)</span></div>'
-            + (reqRows ? '<div class="desk-sub-section-title">Returns &amp; Exchanges</div><div class="desk-history-list">' + reqRows + '</div>' : '')
-            + (pastOrders ? '<div class="desk-sub-section-title" style="margin-top:10px">Past Orders</div><div class="desk-history-list">' + pastOrders + '</div>' : '')
-            + '</div>'
-          ) : '')
+      +   '<div class="desk-section-subhead">All Orders <span class="desk-muted">(' + orders.length + ' \u2014 ticket order first)</span></div>'
+      +   '<div class="desk-history-list">' + (rows || '<div class="desk-set-sub">No orders on record for this customer.</div>') + '</div>'
+      +   (reqs.length ? '<div class="desk-past-orders-section"><div class="desk-sub-section-title">Returns &amp; Exchanges</div><div class="desk-history-list">' + reqRows + '</div></div>' : '')
       +   '</div>'
       + '</div>';
   }
@@ -723,10 +817,10 @@
     var images = t.images || [];
     var imagesHtml = images.length ? (
       '<div class="desk-proof-section">'
-      + '<div class="desk-section-subhead">&#128247; Proof &amp; Attachments <span class="desk-muted">(' + images.length + ' image' + (images.length > 1 ? 's' : '') + ')</span></div>'
+      + '<div class="desk-section-subhead">' + IC.image + ' Proof &amp; Attachments <span class="desk-muted">(' + images.length + ' image' + (images.length > 1 ? 's' : '') + ')</span></div>'
       + '<div class="desk-imggrid">'
       +   images.map(function (u) {
-            return '<div class="desk-proof-thumb" onclick="DESK.lightbox(\'' + esc(u) + '\')" title="Click to enlarge"><img src="' + esc(u) + '" alt="proof"><span class="zoom-icon">&#128269;</span></div>';
+            return '<div class="desk-proof-thumb" onclick="DESK.lightbox(\'' + esc(u) + '\')" title="Click to enlarge"><img src="' + esc(u) + '" alt="proof"><span class="zoom-icon">' + IC.search + '</span></div>';
           }).join('')
       + '</div>'
       + '</div>'
@@ -757,10 +851,10 @@
       problemMeta += '<div class="desk-bubble-detail"><strong>Requested Preference:</strong> ' + esc(t.preference) + '</div>';
     }
     if (t.new_address) {
-      problemMeta += '<div class="desk-bubble-detail"><strong>Requested New Address:</strong> &#128205; ' + esc(t.new_address) + '</div>';
+      problemMeta += '<div class="desk-bubble-detail"><strong>Requested New Address:</strong> ' + IC.pin + ' ' + esc(t.new_address) + '</div>';
     }
     if (t.video_url) {
-      problemMeta += '<div class="desk-bubble-detail">&#127916; <strong>Unboxing Video Proof Attached</strong></div>';
+      problemMeta += '<div class="desk-bubble-detail">' + IC.video + ' <strong>Unboxing Video Proof Attached</strong></div>';
     }
     if (imagesHtml) {
       problemMeta += imagesHtml;
@@ -836,7 +930,7 @@
       threadHtml += '<div class="desk-msg-row note-row">'
         + '<div class="desk-msg-note-box">'
         +   '<div class="desk-note-header">'
-        +     '<span>&#128274; Internal Team Note (Team Only &middot; Hidden from customer)</span>'
+        +     '<span>' + IC.lock + ' Internal Team Note (Team Only &middot; Hidden from customer)</span>'
         +     '<span>' + esc(n.agentId || 'Agent') + ' &middot; ' + fmtTime(n.at) + '</span>'
         +   '</div>'
         +   '<div class="desk-note-body">' + esc(n.text) + '</div>'
@@ -861,7 +955,7 @@
         +   '<div class="desk-composer-modes">'
         +     '<button class="desk-mode' + (S.composer.mode === 'reply' ? ' active' : '') + '" onclick="DESK.setMode(\'reply\')">Reply</button>'
         +     '<button class="desk-mode' + (S.composer.mode === 'ask' ? ' active' : '') + '" onclick="DESK.setMode(\'ask\')">Ask Customer</button>'
-        +     '<button class="desk-mode mode-note' + (S.composer.mode === 'note' ? ' active' : '') + '" onclick="DESK.setMode(\'note\')">&#128274; Internal Note</button>'
+        +     '<button class="desk-mode mode-note' + (S.composer.mode === 'note' ? ' active' : '') + '" onclick="DESK.setMode(\'note\')">' + IC.lock + ' Internal Note</button>'
         +   '</div>'
         +   (canned.length ? '<select class="desk-select desk-canned-select" onchange="DESK.useCanned(this.value)"><option value="">&plusmn; Insert Saved Reply\u2026</option>'
         +     canned.map(function (c) { return '<option value="' + esc(c.key) + '">' + esc(c.label) + '</option>'; }).join('') + '</select>' : '')
@@ -883,7 +977,7 @@
 
     return '<div class="desk-card desk-issue-card desk-merged-card">'
       + '<div class="desk-card-head">'
-      +   '<div class="desk-card-title"><span class="desk-head-icon">&#128172;</span> Conversation</div>'
+      +   '<div class="desk-card-title">' + headIcon(IC.chat) + ' Conversation</div>'
       +   '<div class="desk-card-head-right" style="display:flex;align-items:center;gap:6px">'
       +     (d.requestKey ? '<span class="desk-pill-badge pill-request">Action Required</span>' : '')
       +     '<span class="desk-tag">' + totalMsgCount + ' ' + (totalMsgCount === 1 ? 'message' : 'messages') + '</span>'
@@ -902,8 +996,7 @@
 
   function approveCard(d, t) {
     var key = d.requestKey;
-    var inner = '';
-    if (d.requestNote) inner += '<div class="req-note">' + esc(d.requestNote) + '</div>';
+    var inner = '<div class="req-note" id="DeskReqNote">' + esc(d.requestNote || '') + '</div>';
     switch (key) {
       case 'order/cancel':
         inner += '<div class="desk-kv"><span class="k">Settlement</span><span class="v">' + (d.order && d.order.payment === 'COD' ? 'COD \u2014 nothing to refund' : 'Prepaid \u2014 confirm refund route with customer') + '</span></div>';
@@ -933,7 +1026,7 @@
         break;
     }
     return '<div class="desk-approve">'
-      + '<div class="desk-approve-head"><span class="badge">&#9889; Action Required</span><span class="req-title">' + esc(d.requestLabel) + '</span></div>'
+      + '<div class="desk-approve-head"><span class="badge">' + IC.zap + ' Action Required</span><span class="req-title">' + esc(d.requestLabel) + '</span></div>'
       + inner
       + '<div class="desk-approve-actions">'
       +   '<button class="desk-btn" onclick="DESK.approve()">Approve Request</button>'
@@ -948,7 +1041,7 @@
     var riskLvl = String(r.level || 'Low').toLowerCase();
     return '<div class="desk-card desk-risk-card">'
       + '<div class="desk-card-head">'
-      +   '<div class="desk-card-title"><span class="desk-head-icon">&#128200;</span> Economic Cost &amp; Risk</div>'
+      +   '<div class="desk-card-title">' + headIcon(IC.chart) + ' Economic Cost &amp; Risk</div>'
       +   '<span class="desk-pill risk-' + esc(riskLvl) + '">' + esc(r.level || 'Low') + ' Risk</span>'
       + '</div>'
       + '<div class="desk-risk-factors">' + (r.factors || []).map(function (f) { return '<span class="desk-tag">' + esc(f) + '</span>'; }).join('') + '</div>'
@@ -959,7 +1052,7 @@
             }).join('')
           + '</tbody></table>'
         ) : '')
-      + (econ.tip ? '<div class="desk-tip">&#128161; <strong>Tip:</strong> ' + esc(econ.tip) + '</div>' : '')
+      + (econ.tip ? '<div class="desk-tip">' + IC.bulb + ' <strong>Tip:</strong> ' + esc(econ.tip) + '</div>' : '')
       + '</div>';
   }
 
@@ -1800,6 +1893,7 @@
     select: select, backToQueue: backToQueue, patchTicket: patchTicket,
     toggleCustomerInfo: toggleCustomerInfo,
     toggleOrderHistory: toggleOrderHistory,
+    toggleOrderRow: toggleOrderRow, reloadContext: reloadContext,
     setMode: setMode, setMsg: setMsg, useCanned: useCanned, sendComposer: sendComposer,
     openResolve: openResolve, pickResolution: pickResolution, confirmResolve: confirmResolve,
     agentReopen: agentReopen, approve: approve, decline: decline,

@@ -221,58 +221,83 @@ router.get('/tickets', async (req, res) => {
     }
 });
 
-// ── Full detail: order + history + risk + econ + settings ──
+// ── Ticket core: conversation + controls, served from three cheap reads ──
+// The heavy customer/order aggregation lives in /tickets/:id/context so the
+// agent sees the thread immediately instead of waiting on the hub build.
 router.get('/tickets/:id', async (req, res) => {
     try {
         const t = await Support.getTicket(req.params.id);
         if (!t) return res.status(404).json({ error: 'Ticket not found' });
-        const [order, settings, history, ticketCount, images, ctx] = await Promise.all([
-            Support.getOrderByNumber(t.order_id, t.customer_phone),
-            Support.getAllSettings(),
-            Support.customerHistory(t.customer_phone),
-            Support.countTicketsByPhone(t.customer_phone),
+        const [images, settings] = await Promise.all([
             Support.listTicketImages(t.id),
-            // Shoppers Hub customer context (orders/returns/exchanges/RTO) —
-            // cached, so this is one shared read for everything above too.
-            Support.contextFor(t.customer_phone)
+            Support.getAllSettings()
         ]);
-        const slaCfg = settings.sla || {}, costCfg = settings.cost_config || {};
-        const enriched = { ...t, history };
         const key = t.reason + '/' + t.sub;
-        const trimReq = r => ({
-            id: r.request_id || r.return_id || r.exchange_id, order_id: r.order_id || r.order_number,
-            status: r.status, reason: r.reason || null, created_at: r.created_at, source: r.source
-        });
         res.json({
             ticket: { ...t, images },
-            order,
-            history,
-            ticketCount,
-            context: ctx ? {
-                orders: (ctx.orders || []).slice(0, 10).map(o => ({
-                    order_id: o.order_id, status: o.status, awb: o.awb, courier_name: o.courier_name,
-                    total: o.order_total, created_at: o.created_at, delivered_at: o.delivered_at
-                })),
-                returns: (ctx.returns || []).slice(0, 10).map(trimReq),
-                exchanges: (ctx.exchanges || []).slice(0, 10).map(trimReq),
-                rto: (ctx.rto || []).slice(0, 10).map(o => ({ order_id: o.order_id, awb: o.awb, status: o.status }))
-            } : null,
-            sla: Support.slaOf(t, slaCfg),
-            risk: order ? Support.riskOf(enriched, order, costCfg, ticketCount) : null,
-            econ: order ? Support.econOf(t, order, costCfg) : null,
+            sla: Support.slaOf(t, settings.sla || {}),
             requestKey: Support.REQUESTS[key] ? key : null,
             requestLabel: Support.REQUESTS[key] || null,
-            requestNote: (Support.REQUEST_NOTES[t.sub] || (() => null))(order || {}),
             settings: {
                 teams: settings.teams || {},
                 canned_responses: settings.canned_responses || [],
                 resolution_templates: settings.resolution_templates || {},
-                sla: slaCfg
+                sla: settings.sla || {}
             }
         });
     } catch (error) {
         console.error('[Support Desk] detail error:', error.message);
         res.status(500).json({ error: 'Failed to load ticket detail' });
+    }
+});
+
+// ── Lazy context: order + history + risk + econ (Shoppers Hub aggregation) ──
+// One hub build feeds everything; the full per-customer order list ships
+// with items/tracking so the desk expands orders without more roundtrips.
+router.get('/tickets/:id/context', async (req, res) => {
+    try {
+        const t = await Support.getTicket(req.params.id);
+        if (!t) return res.status(404).json({ error: 'Ticket not found' });
+        const [ctx, settings] = await Promise.all([
+            Support.contextFor(t.customer_phone),
+            Support.getAllSettings()
+        ]);
+        const costCfg = settings.cost_config || {};
+        // Newest-first full orders from the shared hub context; the ticket's
+        // own order leads the list (live fallback when the hub misses it).
+        let orders = t.customer_phone ? await Support.listOrdersByPhone(t.customer_phone) : [];
+        const tid = Support.normOrderId(t.order_id);
+        let order = (orders.find(o => Support.normOrderId(o.id) === tid) || null);
+        if (!order && t.order_id) {
+            order = await Support.getOrderByNumber(t.order_id, t.customer_phone);
+        }
+        if (order) orders = [order, ...orders.filter(o => o !== order)];
+        const [history, ticketCount] = await Promise.all([
+            Support.customerHistory(t.customer_phone, ctx),
+            Support.countTicketsByPhone(t.customer_phone)
+        ]);
+        const enriched = { ...t, history };
+        const trimReq = r => ({
+            id: r.request_id || r.return_id || r.exchange_id, order_id: r.order_id || r.order_number,
+            status: r.status, reason: r.reason || null, created_at: r.created_at, source: r.source
+        });
+        res.json({
+            order,
+            orders: orders.slice(0, 25),
+            history,
+            ticketCount,
+            context: ctx ? {
+                returns: (ctx.returns || []).slice(0, 10).map(trimReq),
+                exchanges: (ctx.exchanges || []).slice(0, 10).map(trimReq),
+                rto: (ctx.rto || []).slice(0, 10).map(o => ({ order_id: o.order_id, awb: o.awb, status: o.status }))
+            } : null,
+            risk: order ? Support.riskOf(enriched, order, costCfg, ticketCount) : null,
+            econ: order ? Support.econOf(t, order, costCfg) : null,
+            requestNote: t.sub ? (Support.REQUEST_NOTES[t.sub] || (() => null))(order || {}) : null
+        });
+    } catch (error) {
+        console.error('[Support Desk] context error:', error.message);
+        res.status(500).json({ error: 'Failed to load ticket context' });
     }
 });
 
