@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark">
     <title>OffComfrt — Support Command Center</title>
-    <link rel="stylesheet" href="/dashboard/css/style.css?v=31">
+    <link rel="stylesheet" href="/dashboard/css/style.css?v=32">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -216,6 +216,7 @@
                                 </button>
                                 <span class="daterange-chip" id="ticketDateChip" style="display:none"></span>
                                 <div class="daterange-popover" id="ticketDatePopover" style="display:none">
+                                    <div class="daterange-section-label">Quick ranges</div>
                                     <div class="daterange-presets">
                                         <button type="button" data-preset="today">Today</button>
                                         <button type="button" data-preset="yesterday">Yesterday</button>
@@ -224,13 +225,14 @@
                                         <button type="button" data-preset="this_month">This Month</button>
                                         <button type="button" data-preset="last_month">Last Month</button>
                                     </div>
+                                    <div class="daterange-section-label">Custom range (IST)</div>
                                     <div class="daterange-custom">
                                         <label>From<input type="date" id="ticketDateFrom"></label>
                                         <label>To<input type="date" id="ticketDateTo"></label>
-                                        <label>Start (IST)<input type="time" id="ticketTimeFrom" step="60"></label>
-                                        <label>End (IST)<input type="time" id="ticketTimeTo" step="60"></label>
+                                        <label>Start time<input type="time" id="ticketTimeFrom" step="60"></label>
+                                        <label>End time<input type="time" id="ticketTimeTo" step="60"></label>
                                     </div>
-                                    <div class="daterange-hint">Presets fill the dates above — adjust for a custom window. Times narrow the selected days.</div>
+                                    <div class="daterange-hint">A preset fills the dates above — adjust them for any window. Times are optional and narrow the selected days.</div>
                                     <div class="daterange-actions">
                                         <button type="button" class="btn btn-secondary btn-sm" id="ticketDateClear">Clear</button>
                                         <button type="button" class="btn btn-primary btn-sm" id="ticketDateApply">Apply</button>
