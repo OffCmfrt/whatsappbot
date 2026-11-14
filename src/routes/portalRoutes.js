@@ -143,8 +143,12 @@ async function getPortalTickets(portalId, portalType, portalConfig, status, chan
 
         const whereSql = conditions.join(' AND ');
         // Prioritize tickets explicitly assigned to this portal first, then newest
+        // LEFT(message, 600) mirrors the admin ticket list: the portal UI only
+        // previews/searches this column (chat history comes from /chat/:phone),
+        // and full message blobs made every poll response ~500KB and pinned
+        // tens of MB in the LRU cache — a driver of the 256MB-heap OOM.
         return await dbAdapter.query(
-            `SELECT * FROM support_tickets
+            `SELECT *, LEFT(message, 600) AS message FROM support_tickets
              WHERE ${whereSql}
              ORDER BY (CASE WHEN portal_id = ? THEN 0 ELSE 1 END), created_at DESC LIMIT 200`,
             [...params, portalId]
