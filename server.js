@@ -308,6 +308,11 @@ app.use('/api/support/admin', supportDeskRoutes);
 const supportRoutes = require('./src/routes/supportRoutes');
 app.use('/api/support', supportRoutes);
 
+// Website mirror of the WhatsApp post-purchase Confirm/Cancel/Edit flow —
+// consumed by the Shopify order detail page (phone + order-number claim).
+const orderConfirmationRoutes = require('./src/routes/orderConfirmationRoutes');
+app.use('/api/order-confirmation', orderConfirmationRoutes);
+
 // Instagram webhook rate limiter — DISABLED (Instagram bot turned off)
 // Instagram Graph API allows ~500 calls/hour; 300/min per IP is generous
 // for DM + comment traffic while protecting against burst floods.
