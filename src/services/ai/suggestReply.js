@@ -473,4 +473,7 @@ async function generateSuggestions({ actor, context, cacheKey }) {
     return result;
 }
 
-module.exports = { suggestReply };
+// SUGGEST_SYSTEM_PROMPT is exported so the support-desk suggester
+// (suggestReplyDesk.js) shares the exact same SOP pipeline instead of forking
+// it — the desk only changes how context is gathered, not the rules.
+module.exports = { suggestReply, SUGGEST_SYSTEM_PROMPT };

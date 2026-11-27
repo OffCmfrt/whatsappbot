@@ -31,7 +31,7 @@
     expandedOrders: {},      // order-history rows opened by order id (per ticket)
     pendingContext: null,    // context payload that landed before the core did
     settings: { teams: {}, canned: [], templates: {}, sla: {}, cost: {}, portalRouting: {} },
-    composer: { mode: 'reply', text: '', media: [] },
+    composer: { mode: 'reply', text: '', media: [], lastAiDraft: null },
     orderExpanded: true,
     customerExpanded: true,
     returnsExpanded: true,
@@ -292,8 +292,9 @@
     api('/api/support/admin/tickets/' + id).then(function (d) {
       if (S.selectedId !== id) return;
       S.detail = d;
-      S.composer = { mode: 'reply', text: '', media: [] };
+      S.composer = { mode: 'reply', text: '', media: [], lastAiDraft: null };
       renderDetail();
+      prefetchAi(id);
       // Context landed before the core did \u2014 merge it now.
       if (S.pendingContext && S.pendingContext.id === id) applyContext(S.pendingContext.data);
     }).catch(function (e) {
@@ -1176,10 +1177,12 @@
         +   (canned.length ? '<select class="desk-select desk-canned-select" onchange="DESK.useCanned(this.value)"><option value="">&plusmn; Insert Saved Reply\u2026</option>'
         +     canned.map(function (c) { return '<option value="' + esc(c.key) + '">' + esc(c.label) + '</option>'; }).join('') + '</select>' : '')
         + '</div>'
+        + (S.composer.mode === 'note' ? '' : '<div class="desk-ai-box" id="DeskAiBox"></div>')
         + '<div class="desk-composer-media" id="DeskComposerMedia"></div>'
         + '<textarea id="DeskMsg" class="desk-composer-textarea" placeholder="' + esc(placeholder) + '" oninput="DESK.setMsg(this.value)">' + esc(S.composer.text) + '</textarea>'
         + '<div class="desk-composer-actions">'
         +   (S.composer.mode !== 'note' ? '<label class="desk-attach" title="Attach up to 5 images (JPG, PNG, WebP, HEIC)">' + IC.clip + '<span class="desk-attach-txt">Photos</span><input type="file" accept="image/jpeg,image/png,image/webp,image/heic" multiple onchange="DESK.onPickFiles(this)"></label>' : '')
+        +   (S.composer.mode === 'note' ? '' : '<button class="desk-btn desk-btn-ghost desk-ai-btn" id="DeskAiBtn" title="Suggest a reply with AI" onclick="DESK.aiSuggest()">✨ Suggest</button>')
         +   '<button class="desk-btn desk-btn-ghost" onclick="DESK.openResolve()">Resolve &amp; Close Ticket</button>'
         +   '<button class="desk-btn' + (S.composer.mode === 'note' ? ' desk-btn-note' : '') + '" onclick="DESK.sendComposer()">'
         +     (S.composer.mode === 'note' ? 'Add Internal Note' : (S.composer.mode === 'ask' ? 'Send Question' : 'Send Reply'))
@@ -1276,7 +1279,7 @@
 
 
   // ---------- composer actions ----------
-  function setMode(m) { S.composer.mode = m; S.composer.text = ''; if (m === 'note') S.composer.media = []; renderDetail(); }
+  function setMode(m) { S.composer.mode = m; S.composer.text = ''; S.composer.lastAiDraft = null; if (m === 'note') S.composer.media = []; renderDetail(); }
   function setMsg(v) { S.composer.text = v; }
   function useCanned(key) {
     var c = S.settings.canned.filter(function (x) { return x.key === key; })[0];
@@ -1305,10 +1308,12 @@
     var path = S.composer.mode === 'note' ? '/note' : (S.composer.mode === 'ask' ? '/ask' : '/reply');
     var body = { text: text };
     if (canAttach && ready.length) body.media_ids = ready.map(function (m) { return m.media_id; });
+    if (S.composer.mode === 'reply') body.suggestedText = S.composer.lastAiDraft || null;
     api('/api/support/admin/tickets/' + t.id + path, { method: 'POST', body: body })
       .then(function () {
         S.composer.text = '';
         S.composer.media = [];
+        S.composer.lastAiDraft = null;
         loadDetail(t.id);
         refreshStats();
       })
@@ -1577,6 +1582,64 @@
         if (ta) { ta.focus(); try { if (caret != null) ta.setSelectionRange(caret, caret); } catch (e) {} }
       }
     }).catch(function () { /* transient — next tick retries */ });
+  }
+
+  // ---------- AI reply suggestions (drafts only — never auto-sent) ----------
+  var aiPrefetch = {};                       // ticketId -> { promise, at }
+  var AI_PREFETCH_FRESH_MS = 90 * 1000;
+
+  function aiSuggestFetch(id, prefetch) {
+    return api('/api/support/admin/tickets/' + id + '/suggest-reply', { method: 'POST', body: { prefetch: !!prefetch } })
+      .then(function (d) {
+        if (!d.success) throw new Error(d.error || 'AI suggestions unavailable');
+        return d;
+      });
+  }
+  // Warm the cache when a ticket opens so an explicit ✨ click is instant.
+  function prefetchAi(id) {
+    if (!id) return;
+    var hit = aiPrefetch[id];
+    if (hit && Date.now() - hit.at < AI_PREFETCH_FRESH_MS) return;
+    aiPrefetch[id] = { promise: aiSuggestFetch(id, true).catch(function () { return null; }), at: Date.now() };
+  }
+  function aiSuggest() {
+    var d = S.detail;
+    if (!d || !d.ticket) { toast('Open a ticket first', true); return; }
+    var id = d.ticket.id;
+    var box = $('DeskAiBox'), btn = $('DeskAiBtn');
+    if (!box) return;
+    if (btn) btn.disabled = true;
+    box.className = 'desk-ai-box open';
+    box.innerHTML = '<div class="desk-ai-note">Generating suggestions…</div>';
+    var hit = aiPrefetch[id];
+    var p = (hit && Date.now() - hit.at < AI_PREFETCH_FRESH_MS) ? hit.promise : aiSuggestFetch(id, false);
+    delete aiPrefetch[id];
+    Promise.resolve(p).then(function (data) {
+      // A failed/empty prefetch must not read as "nothing to suggest" — retry live.
+      if (!data || !data.suggestions || !data.suggestions.length) return aiSuggestFetch(id, false);
+      return data;
+    }).then(function (data) {
+      if (!data.suggestions || !data.suggestions.length) {
+        box.innerHTML = '<div class="desk-ai-note">No suggestions available.</div>';
+        return;
+      }
+      box.innerHTML = '<div class="desk-ai-note">✨ Tap a draft to insert it:</div>';
+      data.suggestions.forEach(function (s) {
+        var chip = document.createElement('button');
+        chip.type = 'button'; chip.className = 'desk-ai-chip'; chip.textContent = s;
+        chip.onclick = function () {
+          S.composer.text = s; S.composer.lastAiDraft = s;
+          var ta = $('DeskMsg');
+          if (ta) { ta.value = s; ta.focus(); }
+          box.className = 'desk-ai-box'; box.innerHTML = '';
+        };
+        box.appendChild(chip);
+      });
+    }).catch(function (e) {
+      box.innerHTML = '<div class="desk-ai-note desk-ai-err">❌ ' + esc(e.message) + '</div>';
+    }).then(function () {
+      if (btn) btn.disabled = false;
+    });
   }
   function patchTicket(patch) {
     var t = S.detail.ticket;
@@ -3078,6 +3141,7 @@
     toggleOrderRow: toggleOrderRow, reloadContext: reloadContext,
     setMode: setMode, setMsg: setMsg, useCanned: useCanned, sendComposer: sendComposer,
     onPickFiles: onPickFiles, removeMediaChip: removeMediaChip, retryMediaChip: retryMediaChip,
+    aiSuggest: aiSuggest,
     openResolve: openResolve, pickResolution: pickResolution, confirmResolve: confirmResolve,
     agentReopen: agentReopen, approve: approve, decline: decline,
     openSettings: openSettings, setTab: setTab, saveSla: saveSla, saveTeams: saveTeams,

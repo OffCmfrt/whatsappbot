@@ -393,6 +393,14 @@ async function agentComposer(req, res, mode) {
             return res.json({ ticket: publicTicket(updated) });
         }
         const updated = await Support.updateTicket(t.id, patch);
+        // AI learning: pair this human reply with the customer's latest question
+        // so future desk suggestions imitate approved answers (fire-and-forget).
+        // suggestedText tells us whether an AI draft was accepted as-is or edited.
+        if (mode === 'reply' && t.customer_phone) {
+            const aiLearning = require('../services/ai/learning');
+            const suggestedText = String((req.body && req.body.suggestedText) || '') || null;
+            aiLearning.learnFromAgentReply({ phone: t.customer_phone, replyText: text, suggestedText }).catch(() => {});
+        }
         res.json({ ticket: publicTicket(updated) });
     } catch (error) {
         console.error(`[Support Desk] ${mode} error:`, error.message);
@@ -402,6 +410,28 @@ async function agentComposer(req, res, mode) {
 router.post('/tickets/:id/reply', (req, res) => agentComposer(req, res, 'reply'));
 router.post('/tickets/:id/ask', (req, res) => agentComposer(req, res, 'ask'));
 router.post('/tickets/:id/note', (req, res) => agentComposer(req, res, 'note'));
+
+// ── AI reply suggestions (drafts only — never auto-sent) ──
+// Desk-tuned engine: gathers context from the ticket thread + customerContext
+// (order/return/exchange/RTO) + the structured reason/sub, then reuses the
+// shared SOP prompt. Same per-actor daily budget as the portal, scoped to
+// `desk:<agent>`.
+router.post('/tickets/:id/suggest-reply', async (req, res) => {
+    try {
+        const { suggestReplyDesk } = require('../services/ai/suggestReplyDesk');
+        const result = await suggestReplyDesk({
+            actor: `desk:${agentName(req)}`,
+            ticketId: req.params.id,
+            prefetch: Boolean(req.body && req.body.prefetch)
+        });
+        res.json({ success: true, suggestions: result.suggestions });
+    } catch (error) {
+        console.error('[Support Desk] suggest-reply error:', error.message);
+        const known = ['AI_NOT_CONFIGURED', 'AI_DISABLED', 'AI_LIMIT', 'NO_HISTORY', 'NO_TICKET', 'AI_RATE_LIMIT', 'AI_UNAVAILABLE'];
+        const status = known.includes(error.code) ? 400 : 500;
+        res.status(status).json({ success: false, error: known.includes(error.code) ? error.message : 'Failed to generate suggestions' });
+    }
+});
 
 // ── Resolve & close ──
 router.post('/tickets/:id/resolve', async (req, res) => {

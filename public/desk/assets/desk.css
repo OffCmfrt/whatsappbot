@@ -2101,6 +2101,39 @@ button, input, select, textarea {
   gap: 8px;
   margin-top: 4px;
 }
+.desk-composer-actions > .desk-btn:last-child { margin-left: auto; }
+/* AI reply suggestions — monochrome, drafts only, never auto-sent. */
+.desk-ai-box { display: none; }
+.desk-ai-box.open {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  background: var(--desk-card-sub);
+  border: 1px solid var(--desk-border);
+  border-radius: var(--radius-sm);
+}
+.desk-ai-note { font-size: 12px; color: var(--desk-muted); }
+.desk-ai-err { color: var(--desk-ink); font-weight: 600; }
+.desk-ai-chip {
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.4;
+  font-family: inherit;
+  color: var(--desk-ink);
+  background: #FFFFFF;
+  border: 1px solid var(--desk-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.desk-ai-chip:hover {
+  border-color: var(--desk-ink);
+  background: var(--desk-fill);
+}
+.desk-ai-btn { white-space: nowrap; }
 .desk-composer-closed {
   background: var(--desk-card-sub);
   border: 1px solid var(--desk-border);
